@@ -51,7 +51,7 @@ impl Config {
             .unwrap_or(1024 * 1024); // 默认 1MB
 
         Self {
-            database_url: std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://data:data@192.168.0.62/data?sslmode=disable".into()),
+            database_url: std::env::var("DATABASE_URL").expect("DATABASE_URL is required"),
             bind_addr: std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:3001".into()),
             session_ttl_hours: std::env::var("SESSION_TTL_HOURS").ok().and_then(|v| v.parse().ok()).unwrap_or(24),
             dev_username: std::env::var("DEV_USERNAME").unwrap_or_else(|_| "dev".into()),

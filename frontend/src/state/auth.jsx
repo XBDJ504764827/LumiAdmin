@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api.js';
 import { defaultSessionFromToken, normalizeSession, readStoredToken } from '../shared/authClient.js';
 
@@ -7,6 +7,8 @@ const AuthContext = createContext(null);
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(null);
   const [bootstrapLoading, setBootstrapLoading] = useState(true);
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
 
   useEffect(() => {
     const token = readStoredToken(typeof window !== 'undefined' ? window.localStorage : null);
@@ -33,33 +35,32 @@ export function AuthProvider({ children }) {
       });
   }, []);
 
-  const value = useMemo(() => ({
-    session,
-    bootstrapLoading,
-    login: async (credentials) => {
-      const payload = await api.login(credentials);
-      const nextSession = normalizeSession(payload);
-      if (typeof window !== 'undefined' && nextSession?.token) {
-        window.localStorage.setItem('manger_token', nextSession.token);
-      }
-      setSession(nextSession);
-      return nextSession;
-    },
-    logout: async () => {
-      if (session?.token) {
-        try {
-          await api.logout(session.token);
-        } catch {
-        }
-      }
-      if (typeof window !== 'undefined') {
-        window.localStorage.removeItem('manger_token');
-      }
-      setSession(null);
-    },
-  }), [session, bootstrapLoading]);
+  const login = useCallback(async (credentials) => {
+    const payload = await api.login(credentials);
+    const nextSession = normalizeSession(payload);
+    if (typeof window !== 'undefined' && nextSession?.token) {
+      window.localStorage.setItem('manger_token', nextSession.token);
+    }
+    setSession(nextSession);
+    return nextSession;
+  }, []);
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  const logout = useCallback(async () => {
+    const current = sessionRef.current;
+    if (current?.token) {
+      try { await api.logout(current.token); } catch {}
+    }
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem('manger_token');
+    }
+    setSession(null);
+  }, []);
+
+  return (
+    <AuthContext.Provider value={{ session, bootstrapLoading, login, logout }}>
+      {children}
+    </AuthContext.Provider>
+  );
 }
 
 export function useAuth() {

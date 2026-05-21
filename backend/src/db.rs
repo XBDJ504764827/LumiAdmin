@@ -243,9 +243,6 @@ impl Database {
         sqlx::query(r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS last_tested_at TIMESTAMPTZ"#)
             .execute(&self.pool)
             .await?;
-        sqlx::query(r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS report_token TEXT"#)
-            .execute(&self.pool)
-            .await?;
         sqlx::query(r#"UPDATE servers SET report_token = md5(random()::TEXT || clock_timestamp()::TEXT) WHERE report_token IS NULL OR btrim(report_token) = ''"#)
             .execute(&self.pool)
             .await?;
@@ -815,6 +812,28 @@ impl Database {
             .execute(&self.pool)
             .await?;
 
+        // Session 清理优化 - logout_all_for_user 按 user_id 查询
+        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions (user_id)"#)
+            .execute(&self.pool)
+            .await?;
+        // Session 过期清理优化
+        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions (expires_at)"#)
+            .execute(&self.pool)
+            .await?;
+
+        // 管理日志查询优化
+        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_admin_logs_operator_name ON admin_logs (operator_name)"#)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_admin_logs_created_at ON admin_logs (created_at DESC)"#)
+            .execute(&self.pool)
+            .await?;
+
+        // 封禁记录操作者查询优化
+        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_ban_records_operator_name ON ban_records (operator_name)"#)
+            .execute(&self.pool)
+            .await?;
+
         // 社区级访问限制
         sqlx::query(r#"ALTER TABLE communities ADD COLUMN IF NOT EXISTS min_rating INTEGER NOT NULL DEFAULT 0"#)
             .execute(&self.pool)
@@ -830,11 +849,6 @@ impl Database {
             .await?;
         // 已有自定义设置的服务器保留原行为
         sqlx::query(r#"UPDATE servers SET use_custom_access = true WHERE access_restriction_enabled = true OR min_rating > 0 OR min_steam_level > 0"#)
-            .execute(&self.pool)
-            .await?;
-
-        // 玩家访问缓存过期时间索引（用于快照加载）
-        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_player_access_cache_expires_at ON player_access_cache (expires_at)"#)
             .execute(&self.pool)
             .await?;
 

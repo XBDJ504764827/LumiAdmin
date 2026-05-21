@@ -79,3 +79,26 @@ pub async fn logout_all_for_user(
     };
     Ok(result.rows_affected())
 }
+
+/// 清理所有过期 session
+pub async fn cleanup_expired_sessions(db: &Database) -> anyhow::Result<u64> {
+    let result = sqlx::query("DELETE FROM sessions WHERE expires_at < NOW()")
+        .execute(&db.pool)
+        .await?;
+    Ok(result.rows_affected())
+}
+
+/// 启动过期 session 定时清理循环
+pub fn start_session_cleanup_loop(db: Database, interval_secs: u64) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+        loop {
+            interval.tick().await;
+            match cleanup_expired_sessions(&db).await {
+                Ok(0) => {}
+                Ok(count) => tracing::info!(count, "cleaned up expired sessions"),
+                Err(e) => tracing::warn!(%e, "failed to cleanup expired sessions"),
+            }
+        }
+    });
+}

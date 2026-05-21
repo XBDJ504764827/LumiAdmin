@@ -15,6 +15,15 @@ pub struct User {
     pub created_at: DateTime<Utc>,
 }
 
+/// 鉴权用的操作者信息，不包含 password_hash
+#[derive(Clone, Debug)]
+pub struct Operator {
+    pub id: Uuid,
+    pub username: String,
+    pub display_name: String,
+    pub role: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Session {
     pub token: Uuid,

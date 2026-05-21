@@ -1,4 +1,4 @@
-use crate::{db::Database, models::User, password::hash_password, routes::ListQuery};
+use crate::{db::Database, models::{Operator, User}, password::hash_password, routes::ListQuery};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -41,7 +41,7 @@ pub async fn find_user(db: &Database, id: Uuid) -> anyhow::Result<User> {
     .map_err(Into::into)
 }
 
-pub async fn list_users(db: &Database, actor: &User, query: &ListQuery) -> anyhow::Result<crate::routes::PaginatedResponse<UserListItem>> {
+pub async fn list_users(db: &Database, actor: &Operator, query: &ListQuery) -> anyhow::Result<crate::routes::PaginatedResponse<UserListItem>> {
     if actor.role == "normal" {
         let user = find_user(db, actor.id).await?;
         return Ok(crate::routes::PaginatedResponse {

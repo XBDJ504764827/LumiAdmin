@@ -42,6 +42,9 @@ docs/
 Thumbs.db
 Desktop.ini
 
+# ----- 敏感数据文件 -----
+access_snapshot.json
+
 # ----- 日志 & 临时文件 -----
 *.log
 *.tmp

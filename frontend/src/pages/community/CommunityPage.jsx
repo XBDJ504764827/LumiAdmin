@@ -704,29 +704,49 @@ export function CommunityPage() {
       {/* 在线玩家弹窗 */}
       <Modal
         open={playersModal.open}
-        title="查看在线玩家"
+        title={`在线玩家 — ${playersModal.serverName}`}
         onClose={() => setPlayersModal({ open: false, serverId: null, serverName: '', players: [], loading: false, error: '' })}
         footer={<button className="btn btn-primary" onClick={() => setPlayersModal({ open: false, serverId: null, serverName: '', players: [], loading: false, error: '' })}>关闭</button>}
       >
-        <div className="form-group">
-          <label>服务器</label>
-          <input type="text" className="form-control" value={playersModal.serverName} readOnly />
-        </div>
-        {playersModal.loading ? <div>正在获取在线玩家...</div> : null}
-        {!playersModal.loading && playersModal.error ? <div style={{ color: 'var(--accent)' }}>{playersModal.error}</div> : null}
-        {!playersModal.loading && !playersModal.error && playersModal.players.length === 0 ? <div>当前没有在线玩家。</div> : null}
-        {!playersModal.loading && !playersModal.error && playersModal.players.length > 0 ? (
-          <div className="online-player-list">
-            {playersModal.players.map((player) => (
-              <OnlinePlayerCard
-                key={onlinePlayerKey(player)}
-                player={player}
-                canOperate={canMutate}
-                onKick={() => handleKickPlayer(player)}
-                onBan={(duration, reason) => handleBanPlayer(player, duration, reason)}
-              />
-            ))}
+        {playersModal.loading ? (
+          <div className="online-player-loading">
+            <div>⟳</div>
+            <div>正在获取在线玩家...</div>
           </div>
+        ) : null}
+        {!playersModal.loading && playersModal.error ? (
+          <div className="alert alert-error">
+            <span className="alert-icon">✕</span>
+            <div className="alert-content"><div className="alert-text">{playersModal.error}</div></div>
+          </div>
+        ) : null}
+        {!playersModal.loading && !playersModal.error && playersModal.players.length === 0 ? (
+          <div className="online-player-empty">
+            <div className="online-player-empty-icon">👥</div>
+            <div className="online-player-empty-text">当前没有在线玩家</div>
+          </div>
+        ) : null}
+        {!playersModal.loading && !playersModal.error && playersModal.players.length > 0 ? (
+          <>
+            <div className="online-player-header">
+              <div className="online-player-header-left">
+                <svg className="online-player-header-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
+                <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text2)' }}>玩家列表</span>
+              </div>
+              <span className="online-player-count">{playersModal.players.length} 人在线</span>
+            </div>
+            <div className="online-player-list">
+              {playersModal.players.map((player) => (
+                <OnlinePlayerCard
+                  key={onlinePlayerKey(player)}
+                  player={player}
+                  canOperate={canMutate}
+                  onKick={() => handleKickPlayer(player)}
+                  onBan={(duration, reason) => handleBanPlayer(player, duration, reason)}
+                />
+              ))}
+            </div>
+          </>
         ) : null}
       </Modal>
       {dialog}
@@ -740,6 +760,8 @@ function OnlinePlayerCard({ player, canOperate, onKick, onBan }) {
   const [banDuration, setBanDuration] = React.useState(0);
   const [banReason, setBanReason] = React.useState(BAN_REASON_OPTIONS[0]);
 
+  const initial = (player.name || '?')[0].toUpperCase();
+
   function handleBan() {
     onBan(banDuration, banReason);
     setShowBanForm(false);
@@ -749,8 +771,15 @@ function OnlinePlayerCard({ player, canOperate, onKick, onBan }) {
     <div className="online-player-card">
       <div className="online-player-row">
         <div className="online-player-info">
-          <span className="online-player-name">{player.name}</span>
-          <span className="online-player-steamid">{player.steam_id64}</span>
+          <div className="online-player-avatar">{initial}</div>
+          <div className="online-player-detail">
+            <span className="online-player-name">{player.name}</span>
+            <div className="online-player-meta">
+              <span className="online-player-tag">{player.steam_id64}</span>
+              <span className="online-player-tag">{player.ip}</span>
+              <span className="online-player-tag online-player-tag-tag-ping">{player.ping}ms</span>
+            </div>
+          </div>
         </div>
         {canOperate ? (
           <div className="online-player-actions">

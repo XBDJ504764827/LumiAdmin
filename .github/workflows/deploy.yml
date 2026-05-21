@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ===== 第一步：检测哪些模块有变更 =====
+  # ===== 检测变更模块 =====
   detect-changes:
     runs-on: ubuntu-latest
     outputs:
@@ -101,7 +101,7 @@ jobs:
           path: backend/target/release/manger-backend
           retention-days: 1
 
-  # ===== 插件构建（源码 → .smx 编译可在此添加）=====
+  # ===== 插件构建 =====
   build-plugin:
     needs: detect-changes
     if: needs.detect-changes.outputs.plugin == 'true'
@@ -120,8 +120,8 @@ jobs:
             csgo/addons/sourcemod/plugins/manger_edge_sync.smx
           retention-days: 1
 
-  # ===== 部署前端到 Web 服务器 1 =====
-  deploy-frontend-web-1:
+  # ===== 部署前端 → CNGOKZ =====
+  deploy-frontend-cngokz:
     needs: [detect-changes, build-frontend]
     if: needs.detect-changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
@@ -136,16 +136,16 @@ jobs:
       - name: Setup SSH Key
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.WEB_SSH_KEY }}" > ~/.ssh/deploy_key
+          echo "${{ secrets.WEB_SSH_KEY_CNGOKZ }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ vars.WEB_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ vars.WEB_HOST_CNGOKZ }} >> ~/.ssh/known_hosts
 
       - name: Deploy Frontend
         run: |
-          rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key" dist/ ${{ vars.WEB_USER }}@${{ vars.WEB_HOST }}:${{ vars.WEB_PATH }}/dist/
+          rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key" dist/ ${{ vars.WEB_USER_CNGOKZ }}@${{ vars.WEB_HOST_CNGOKZ }}:${{ vars.WEB_PATH_CNGOKZ }}/dist/
 
-  # ===== 部署后端到 Web 服务器 1 =====
-  deploy-backend-web-1:
+  # ===== 部署后端 → CNGOKZ =====
+  deploy-backend-cngokz:
     needs: [detect-changes, build-backend]
     if: needs.detect-changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
@@ -160,26 +160,26 @@ jobs:
       - name: Setup SSH Key
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.WEB_SSH_KEY }}" > ~/.ssh/deploy_key
+          echo "${{ secrets.WEB_SSH_KEY_CNGOKZ }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ vars.WEB_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ vars.WEB_HOST_CNGOKZ }} >> ~/.ssh/known_hosts
 
       - name: Deploy Backend
         run: |
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" backend-bin/manger-backend ${{ vars.WEB_USER }}@${{ vars.WEB_HOST }}:${{ vars.WEB_PATH }}/
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" backend-bin/manger-backend ${{ vars.WEB_USER_CNGOKZ }}@${{ vars.WEB_HOST_CNGOKZ }}:${{ vars.WEB_PATH_CNGOKZ }}/
 
       - name: Restart Backend Service
         uses: appleboy/ssh-action@v1
         with:
-          host: ${{ vars.WEB_HOST }}
-          username: ${{ vars.WEB_USER }}
-          key: ${{ secrets.WEB_SSH_KEY }}
+          host: ${{ vars.WEB_HOST_CNGOKZ }}
+          username: ${{ vars.WEB_USER_CNGOKZ }}
+          key: ${{ secrets.WEB_SSH_KEY_CNGOKZ }}
           script: |
-            chmod +x ${{ vars.WEB_PATH }}/manger-backend
+            chmod +x ${{ vars.WEB_PATH_CNGOKZ }}/manger-backend
             sudo systemctl restart manger-backend || true
 
-  # ===== 部署前端到 Web 服务器 2 =====
-  deploy-frontend-web-2:
+  # ===== 部署前端 → ILIAN =====
+  deploy-frontend-ilian:
     needs: [detect-changes, build-frontend]
     if: needs.detect-changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
@@ -194,16 +194,16 @@ jobs:
       - name: Setup SSH Key
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.WEB2_SSH_KEY_CNGOKZ }}" > ~/.ssh/deploy_key
+          echo "${{ secrets.WEB_SSH_KEY_ILIAN }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ vars.WEB2_HOST_CNGOKZ }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ vars.WEB_HOST_ILIAN }} >> ~/.ssh/known_hosts
 
       - name: Deploy Frontend
         run: |
-          rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key" dist/ ${{ vars.WEB2_USER_CNGOKZ }}@${{ vars.WEB2_HOST_CNGOKZ }}:${{ vars.WEB2_PATH_CNGOKZ }}/dist/
+          rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key" dist/ ${{ vars.WEB_USER_ILIAN }}@${{ vars.WEB_HOST_ILIAN }}:${{ vars.WEB_PATH_ILIAN }}/dist/
 
-  # ===== 部署后端到 Web 服务器 2 =====
-  deploy-backend-web-2:
+  # ===== 部署后端 → ILIAN =====
+  deploy-backend-ilian:
     needs: [detect-changes, build-backend]
     if: needs.detect-changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
@@ -218,26 +218,26 @@ jobs:
       - name: Setup SSH Key
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.WEB2_SSH_KEY_CNGOKZ }}" > ~/.ssh/deploy_key
+          echo "${{ secrets.WEB_SSH_KEY_ILIAN }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ vars.WEB2_HOST_CNGOKZ }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ vars.WEB_HOST_ILIAN }} >> ~/.ssh/known_hosts
 
       - name: Deploy Backend
         run: |
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" backend-bin/manger-backend ${{ vars.WEB2_USER_CNGOKZ }}@${{ vars.WEB2_HOST_CNGOKZ }}:${{ vars.WEB2_PATH_CNGOKZ }}/
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" backend-bin/manger-backend ${{ vars.WEB_USER_ILIAN }}@${{ vars.WEB_HOST_ILIAN }}:${{ vars.WEB_PATH_ILIAN }}/
 
       - name: Restart Backend Service
         uses: appleboy/ssh-action@v1
         with:
-          host: ${{ vars.WEB2_HOST_CNGOKZ }}
-          username: ${{ vars.WEB2_USER_CNGOKZ }}
-          key: ${{ secrets.WEB2_SSH_KEY_CNGOKZ }}
+          host: ${{ vars.WEB_HOST_ILIAN }}
+          username: ${{ vars.WEB_USER_ILIAN }}
+          key: ${{ secrets.WEB_SSH_KEY_ILIAN }}
           script: |
-            chmod +x ${{ vars.WEB2_PATH_CNGOKZ }}/manger-backend
+            chmod +x ${{ vars.WEB_PATH_ILIAN }}/manger-backend
             sudo systemctl restart manger-backend || true
 
-  # ===== 部署插件到游戏服务器 1 =====
-  deploy-plugin-1:
+  # ===== 部署插件 → CNGOKZ =====
+  deploy-plugin-cngokz:
     needs: [detect-changes, build-plugin]
     if: needs.detect-changes.outputs.plugin == 'true'
     runs-on: ubuntu-latest
@@ -252,25 +252,25 @@ jobs:
       - name: Setup SSH Key
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.GAME_SSH_KEY }}" > ~/.ssh/deploy_key
+          echo "${{ secrets.GAME_SSH_KEY_CNGOKZ }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ vars.GAME_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ vars.GAME_HOST_CNGOKZ }} >> ~/.ssh/known_hosts
 
       - name: Deploy Plugin
         run: |
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugins/manger_online_reporter.smx plugins/manger_edge_sync.smx ${{ vars.GAME_USER }}@${{ vars.GAME_HOST }}:${{ vars.GAME_PATH }}/
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugins/manger_online_reporter.smx plugins/manger_edge_sync.smx ${{ vars.GAME_USER_CNGOKZ }}@${{ vars.GAME_HOST_CNGOKZ }}:${{ vars.GAME_PATH_CNGOKZ }}/
 
       - name: Reload Plugin
         uses: appleboy/ssh-action@v1
         with:
-          host: ${{ vars.GAME_HOST }}
-          username: ${{ vars.GAME_USER }}
-          key: ${{ secrets.GAME_SSH_KEY }}
+          host: ${{ vars.GAME_HOST_CNGOKZ }}
+          username: ${{ vars.GAME_USER_CNGOKZ }}
+          key: ${{ secrets.GAME_SSH_KEY_CNGOKZ }}
           script: |
-            echo "插件已更新，请在服务器中执行 sm plugins reload manger_online_reporter; sm plugins reload manger_edge_sync 或重启服务器"
+            echo "插件已更新，请执行 sm plugins reload manger_online_reporter; sm plugins reload manger_edge_sync"
 
-  # ===== 部署插件到游戏服务器 2 =====
-  deploy-plugin-2:
+  # ===== 部署插件 → ILIAN =====
+  deploy-plugin-ilian:
     needs: [detect-changes, build-plugin]
     if: needs.detect-changes.outputs.plugin == 'true'
     runs-on: ubuntu-latest
@@ -285,19 +285,19 @@ jobs:
       - name: Setup SSH Key
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.GAME2_SSH_KEY_CNGOKZ }}" > ~/.ssh/deploy_key
+          echo "${{ secrets.GAME_SSH_KEY_ILIAN }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ vars.GAME2_HOST_CNGOKZ }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ vars.GAME_HOST_ILIAN }} >> ~/.ssh/known_hosts
 
       - name: Deploy Plugin
         run: |
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugins/manger_online_reporter.smx plugins/manger_edge_sync.smx ${{ vars.GAME2_USER_CNGOKZ }}@${{ vars.GAME2_HOST_CNGOKZ }}:${{ vars.GAME2_PATH_CNGOKZ }}/
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugins/manger_online_reporter.smx plugins/manger_edge_sync.smx ${{ vars.GAME_USER_ILIAN }}@${{ vars.GAME_HOST_ILIAN }}:${{ vars.GAME_PATH_ILIAN }}/
 
       - name: Reload Plugin
         uses: appleboy/ssh-action@v1
         with:
-          host: ${{ vars.GAME2_HOST_CNGOKZ }}
-          username: ${{ vars.GAME2_USER_CNGOKZ }}
-          key: ${{ secrets.GAME2_SSH_KEY_CNGOKZ }}
+          host: ${{ vars.GAME_HOST_ILIAN }}
+          username: ${{ vars.GAME_USER_ILIAN }}
+          key: ${{ secrets.GAME_SSH_KEY_ILIAN }}
           script: |
-            echo "插件已更新，请在服务器中执行 sm plugins reload manger_online_reporter; sm plugins reload manger_edge_sync 或重启服务器"
+            echo "插件已更新，请执行 sm plugins reload manger_online_reporter; sm plugins reload manger_edge_sync"

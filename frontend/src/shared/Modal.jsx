@@ -1,0 +1,20 @@
+import React from 'react';
+
+export function Modal({ open, title, subtitle, children, footer, onClose, wide = false }) {
+  if (!open) return null;
+  return (
+    <div className="modal-overlay active" onClick={onClose}>
+      <div className="modal" style={wide ? { maxWidth: 640 } : undefined} onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div>
+            <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>{title}</h2>
+            {subtitle ? <div className="card-sub">{subtitle}</div> : null}
+          </div>
+          <span style={{ cursor: 'pointer', color: 'var(--text3)' }} onClick={onClose}>✕</span>
+        </div>
+        <div className="modal-body">{children}</div>
+        {footer ? <div className="modal-footer">{footer}</div> : null}
+      </div>
+    </div>
+  );
+}

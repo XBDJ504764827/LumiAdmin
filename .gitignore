@@ -1,0 +1,47 @@
+# ==============================
+# LumiAdmin .gitignore
+# ==============================
+
+# ----- 环境 & 密钥 -----
+.env
+.env.*
+!.env.example
+
+# ----- Rust 后端 -----
+backend/target/
+**/*.rs.bk
+
+# ----- Node.js 前端 -----
+frontend/node_modules/
+frontend/dist/
+
+# ----- SourceMod 编译器 -----
+sourcemod-*/
+
+# ----- Claude Code -----
+.claude/
+
+# ----- Worktree -----
+.worktree/
+
+# ----- Nginx 配置 -----
+nginx/
+
+# ----- 文档（内部） -----
+docs/
+
+# ----- IDE & 编辑器 -----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ----- 操作系统 -----
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ----- 日志 & 临时文件 -----
+*.log
+*.tmp

@@ -1,0 +1,129 @@
+import React, { useCallback, useEffect, useState } from 'react';
+import { api } from '../../lib/api.js';
+import { PublicPageShell } from './PublicPageShell.jsx';
+import { SearchBar } from '../../shared/SearchBar.jsx';
+import { Pagination } from '../../shared/Pagination.jsx';
+
+export function PublicWhitelistPage() {
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const loadItems = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const params = { page, page_size: 20 };
+      if (search) params.search = search;
+      const result = await api.publicWhitelist(params);
+      setData(result);
+    } catch (err) {
+      setError(err);
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [page, search]);
+
+  useEffect(() => { loadItems(); }, [loadItems]);
+
+  const items = data?.items ?? [];
+  const total = data?.total ?? 0;
+
+  function renderContent() {
+    if (loading) return (
+      <div className="public-loading">
+        <div className="public-loading-spinner" />
+        正在加载白名单...
+      </div>
+    );
+
+    if (error) return (
+      <div className="public-error">
+        加载白名单失败
+        <div><button className="public-error-retry" onClick={loadItems}>重新加载</button></div>
+      </div>
+    );
+
+    if (items.length === 0) return (
+      <div className="public-empty">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" />
+        </svg>
+        <div className="public-empty-text">暂无白名单记录</div>
+        <div className="public-empty-hint">目前还没有已通过的白名单玩家</div>
+      </div>
+    );
+
+    return (
+      <>
+        <div className="table-responsive">
+          <table className="public-table">
+            <thead>
+              <tr>
+                <th>游戏昵称</th>
+                <th>SteamID64</th>
+                <th>申请时间</th>
+                <th>通过时间</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item) => (
+                <tr key={item.id}>
+                  <td style={{ fontWeight: 600 }}>{item.nickname}</td>
+                  <td className="steam-id">{item.steamid64}</td>
+                  <td style={{ color: 'var(--text3)' }}>{item.applied_at}</td>
+                  <td>
+                    {item.approved_at
+                      ? <span style={{ color: 'var(--teal)' }}>{item.approved_at}</span>
+                      : <span style={{ color: 'var(--text3)' }}>-</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <Pagination page={page} pageSize={20} total={total} onChange={setPage} />
+      </>
+    );
+  }
+
+  return (
+    <PublicPageShell>
+      <div className="public-hero">
+        <div className="public-hero-icon" style={{ background: 'linear-gradient(135deg, var(--teal), #7dd3c0)' }}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" />
+          </svg>
+        </div>
+        <h1>白名单公示</h1>
+        <p>查看当前已通过审核的白名单玩家，所有信息实时更新。</p>
+      </div>
+
+      {!loading && data && (
+        <div className="public-stats">
+          <div className="public-stat">
+            <span className="public-stat-value" style={{ color: 'var(--teal)' }}>{total}</span>
+            <span className="public-stat-label">已通过玩家</span>
+          </div>
+        </div>
+      )}
+
+      <div style={{ marginBottom: 16 }}>
+        <SearchBar
+          value={search}
+          onChange={(v) => { setSearch(v); setPage(1); }}
+          placeholder="搜索 SteamID64 / 昵称..."
+        />
+      </div>
+
+      <div className="public-card">
+        <div style={{ overflow: 'hidden' }}>
+          {renderContent()}
+        </div>
+      </div>
+    </PublicPageShell>
+  );
+}

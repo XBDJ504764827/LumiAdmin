@@ -1,0 +1,303 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  # ===== 第一步：检测哪些模块有变更 =====
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      backend: ${{ steps.filter.outputs.backend }}
+      plugin: ${{ steps.filter.outputs.plugin }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect Changed Paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            frontend:
+              - 'frontend/**'
+            backend:
+              - 'backend/**'
+            plugin:
+              - 'csgo/**'
+
+      - name: Print Detection Result
+        run: |
+          echo "Frontend changed: ${{ steps.filter.outputs.frontend }}"
+          echo "Backend changed: ${{ steps.filter.outputs.backend }}"
+          echo "Plugin changed: ${{ steps.filter.outputs.plugin }}"
+
+  # ===== 前端构建 =====
+  build-frontend:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build Frontend
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
+      - name: Upload Frontend Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-output
+          path: frontend/dist
+          retention-days: 1
+
+  # ===== 后端构建 =====
+  build-backend:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            backend/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build Backend
+        run: |
+          cd backend
+          cargo build --release
+
+      - name: Upload Backend Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-output
+          path: backend/target/release/manger-backend
+          retention-days: 1
+
+  # ===== 插件构建（源码 → .smx 编译可在此添加）=====
+  build-plugin:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.plugin == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Upload Plugin Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-output
+          path: |
+            csgo/addons/sourcemod/plugins/manger_online_reporter.smx
+            csgo/addons/sourcemod/plugins/manger_edge_sync.smx
+          retention-days: 1
+
+  # ===== 部署前端到 Web 服务器 1 =====
+  deploy-frontend-web-1:
+    needs: [detect-changes, build-frontend]
+    if: needs.detect-changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Frontend Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-output
+          path: dist
+
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.WEB_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ vars.WEB_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy Frontend
+        run: |
+          rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key" dist/ ${{ vars.WEB_USER }}@${{ vars.WEB_HOST }}:${{ vars.WEB_PATH }}/dist/
+
+  # ===== 部署后端到 Web 服务器 1 =====
+  deploy-backend-web-1:
+    needs: [detect-changes, build-backend]
+    if: needs.detect-changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Backend Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-output
+          path: backend-bin
+
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.WEB_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ vars.WEB_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy Backend
+        run: |
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" backend-bin/manger-backend ${{ vars.WEB_USER }}@${{ vars.WEB_HOST }}:${{ vars.WEB_PATH }}/
+
+      - name: Restart Backend Service
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ vars.WEB_HOST }}
+          username: ${{ vars.WEB_USER }}
+          key: ${{ secrets.WEB_SSH_KEY }}
+          script: |
+            chmod +x ${{ vars.WEB_PATH }}/manger-backend
+            sudo systemctl restart manger-backend || true
+
+  # ===== 部署前端到 Web 服务器 2 =====
+  deploy-frontend-web-2:
+    needs: [detect-changes, build-frontend]
+    if: needs.detect-changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Frontend Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-output
+          path: dist
+
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.WEB2_SSH_KEY_CNGOKZ }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ vars.WEB2_HOST_CNGOKZ }} >> ~/.ssh/known_hosts
+
+      - name: Deploy Frontend
+        run: |
+          rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key" dist/ ${{ vars.WEB2_USER_CNGOKZ }}@${{ vars.WEB2_HOST_CNGOKZ }}:${{ vars.WEB2_PATH_CNGOKZ }}/dist/
+
+  # ===== 部署后端到 Web 服务器 2 =====
+  deploy-backend-web-2:
+    needs: [detect-changes, build-backend]
+    if: needs.detect-changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Backend Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-output
+          path: backend-bin
+
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.WEB2_SSH_KEY_CNGOKZ }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ vars.WEB2_HOST_CNGOKZ }} >> ~/.ssh/known_hosts
+
+      - name: Deploy Backend
+        run: |
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" backend-bin/manger-backend ${{ vars.WEB2_USER_CNGOKZ }}@${{ vars.WEB2_HOST_CNGOKZ }}:${{ vars.WEB2_PATH_CNGOKZ }}/
+
+      - name: Restart Backend Service
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ vars.WEB2_HOST_CNGOKZ }}
+          username: ${{ vars.WEB2_USER_CNGOKZ }}
+          key: ${{ secrets.WEB2_SSH_KEY_CNGOKZ }}
+          script: |
+            chmod +x ${{ vars.WEB2_PATH_CNGOKZ }}/manger-backend
+            sudo systemctl restart manger-backend || true
+
+  # ===== 部署插件到游戏服务器 1 =====
+  deploy-plugin-1:
+    needs: [detect-changes, build-plugin]
+    if: needs.detect-changes.outputs.plugin == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Plugin Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: plugin-output
+          path: plugins
+
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.GAME_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ vars.GAME_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy Plugin
+        run: |
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugins/manger_online_reporter.smx plugins/manger_edge_sync.smx ${{ vars.GAME_USER }}@${{ vars.GAME_HOST }}:${{ vars.GAME_PATH }}/
+
+      - name: Reload Plugin
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ vars.GAME_HOST }}
+          username: ${{ vars.GAME_USER }}
+          key: ${{ secrets.GAME_SSH_KEY }}
+          script: |
+            echo "插件已更新，请在服务器中执行 sm plugins reload manger_online_reporter; sm plugins reload manger_edge_sync 或重启服务器"
+
+  # ===== 部署插件到游戏服务器 2 =====
+  deploy-plugin-2:
+    needs: [detect-changes, build-plugin]
+    if: needs.detect-changes.outputs.plugin == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Plugin Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: plugin-output
+          path: plugins
+
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.GAME2_SSH_KEY_CNGOKZ }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ vars.GAME2_HOST_CNGOKZ }} >> ~/.ssh/known_hosts
+
+      - name: Deploy Plugin
+        run: |
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugins/manger_online_reporter.smx plugins/manger_edge_sync.smx ${{ vars.GAME2_USER_CNGOKZ }}@${{ vars.GAME2_HOST_CNGOKZ }}:${{ vars.GAME2_PATH_CNGOKZ }}/
+
+      - name: Reload Plugin
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ vars.GAME2_HOST_CNGOKZ }}
+          username: ${{ vars.GAME2_USER_CNGOKZ }}
+          key: ${{ secrets.GAME2_SSH_KEY_CNGOKZ }}
+          script: |
+            echo "插件已更新，请在服务器中执行 sm plugins reload manger_online_reporter; sm plugins reload manger_edge_sync 或重启服务器"

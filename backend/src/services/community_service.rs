@@ -1,11 +1,7 @@
 use std::collections::BTreeMap;
-use std::time::Duration;
 
 use crate::db::Database;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
-use tokio::time::timeout;
 use uuid::Uuid;
 
 const OFFLINE_AFTER_SECONDS: i64 = 60;
@@ -180,12 +176,6 @@ struct ServerDetailRow {
     whitelist_mode_enabled: bool,
     use_custom_access: bool,
 }
-
-const AUTH_REQUEST_ID: i32 = 1;
-const AUTH_PACKET_TYPE: i32 = 3;
-const AUTH_RESPONSE_PACKET_TYPE: i32 = 2;
-const EXEC_COMMAND_PACKET_TYPE: i32 = 2;
-const RESPONSE_VALUE_PACKET_TYPE: i32 = 0;
 
 pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
     mark_stale_servers_offline(db).await?;
@@ -644,9 +634,9 @@ async fn test_rcon_connection(input: &ServerInput) -> anyhow::Result<RconTestRes
 
     let address = format!("{}:{}", ip, input.port);
 
-    match authenticate_rcon(&address, password).await {
-        Ok(mut stream) => {
-            let players = send_rcon_command(&mut stream, "listplayers")
+    match crate::rcon::RconConnection::connect(&address, password, 3).await {
+        Ok(mut conn) => {
+            let players = conn.execute("listplayers")
                 .await
                 .map(|response| parse_players_from_response(&response))
                 .unwrap_or_default();
@@ -663,100 +653,6 @@ async fn test_rcon_connection(input: &ServerInput) -> anyhow::Result<RconTestRes
             players: Vec::new(),
         }),
     }
-}
-
-async fn authenticate_rcon(address: &str, password: &str) -> Result<TcpStream, String> {
-    let connect_result = timeout(Duration::from_secs(3), TcpStream::connect(address)).await;
-    let mut stream = match connect_result {
-        Ok(Ok(stream)) => stream,
-        Ok(Err(error)) => return Err(format!("无法连接到服务器 {}: {}", address, error)),
-        Err(_) => return Err(format!("连接服务器 {} 超时", address)),
-    };
-
-    if let Err(error) = send_rcon_packet(&mut stream, AUTH_REQUEST_ID, AUTH_PACKET_TYPE, password).await {
-        return Err(format!("向服务器 {} 发送 RCON 认证请求失败: {}", address, error));
-    }
-
-    loop {
-        let (request_id, packet_type, _) = match read_rcon_packet(&mut stream).await {
-            Ok(packet) => packet,
-            Err(error) => return Err(format!("读取服务器 {} 的 RCON 认证响应失败: {}", address, error)),
-        };
-
-        if packet_type != AUTH_RESPONSE_PACKET_TYPE {
-            continue;
-        }
-
-        if request_id == AUTH_REQUEST_ID {
-            return Ok(stream);
-        }
-
-        if request_id == -1 {
-            return Err("RCON 密码错误，认证失败".to_string());
-        }
-
-        return Err(format!("服务器 {} 返回了无效的 RCON 认证响应", address));
-    }
-}
-
-async fn send_rcon_command(stream: &mut TcpStream, command: &str) -> Result<String, String> {
-    send_rcon_packet(stream, AUTH_REQUEST_ID, EXEC_COMMAND_PACKET_TYPE, command)
-        .await
-        .map_err(|error| format!("发送 RCON 命令失败: {}", error))?;
-
-    let (request_id, packet_type, body) = read_rcon_packet(stream)
-        .await
-        .map_err(|error| format!("读取 RCON 命令响应失败: {}", error))?;
-
-    if request_id != AUTH_REQUEST_ID || packet_type != RESPONSE_VALUE_PACKET_TYPE {
-        return Err("服务器返回了无效的 RCON 命令响应".to_string());
-    }
-
-    Ok(body)
-}
-
-async fn send_rcon_packet(
-    stream: &mut TcpStream,
-    request_id: i32,
-    packet_type: i32,
-    body: &str,
-) -> std::io::Result<()> {
-    let size = body.len() + 10;
-    let mut packet = Vec::with_capacity(size + 4);
-    packet.extend_from_slice(&(size as i32).to_le_bytes());
-    packet.extend_from_slice(&request_id.to_le_bytes());
-    packet.extend_from_slice(&packet_type.to_le_bytes());
-    packet.extend_from_slice(body.as_bytes());
-    packet.extend_from_slice(&[0, 0]);
-    stream.write_all(&packet).await
-}
-
-async fn read_rcon_packet(stream: &mut TcpStream) -> std::io::Result<(i32, i32, String)> {
-    let mut size_bytes = [0_u8; 4];
-    stream.read_exact(&mut size_bytes).await?;
-    let size = i32::from_le_bytes(size_bytes);
-
-    if size < 10 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "RCON 响应长度无效",
-        ));
-    }
-
-    let mut payload = vec![0_u8; size as usize];
-    stream.read_exact(&mut payload).await?;
-
-    let mut request_id_bytes = [0_u8; 4];
-    request_id_bytes.copy_from_slice(&payload[0..4]);
-
-    let mut packet_type_bytes = [0_u8; 4];
-    packet_type_bytes.copy_from_slice(&payload[4..8]);
-
-    Ok((
-        i32::from_le_bytes(request_id_bytes),
-        i32::from_le_bytes(packet_type_bytes),
-        String::from_utf8_lossy(&payload[8..payload.len() - 2]).into_owned(),
-    ))
 }
 
 fn parse_players_from_response(response: &str) -> Vec<String> {
@@ -884,13 +780,13 @@ pub async fn execute_rcon_command(
     .ok_or_else(|| anyhow::anyhow!("服务器不存在"))?;
 
     let address = format!("{}:{}", server.ip, server.port);
-    let mut stream = authenticate_rcon(&address, &server.rcon_password)
+    let mut conn = crate::rcon::RconConnection::connect(&address, &server.rcon_password, 3)
         .await
-        .map_err(|error| anyhow::anyhow!("{}", error))?;
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    let response = send_rcon_command(&mut stream, command)
+    let response = conn.execute(command)
         .await
-        .map_err(|error| anyhow::anyhow!("{}", error))?;
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     Ok(response)
 }

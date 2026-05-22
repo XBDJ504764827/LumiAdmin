@@ -9,6 +9,7 @@ import {
   defaultPlayerApiConfig,
   defaultWebhookConfig,
   flattenServerOptions,
+  flattenExternalServerOptions,
   normalizePlayerApiConfig,
   normalizePlayerApiRows,
 } from './apiPages.js';
@@ -33,6 +34,7 @@ export function PlayerApiPage() {
 
   const playersState = useAsync(() => api.playerApiPlayers(token), [token, refreshKey]);
   const configState = useAsync(() => api.playerApiConfig(token), [token, refreshKey]);
+  const externalServersState = useAsync(() => api.externalServers(token), [token, refreshKey]);
   const serversState = useAsync(() => api.servers(token), [token]);
 
   useEffect(() => {
@@ -43,6 +45,7 @@ export function PlayerApiPage() {
 
   const rows = normalizePlayerApiRows(playersState.data?.items ?? []);
   const serverOptions = flattenServerOptions(serversState.data?.groups ?? []);
+  const externalServerOptions = flattenExternalServerOptions(externalServersState.data?.items ?? []);
 
   // 按 groupId 分组
   const groupedServers = serverOptions.reduce((acc, s) => {
@@ -94,6 +97,24 @@ export function PlayerApiPage() {
       serverIds: allSelected
         ? prev.serverIds.filter((id) => !groupServerIds.includes(id))
         : [...new Set([...prev.serverIds, ...groupServerIds])],
+    }));
+  }
+
+  function toggleExternalServer(serverId) {
+    setDraftWebhook((prev) => ({
+      ...prev,
+      externalServerIds: prev.externalServerIds.includes(serverId)
+        ? prev.externalServerIds.filter((id) => id !== serverId)
+        : [...prev.externalServerIds, serverId],
+    }));
+  }
+
+  function toggleAllExternalServers() {
+    const allIds = externalServerOptions.map((s) => s.id);
+    const allSelected = allIds.length > 0 && allIds.every((id) => draftWebhook.externalServerIds.includes(id));
+    setDraftWebhook((prev) => ({
+      ...prev,
+      externalServerIds: allSelected ? [] : allIds,
     }));
   }
 
@@ -465,6 +486,31 @@ export function PlayerApiPage() {
                   })}
                 </div>
               </div>
+
+              {/* 外部服务器选择 */}
+              {externalServerOptions.length > 0 && (
+                <div className="form-group">
+                  <label>外部服务器（RCON 查询）</label>
+                  <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 8 }}>不选择则不包含外部服务器数据</div>
+                  <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--surface2)' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 0, fontWeight: 500, fontSize: 13 }}>
+                        <input type="checkbox" checked={externalServerOptions.length > 0 && externalServerOptions.every((s) => draftWebhook.externalServerIds.includes(s.id))} onChange={toggleAllExternalServers} />
+                        全部外部服务器
+                      </label>
+                      <span style={{ fontSize: 11, color: 'var(--text3)' }}>{draftWebhook.externalServerIds.length}/{externalServerOptions.length}</span>
+                    </div>
+                    <div style={{ padding: '6px 12px 8px', display: 'flex', flexWrap: 'wrap', gap: '6px 16px' }}>
+                      {externalServerOptions.map((server) => (
+                        <label key={server.id} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 12.5, fontWeight: 400 }}>
+                          <input type="checkbox" checked={draftWebhook.externalServerIds.includes(server.id)} onChange={() => toggleExternalServer(server.id)} />
+                          {server.label} ({server.ip}:{server.port})
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {message ? <div style={{ color: 'var(--accent)', marginTop: 8, fontSize: 13 }}>{message}</div> : null}
             </div>

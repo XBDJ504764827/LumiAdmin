@@ -8,6 +8,7 @@ const UsersPage = lazy(() => import('../pages/users/UsersPage.jsx').then(m => ({
 const LogsPage = lazy(() => import('../pages/logs/LogsPage.jsx').then(m => ({ default: m.LogsPage })));
 const ApiListPage = lazy(() => import('../pages/api/ApiListPage.jsx').then(m => ({ default: m.ApiListPage })));
 const PlayerApiPage = lazy(() => import('../pages/api/PlayerApiPage.jsx').then(m => ({ default: m.PlayerApiPage })));
+const ExternalServerPage = lazy(() => import('../pages/external/ExternalServerPage.jsx').then(m => ({ default: m.ExternalServerPage })));
 const PlayerAccessPage = lazy(() => import('../pages/playerAccess/PlayerAccessPage.jsx').then(m => ({ default: m.PlayerAccessPage })));
 const AuditPage = lazy(() => import('../pages/audit/AuditPage.jsx').then(m => ({ default: m.AuditPage })));
 const PublicApplyPage = lazy(() => import('../pages/public/PublicApplyPage.jsx').then(m => ({ default: m.PublicApplyPage })));
@@ -29,6 +30,7 @@ export const protectedRoutes = [
   { path: '/logs', element: <Lazy><LogsPage /></Lazy>, roles: ['admin', 'developer'] },
   { path: '/docs/api', element: <Lazy><ApiListPage /></Lazy>, roles: ['admin', 'developer'] },
   { path: '/player-api', element: <Lazy><PlayerApiPage /></Lazy>, roles: ['admin', 'developer'] },
+  { path: '/external-servers', element: <Lazy><ExternalServerPage /></Lazy>, roles: ['admin', 'developer'] },
 ];
 
 export const publicRoutes = [

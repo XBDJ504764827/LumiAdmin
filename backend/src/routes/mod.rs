@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod community;
+pub mod external_server;
 pub mod ban;
 pub mod whitelist;
 pub mod user;
@@ -134,6 +135,10 @@ pub fn router(
         .route("/api/plugin/access/snapshot", post(access::plugin_access_snapshot))
         .route("/api/plugin/server-status", post(plugin::report_server_status))
         .route("/api/plugin/offline/sync", post(plugin::sync_offline_operations))
+        // -- external servers --
+        .route("/api/external-servers", get(external_server::list_external_servers).post(external_server::create_external_server))
+        .route("/api/external-servers/:id", put(external_server::update_external_server).delete(external_server::delete_external_server))
+        .route("/api/external-servers/:id/test", post(external_server::test_external_server))
         // -- player api --
         .route("/api/player-api/players", get(plugin::player_api_players))
         .route("/api/player-api/config", get(plugin::get_player_api_config).put(plugin::update_player_api_config))

@@ -1,3 +1,4 @@
+mod a2s;
 mod auth;
 mod config;
 mod db;
@@ -5,6 +6,7 @@ mod http_client;
 mod models;
 mod password;
 mod rate_limit_middleware;
+mod rcon;
 mod routes;
 mod services;
 
@@ -38,6 +40,8 @@ async fn main() -> anyhow::Result<()> {
     services::steam_name_refresh_service::start_steam_name_refresh_loop(db.clone(), config.clone(), 6 * 3600);
     // 启动过期 session 定时清理，每 10 分钟清理一次
     services::auth_service::start_session_cleanup_loop(db.clone(), 600);
+    // 启动外部服务器轮询，每 5 秒扫描一次，各服务器按自身 poll_interval 独立轮询
+    services::rcon_poll_service::start_rcon_poll_loop(db.clone(), 5);
     // 启动服务器配置缓存，每 5 分钟刷新一次
     let server_config_cache = Arc::new(services::server_config_cache::ServerConfigCache::new(300));
     services::server_config_cache::start_refresh_loop(db.clone(), server_config_cache.clone(), 300);

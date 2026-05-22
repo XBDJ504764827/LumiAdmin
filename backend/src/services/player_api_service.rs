@@ -29,6 +29,8 @@ pub struct PlayerApiWebhookConfig {
     pub webhook_url: String,
     pub secret: Option<String>,
     pub server_ids: Vec<Uuid>,
+    #[serde(default)]
+    pub external_server_ids: Vec<Uuid>,
     pub last_status: Option<String>,
     pub last_error: Option<String>,
     pub last_dispatched_at: Option<DateTime<Utc>>,
@@ -49,6 +51,8 @@ pub struct PlayerApiWebhookInput {
     pub webhook_url: String,
     pub secret: Option<String>,
     pub server_ids: Vec<Uuid>,
+    #[serde(default)]
+    pub external_server_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Clone)]
@@ -57,6 +61,7 @@ pub struct NormalizedWebhookInput {
     pub webhook_url: String,
     pub secret: Option<String>,
     pub server_ids: Vec<Uuid>,
+    pub external_server_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -129,7 +134,7 @@ pub async fn get_config(db: &Database) -> anyhow::Result<PlayerApiConfigResponse
     .await?;
 
     let items = sqlx::query_as::<_, PlayerApiWebhookConfig>(
-        r#"SELECT id, public_path, webhook_url, secret, server_ids, last_status, last_error, last_dispatched_at
+        r#"SELECT id, public_path, webhook_url, secret, server_ids, external_server_ids, last_status, last_error, last_dispatched_at
            FROM player_api_webhooks
            ORDER BY created_at ASC"#,
     )
@@ -196,26 +201,28 @@ pub async fn save_config(db: &Database, input: PlayerApiConfigInput) -> anyhow::
             // 更新现有记录，保留状态信息
             sqlx::query(
                 r#"UPDATE player_api_webhooks
-                   SET webhook_url = $2, secret = $3, server_ids = $4, updated_at = now()
+                   SET webhook_url = $2, secret = $3, server_ids = $4, external_server_ids = $5, updated_at = now()
                    WHERE id = $1"#,
             )
             .bind(existing_id)
             .bind(&item.webhook_url)
             .bind(&item.secret)
             .bind(&item.server_ids)
+            .bind(&item.external_server_ids)
             .execute(&mut *tx)
             .await?;
         } else {
             // 插入新记录
             sqlx::query(
-                r#"INSERT INTO player_api_webhooks (id, public_path, webhook_url, secret, server_ids)
-                   VALUES ($1, $2, $3, $4, $5)"#,
+                r#"INSERT INTO player_api_webhooks (id, public_path, webhook_url, secret, server_ids, external_server_ids)
+                   VALUES ($1, $2, $3, $4, $5, $6)"#,
             )
             .bind(Uuid::new_v4())
             .bind(item.public_path)
             .bind(item.webhook_url)
             .bind(item.secret)
             .bind(item.server_ids)
+            .bind(item.external_server_ids)
             .execute(&mut *tx)
             .await?;
         }
@@ -239,6 +246,7 @@ pub fn normalize_webhook_input(input: PlayerApiWebhookInput) -> anyhow::Result<N
         webhook_url,
         secret,
         server_ids: input.server_ids,
+        external_server_ids: input.external_server_ids,
     })
 }
 
@@ -270,6 +278,29 @@ pub fn build_webhook_payload(generated_at: DateTime<Utc>, rows: Vec<PlayerApiDis
     }
 
     WebhookPayload { generated_at, servers }
+}
+
+async fn fetch_external_server_rows(db: &Database, ids: &[Uuid]) -> anyhow::Result<Vec<WebhookServerPayload>> {
+    let servers = if ids.is_empty() {
+        crate::services::external_server_service::get_all_with_status(db).await?
+    } else {
+        crate::services::external_server_service::get_status_by_ids(db, ids).await?
+    };
+
+    Ok(servers.into_iter().map(|s| WebhookServerPayload {
+        server_id: s.id,
+        server_name: s.name,
+        server_ip: s.ip,
+        server_port: s.port,
+        current_map: s.current_map.unwrap_or_default(),
+        player_count: s.player_count.unwrap_or(0) as usize,
+        players: s.players.unwrap_or_default().into_iter().map(|name| WebhookPlayerPayload {
+            player: name,
+            steam_id64: String::new(),
+            ping: 0,
+            reported_at: s.status_queried_at.unwrap_or_default(),
+        }).collect(),
+    }).collect())
 }
 
 async fn dispatch_rows_for_item(db: &Database, item: &PlayerApiWebhookConfig) -> anyhow::Result<Vec<PlayerApiDispatchRow>> {
@@ -342,7 +373,9 @@ pub async fn dispatch_once(db: &Database, client: &Client) -> anyhow::Result<()>
             continue;
         }
         let rows = dispatch_rows_for_item(db, &item).await?;
-        let payload = build_webhook_payload(Utc::now(), rows);
+        let mut payload = build_webhook_payload(Utc::now(), rows);
+        let external_servers = fetch_external_server_rows(db, &item.external_server_ids).await?;
+        payload.servers.extend(external_servers);
         let mut request = client.post(&item.webhook_url).json(&payload);
         if let Some(secret) = item.secret.as_deref() {
             request = request.header("X-Manger-Secret", secret);
@@ -366,7 +399,7 @@ pub async fn dispatch_once(db: &Database, client: &Client) -> anyhow::Result<()>
 
 pub async fn fetch_webhook_payload_by_path(db: &Database, public_path: &str) -> anyhow::Result<WebhookPayload> {
     let item = sqlx::query_as::<_, PlayerApiWebhookConfig>(
-        r#"SELECT id, public_path, webhook_url, secret, server_ids, last_status, last_error, last_dispatched_at
+        r#"SELECT id, public_path, webhook_url, secret, server_ids, external_server_ids, last_status, last_error, last_dispatched_at
            FROM player_api_webhooks
            WHERE public_path = $1"#,
     )
@@ -376,7 +409,12 @@ pub async fn fetch_webhook_payload_by_path(db: &Database, public_path: &str) -> 
     .ok_or_else(|| anyhow::anyhow!("webhook not found"))?;
 
     let rows = dispatch_rows_for_item(db, &item).await?;
-    Ok(build_webhook_payload(Utc::now(), rows))
+    let mut payload = build_webhook_payload(Utc::now(), rows);
+
+    let external_servers = fetch_external_server_rows(db, &item.external_server_ids).await?;
+    payload.servers.extend(external_servers);
+
+    Ok(payload)
 }
 
 pub async fn dispatch_interval_seconds(db: &Database) -> anyhow::Result<u64> {

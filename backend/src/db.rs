@@ -852,6 +852,52 @@ impl Database {
             .execute(&self.pool)
             .await?;
 
+        // ========== 外部服务器（RCON 查询） ==========
+        sqlx::query(
+            r#"CREATE TABLE IF NOT EXISTS external_servers (
+              id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+              name TEXT NOT NULL,
+              ip TEXT NOT NULL,
+              port INTEGER NOT NULL,
+              rcon_password TEXT NOT NULL,
+              enabled BOOLEAN NOT NULL DEFAULT true,
+              last_queried_at TIMESTAMPTZ,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )"#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"CREATE TABLE IF NOT EXISTS external_server_status (
+              server_id UUID PRIMARY KEY REFERENCES external_servers(id) ON DELETE CASCADE,
+              server_name TEXT NOT NULL DEFAULT '',
+              current_map TEXT NOT NULL DEFAULT '',
+              player_count INTEGER NOT NULL DEFAULT 0,
+              max_players INTEGER NOT NULL DEFAULT 0,
+              players TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+              queried_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )"#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_external_servers_enabled ON external_servers (enabled) WHERE enabled = true"#)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query(r#"ALTER TABLE external_servers ALTER COLUMN rcon_password DROP NOT NULL"#)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query(r#"ALTER TABLE external_servers ADD COLUMN IF NOT EXISTS poll_interval INTEGER NOT NULL DEFAULT 30"#)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query(r#"ALTER TABLE player_api_webhooks ADD COLUMN IF NOT EXISTS external_server_ids UUID[] NOT NULL DEFAULT ARRAY[]::UUID[]"#)
+            .execute(&self.pool)
+            .await?;
+
         Ok(())
     }
 
@@ -861,12 +907,31 @@ impl Database {
             r#"INSERT INTO users (id, username, display_name, password_hash, role, steam_id, remark)
                VALUES
                ('22222222-2222-2222-2222-222222222222', $1, 'DevAdmin', $2, 'developer', '76561198000000000', '开发管理员')
-               ON CONFLICT (username) DO NOTHING"#,
+               ON CONFLICT (username) DO UPDATE SET password_hash = $2"#,
         )
         .bind(&config.dev_username)
         .bind(&password_hash)
         .execute(&self.pool)
         .await?;
+
+        // 修复所有存储为明文的密码（非 $argon2 开头的）
+        let rows: Vec<(uuid::Uuid, String)> = sqlx::query_as(
+            "SELECT id, password_hash FROM users WHERE password_hash NOT LIKE '$argon2%'",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        for (user_id, plain) in &rows {
+            let hashed = crate::password::hash_password(plain)?;
+            sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+                .bind(&hashed)
+                .bind(user_id)
+                .execute(&self.pool)
+                .await?;
+        }
+        if !rows.is_empty() {
+            tracing::info!(count = rows.len(), "migrated plaintext passwords to argon2 hashes");
+        }
 
         Ok(())
     }

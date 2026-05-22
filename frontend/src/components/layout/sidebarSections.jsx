@@ -17,6 +17,7 @@ const icons = {
   logs: icon(<><path d="M2 2h4v5H2zM10 2h4v3h-4zM10 9h4v5h-4zM2 11h4v3H2zM6 5h4v11M6 2h4v3" /></>),
   api: icon(<><path d="M4 6l-3 2 3 2m8-4l3 2-3 2m-5 4l2-10" strokeLinecap="round" strokeLinejoin="round" /></>),
   playerApi: icon(<><rect x="2" y="3" width="12" height="10" rx="2" /><path d="M6 8h4M6 12h4M2 7h12" /></>),
+  externalServer: icon(<><circle cx="8" cy="8" r="6" /><path d="M8 2v3M8 11v3M2 8h3M11 8h3" strokeLinecap="round" /></>),
   apply: icon(<><path d="M4 2v12l4-2 4 2V2z" /></>),
   table: icon(<><path d="M1 4h14M1 8h14M1 12h14" /></>),
   banPublic: icon(<><path d="M8 1v14M1 8h14" transform="rotate(45 8 8)" /></>),
@@ -45,9 +46,11 @@ export function sidebarSections(role) {
         { path: '/logs', label: '操作日志', icon: icons.logs },
         { path: '/docs/api', label: 'API 接口列表', icon: icons.api },
         { path: '/player-api', label: '玩家信息 API', icon: icons.playerApi },
+        { path: '/external-servers', label: '外部服务器', icon: icons.externalServer },
       ] : [
         { path: '/player-access', label: '玩家进服设置', icon: icons.playerAccess },
         { path: '/audit', label: '审计日志', icon: icons.audit },
+        { path: '/external-servers', label: '外部服务器', icon: icons.externalServer },
       ],
     },
     {

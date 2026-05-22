@@ -24,6 +24,7 @@ export const defaultWebhookConfig = {
   webhookUrl: '',
   secret: '',
   serverIds: [],
+  externalServerIds: [],
 };
 
 export const defaultPlayerApiConfig = {
@@ -53,6 +54,7 @@ export function normalizePlayerApiConfig(config = {}) {
       webhookUrl: item.webhook_url ?? '',
       secret: item.secret ?? '',
       serverIds: item.server_ids ?? [],
+      externalServerIds: item.external_server_ids ?? [],
       lastStatus: item.last_status ?? null,
       lastError: item.last_error ?? null,
       lastDispatchedAt: item.last_dispatched_at ?? null,
@@ -67,6 +69,7 @@ export function buildWebhookConfigPayload(config) {
     webhook_url: config.webhookUrl.trim(),
     secret: secret || null,
     server_ids: config.serverIds,
+    external_server_ids: config.externalServerIds,
   };
 }
 
@@ -86,4 +89,13 @@ export function flattenServerOptions(groups = []) {
     label: server.name,
     port: server.port,
   })));
+}
+
+export function flattenExternalServerOptions(items = []) {
+  return items.map((item) => ({
+    id: item.id,
+    label: item.name,
+    ip: item.ip,
+    port: item.port,
+  }));
 }

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct MapTierMysqlRow {
     map_name: String,
-    tier: i32,
+    tier: String,
 }
 
 /// 从 MySQL 拉取 map_tiers 全量数据并 upsert 到本地 PostgreSQL
@@ -31,12 +31,13 @@ pub async fn sync_map_tiers(pg: &Database, mysql_url: &str) -> anyhow::Result<us
     let mut tx = pg.pool.begin().await?;
 
     for row in &rows {
+        let tier: i32 = row.tier.trim().parse().unwrap_or(0);
         sqlx::query(
             r#"INSERT INTO map_tiers (map_name, tier) VALUES ($1, $2)
                ON CONFLICT (map_name) DO UPDATE SET tier = $2"#,
         )
         .bind(&row.map_name)
-        .bind(row.tier)
+        .bind(tier)
         .execute(&mut *tx)
         .await?;
     }
@@ -63,7 +64,6 @@ pub async fn get_map_tiers(db: &Database, map_names: &[String]) -> anyhow::Resul
 /// 启动定时同步循环
 pub fn start_sync_loop(db: Database, mysql_url: String, interval_secs: u64) {
     tokio::spawn(async move {
-        // 启动时先同步一次
         match sync_map_tiers(&db, &mysql_url).await {
             Ok(count) => tracing::info!(count, "map_tiers 初始同步完成"),
             Err(e) => tracing::warn!(%e, "map_tiers 初始同步失败"),

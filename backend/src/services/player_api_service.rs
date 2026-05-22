@@ -301,6 +301,20 @@ pub fn build_webhook_payload(generated_at: DateTime<Utc>, rows: Vec<PlayerApiDis
     WebhookPayload { generated_at, servers }
 }
 
+/// 按 id 列表的顺序排列 servers。不在列表中的排到末尾并按名称字母排序。
+pub fn sort_servers_by_ids(servers: &mut [WebhookServerPayload], order: &[Uuid]) {
+    let position: std::collections::HashMap<Uuid, usize> = order
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (*id, i))
+        .collect();
+    servers.sort_by(|a, b| {
+        let pa = position.get(&a.server_id).unwrap_or(&usize::MAX);
+        let pb = position.get(&b.server_id).unwrap_or(&usize::MAX);
+        pa.cmp(pb).then_with(|| a.server_name.cmp(&b.server_name))
+    });
+}
+
 async fn fetch_external_server_rows(db: &Database, ids: &[Uuid]) -> anyhow::Result<Vec<WebhookServerPayload>> {
     let servers = if ids.is_empty() {
         crate::services::external_server_service::get_all_with_status(db).await?
@@ -308,19 +322,26 @@ async fn fetch_external_server_rows(db: &Database, ids: &[Uuid]) -> anyhow::Resu
         crate::services::external_server_service::get_status_by_ids(db, ids).await?
     };
 
-    Ok(servers.into_iter().map(|s| WebhookServerPayload {
-        server_id: s.id,
-        server_name: s.name,
-        server_ip: s.ip,
-        server_port: s.port,
-        current_map: s.current_map.unwrap_or_default(),
-        player_count: s.player_count.unwrap_or(0) as usize,
-        players: s.players.unwrap_or_default().into_iter().map(|name| WebhookPlayerPayload {
-            player: name,
-            steam_id64: String::new(),
-            ping: 0,
-            reported_at: s.status_queried_at.unwrap_or_default(),
-        }).collect(),
+    Ok(servers.into_iter().map(|s| {
+        let server_name = s.server_name
+            .as_deref()
+            .filter(|n| !n.is_empty())
+            .unwrap_or(&s.name)
+            .to_string();
+        WebhookServerPayload {
+            server_id: s.id,
+            server_name,
+            server_ip: s.ip,
+            server_port: s.port,
+            current_map: s.current_map.unwrap_or_default(),
+            player_count: s.player_count.unwrap_or(0) as usize,
+            players: s.players.unwrap_or_default().into_iter().map(|name| WebhookPlayerPayload {
+                player: name,
+                steam_id64: String::new(),
+                ping: 0,
+                reported_at: s.status_queried_at.unwrap_or_default(),
+            }).collect(),
+        }
     }).collect())
 }
 
@@ -399,7 +420,17 @@ pub async fn dispatch_once(db: &Database, client: &Client) -> anyhow::Result<()>
         };
         let rows = dispatch_rows_for_item(db, &item).await?;
         let mut payload = build_webhook_payload(Utc::now(), rows);
-        let external_servers = fetch_external_server_rows(db, &item.external_server_ids).await?;
+        let mut external_servers = fetch_external_server_rows(db, &item.external_server_ids).await?;
+        if !item.server_ids.is_empty() {
+            sort_servers_by_ids(&mut payload.servers, &item.server_ids);
+        } else {
+            payload.servers.sort_by(|a, b| a.server_name.cmp(&b.server_name));
+        }
+        if !item.external_server_ids.is_empty() {
+            sort_servers_by_ids(&mut external_servers, &item.external_server_ids);
+        } else {
+            external_servers.sort_by(|a, b| a.server_name.cmp(&b.server_name));
+        }
         payload.servers.extend(external_servers);
         let mut request = client.post(webhook_url).json(&payload);
         if let Some(secret) = item.secret.as_deref() {
@@ -450,7 +481,17 @@ pub async fn fetch_webhook_payload_by_path(db: &Database, public_path: &str, sec
     let rows = dispatch_rows_for_item(db, &item).await?;
     let mut payload = build_webhook_payload(Utc::now(), rows);
 
-    let external_servers = fetch_external_server_rows(db, &item.external_server_ids).await?;
+    let mut external_servers = fetch_external_server_rows(db, &item.external_server_ids).await?;
+    if !item.server_ids.is_empty() {
+        sort_servers_by_ids(&mut payload.servers, &item.server_ids);
+    } else {
+        payload.servers.sort_by(|a, b| a.server_name.cmp(&b.server_name));
+    }
+    if !item.external_server_ids.is_empty() {
+        sort_servers_by_ids(&mut external_servers, &item.external_server_ids);
+    } else {
+        external_servers.sort_by(|a, b| a.server_name.cmp(&b.server_name));
+    }
     payload.servers.extend(external_servers);
 
     Ok(payload)

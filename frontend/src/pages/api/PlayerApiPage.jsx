@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useAsync } from '../../shared/useAsync.js';
 import { useAuth } from '../../state/auth.jsx';
@@ -51,6 +51,49 @@ export function PlayerApiPage() {
     acc[key].servers.push(s);
     return acc;
   }, {});
+
+  // 拖拽排序
+  const dragItem = useRef(null);
+  const dragOverItem = useRef(null);
+
+  // 合并已选服务器列表（保持 serverIds + externalServerIds 顺序）
+  function getOrderedServers() {
+    const list = [];
+    for (const id of draftWebhook.serverIds) {
+      const s = serverOptions.find((o) => o.id === id);
+      if (s) list.push({ id: s.id, name: s.label, group: s.groupName, type: 'plugin' });
+    }
+    for (const id of draftWebhook.externalServerIds) {
+      const s = externalServerOptions.find((o) => o.id === id);
+      if (s) list.push({ id: s.id, name: s.label, group: '外部服务器', type: 'external' });
+    }
+    return list;
+  }
+
+  function handleDragStart(index) {
+    dragItem.current = index;
+  }
+
+  function handleDragEnter(index) {
+    dragOverItem.current = index;
+  }
+
+  function handleDragEnd() {
+    const from = dragItem.current;
+    const to = dragOverItem.current;
+    if (from == null || to == null || from === to) return;
+
+    const ordered = getOrderedServers();
+    const [moved] = ordered.splice(from, 1);
+    ordered.splice(to, 0, moved);
+
+    const newServerIds = ordered.filter((s) => s.type === 'plugin').map((s) => s.id);
+    const newExternalIds = ordered.filter((s) => s.type === 'external').map((s) => s.id);
+
+    setDraftWebhook((prev) => ({ ...prev, serverIds: newServerIds, externalServerIds: newExternalIds }));
+    dragItem.current = null;
+    dragOverItem.current = null;
+  }
 
   function openCreateWebhook() {
     if (form.items.length >= Number(form.maxApiCount)) {
@@ -457,6 +500,42 @@ export function PlayerApiPage() {
                         </label>
                       ))}
                     </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 拖拽排序 */}
+              {getOrderedServers().length > 1 && (
+                <div className="form-group">
+                  <label>服务器排序</label>
+                  <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 8 }}>拖拽调整顺序，上方为 API 返回数据中的排列顺序</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {getOrderedServers().map((server, index) => (
+                      <div
+                        key={`${server.type}-${server.id}`}
+                        draggable
+                        onDragStart={() => handleDragStart(index)}
+                        onDragEnter={() => handleDragEnter(index)}
+                        onDragEnd={handleDragEnd}
+                        onDragOver={(e) => e.preventDefault()}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 10,
+                          padding: '8px 12px', background: 'var(--surface)',
+                          border: '1px solid var(--border)', borderRadius: 4,
+                          cursor: 'grab', fontSize: 13,
+                          transition: 'background 0.15s',
+                        }}
+                      >
+                        <span style={{ color: 'var(--text3)', cursor: 'grab', fontSize: 14, userSelect: 'none' }}>&#9776;</span>
+                        <span style={{ fontWeight: 500 }}>{server.name}</span>
+                        <span style={{
+                          fontSize: 11, color: 'var(--text3)', background: 'var(--surface2)',
+                          padding: '1px 6px', borderRadius: 3,
+                        }}>
+                          {server.group}
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}

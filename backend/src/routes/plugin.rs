@@ -159,9 +159,25 @@ pub(crate) async fn update_player_api_config(
 pub(crate) async fn webhook_public(
     State(ctx): State<AppCtx>,
     Path(public_path): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let payload = player_api_service::fetch_webhook_payload_by_path(&ctx.db, &public_path)
+    let secret_header = headers
+        .get("X-Manger-Secret")
+        .and_then(|v| v.to_str().ok());
+
+    let payload = player_api_service::fetch_webhook_payload_by_path(&ctx.db, &public_path, secret_header)
         .await
-        .map_err(|_| (StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"Webhook 不存在"}))))?;
+        .map_err(|e| {
+            let msg = e.to_string();
+            if msg == "not found" {
+                (StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"端点不存在"})))
+            } else if msg == "disabled" {
+                (StatusCode::FORBIDDEN, Json(serde_json::json!({"error":"该端点已禁用"})))
+            } else if msg == "unauthorized" {
+                (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"需要有效的密钥验证"})))
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error":"查询失败"})))
+            }
+        })?;
     Ok(Json(serde_json::json!(payload)))
 }

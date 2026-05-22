@@ -19,15 +19,13 @@ export function PlayerApiPage() {
   const { confirm, dialog } = useConfirmDialog();
   const { toast, toasts, dismiss: dismissToast } = useToast();
   const token = session?.token ?? null;
-  const isDeveloper = session?.role === 'developer';
-  const canConfigure = isDeveloper || session?.role === 'admin';
+  const canConfigure = session?.role === 'developer' || session?.role === 'admin';
 
   const [form, setForm] = useState(defaultPlayerApiConfig);
   const [message, setMessage] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
 
-  // Webhook 弹窗
-  const [webhookModalOpen, setWebhookModalOpen] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
   const [editingIndex, setEditingIndex] = useState(null);
   const [draftWebhook, setDraftWebhook] = useState(defaultWebhookConfig);
   const [saving, setSaving] = useState(false);
@@ -47,7 +45,6 @@ export function PlayerApiPage() {
   const serverOptions = flattenServerOptions(serversState.data?.groups ?? []);
   const externalServerOptions = flattenExternalServerOptions(externalServersState.data?.items ?? []);
 
-  // 按 groupId 分组
   const groupedServers = serverOptions.reduce((acc, s) => {
     const key = s.groupId;
     if (!acc[key]) acc[key] = { name: s.groupName, servers: [] };
@@ -57,24 +54,24 @@ export function PlayerApiPage() {
 
   function openCreateWebhook() {
     if (form.items.length >= Number(form.maxApiCount)) {
-      toast({ title: '无法添加', message: `已达到最大 Webhook 数量限制（${form.maxApiCount}）`, tone: 'danger' });
+      toast({ title: '无法添加', message: `已达到最大端点数量限制（${form.maxApiCount}）`, tone: 'danger' });
       return;
     }
     setDraftWebhook({ ...defaultWebhookConfig });
     setEditingIndex(null);
     setMessage('');
-    setWebhookModalOpen(true);
+    setModalOpen(true);
   }
 
   function openEditWebhook(index) {
     setDraftWebhook({ ...form.items[index] });
     setEditingIndex(index);
     setMessage('');
-    setWebhookModalOpen(true);
+    setModalOpen(true);
   }
 
   function closeWebhookModal() {
-    setWebhookModalOpen(false);
+    setModalOpen(false);
     setDraftWebhook(defaultWebhookConfig);
     setEditingIndex(null);
     setMessage('');
@@ -119,12 +116,12 @@ export function PlayerApiPage() {
   }
 
   function saveWebhookToForm() {
-    if (!draftWebhook.webhookUrl.trim()) {
-      setMessage('请输入 Webhook 接收地址。');
-      return;
-    }
     if (!draftWebhook.publicPath.trim()) {
       setMessage('请输入自定义访问后缀。');
+      return;
+    }
+    if (/[^a-zA-Z0-9_-]/.test(draftWebhook.publicPath.trim())) {
+      setMessage('后缀只能包含字母、数字、下划线和连字符。');
       return;
     }
 
@@ -133,10 +130,10 @@ export function PlayerApiPage() {
         ...prev,
         items: prev.items.map((item, i) => (i === editingIndex ? { ...draftWebhook } : item)),
       }));
-      toast({ title: '已更新', message: 'Webhook 已更新，请点击"保存全部配置"生效。' });
+      toast({ title: '已更新', message: '端点已更新，请点击"保存全部配置"生效。' });
     } else {
       setForm((prev) => ({ ...prev, items: [...prev.items, { ...draftWebhook }] }));
-      toast({ title: '已添加', message: 'Webhook 已添加，请点击"保存全部配置"生效。' });
+      toast({ title: '已添加', message: '端点已添加，请点击"保存全部配置"生效。' });
     }
     closeWebhookModal();
   }
@@ -144,8 +141,8 @@ export function PlayerApiPage() {
   async function removeWebhook(index) {
     const item = form.items[index];
     const confirmed = await confirm({
-      title: '移除 Webhook',
-      message: `确定要移除 Webhook「${item.publicPath}」吗？`,
+      title: '移除 API 端点',
+      message: `确定要移除端点「${item.publicPath}」吗？`,
       confirmText: '确认移除',
     });
     if (!confirmed) return;
@@ -160,19 +157,12 @@ export function PlayerApiPage() {
       const response = await api.updatePlayerApiConfig(token, payload);
       setForm(normalizePlayerApiConfig(response.config));
       setRefreshKey((v) => v + 1);
-      toast({ title: '保存成功', message: 'API 分发配置已更新。' });
+      toast({ title: '保存成功', message: 'API 端点配置已更新。' });
     } catch (e) {
       toast({ title: '保存失败', message: e.message, tone: 'danger' });
     } finally {
       setSaving(false);
     }
-  }
-
-  function statusPill(status) {
-    if (!status) return <span style={{ color: 'var(--text3)' }}>未分发</span>;
-    if (status === 'success' || status === 'ok') return <span className="status-pill pill-online">成功</span>;
-    if (status === 'failed' || status === 'error') return <span className="status-pill pill-danger">失败</span>;
-    return <span className="status-pill pill-warning">{status}</span>;
   }
 
   const hasUnsavedChanges = JSON.stringify(form) !== JSON.stringify(
@@ -182,24 +172,22 @@ export function PlayerApiPage() {
   return (
     <div id="player-api" className="content-section active">
       <div className="breadcrumb">
-        <span>系统功能</span>
-        <span className="sep">›</span>
-        <span className="current">玩家信息 API</span>
+        <span>系统功能</span><span className="sep">›</span><span className="current">玩家信息 API</span>
       </div>
 
       <div className="page-header">
         <div>
-          <div className="page-title">实时玩家数据分发 API</div>
-          <div className="page-sub">展示插件上报的在线玩家信息，并按配置周期将数据分发到外部 Webhook。</div>
+          <div className="page-title">实时玩家数据 API</div>
+          <div className="page-sub">创建 API 端点，通过当前域名 + 自定义后缀即可访问指定服务器的在线玩家数据。</div>
         </div>
         {canConfigure && (
           <button className="btn btn-primary" onClick={openCreateWebhook}>
-            添加 Webhook
+            添加端点
           </button>
         )}
       </div>
 
-      {/* ── 在线玩家数据 ── */}
+      {/* 在线玩家数据 */}
       <div className="card">
         <div className="card-header" style={{ borderBottom: 'none' }}>
           <div>
@@ -245,13 +233,13 @@ export function PlayerApiPage() {
         </div>
       </div>
 
-      {/* ── 全局配置 ── */}
+      {/* 分发配置 */}
       {canConfigure && (
         <div className="card" style={{ marginTop: 16 }}>
           <div className="card-header">
             <div>
-              <div className="card-title">分发配置</div>
-              <div className="card-sub">控制 Webhook 分发的全局参数和 Webhook 列表</div>
+              <div className="card-title">API 端点配置</div>
+              <div className="card-sub">创建端点后，通过 {window.location.origin}/webhook/后缀 即可获取玩家数据</div>
             </div>
             {hasUnsavedChanges && (
               <button className="btn btn-primary" onClick={saveConfig} disabled={saving}>
@@ -263,7 +251,7 @@ export function PlayerApiPage() {
             {/* 全局参数 */}
             <div style={{ display: 'flex', gap: 16, marginBottom: 20, flexWrap: 'wrap' }}>
               <div style={{ flex: '1 1 200px', maxWidth: 260 }}>
-                <label style={{ display: 'block', fontSize: 12, fontWeight: 500, marginBottom: 6, color: 'var(--text2)' }}>最大 Webhook 数量</label>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 500, marginBottom: 6, color: 'var(--text2)' }}>最大端点数量</label>
                 <input
                   type="number" min="0" className="form-control"
                   value={form.maxApiCount}
@@ -271,7 +259,7 @@ export function PlayerApiPage() {
                 />
               </div>
               <div style={{ flex: '1 1 200px', maxWidth: 260 }}>
-                <label style={{ display: 'block', fontSize: 12, fontWeight: 500, marginBottom: 6, color: 'var(--text2)' }}>分发周期（秒）</label>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 500, marginBottom: 6, color: 'var(--text2)' }}>分发周期（秒，仅推送到外部地址时生效）</label>
                 <input
                   type="number" min="1" className="form-control"
                   value={form.intervalSeconds}
@@ -279,20 +267,18 @@ export function PlayerApiPage() {
                 />
               </div>
               <div style={{ flex: '1 1 200px', maxWidth: 260 }}>
-                <label style={{ display: 'block', fontSize: 12, fontWeight: 500, marginBottom: 6, color: 'var(--text2)' }}>当前 Webhook</label>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 500, marginBottom: 6, color: 'var(--text2)' }}>当前端点</label>
                 <div style={{ padding: '9px 0', fontSize: 14, fontWeight: 600 }}>
                   {form.items.length} / {form.maxApiCount}
                 </div>
               </div>
             </div>
 
-            {/* Webhook 列表 */}
+            {/* 端点列表 */}
             <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <span style={{ fontSize: 13, fontWeight: 600 }}>Webhook 列表</span>
-                <button className="action-btn" onClick={openCreateWebhook}>
-                  + 添加
-                </button>
+                <span style={{ fontSize: 13, fontWeight: 600 }}>端点列表</span>
+                <button className="action-btn" onClick={openCreateWebhook}>+ 添加</button>
               </div>
 
               {form.items.length === 0 ? (
@@ -300,7 +286,7 @@ export function PlayerApiPage() {
                   padding: 30, textAlign: 'center', color: 'var(--text3)', fontSize: 13,
                   background: 'var(--surface2)', borderRadius: 'var(--r-md)',
                 }}>
-                  暂无 Webhook 配置，点击上方"添加"按钮创建。
+                  暂无 API 端点，点击上方"添加"按钮创建。
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -313,20 +299,20 @@ export function PlayerApiPage() {
                         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                         padding: '12px 16px', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
                         background: 'var(--surface)', gap: 12,
+                        opacity: item.enabled ? 1 : 0.6,
                       }}>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                             <span style={{ fontWeight: 600, fontSize: 13 }}>{item.publicPath}</span>
-                            {statusPill(item.lastStatus)}
+                            {!item.enabled && <span style={{ fontSize: 11, color: 'var(--text3)', background: 'var(--surface2)', padding: '1px 6px', borderRadius: 3 }}>已禁用</span>}
+                            {item.enabled && item.publicAccess && <span style={{ fontSize: 11, color: '#22c55e', background: 'rgba(34,197,94,0.1)', padding: '1px 6px', borderRadius: 3 }}>公开</span>}
+                            {item.enabled && !item.publicAccess && item.secret && <span style={{ fontSize: 11, color: '#f59e0b', background: 'rgba(245,158,11,0.1)', padding: '1px 6px', borderRadius: 3 }}>密钥验证</span>}
+                            {item.enabled && !item.publicAccess && !item.secret && <span style={{ fontSize: 11, color: 'var(--accent)', background: 'rgba(239,68,68,0.1)', padding: '1px 6px', borderRadius: 3 }}>未设置密钥</span>}
                           </div>
                           <div style={{ fontSize: 11.5, color: 'var(--text3)', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-                            <span>地址：{window.location.origin}/webhook/{item.publicPath}</span>
+                            <span>{window.location.origin}/webhook/{item.publicPath}</span>
                             <span>服务器：{selectedServerNames}</span>
-                            {item.lastDispatchedAt && <span>上次分发：{item.lastDispatchedAt}</span>}
                           </div>
-                          {item.lastError && (
-                            <div style={{ fontSize: 11.5, color: 'var(--accent)', marginTop: 2 }}>错误：{item.lastError}</div>
-                          )}
                         </div>
                         <div className="action-btn-group" style={{ flexShrink: 0 }}>
                           <button className="action-btn action-btn-accent" onClick={() => openEditWebhook(index)}>编辑</button>
@@ -350,97 +336,78 @@ export function PlayerApiPage() {
         </div>
       )}
 
-      {/* ── 非管理员查看 Webhook 状态 ── */}
-      {!canConfigure && form.items.length > 0 && (
-        <div className="card" style={{ marginTop: 16 }}>
-          <div className="card-header" style={{ borderBottom: 'none' }}>
-            <div>
-              <div className="card-title">Webhook 分发状态</div>
-              <div className="card-sub">周期：{form.intervalSeconds} 秒</div>
-            </div>
-          </div>
-          <div className="card-body" style={{ padding: 0 }}>
-            <div className="table-responsive">
-              <table className="data-table">
-                <thead>
-                  <tr><th>后缀</th><th>公开地址</th><th>服务器范围</th><th>状态</th><th>最近错误</th><th>最近分发</th></tr>
-                </thead>
-                <tbody>
-                  {form.items.map((item, index) => (
-                    <tr key={`${item.publicPath}-${index}`}>
-                      <td className="steam-id">{item.publicPath}</td>
-                      <td className="steam-id">{window.location.origin}/webhook/{item.publicPath}</td>
-                      <td>{item.serverIds.length ? `${item.serverIds.length} 台服务器` : '全部'}</td>
-                      <td>{statusPill(item.lastStatus)}</td>
-                      <td style={{ color: item.lastError ? 'var(--accent)' : 'var(--text2)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.lastError ?? '无'}</td>
-                      <td>{item.lastDispatchedAt ?? '未分发'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Webhook 编辑弹窗 ── */}
-      {webhookModalOpen && (
+      {/* 编辑弹窗 */}
+      {modalOpen && (
         <div className="modal-overlay active" onClick={closeWebhookModal}>
           <div className="modal" style={{ maxWidth: 540 }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h2 style={{ fontSize: 16, fontWeight: 600 }}>
-                {editingIndex !== null ? '编辑 Webhook' : '添加 Webhook'}
+              <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>
+                {editingIndex !== null ? '编辑 API 端点' : '添加 API 端点'}
               </h2>
-              <span style={{ cursor: 'pointer', color: 'var(--text3)', fontSize: 18 }} onClick={closeWebhookModal}>✕</span>
+              <span style={{ cursor: 'pointer', color: 'var(--text3)', fontSize: 18 }} onClick={closeWebhookModal}>&#10005;</span>
             </div>
-            <div className="modal-body">
+            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <div style={{
-                marginBottom: 16, padding: '10px 14px', borderRadius: 'var(--r-sm)',
+                padding: '10px 14px', borderRadius: 'var(--r-sm)',
                 background: 'var(--info-bg)', fontSize: 12.5, color: 'var(--info-text)', lineHeight: 1.6,
               }}>
-                系统会按分发周期将在线玩家数据 POST 到指定的接收地址。配置完成后记得点击页面底部的"保存全部配置"生效。
-              </div>
-
-              <div className="form-group">
-                <label>Webhook 接收地址</label>
-                <input
-                  type="url" className="form-control"
-                  value={draftWebhook.webhookUrl}
-                  onChange={(e) => setDraftWebhook((prev) => ({ ...prev, webhookUrl: e.target.value }))}
-                  placeholder="https://example.com/api/players"
-                />
-                <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>玩家数据将 POST 到此地址</div>
-              </div>
-
-              <div className="form-group">
-                <label>自定义访问后缀</label>
-                <input
-                  type="text" className="form-control"
-                  value={draftWebhook.publicPath}
-                  onChange={(e) => setDraftWebhook((prev) => ({ ...prev, publicPath: e.target.value }))}
-                  placeholder="例如: my-player-data"
-                />
+                配置完成后，通过 <strong>{window.location.origin}/webhook/后缀</strong> 即可获取在线玩家数据。
                 {draftWebhook.publicPath.trim() && (
-                  <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 4 }}>
-                    公开访问地址：<strong>{window.location.origin}/webhook/{draftWebhook.publicPath.trim()}</strong>
-                  </div>
+                  <div style={{ marginTop: 4 }}>当前地址：<strong>{window.location.origin}/webhook/{draftWebhook.publicPath.trim()}</strong></div>
                 )}
               </div>
 
               <div className="form-group">
-                <label>安全校验 Secret（可选）</label>
+                <label>自定义访问后缀 <span style={{ color: 'var(--accent)' }}>*</span></label>
                 <input
                   type="text" className="form-control"
-                  value={draftWebhook.secret}
-                  onChange={(e) => setDraftWebhook((prev) => ({ ...prev, secret: e.target.value }))}
-                  placeholder="留空则不校验，请求头 X-Manger-Secret"
+                  value={draftWebhook.publicPath}
+                  onChange={(e) => setDraftWebhook((prev) => ({ ...prev, publicPath: e.target.value.replace(/[^a-zA-Z0-9_-]/g, '') }))}
+                  placeholder="例如: my-server-data"
                 />
+                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>仅允许字母、数字、下划线、连字符</div>
               </div>
 
-              {/* 服务器选择 - 按社区分组 */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 0 }}>
+                  <label className="toggle-switch">
+                    <input type="checkbox" checked={draftWebhook.enabled} onChange={(e) => setDraftWebhook((prev) => ({ ...prev, enabled: e.target.checked }))} />
+                    <span className="toggle-slider" />
+                  </label>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 500 }}>启用端点</div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)' }}>关闭后无法访问</div>
+                  </div>
+                </div>
+                <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 0 }}>
+                  <label className="toggle-switch">
+                    <input type="checkbox" checked={draftWebhook.publicAccess} onChange={(e) => setDraftWebhook((prev) => ({ ...prev, publicAccess: e.target.checked }))} />
+                    <span className="toggle-slider" />
+                  </label>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 500 }}>公开访问</div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)' }}>关闭后需密钥验证</div>
+                  </div>
+                </div>
+              </div>
+
+              {!draftWebhook.publicAccess && (
+                <div className="form-group">
+                  <label>访问密钥</label>
+                  <input
+                    type="text" className="form-control"
+                    value={draftWebhook.secret}
+                    onChange={(e) => setDraftWebhook((prev) => ({ ...prev, secret: e.target.value }))}
+                    placeholder="设置访问密钥"
+                  />
+                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>访问时需在请求头 <code>X-Manger-Secret</code> 中携带此密钥</div>
+                </div>
+              )}
+
+              {/* 服务器选择 */}
               <div className="form-group">
                 <label>指定分发数据的服务器</label>
-                <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 8 }}>不选择则默认分发所有服务器的数据</div>
+                <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 8 }}>不选择则默认包含所有服务器</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {Object.entries(groupedServers).map(([groupId, group]) => {
                     const groupServerIds = group.servers.map((s) => s.id);
@@ -448,35 +415,18 @@ export function PlayerApiPage() {
                     const someSelected = groupServerIds.some((id) => draftWebhook.serverIds.includes(id));
 
                     return (
-                      <div key={groupId} style={{
-                        border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
-                        overflow: 'hidden',
-                      }}>
-                        <div style={{
-                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                          padding: '8px 12px', background: 'var(--surface2)',
-                        }}>
+                      <div key={groupId} style={{ border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--surface2)' }}>
                           <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 0, fontWeight: 500, fontSize: 13 }}>
-                            <input
-                              type="checkbox"
-                              checked={allSelected}
-                              ref={(el) => { if (el) el.indeterminate = someSelected && !allSelected; }}
-                              onChange={() => toggleAllServers(groupId)}
-                            />
+                            <input type="checkbox" checked={allSelected} ref={(el) => { if (el) el.indeterminate = someSelected && !allSelected; }} onChange={() => toggleAllServers(groupId)} />
                             {group.name}
                           </label>
-                          <span style={{ fontSize: 11, color: 'var(--text3)' }}>
-                            {group.servers.filter((s) => draftWebhook.serverIds.includes(s.id)).length}/{group.servers.length}
-                          </span>
+                          <span style={{ fontSize: 11, color: 'var(--text3)' }}>{group.servers.filter((s) => draftWebhook.serverIds.includes(s.id)).length}/{group.servers.length}</span>
                         </div>
                         <div style={{ padding: '6px 12px 8px', display: 'flex', flexWrap: 'wrap', gap: '6px 16px' }}>
                           {group.servers.map((server) => (
                             <label key={server.id} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 12.5, fontWeight: 400 }}>
-                              <input
-                                type="checkbox"
-                                checked={draftWebhook.serverIds.includes(server.id)}
-                                onChange={() => toggleServer(server.id)}
-                              />
+                              <input type="checkbox" checked={draftWebhook.serverIds.includes(server.id)} onChange={() => toggleServer(server.id)} />
                               {server.label}
                             </label>
                           ))}
@@ -487,11 +437,10 @@ export function PlayerApiPage() {
                 </div>
               </div>
 
-              {/* 外部服务器选择 */}
+              {/* 外部服务器 */}
               {externalServerOptions.length > 0 && (
                 <div className="form-group">
-                  <label>外部服务器（RCON 查询）</label>
-                  <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 8 }}>不选择则不包含外部服务器数据</div>
+                  <label>外部服务器</label>
                   <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--surface2)' }}>
                       <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 0, fontWeight: 500, fontSize: 13 }}>
@@ -504,7 +453,7 @@ export function PlayerApiPage() {
                       {externalServerOptions.map((server) => (
                         <label key={server.id} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 12.5, fontWeight: 400 }}>
                           <input type="checkbox" checked={draftWebhook.externalServerIds.includes(server.id)} onChange={() => toggleExternalServer(server.id)} />
-                          {server.label} ({server.ip}:{server.port})
+                          {server.label}
                         </label>
                       ))}
                     </div>
@@ -512,7 +461,7 @@ export function PlayerApiPage() {
                 </div>
               )}
 
-              {message ? <div style={{ color: 'var(--accent)', marginTop: 8, fontSize: 13 }}>{message}</div> : null}
+              {message ? <div style={{ color: 'var(--accent)', fontSize: 13 }}>{message}</div> : null}
             </div>
             <div className="modal-footer">
               <button className="btn btn-outline" onClick={closeWebhookModal}>取消</button>

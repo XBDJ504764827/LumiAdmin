@@ -898,6 +898,18 @@ impl Database {
             .execute(&self.pool)
             .await?;
 
+        sqlx::query(r#"ALTER TABLE player_api_webhooks ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT true"#)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query(r#"ALTER TABLE player_api_webhooks ADD COLUMN IF NOT EXISTS public_access BOOLEAN NOT NULL DEFAULT true"#)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query(r#"ALTER TABLE player_api_webhooks ALTER COLUMN webhook_url DROP NOT NULL"#)
+            .execute(&self.pool)
+            .await?;
+
         Ok(())
     }
 

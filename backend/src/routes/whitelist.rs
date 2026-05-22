@@ -54,7 +54,7 @@ pub(crate) async fn create_whitelist(
         return Err(forbidden());
     }
     let operator_name = actor.display_name.clone();
-    let resolver = whitelist_service::steam_resolver(&ctx.config);
+    let resolver = &ctx.steam_resolver;
     let item = whitelist_service::create_manual_whitelist(
         &ctx.db,
         whitelist_service::ManualWhitelistInput {
@@ -152,7 +152,7 @@ pub(crate) async fn refresh_single_steam_name(
     if !permission_service::can_review_whitelist(&actor) {
         return Err(forbidden());
     }
-    let resolver = whitelist_service::steam_resolver(&ctx.config);
+    let resolver = &ctx.steam_resolver;
     let steam_name = whitelist_service::update_steam_persona_name(&ctx.db, id, &resolver)
         .await
         .map_err(invalid_request)?;
@@ -169,7 +169,7 @@ pub(crate) async fn refresh_all_steam_names(
     if !permission_service::can_review_whitelist(&actor) {
         return Err(forbidden());
     }
-    let resolver = whitelist_service::steam_resolver(&ctx.config);
+    let resolver = &ctx.steam_resolver;
     let updated_count = whitelist_service::refresh_all_steam_persona_names(&ctx.db, &resolver, body.status.as_deref())
         .await
         .map_err(invalid_request)?;

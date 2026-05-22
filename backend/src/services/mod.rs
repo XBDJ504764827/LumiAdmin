@@ -24,3 +24,16 @@ pub mod steam_name_refresh_service;
 pub mod steam_service;
 pub mod user_service;
 pub mod whitelist_service;
+
+/// Trim an optional string, returning None if empty after trimming.
+pub fn normalize_optional_text(value: Option<&str>) -> Option<String> {
+    value.map(str::trim).filter(|v| !v.is_empty()).map(ToOwned::to_owned)
+}
+
+/// Trim an owned optional string in-place, returning None if empty after trimming.
+pub fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|text| {
+        let trimmed = text.trim().to_string();
+        if trimmed.is_empty() { None } else { Some(trimmed) }
+    })
+}

@@ -178,8 +178,6 @@ struct ServerDetailRow {
 }
 
 pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
-    mark_stale_servers_offline(db).await?;
-
     let rows = sqlx::query_as::<_, CommunityRow>(
         r#"
         SELECT
@@ -294,8 +292,8 @@ pub async fn create_server(db: &Database, community_id: Uuid, input: ServerInput
     let name = input.name.trim();
     let ip = input.ip.trim();
     let password = input.rcon_password.trim();
-    let report_token = normalize_optional_text(input.report_token.as_deref()).unwrap_or_else(generate_report_token);
-    let note = normalize_optional_text(input.note.as_deref());
+    let report_token = super::normalize_optional_text(input.report_token.as_deref()).unwrap_or_else(generate_report_token);
+    let note = super::normalize_optional_text(input.note.as_deref());
 
     anyhow::ensure!(!name.is_empty(), "服务器名称不能为空");
     anyhow::ensure!(!ip.is_empty(), "服务器 IP 不能为空");
@@ -357,8 +355,8 @@ pub async fn update_server(db: &Database, server_id: Uuid, input: ServerInput) -
     let name = input.name.trim();
     let ip = input.ip.trim();
     let password = input.rcon_password.trim();
-    let report_token = normalize_optional_text(input.report_token.as_deref());
-    let note = normalize_optional_text(input.note.as_deref());
+    let report_token = super::normalize_optional_text(input.report_token.as_deref());
+    let note = super::normalize_optional_text(input.note.as_deref());
 
     anyhow::ensure!(!name.is_empty(), "服务器名称不能为空");
     anyhow::ensure!(!ip.is_empty(), "服务器 IP 不能为空");
@@ -576,20 +574,26 @@ pub async fn report_online_players(
         .execute(&mut *tx)
         .await?;
 
-    for player in normalized_players {
+    if !normalized_players.is_empty() {
+        let names: Vec<&str> = normalized_players.iter().map(|p| p.name.as_str()).collect();
+        let steam_ids: Vec<&str> = normalized_players.iter().map(|p| p.steam_id64.as_str()).collect();
+        let ips: Vec<&str> = normalized_players.iter().map(|p| p.ip.as_str()).collect();
+        let pings: Vec<i32> = normalized_players.iter().map(|p| p.ping).collect();
+        let ports: Vec<i32> = normalized_players.iter().map(|p| i32::from(p.server_port)).collect();
+        let current_map = &input.current_map;
+
         sqlx::query(
-            r#"
-            INSERT INTO server_online_players (server_id, name, steam_id64, ip, ping, server_port, current_map)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            "#,
+            r#"INSERT INTO server_online_players (server_id, name, steam_id64, ip, ping, server_port, current_map)
+               SELECT $1, u.name, u.steam_id64, u.ip, u.ping, u.server_port, $3
+               FROM UNNEST($2::TEXT[], $4::TEXT[], $5::TEXT[], $6::INTEGER[], $7::INTEGER[]) AS u(name, steam_id64, ip, ping, server_port)"#,
         )
         .bind(server_id)
-        .bind(player.name)
-        .bind(player.steam_id64)
-        .bind(player.ip)
-        .bind(player.ping)
-        .bind(i32::from(player.server_port))
-        .bind(&input.current_map)
+        .bind(&names)
+        .bind(current_map)
+        .bind(&steam_ids)
+        .bind(&ips)
+        .bind(&pings)
+        .bind(&ports)
         .execute(&mut *tx)
         .await?;
     }
@@ -600,8 +604,6 @@ pub async fn report_online_players(
 }
 
 pub async fn list_online_players(db: &Database, server_id: Uuid) -> anyhow::Result<OnlinePlayersResponse> {
-    mark_stale_servers_offline(db).await?;
-
     let details = sqlx::query_as::<_, OnlinePlayerItem>(
         r#"
         SELECT name, steam_id64, ip, ping, server_port
@@ -677,7 +679,7 @@ fn normalize_online_player(player: OnlinePlayerInput, report_port: u16) -> anyho
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| anyhow::anyhow!("玩家 SteamID64 不能为空"))?;
-            steam2_to_steamid64(steam_id)?
+            super::steam_service::steam2_to_steamid64(steam_id)?
         }
     };
 
@@ -699,19 +701,6 @@ fn normalize_online_player(player: OnlinePlayerInput, report_port: u16) -> anyho
     })
 }
 
-fn steam2_to_steamid64(steam_id: &str) -> anyhow::Result<String> {
-    let mut parts = steam_id.split(':');
-    let prefix = parts.next().unwrap_or_default();
-    let auth_server = parts.next().unwrap_or_default();
-    let account = parts.next().unwrap_or_default();
-
-    anyhow::ensure!(prefix == "STEAM_0" || prefix == "STEAM_1", "旧 SteamID 格式无效");
-    let auth_server = auth_server.parse::<u64>()?;
-    let account = account.parse::<u64>()?;
-    anyhow::ensure!(auth_server <= 1, "旧 SteamID 格式无效");
-
-    Ok((76561197960265728_u64 + account * 2 + auth_server).to_string())
-}
 fn generate_report_token() -> String {
     Uuid::new_v4().simple().to_string()
 }
@@ -751,11 +740,49 @@ async fn mark_stale_servers_offline(db: &Database) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn normalize_optional_text(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
+/// 启动定时清理过期服务器的后台任务（每 30 秒执行一次）
+pub fn start_stale_cleanup_loop(db: Database) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            if let Err(error) = mark_stale_servers_offline(&db).await {
+                tracing::warn!(%error, "清理过期服务器状态失败");
+            }
+        }
+    });
+}
+
+
+/// 验证 RCON 命令安全性，阻止破坏性命令
+fn validate_rcon_command(command: &str) -> anyhow::Result<()> {
+    let cmd = command.trim().to_lowercase();
+    anyhow::ensure!(!cmd.is_empty(), "命令不能为空");
+
+    // 提取命令关键字（取第一个词）
+    let keyword = cmd.split_whitespace().next().unwrap_or("");
+    const BLOCKED_COMMANDS: &[&str] = &[
+        "quit",
+        "exit",
+        "rcon_password",
+        "sv_password",
+        "servercfgfile",
+        "writeid",
+        "writeip",
+        "banid",
+        "removeid",
+        "removeip",
+        "exec",
+        "alias",
+    ];
+
+    anyhow::ensure!(
+        !BLOCKED_COMMANDS.contains(&keyword),
+        "命令 \"{}\" 被禁止执行",
+        keyword
+    );
+
+    Ok(())
 }
 
 /// Execute a RCON command on a specific server
@@ -764,6 +791,8 @@ pub async fn execute_rcon_command(
     server_id: Uuid,
     command: &str,
 ) -> anyhow::Result<String> {
+    validate_rcon_command(command)?;
+
     #[derive(sqlx::FromRow)]
     struct ServerRconInfo {
         ip: String,

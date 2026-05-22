@@ -112,27 +112,6 @@ impl ServerAuth {
     }
 }
 
-#[derive(sqlx::FromRow)]
-struct PluginBanRow {
-    id: Uuid,
-    player: Option<String>,
-    steam_id: String,
-    ip_address: Option<String>,
-    server_name: Option<String>,
-    ban_type: String,
-    duration_minutes: i32,
-    expires_at: Option<chrono::DateTime<chrono::Utc>>,
-    reason: String,
-    status: String,
-    operator_name: String,
-    source: String,
-    server_id: Option<Uuid>,
-    server_port: Option<i32>,
-    removed_reason: Option<String>,
-    removed_by: Option<String>,
-    removed_at: Option<chrono::DateTime<chrono::Utc>>,
-    created_at: chrono::DateTime<chrono::Utc>,
-}
 
 async fn authenticate_server(
     db: &Database,
@@ -152,16 +131,6 @@ async fn authenticate_server(
     .map_err(|_| anyhow::anyhow!("服务器 token 或端口无效"))
 }
 
-fn normalize_optional_text(value: Option<String>) -> Option<String> {
-    value.and_then(|text| {
-        let trimmed = text.trim().to_string();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed)
-        }
-    })
-}
 
 fn expires_at(duration_minutes: i32) -> Option<chrono::DateTime<Utc>> {
     if duration_minutes == 0 {
@@ -196,36 +165,14 @@ fn format_expires_at_for_display(rfc3339_time: &str) -> String {
     }
 }
 
-fn row_to_item(row: PluginBanRow) -> BanItem {
-    BanItem {
-        id: row.id,
-        player: row.player,
-        steam_id: row.steam_id,
-        ip_address: row.ip_address,
-        server_name: row.server_name,
-        ban_type: row.ban_type,
-        duration_minutes: row.duration_minutes,
-        expires_at: row.expires_at.map(|value| value.to_rfc3339()),
-        reason: row.reason,
-        status: row.status,
-        operator_name: row.operator_name,
-        source: row.source,
-        server_id: row.server_id,
-        server_port: row.server_port,
-        removed_reason: row.removed_reason,
-        removed_by: row.removed_by,
-        removed_at: row.removed_at.map(|value| value.to_rfc3339()),
-        created_at: row.created_at.to_rfc3339(),
-    }
-}
 
 pub async fn create_plugin_ban(db: &Database, input: PluginBanInput) -> anyhow::Result<BanItem> {
     let server = authenticate_server(db, input.port, &input.report_token).await?;
     let ban_type = input.ban_type.trim();
     let reason = input.reason.trim();
     let operator_name = input.operator_name.trim();
-    let steam_id = normalize_optional_text(input.steam_id.clone()).map(|s| normalize_steam_id(&s));
-    let ip_address = normalize_optional_text(input.ip_address);
+    let steam_id = super::normalize_optional_string(input.steam_id.clone()).map(|s| normalize_steam_id(&s));
+    let ip_address = super::normalize_optional_string(input.ip_address);
 
     anyhow::ensure!(matches!(ban_type, "steam" | "ip"), "封禁属性无效");
     anyhow::ensure!(input.duration_minutes >= 0, "封禁时长不能为负数");
@@ -251,7 +198,7 @@ pub async fn create_plugin_ban(db: &Database, input: PluginBanInput) -> anyhow::
     anyhow::ensure!(duplicate_count.0 == 0, "目标已有有效封禁");
 
     let expires_at = expires_at(input.duration_minutes);
-    let row = sqlx::query_as::<_, PluginBanRow>(
+    let row = sqlx::query_as::<_, super::ban_service::BanRow>(
         r#"INSERT INTO ban_records (
                id, player, steam_id, ip_address, server_name, ban_type,
                duration_minutes, expires_at, reason, status, operator_name, source,
@@ -263,7 +210,7 @@ pub async fn create_plugin_ban(db: &Database, input: PluginBanInput) -> anyhow::
                      server_id, server_port, removed_reason, removed_by, removed_at, created_at"#,
     )
     .bind(Uuid::new_v4())
-    .bind(normalize_optional_text(input.player))
+    .bind(super::normalize_optional_string(input.player))
     .bind(steam_id.unwrap_or_default())
     .bind(ip_address)
     .bind(server.name)
@@ -277,7 +224,7 @@ pub async fn create_plugin_ban(db: &Database, input: PluginBanInput) -> anyhow::
     .fetch_one(&db.pool)
     .await?;
 
-    Ok(row_to_item(row))
+    Ok(super::ban_service::row_to_item(row))
 }
 
 pub async fn unban_plugin_target(
@@ -292,7 +239,7 @@ pub async fn unban_plugin_target(
     anyhow::ensure!(!operator_name.is_empty(), "操作人不能为空");
 
     // 先查询封禁记录，获取原始封禁者
-    let original_ban = sqlx::query_as::<_, PluginBanRow>(
+    let original_ban = sqlx::query_as::<_, super::ban_service::BanRow>(
         r#"SELECT id, player, steam_id, ip_address, server_name, ban_type,
                   duration_minutes, expires_at, reason, status, operator_name, source,
                   server_id, server_port, removed_reason, removed_by, removed_at, created_at
@@ -326,7 +273,7 @@ pub async fn unban_plugin_target(
     }
 
     // 执行解封
-    let row = sqlx::query_as::<_, PluginBanRow>(
+    let row = sqlx::query_as::<_, super::ban_service::BanRow>(
         r#"UPDATE ban_records
            SET status = 'inactive', removed_reason = $2, removed_by = $3, removed_at = now()
            WHERE id = $1
@@ -348,7 +295,7 @@ pub async fn unban_plugin_target(
     .await
     .map_err(|_| anyhow::anyhow!("解封失败"))?;
 
-    Ok(row_to_item(row))
+    Ok(super::ban_service::row_to_item(row))
 }
 
 /// 检查操作员是否具有特权（developer 或 admin）
@@ -388,7 +335,7 @@ pub async fn poll_active_bans(
     input: PluginBanPollInput,
 ) -> anyhow::Result<Vec<BanItem>> {
     let server = authenticate_server(db, input.port, &input.report_token).await?;
-    let rows = sqlx::query_as::<_, PluginBanRow>(
+    let rows = sqlx::query_as::<_, super::ban_service::BanRow>(
         r#"SELECT id, player, steam_id, ip_address, server_name, ban_type,
                   duration_minutes, expires_at, reason, status, operator_name, source,
                   server_id, server_port, removed_reason, removed_by, removed_at, created_at
@@ -396,14 +343,15 @@ pub async fn poll_active_bans(
            WHERE status = 'active'
              AND (expires_at IS NULL OR expires_at > now())
              AND (server_id IS NULL OR server_id = $1 OR server_port = $2)
-           ORDER BY created_at DESC"#,
+           ORDER BY created_at DESC
+           LIMIT 10000"#,
     )
     .bind(server.id)
     .bind(server.port)
     .fetch_all(&db.pool)
     .await?;
 
-    Ok(rows.into_iter().map(row_to_item).collect())
+    Ok(rows.into_iter().map(super::ban_service::row_to_item).collect())
 }
 
 /// 增量轮询封禁记录的结果
@@ -449,7 +397,7 @@ pub async fn poll_active_bans_incremental(
     // 构建查询
     let (rows, total_count) = if let Some(since_time) = since {
         // 增量查询：只获取新记录
-        let rows = sqlx::query_as::<_, PluginBanRow>(
+        let rows = sqlx::query_as::<_, super::ban_service::BanRow>(
             r#"SELECT id, player, steam_id, ip_address, server_name, ban_type,
                       duration_minutes, expires_at, reason, status, operator_name, source,
                       server_id, server_port, removed_reason, removed_by, removed_at, created_at
@@ -482,7 +430,7 @@ pub async fn poll_active_bans_incremental(
         (rows, count.0)
     } else {
         // 首次查询：获取所有活跃封禁
-        let rows = sqlx::query_as::<_, PluginBanRow>(
+        let rows = sqlx::query_as::<_, super::ban_service::BanRow>(
             r#"SELECT id, player, steam_id, ip_address, server_name, ban_type,
                       duration_minutes, expires_at, reason, status, operator_name, source,
                       server_id, server_port, removed_reason, removed_by, removed_at, created_at
@@ -521,7 +469,7 @@ pub async fn poll_active_bans_incremental(
     let has_more = rows.len() as i32 == limit;
 
     Ok(BanPollIncrementalResult {
-        items: rows.into_iter().map(row_to_item).collect(),
+        items: rows.into_iter().map(super::ban_service::row_to_item).collect(),
         cursor: new_cursor,
         has_more,
         total_count: Some(total_count),
@@ -533,8 +481,8 @@ pub async fn check_plugin_ban(
     snapshot_store: &access_snapshot_service::SnapshotStore,
     input: PluginBanCheckInput,
 ) -> anyhow::Result<PluginBanCheckResult> {
-    let steam_id = normalize_optional_text(input.steam_id.clone());
-    let ip_address = normalize_optional_text(input.ip_address.clone());
+    let steam_id = super::normalize_optional_string(input.steam_id.clone());
+    let ip_address = super::normalize_optional_string(input.ip_address.clone());
     anyhow::ensure!(
         steam_id.is_some() || ip_address.is_some(),
         "SteamID 或 IP 不能为空"
@@ -579,9 +527,9 @@ async fn check_plugin_ban_live(
     input: PluginBanCheckInput,
 ) -> anyhow::Result<PluginBanCheckResult> {
     let server = authenticate_server(db, input.port, &input.report_token).await?;
-    let steam_id = normalize_optional_text(input.steam_id);
-    let ip_address = normalize_optional_text(input.ip_address);
-    let player = normalize_optional_text(input.player);
+    let steam_id = super::normalize_optional_string(input.steam_id);
+    let ip_address = super::normalize_optional_string(input.ip_address);
+    let player = super::normalize_optional_string(input.player);
     let server_port = input.server_port.unwrap_or(server.port);
     anyhow::ensure!(
         steam_id.is_some() || ip_address.is_some(),
@@ -710,7 +658,7 @@ mod tests {
     fn normalize_steam_id_converts_steam2() {
         // STEAM_0:1:12345 -> 76561197960265728 + 12345 * 2 + 1 = 76561197960290401
         assert_eq!(normalize_steam_id("STEAM_0:1:12345"), "76561197960290401");
-        assert_eq!(normalize_steam_id("STEAM_1:0:54321"), "76561197960265728"); // X is ignored
+        assert_eq!(normalize_steam_id("STEAM_1:0:54321"), "76561197960374370"); // universe bit ignored
     }
 
     #[test]

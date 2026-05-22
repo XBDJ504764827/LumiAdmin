@@ -1,5 +1,4 @@
 use crate::{
-    config::Config,
     db::Database,
     models::PublicWhitelistItem,
     routes::ListQuery,
@@ -76,10 +75,6 @@ struct WhitelistStatusRow {
     revoked_at: Option<DateTime<Utc>>,
     revoked_by: Option<String>,
     source: Option<String>,
-}
-
-pub fn steam_resolver(config: &Config) -> SteamResolver {
-    SteamResolver::new(config)
 }
 
 pub async fn list_whitelist(db: &Database, query: &ListQuery) -> anyhow::Result<crate::routes::PaginatedResponse<WhitelistItem>> {

@@ -1,7 +1,7 @@
 use crate::{
     config::Config,
     db::Database,
-    http_client::HTTP_CLIENT,
+    http_client,
     services::{access_snapshot_service, player_access_rule_service, plugin_ban_service, server_config_cache},
 };
 use chrono::{DateTime, Duration, Utc};
@@ -311,7 +311,7 @@ async fn fetch_player_profile(
 
     let steam_level = fetch_steam_level(config, steam_id64).await;
 
-    let rating = match HTTP_CLIENT.get(&gokz_url).send().await {
+    let rating = match http_client::http_client().get(&gokz_url).send().await {
         Ok(response) if response.status().is_success() => {
             match response.json::<GokzPlayerResponse>().await {
                 Ok(body) => body.rating.map(|rating| rating.trunc() as i32),
@@ -477,7 +477,7 @@ async fn fetch_steam_level(config: &Config, steam_id64: &str) -> Option<i32> {
         let url = format!(
             "https://api.steamchina.com/IPlayerService/GetSteamLevel/v0001/?key={china_key}&steamid={steam_id64}"
         );
-        match HTTP_CLIENT.get(&url).send().await {
+        match http_client::http_client().get(&url).send().await {
             Ok(response) if response.status().is_success() => {
                 match response.json::<SteamLevelEnvelope>().await {
                     Ok(body) => {
@@ -504,7 +504,7 @@ async fn fetch_steam_level(config: &Config, steam_id64: &str) -> Option<i32> {
         let url = format!(
             "https://api.steampowered.com/IPlayerService/GetSteamLevel/v1/?key={steam_web_key}&steamid={steam_id64}"
         );
-        match HTTP_CLIENT.get(&url).send().await {
+        match http_client::http_client().get(&url).send().await {
             Ok(response) if response.status().is_success() => {
                 match response.json::<SteamLevelEnvelope>().await {
                     Ok(body) => {

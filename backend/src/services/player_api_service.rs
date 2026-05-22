@@ -496,11 +496,11 @@ pub async fn fetch_webhook_payload_by_path(db: &Database, public_path: &str, sec
         anyhow::bail!("disabled");
     }
 
-    // 如果不是公开访问，必须提供正确的 secret
+    // 如果不是公开访问，必须提供正确的 secret（常量时间比较，防止时序攻击）
     if !item.public_access {
         let expected = item.secret.as_deref().unwrap_or("");
         let provided = secret_header.unwrap_or("");
-        if expected.is_empty() || provided != expected {
+        if expected.is_empty() || !constant_time_eq(expected.as_bytes(), provided.as_bytes()) {
             anyhow::bail!("unauthorized");
         }
     }
@@ -541,10 +541,22 @@ pub fn start_dispatch_loop(db: Database) {
             let seconds = dispatch_interval_seconds(&db).await.unwrap_or(30);
             tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
             if let Err(error) = dispatch_once(&db, &client).await {
-                eprintln!("player api webhook dispatch failed: {error}");
+                tracing::warn!(%error, "player api webhook dispatch failed");
             }
         }
     });
+}
+
+/// 常量时间比较，防止通过响应时间差异推断 secret 内容
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut result = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        result |= x ^ y;
+    }
+    result == 0
 }
 
 #[cfg(test)]

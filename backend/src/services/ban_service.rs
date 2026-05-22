@@ -47,25 +47,25 @@ pub struct BanRecord {
 }
 
 #[derive(sqlx::FromRow)]
-struct BanRow {
-    id: Uuid,
-    player: Option<String>,
-    steam_id: String,
-    ip_address: Option<String>,
-    server_name: Option<String>,
-    ban_type: String,
-    duration_minutes: i32,
-    expires_at: Option<chrono::DateTime<chrono::Utc>>,
-    reason: String,
-    status: String,
-    operator_name: String,
-    source: String,
-    server_id: Option<Uuid>,
-    server_port: Option<i32>,
-    removed_reason: Option<String>,
-    removed_by: Option<String>,
-    removed_at: Option<chrono::DateTime<chrono::Utc>>,
-    created_at: chrono::DateTime<chrono::Utc>,
+pub(crate) struct BanRow {
+    pub id: Uuid,
+    pub player: Option<String>,
+    pub steam_id: String,
+    pub ip_address: Option<String>,
+    pub server_name: Option<String>,
+    pub ban_type: String,
+    pub duration_minutes: i32,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub reason: String,
+    pub status: String,
+    pub operator_name: String,
+    pub source: String,
+    pub server_id: Option<Uuid>,
+    pub server_port: Option<i32>,
+    pub removed_reason: Option<String>,
+    pub removed_by: Option<String>,
+    pub removed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Deserialize)]
@@ -89,7 +89,7 @@ pub struct UpdateBanInput {
 
 const BAN_FIELDS: &str = "id, player, steam_id, ip_address, server_name, ban_type, duration_minutes, expires_at, reason, status, operator_name, source, server_id, server_port, removed_reason, removed_by, removed_at, created_at";
 
-fn row_to_item(row: BanRow) -> BanItem {
+pub(crate) fn row_to_item(row: BanRow) -> BanItem {
     BanItem {
         id: row.id,
         player: row.player,
@@ -163,12 +163,6 @@ pub async fn list_bans(db: &Database, query: &ListQuery) -> anyhow::Result<crate
     })
 }
 
-fn normalize_optional_text(value: Option<String>) -> Option<String> {
-    value.and_then(|text| {
-        let trimmed = text.trim().to_string();
-        if trimmed.is_empty() { None } else { Some(trimmed) }
-    })
-}
 
 pub async fn create_ban(db: &Database, config: &Config, input: CreateBanInput) -> anyhow::Result<BanItem> {
     let steam_id_input = input.steam_id.trim();
@@ -204,9 +198,9 @@ pub async fn create_ban(db: &Database, config: &Config, input: CreateBanInput) -
                      server_id, server_port, removed_reason, removed_by, removed_at, created_at"#,
     )
     .bind(Uuid::new_v4())
-    .bind(normalize_optional_text(input.player))
+    .bind(super::normalize_optional_string(input.player))
     .bind(&steam_id)
-    .bind(normalize_optional_text(input.ip_address))
+    .bind(super::normalize_optional_string(input.ip_address))
     .bind(ban_type)
     .bind(reason)
     .bind(input.operator_name)
@@ -239,9 +233,9 @@ pub async fn update_ban(db: &Database, config: &Config, id: Uuid, input: UpdateB
                      server_id, server_port, removed_reason, removed_by, removed_at, created_at"#,
     )
     .bind(id)
-    .bind(normalize_optional_text(input.player))
+    .bind(super::normalize_optional_string(input.player))
     .bind(&steam_id)
-    .bind(normalize_optional_text(input.ip_address))
+    .bind(super::normalize_optional_string(input.ip_address))
     .bind(ban_type)
     .bind(reason)
     .fetch_one(&db.pool)

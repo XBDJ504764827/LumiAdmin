@@ -48,7 +48,7 @@ pub(crate) async fn submit_whitelist(
     headers: HeaderMap,
     Json(body): Json<WhitelistBody>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    let resolver = whitelist_service::steam_resolver(&ctx.config);
+    let resolver = &ctx.steam_resolver;
     let item = whitelist_service::create_public_whitelist_request(
         &ctx.db,
         whitelist_service::PublicWhitelistRequestInput {
@@ -77,7 +77,7 @@ pub(crate) async fn resolve_steam(
     State(ctx): State<AppCtx>,
     Json(body): Json<ResolveSteamBody>,
 ) -> Result<Json<SteamResolveResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let resolver = whitelist_service::steam_resolver(&ctx.config);
+    let resolver = &ctx.steam_resolver;
 
     // 解析 Steam 标识符
     let parsed = match resolver.resolve(&body.steam_input).await {
@@ -230,7 +230,7 @@ pub(crate) async fn get_global_bans_batch(
 async fn fetch_global_bans_from_api(
     steamid64: &str,
 ) -> Result<serde_json::Value, ()> {
-    use crate::http_client::HTTP_CLIENT;
+    use crate::http_client;
 
     let timeout = std::time::Duration::from_secs(5);
 
@@ -247,7 +247,7 @@ async fn fetch_global_bans_from_api(
     );
 
     // 先尝试主 API
-    if let Ok(response) = tokio::time::timeout(timeout, HTTP_CLIENT.get(&primary_url).send()).await {
+    if let Ok(response) = tokio::time::timeout(timeout, http_client::http_client().get(&primary_url).send()).await {
         if let Ok(response) = response {
             if response.status().is_success() {
                 if let Ok(Ok(data)) = tokio::time::timeout(timeout, response.json::<serde_json::Value>()).await {
@@ -258,7 +258,7 @@ async fn fetch_global_bans_from_api(
     }
 
     // 主 API 失败，尝试备用 API
-    if let Ok(response) = tokio::time::timeout(timeout, HTTP_CLIENT.get(&fallback_url).send()).await {
+    if let Ok(response) = tokio::time::timeout(timeout, http_client::http_client().get(&fallback_url).send()).await {
         if let Ok(response) = response {
             if response.status().is_success() {
                 if let Ok(Ok(data)) = tokio::time::timeout(timeout, response.json::<serde_json::Value>()).await {

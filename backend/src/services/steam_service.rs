@@ -1,15 +1,33 @@
-use crate::{config::Config, http_client::HTTP_CLIENT};
+use crate::{config::Config, http_client};
 use anyhow::Context;
 use regex::Regex;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::time::Instant;
 
 const STEAM_ID64_BASE: u64 = 76561197960265728;
 const STEAM_API_MAX_RETRIES: u32 = 3;
+
+static RE_STEAM2: OnceLock<Regex> = OnceLock::new();
+static RE_STEAM3: OnceLock<Regex> = OnceLock::new();
+static RE_PROFILE_URL: OnceLock<Regex> = OnceLock::new();
+static RE_VANITY_URL: OnceLock<Regex> = OnceLock::new();
+
+fn re_steam2() -> &'static Regex {
+    RE_STEAM2.get_or_init(|| Regex::new(r"(?i)^STEAM_[0-5]:([0-1]):(\d+)$").unwrap())
+}
+fn re_steam3() -> &'static Regex {
+    RE_STEAM3.get_or_init(|| Regex::new(r"^\[U:1:(\d+)\]$").unwrap())
+}
+fn re_profile_url() -> &'static Regex {
+    RE_PROFILE_URL.get_or_init(|| Regex::new(r"^https?://steamcommunity\.com/profiles/(\d{17})/?$").unwrap())
+}
+fn re_vanity_url() -> &'static Regex {
+    RE_VANITY_URL.get_or_init(|| Regex::new(r"^https?://steamcommunity\.com/id/([^/?#]+)/?$").unwrap())
+}
 const CACHE_TTL_SECS: u64 = 300; // 5分钟缓存
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -81,7 +99,7 @@ impl SteamResolver {
             ));
         }
 
-        if let Some(captures) = Regex::new(r"(?i)^STEAM_[0-5]:([0-1]):(\d+)$")?.captures(input) {
+        if let Some(captures) = re_steam2().captures(input) {
             let parity: u64 = captures[1].parse()?;
             let account_number: u64 = captures[2].parse()?;
             let steamid64 = (STEAM_ID64_BASE + account_number * 2 + parity).to_string();
@@ -93,7 +111,7 @@ impl SteamResolver {
             ));
         }
 
-        if let Some(captures) = Regex::new(r"^\[U:1:(\d+)\]$")?.captures(input) {
+        if let Some(captures) = re_steam3().captures(input) {
             let account_id: u64 = captures[1].parse()?;
             let steamid64 = (STEAM_ID64_BASE + account_id).to_string();
             return Ok(build_identity(
@@ -104,7 +122,7 @@ impl SteamResolver {
             ));
         }
 
-        if let Some(captures) = Regex::new(r"^https?://steamcommunity\.com/profiles/(\d{17})/?$")?.captures(input) {
+        if let Some(captures) = re_profile_url().captures(input) {
             let steamid64 = captures[1].to_string();
             return Ok(build_identity(
                 steamid64.clone(),
@@ -129,7 +147,7 @@ impl SteamResolver {
             .as_deref()
             .context("缺少 STEAM_API_KEY，无法解析自定义 Steam 主页链接")?;
 
-        let response = HTTP_CLIENT
+        let response = http_client::http_client()
             .get("https://api.steampowered.com/ISteamUser/ResolveVanityURL/v1/")
             .query(&[("key", api_key), ("vanityurl", vanity.as_str())])
             .send()
@@ -214,7 +232,7 @@ impl SteamResolver {
     }
 
     async fn fetch_profile_from(base_url: &str, steamid64: &str, api_key: &str) -> anyhow::Result<Option<SteamProfile>> {
-        let response = HTTP_CLIENT
+        let response = http_client::http_client()
             .get(base_url)
             .query(&[("key", api_key), ("steamids", steamid64)])
             .send()
@@ -316,7 +334,7 @@ impl SteamResolver {
     }
 
     async fn fetch_profiles_batch_from(base_url: &str, steamids: &str, api_key: &str) -> anyhow::Result<HashMap<String, SteamProfile>> {
-        let response = HTTP_CLIENT
+        let response = http_client::http_client()
             .get(base_url)
             .query(&[("key", api_key), ("steamids", steamids)])
             .send()
@@ -391,6 +409,21 @@ fn steamid2_from_steamid64(steamid64: &str) -> anyhow::Result<String> {
     Ok(format!("STEAM_0:{x}:{y}"))
 }
 
+/// 将 STEAM_X:Y:Z 格式转换为 SteamID64
+pub fn steam2_to_steamid64(steam_id: &str) -> anyhow::Result<String> {
+    let mut parts = steam_id.split(':');
+    let prefix = parts.next().unwrap_or_default();
+    let auth_server = parts.next().unwrap_or_default();
+    let account = parts.next().unwrap_or_default();
+
+    anyhow::ensure!(prefix == "STEAM_0" || prefix == "STEAM_1", "旧 SteamID 格式无效");
+    let auth_server = auth_server.parse::<u64>()?;
+    let account = account.parse::<u64>()?;
+    anyhow::ensure!(auth_server <= 1, "旧 SteamID 格式无效");
+
+    Ok((STEAM_ID64_BASE + account * 2 + auth_server).to_string())
+}
+
 fn steamid3_from_steamid64(steamid64: &str) -> anyhow::Result<String> {
     let z = steamid64
         .parse::<u64>()?
@@ -404,7 +437,7 @@ fn profile_url_from_steamid64(steamid64: &str) -> String {
 }
 
 fn extract_vanity(input: &str) -> anyhow::Result<String> {
-    let captures = Regex::new(r"^https?://steamcommunity\.com/id/([^/?#]+)/?$")?
+    let captures = re_vanity_url()
         .captures(input)
         .context("无法识别 Steam 标识符格式")?;
     Ok(captures[1].to_string())

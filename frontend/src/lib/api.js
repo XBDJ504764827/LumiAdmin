@@ -7,6 +7,15 @@ function buildQueryString(params = {}) {
   return entries.length > 0 ? '?' + entries.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&') : '';
 }
 
+function handleUnauthorized() {
+  if (typeof window !== 'undefined') {
+    window.localStorage.removeItem('manger_token');
+    if (!window.location.pathname.endsWith('/login')) {
+      window.location.href = '/login';
+    }
+  }
+}
+
 async function request(path, options = {}) {
   const { headers: optionHeaders, ...restOptions } = options;
 
@@ -18,6 +27,11 @@ async function request(path, options = {}) {
       ...(optionHeaders ?? {}),
     },
   });
+
+  if (response.status === 401 && !path.startsWith('/api/public/')) {
+    handleUnauthorized();
+    throw new Error('登录已过期，请重新登录。');
+  }
 
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));

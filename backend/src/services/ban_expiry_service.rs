@@ -1,6 +1,4 @@
 use crate::db::Database;
-use chrono::Utc;
-use uuid::Uuid;
 
 /// 启动封禁过期检查循环
 /// 每隔 interval_seconds 秒检查一次过期的封禁记录并自动解封
@@ -26,41 +24,20 @@ pub fn start_expiry_loop(db: Database, interval_seconds: u64) {
 /// 处理所有已过期的封禁记录
 /// 返回解封的记录数量
 pub async fn process_expired_bans(db: &Database) -> anyhow::Result<usize> {
-    let now = Utc::now();
-
-    // 查找所有已过期但仍处于 active 状态的封禁记录
-    let expired_ids: Vec<Uuid> = sqlx::query_scalar(
-        r#"SELECT id FROM ban_records
+    let result = sqlx::query(
+        r#"UPDATE ban_records
+           SET status = 'inactive',
+               removed_reason = '临时封禁已到期，自动解封',
+               removed_by = 'system',
+               removed_at = now()
            WHERE status = 'active'
              AND expires_at IS NOT NULL
-             AND expires_at <= $1"#,
+             AND expires_at <= now()"#,
     )
-    .bind(now)
-    .fetch_all(&db.pool)
+    .execute(&db.pool)
     .await?;
 
-    if expired_ids.is_empty() {
-        return Ok(0);
-    }
-
-    let count = expired_ids.len();
-
-    // 批量更新为 inactive 状态
-    for id in expired_ids {
-        sqlx::query(
-            r#"UPDATE ban_records
-               SET status = 'inactive',
-                   removed_reason = '临时封禁已到期，自动解封',
-                   removed_by = 'system',
-                   removed_at = now()
-               WHERE id = $1"#,
-        )
-        .bind(id)
-        .execute(&db.pool)
-        .await?;
-    }
-
-    Ok(count)
+    Ok(result.rows_affected() as usize)
 }
 
 #[cfg(test)]

@@ -27,6 +27,7 @@ use tower_http::compression::CompressionLayer;
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("info").init();
     let config = Config::from_env();
+    http_client::init_http_client(config.http_timeout_secs, config.http_connect_timeout_secs);
     let db = Database::connect(&config.database_url, &config).await?;
     db.migrate().await?;
     db.seed(&config).await?;
@@ -42,6 +43,8 @@ async fn main() -> anyhow::Result<()> {
     services::auth_service::start_session_cleanup_loop(db.clone(), 600);
     // 启动外部服务器轮询，每 5 秒扫描一次，各服务器按自身 poll_interval 独立轮询
     services::rcon_poll_service::start_rcon_poll_loop(db.clone(), 5);
+    // 启动过期服务器状态清理，每 30 秒执行一次
+    services::community_service::start_stale_cleanup_loop(db.clone());
 
     // 启动地图等级同步（如果配置了 MySQL），启动时同步一次，之后每 6 小时同步一次
     if let Some(ref mysql_url) = config.mysql_database_url {
@@ -62,7 +65,8 @@ async fn main() -> anyhow::Result<()> {
     let max_body = config.max_request_body_bytes;
     let request_timeout = Duration::from_secs(config.request_timeout_secs);
     let cors_origin = config.cors_origin.clone();
-    let app = routes::router(config, db, access_snapshot, server_config_cache)
+    let steam_resolver = services::steam_service::SteamResolver::new(&config);
+    let app = routes::router(config, db, access_snapshot, server_config_cache, steam_resolver)
         .layer(axum::middleware::from_fn_with_state(
             rate_limit_state,
             rate_limit_middleware::rate_limit_middleware,
@@ -86,6 +90,7 @@ async fn main() -> anyhow::Result<()> {
                         cors = cors.allow_origin(parsed);
                     }
                 } else {
+                    tracing::warn!("CORS_ORIGIN 未配置，允许所有来源访问。生产环境请设置 CORS_ORIGIN 环境变量");
                     cors = cors.allow_origin(tower_http::cors::Any);
                 }
                 cors

@@ -118,7 +118,7 @@ pub async fn create_user(db: &Database, input: CreateUserInput) -> anyhow::Resul
     let username = input.username.trim();
     let password = input.password.trim();
     let role = input.role.trim();
-    let steam_id = normalize_optional_text(input.steam_id.as_deref());
+    let steam_id = super::normalize_optional_text(input.steam_id.as_deref());
 
     anyhow::ensure!(!username.is_empty(), "用户名不能为空");
     anyhow::ensure!(!password.is_empty(), "密码不能为空");
@@ -139,7 +139,7 @@ pub async fn create_user(db: &Database, input: CreateUserInput) -> anyhow::Resul
     .bind(&password_hash)
     .bind(role)
     .bind(steam_id)
-    .bind(normalize_optional_text(input.remark.as_deref()))
+    .bind(super::normalize_optional_text(input.remark.as_deref()))
     .fetch_one(&db.pool)
     .await?;
 
@@ -158,7 +158,7 @@ pub async fn create_user(db: &Database, input: CreateUserInput) -> anyhow::Resul
 pub async fn update_user(db: &Database, id: Uuid, input: UpdateUserInput, keep_role: bool) -> anyhow::Result<UserListItem> {
     let current = find_user(db, id).await?;
     let username = input.username.trim();
-    let steam_id = normalize_optional_text(input.steam_id.as_deref());
+    let steam_id = super::normalize_optional_text(input.steam_id.as_deref());
     anyhow::ensure!(!username.is_empty(), "用户名不能为空");
 
     let role = if keep_role {
@@ -185,7 +185,7 @@ pub async fn update_user(db: &Database, id: Uuid, input: UpdateUserInput, keep_r
     .bind(username)
     .bind(role)
     .bind(steam_id)
-    .bind(normalize_optional_text(input.remark.as_deref()))
+    .bind(super::normalize_optional_text(input.remark.as_deref()))
     .fetch_one(&db.pool)
     .await?;
 
@@ -222,9 +222,6 @@ pub async fn delete_user(db: &Database, id: Uuid) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn normalize_optional_text(value: Option<&str>) -> Option<String> {
-    value.map(str::trim).filter(|value| !value.is_empty()).map(ToString::to_string)
-}
 
 pub async fn toggle_enabled(db: &Database, id: Uuid) -> anyhow::Result<UserListItem> {
     let row = sqlx::query_as::<_, User>(

@@ -30,6 +30,7 @@ use crate::{
     services::{
         access_snapshot_service::SnapshotStore,
         server_config_cache::ServerConfigCache,
+        steam_service::SteamResolver,
     },
 };
 
@@ -44,6 +45,7 @@ pub struct AppCtx {
     pub access_snapshot: SnapshotStore,
     pub global_bans_cache: Arc<RwLock<HashMap<String, (serde_json::Value, chrono::DateTime<Utc>)>>>,
     pub server_config_cache: Arc<ServerConfigCache>,
+    pub steam_resolver: SteamResolver,
 }
 
 // ---------------------------------------------------------------------------
@@ -97,6 +99,7 @@ pub fn router(
     db: Database,
     access_snapshot: SnapshotStore,
     server_config_cache: Arc<ServerConfigCache>,
+    steam_resolver: SteamResolver,
 ) -> Router {
     Router::new()
         .route("/health", get(|| async { Json(serde_json::json!({ "ok": true })) }))
@@ -181,6 +184,7 @@ pub fn router(
             access_snapshot,
             global_bans_cache: Arc::new(RwLock::new(HashMap::new())),
             server_config_cache,
+            steam_resolver,
         })
 }
 

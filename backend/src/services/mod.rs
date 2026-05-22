@@ -9,6 +9,7 @@ pub mod dashboard_service;
 pub mod docs_service;
 pub mod external_server_service;
 pub mod log_service;
+pub mod map_tier_service;
 pub mod offline_sync_service;
 pub mod permission_service;
 pub mod player_access_rule_service;

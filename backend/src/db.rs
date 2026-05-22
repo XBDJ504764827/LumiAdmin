@@ -910,6 +910,15 @@ impl Database {
             .execute(&self.pool)
             .await?;
 
+        sqlx::query(
+            r#"CREATE TABLE IF NOT EXISTS map_tiers (
+              map_name TEXT PRIMARY KEY,
+              tier INTEGER NOT NULL
+            )"#,
+        )
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 

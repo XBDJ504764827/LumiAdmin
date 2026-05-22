@@ -22,6 +22,8 @@ pub struct Config {
     pub request_timeout_secs: u64,
     // CORS 允许的来源
     pub cors_origin: Option<String>,
+    // MySQL 数据库（地图等级同步）
+    pub mysql_database_url: Option<String>,
 }
 
 impl Config {
@@ -73,6 +75,7 @@ impl Config {
             request_timeout_secs: std::env::var("REQUEST_TIMEOUT_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(60),
             // CORS 允许的来源
             cors_origin: std::env::var("CORS_ORIGIN").ok().filter(|v| !v.is_empty()),
+            mysql_database_url: std::env::var("MYSQL_DATABASE_URL").ok().filter(|v| !v.is_empty()),
         }
     }
 }

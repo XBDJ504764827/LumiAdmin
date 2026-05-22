@@ -81,6 +81,7 @@ pub struct PlayerApiDispatchRow {
     pub server_ip: String,
     pub server_port: i32,
     pub current_map: String,
+    pub max_players: i32,
     pub player: String,
     pub steam_id64: String,
     pub ping: i32,
@@ -101,6 +102,8 @@ pub struct WebhookServerPayload {
     pub server_port: i32,
     pub current_map: String,
     pub player_count: usize,
+    pub max_players: i32,
+    pub map_tier: Option<i32>,
     pub players: Vec<WebhookPlayerPayload>,
 }
 
@@ -293,6 +296,8 @@ pub fn build_webhook_payload(generated_at: DateTime<Utc>, rows: Vec<PlayerApiDis
                 server_port: row.server_port,
                 current_map: row.current_map.clone(),
                 player_count: 1,
+                max_players: row.max_players,
+                map_tier: None,
                 players: vec![player],
             });
         }
@@ -315,6 +320,23 @@ pub fn sort_servers_by_ids(servers: &mut [WebhookServerPayload], order: &[Uuid])
     });
 }
 
+/// 批量查询 map_tier 并填充到每个 server 中
+async fn fill_map_tiers(db: &Database, servers: &mut [WebhookServerPayload]) {
+    let map_names: Vec<String> = servers.iter()
+        .map(|s| s.current_map.clone())
+        .filter(|m| !m.is_empty())
+        .collect();
+    let tiers = match crate::services::map_tier_service::get_map_tiers(db, &map_names).await {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+    for server in servers.iter_mut() {
+        if !server.current_map.is_empty() {
+            server.map_tier = tiers.get(&server.current_map).copied();
+        }
+    }
+}
+
 async fn fetch_external_server_rows(db: &Database, ids: &[Uuid]) -> anyhow::Result<Vec<WebhookServerPayload>> {
     let servers = if ids.is_empty() {
         crate::services::external_server_service::get_all_with_status(db).await?
@@ -333,8 +355,10 @@ async fn fetch_external_server_rows(db: &Database, ids: &[Uuid]) -> anyhow::Resu
             server_name,
             server_ip: s.ip,
             server_port: s.port,
-            current_map: s.current_map.unwrap_or_default(),
+            current_map: s.current_map.clone().unwrap_or_default(),
             player_count: s.player_count.unwrap_or(0) as usize,
+            max_players: s.max_players.unwrap_or(0),
+            map_tier: None,
             players: s.players.unwrap_or_default().into_iter().map(|name| WebhookPlayerPayload {
                 player: name,
                 steam_id64: String::new(),
@@ -353,6 +377,7 @@ async fn dispatch_rows_for_item(db: &Database, item: &PlayerApiWebhookConfig) ->
                       s.ip AS server_ip,
                       p.server_port,
                       p.current_map,
+                      s.max_players,
                       p.name AS player,
                       p.steam_id64,
                       p.ping,
@@ -372,6 +397,7 @@ async fn dispatch_rows_for_item(db: &Database, item: &PlayerApiWebhookConfig) ->
                   s.ip AS server_ip,
                   p.server_port,
                   p.current_map,
+                  s.max_players,
                   p.name AS player,
                   p.steam_id64,
                   p.ping,
@@ -432,6 +458,7 @@ pub async fn dispatch_once(db: &Database, client: &Client) -> anyhow::Result<()>
             external_servers.sort_by(|a, b| a.server_name.cmp(&b.server_name));
         }
         payload.servers.extend(external_servers);
+        fill_map_tiers(db, &mut payload.servers).await;
         let mut request = client.post(webhook_url).json(&payload);
         if let Some(secret) = item.secret.as_deref() {
             request = request.header("X-Manger-Secret", secret);
@@ -493,6 +520,7 @@ pub async fn fetch_webhook_payload_by_path(db: &Database, public_path: &str, sec
         external_servers.sort_by(|a, b| a.server_name.cmp(&b.server_name));
     }
     payload.servers.extend(external_servers);
+    fill_map_tiers(db, &mut payload.servers).await;
 
     Ok(payload)
 }
@@ -540,6 +568,7 @@ mod tests {
                     server_ip: "203.0.113.100".to_string(),
                     server_port: 27015,
                     current_map: "de_dust2".to_string(),
+                    max_players: 32,
                     player: "Alice".to_string(),
                     steam_id64: "76561198000000001".to_string(),
                     ping: 28,
@@ -551,6 +580,7 @@ mod tests {
                     server_ip: "203.0.113.100".to_string(),
                     server_port: 27015,
                     current_map: "de_dust2".to_string(),
+                    max_players: 32,
                     player: "Bob".to_string(),
                     steam_id64: "76561198000000002".to_string(),
                     ping: 35,
@@ -562,6 +592,7 @@ mod tests {
                     server_ip: "203.0.113.200".to_string(),
                     server_port: 27016,
                     current_map: "de_inferno".to_string(),
+                    max_players: 16,
                     player: "Charlie".to_string(),
                     steam_id64: "76561198000000003".to_string(),
                     ping: 42,
@@ -599,14 +630,17 @@ mod tests {
         let server_id = Uuid::new_v4();
         let normalized = normalize_webhook_input(PlayerApiWebhookInput {
             public_path: "my-hook".to_string(),
-            webhook_url: " https://api.example.com/players ".to_string(),
+            webhook_url: Some(" https://api.example.com/players ".to_string()),
             secret: Some("  token  ".to_string()),
             server_ids: vec![server_id],
+            external_server_ids: vec![],
+            enabled: true,
+            public_access: true,
         })
         .unwrap();
 
         assert_eq!(normalized.public_path, "my-hook");
-        assert_eq!(normalized.webhook_url, "https://api.example.com/players");
+        assert_eq!(normalized.webhook_url.as_deref(), Some("https://api.example.com/players"));
         assert_eq!(normalized.secret.as_deref(), Some("token"));
         assert_eq!(normalized.server_ids, vec![server_id]);
     }

@@ -6,7 +6,7 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::routes::{AppCtx, current_operator, forbidden, invalid_request};
+use crate::routes::{AppCtx, current_operator, forbidden};
 use crate::services::{auth_service, log_service, rate_limit_service::extract_client_ip};
 
 #[derive(Deserialize)]
@@ -64,7 +64,7 @@ pub(crate) async fn me(State(ctx): State<AppCtx>, headers: HeaderMap) -> Result<
 /// 登出当前用户的所有其他设备（保留当前 session）
 pub(crate) async fn logout_all_devices(
     State(ctx): State<AppCtx>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Json(body): Json<LogoutAllBody>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     // 验证当前 session 有效

@@ -10,6 +10,7 @@ use crate::routes::{AppCtx, ListQuery, invalid_request};
 use crate::services::{whitelist_service, public_service, log_service, rate_limit_service::extract_client_ip};
 
 #[derive(serde::Deserialize)]
+#[allow(dead_code)]
 pub(crate) struct WhitelistBody {
     steam_input: String,
     nickname: String,
@@ -176,7 +177,6 @@ pub(crate) async fn get_global_bans_batch(
     // 批量请求（限制并发数，最多同时 8 个外部请求）
     if !to_fetch.is_empty() {
         let fetch_ids = to_fetch;
-        let fetch_count = fetch_ids.len();
         let fetch_ids_for_timeout = fetch_ids.clone();
         let results_vec = tokio::time::timeout(
             std::time::Duration::from_secs(15),

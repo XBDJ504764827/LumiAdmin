@@ -98,7 +98,7 @@ pub async fn list_audit_logs(
     let mut conditions = Vec::new();
     let mut param_idx = 1u32;
 
-    if let Some(ref server_id) = query.server_id {
+    if let Some(ref _server_id) = query.server_id {
         conditions.push(format!("server_id = ${}", param_idx));
         param_idx += 1;
     }
@@ -126,7 +126,7 @@ pub async fn list_audit_logs(
             param_idx += 1;
         }
     }
-    if let Some(success) = query.success {
+    if let Some(_success) = query.success {
         conditions.push(format!("success = ${}", param_idx));
         param_idx += 1;
     }

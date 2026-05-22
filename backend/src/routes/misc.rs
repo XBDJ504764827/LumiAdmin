@@ -7,8 +7,7 @@ use axum::http::StatusCode;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::routes::{AppCtx, ListQuery, current_operator, forbidden, invalid_request};
-use crate::services::rate_limit_service::extract_client_ip;
+use crate::routes::{AppCtx, ListQuery, current_operator, forbidden};
 use crate::services::{audit_service, dashboard_service, docs_service, log_service, permission_service};
 
 pub(crate) async fn dashboard(State(ctx): State<AppCtx>) -> Result<Json<serde_json::Value>, StatusCode> {

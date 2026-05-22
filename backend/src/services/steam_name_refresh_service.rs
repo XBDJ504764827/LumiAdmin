@@ -98,6 +98,7 @@ pub async fn refresh_steam_names(db: &Database, resolver: &SteamResolver) -> any
             .await;
 
         for (id, result) in results {
+            #[allow(unused_assignments)]
             if let Some(r) = result {
                 let mut updates = Vec::new();
                 let mut param_idx = 2u32;

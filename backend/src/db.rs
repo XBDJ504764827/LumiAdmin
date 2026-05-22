@@ -35,7 +35,23 @@ impl Database {
         Ok(Self { pool })
     }
 
+
     pub async fn migrate(&self) -> anyhow::Result<()> {
+        self.migrate_core_tables().await?;
+        self.migrate_ban_records_schema().await?;
+        self.migrate_users_and_communities_schema().await?;
+        self.migrate_servers_schema().await?;
+        self.migrate_player_api_schema().await?;
+        self.migrate_server_data().await?;
+        self.migrate_whitelist_schema().await?;
+        self.migrate_logs_operations_and_indexes().await?;
+        self.migrate_external_servers_schema().await?;
+        self.migrate_map_tiers_table().await?;
+        Ok(())
+    }
+
+    /// 核心 CREATE TABLE 语句（首次建表）
+    async fn migrate_core_tables(&self) -> anyhow::Result<()> {
         let statements = [
             r#"CREATE TABLE IF NOT EXISTS users (
               id UUID PRIMARY KEY,
@@ -161,115 +177,81 @@ impl Database {
         for stmt in statements {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
+        Ok(())
+    }
 
-        sqlx::query(r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS player TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS ip_address TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS server_name TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS ban_type TEXT NOT NULL DEFAULT 'steam'"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS reason TEXT NOT NULL DEFAULT '未填写'"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS duration_minutes INTEGER NOT NULL DEFAULT 0"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual'"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS server_id UUID"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS server_port INTEGER"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS removed_reason TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS removed_by TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS removed_at TIMESTAMPTZ"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE ban_records ALTER COLUMN player DROP NOT NULL"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE ban_records ALTER COLUMN ip_address DROP NOT NULL"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE ban_records ALTER COLUMN server_name DROP NOT NULL"#)
-            .execute(&self.pool)
-            .await?;
+    /// ban_records 补充列
+    async fn migrate_ban_records_schema(&self) -> anyhow::Result<()> {
+        let alters = [
+            r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS player TEXT"#,
+            r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS ip_address TEXT"#,
+            r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS server_name TEXT"#,
+            r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS ban_type TEXT NOT NULL DEFAULT 'steam'"#,
+            r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS reason TEXT NOT NULL DEFAULT '未填写'"#,
+            r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS duration_minutes INTEGER NOT NULL DEFAULT 0"#,
+            r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ"#,
+            r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual'"#,
+            r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS server_id UUID"#,
+            r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS server_port INTEGER"#,
+            r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS removed_reason TEXT"#,
+            r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS removed_by TEXT"#,
+            r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS removed_at TIMESTAMPTZ"#,
+            r#"ALTER TABLE ban_records ALTER COLUMN player DROP NOT NULL"#,
+            r#"ALTER TABLE ban_records ALTER COLUMN ip_address DROP NOT NULL"#,
+            r#"ALTER TABLE ban_records ALTER COLUMN server_name DROP NOT NULL"#,
+        ];
+        for sql in alters {
+            sqlx::query(sql).execute(&self.pool).await?;
+        }
+        Ok(())
+    }
 
-        sqlx::query(r#"ALTER TABLE users ADD COLUMN IF NOT EXISTS steam_id TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE users ADD COLUMN IF NOT EXISTS remark TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE users ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT true"#)
-            .execute(&self.pool)
-            .await?;
+    /// users 和 communities 补充列
+    async fn migrate_users_and_communities_schema(&self) -> anyhow::Result<()> {
+        let alters = [
+            r#"ALTER TABLE users ADD COLUMN IF NOT EXISTS steam_id TEXT"#,
+            r#"ALTER TABLE users ADD COLUMN IF NOT EXISTS remark TEXT"#,
+            r#"ALTER TABLE users ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT true"#,
+            r#"ALTER TABLE communities ADD COLUMN IF NOT EXISTS created_by UUID"#,
+        ];
+        for sql in alters {
+            sqlx::query(sql).execute(&self.pool).await?;
+        }
+        Ok(())
+    }
 
-        sqlx::query(r#"ALTER TABLE communities ADD COLUMN IF NOT EXISTS created_by UUID"#)
-            .execute(&self.pool)
-            .await?;
+    /// servers 补充列 + player_access_cache / server_online_players
+    async fn migrate_servers_schema(&self) -> anyhow::Result<()> {
+        let alters = [
+            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS ip TEXT"#,
+            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS port INTEGER"#,
+            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS rcon_password TEXT"#,
+            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS report_token TEXT"#,
+            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS note TEXT"#,
+            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS last_tested_at TIMESTAMPTZ"#,
+            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS last_reported_at TIMESTAMPTZ"#,
+            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS access_restriction_enabled BOOLEAN NOT NULL DEFAULT false"#,
+            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS min_rating INTEGER NOT NULL DEFAULT 0"#,
+            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS min_steam_level INTEGER NOT NULL DEFAULT 0"#,
+            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS whitelist_mode_enabled BOOLEAN NOT NULL DEFAULT false"#,
+            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS max_players INTEGER NOT NULL DEFAULT 0"#,
+        ];
+        for sql in alters {
+            sqlx::query(sql).execute(&self.pool).await?;
+        }
 
-        sqlx::query(r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS ip TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS port INTEGER"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS rcon_password TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS report_token TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS note TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS last_tested_at TIMESTAMPTZ"#)
-            .execute(&self.pool)
-            .await?;
+        // report_token 填充 + 唯一约束
         sqlx::query(r#"UPDATE servers SET report_token = md5(random()::TEXT || clock_timestamp()::TEXT) WHERE report_token IS NULL OR btrim(report_token) = ''"#)
-            .execute(&self.pool)
-            .await?;
+            .execute(&self.pool).await?;
         sqlx::query(r#"ALTER TABLE servers ALTER COLUMN report_token SET NOT NULL"#)
-            .execute(&self.pool)
-            .await?;
+            .execute(&self.pool).await?;
         sqlx::query(r#"CREATE UNIQUE INDEX IF NOT EXISTS idx_servers_report_token_unique ON servers (report_token)"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS last_reported_at TIMESTAMPTZ"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS access_restriction_enabled BOOLEAN NOT NULL DEFAULT false"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS min_rating INTEGER NOT NULL DEFAULT 0"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS min_steam_level INTEGER NOT NULL DEFAULT 0"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS whitelist_mode_enabled BOOLEAN NOT NULL DEFAULT false"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS max_players INTEGER NOT NULL DEFAULT 0"#)
-            .execute(&self.pool)
-            .await?;
+            .execute(&self.pool).await?;
+
+        sqlx::query(r#"ALTER TABLE servers ALTER COLUMN status SET DEFAULT 'untested'"#)
+            .execute(&self.pool).await?;
+
+        // player_access_cache 表 + 索引
         sqlx::query(
             r#"CREATE TABLE IF NOT EXISTS player_access_cache (
               steamid64 TEXT PRIMARY KEY,
@@ -278,12 +260,11 @@ impl Database {
               expires_at TIMESTAMPTZ NOT NULL,
               updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )"#,
-        )
-        .execute(&self.pool)
-        .await?;
+        ).execute(&self.pool).await?;
         sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_player_access_cache_expires_at ON player_access_cache (expires_at)"#)
-            .execute(&self.pool)
-            .await?;
+            .execute(&self.pool).await?;
+
+        // server_online_players 表 + 索引
         sqlx::query(
             r#"CREATE TABLE IF NOT EXISTS server_online_players (
               server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
@@ -295,17 +276,17 @@ impl Database {
               current_map TEXT NOT NULL DEFAULT '',
               reported_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )"#,
-        )
-        .execute(&self.pool)
-        .await?;
+        ).execute(&self.pool).await?;
         sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_server_online_players_server_id ON server_online_players (server_id)"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(
-            r#"ALTER TABLE server_online_players ADD COLUMN IF NOT EXISTS current_map TEXT NOT NULL DEFAULT ''"#,
-        )
-        .execute(&self.pool)
-        .await?;
+            .execute(&self.pool).await?;
+        sqlx::query(r#"ALTER TABLE server_online_players ADD COLUMN IF NOT EXISTS current_map TEXT NOT NULL DEFAULT ''"#)
+            .execute(&self.pool).await?;
+
+        Ok(())
+    }
+
+    /// 玩家 API 分发配置表
+    async fn migrate_player_api_schema(&self) -> anyhow::Result<()> {
         sqlx::query(
             r#"CREATE TABLE IF NOT EXISTS player_api_config (
               id BOOLEAN PRIMARY KEY DEFAULT true,
@@ -314,9 +295,8 @@ impl Database {
               updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               CONSTRAINT player_api_config_single_row CHECK (id)
             )"#,
-        )
-        .execute(&self.pool)
-        .await?;
+        ).execute(&self.pool).await?;
+
         sqlx::query(
             r#"CREATE TABLE IF NOT EXISTS player_api_webhooks (
               id UUID PRIMARY KEY,
@@ -330,48 +310,35 @@ impl Database {
               created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )"#,
-        )
-        .execute(&self.pool)
-        .await?;
-        sqlx::query(r#"ALTER TABLE player_api_webhooks ADD COLUMN IF NOT EXISTS public_path TEXT NOT NULL DEFAULT ''"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE player_api_config ADD COLUMN IF NOT EXISTS max_api_count INTEGER NOT NULL DEFAULT 3"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE player_api_config ADD COLUMN IF NOT EXISTS interval_seconds INTEGER NOT NULL DEFAULT 30"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE player_api_config ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE player_api_webhooks ADD COLUMN IF NOT EXISTS secret TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE player_api_webhooks ADD COLUMN IF NOT EXISTS server_ids UUID[] NOT NULL DEFAULT ARRAY[]::UUID[]"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE player_api_webhooks ADD COLUMN IF NOT EXISTS last_status TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE player_api_webhooks ADD COLUMN IF NOT EXISTS last_error TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE player_api_webhooks ADD COLUMN IF NOT EXISTS last_dispatched_at TIMESTAMPTZ"#)
-            .execute(&self.pool)
-            .await?;
+        ).execute(&self.pool).await?;
+
+        let alters = [
+            r#"ALTER TABLE player_api_webhooks ADD COLUMN IF NOT EXISTS public_path TEXT NOT NULL DEFAULT ''"#,
+            r#"ALTER TABLE player_api_config ADD COLUMN IF NOT EXISTS max_api_count INTEGER NOT NULL DEFAULT 3"#,
+            r#"ALTER TABLE player_api_config ADD COLUMN IF NOT EXISTS interval_seconds INTEGER NOT NULL DEFAULT 30"#,
+            r#"ALTER TABLE player_api_config ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()"#,
+            r#"ALTER TABLE player_api_webhooks ADD COLUMN IF NOT EXISTS secret TEXT"#,
+            r#"ALTER TABLE player_api_webhooks ADD COLUMN IF NOT EXISTS server_ids UUID[] NOT NULL DEFAULT ARRAY[]::UUID[]"#,
+            r#"ALTER TABLE player_api_webhooks ADD COLUMN IF NOT EXISTS last_status TEXT"#,
+            r#"ALTER TABLE player_api_webhooks ADD COLUMN IF NOT EXISTS last_error TEXT"#,
+            r#"ALTER TABLE player_api_webhooks ADD COLUMN IF NOT EXISTS last_dispatched_at TIMESTAMPTZ"#,
+        ];
+        for sql in alters {
+            sqlx::query(sql).execute(&self.pool).await?;
+        }
+
         sqlx::query(
             r#"INSERT INTO player_api_config (id, max_api_count, interval_seconds)
                VALUES (true, 3, 30)
                ON CONFLICT (id) DO NOTHING"#,
-        )
-        .execute(&self.pool)
-        .await?;
+        ).execute(&self.pool).await?;
 
-        sqlx::query(r#"ALTER TABLE servers ALTER COLUMN status SET DEFAULT 'untested'"#)
-            .execute(&self.pool)
-            .await?;
+        Ok(())
+    }
 
+    /// 服务器遗留数据迁移（players text→text[]、addr 列迁移）
+    async fn migrate_server_data(&self) -> anyhow::Result<()> {
+        // players: text → text[]
         sqlx::query(
             r#"
             DO $$
@@ -398,20 +365,16 @@ impl Database {
             END
             $$;
             "#,
-        )
-        .execute(&self.pool)
-        .await?;
+        ).execute(&self.pool).await?;
 
         sqlx::query(r#"ALTER TABLE servers ALTER COLUMN players SET DEFAULT ARRAY[]::TEXT[]"#)
-            .execute(&self.pool)
-            .await?;
+            .execute(&self.pool).await?;
         sqlx::query(r#"UPDATE servers SET players = ARRAY[]::TEXT[] WHERE players IS NULL"#)
-            .execute(&self.pool)
-            .await?;
+            .execute(&self.pool).await?;
         sqlx::query(r#"ALTER TABLE servers ALTER COLUMN players SET NOT NULL"#)
-            .execute(&self.pool)
-            .await?;
+            .execute(&self.pool).await?;
 
+        // addr → ip/port 迁移
         sqlx::query(
             r#"
             DO $$
@@ -430,59 +393,36 @@ impl Database {
             END
             $$;
             "#,
-        )
-        .execute(&self.pool)
-        .await?;
+        ).execute(&self.pool).await?;
 
-        sqlx::query(r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS nickname TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS steamid64 TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS steamid TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS steamid3 TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS profile_url TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS steam_persona_name TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS applied_at TIMESTAMPTZ"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS approved_by TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMPTZ"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS rejected_by TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS rejection_reason TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS revoked_by TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS source TEXT"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ"#)
-            .execute(&self.pool)
-            .await?;
+        Ok(())
+    }
 
+    /// 白名单表字段扩充 + 旧数据迁移
+    async fn migrate_whitelist_schema(&self) -> anyhow::Result<()> {
+        let alters = [
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS nickname TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS steamid64 TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS steamid TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS steamid3 TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS profile_url TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS steam_persona_name TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS applied_at TIMESTAMPTZ"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS approved_by TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMPTZ"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS rejected_by TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS rejection_reason TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS revoked_by TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS source TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ"#,
+        ];
+        for sql in alters {
+            sqlx::query(sql).execute(&self.pool).await?;
+        }
+
+        // 旧字段数据迁移
         sqlx::query(
             r#"
             DO $$
@@ -634,40 +574,36 @@ impl Database {
             END
             $$;
             "#,
-        )
-        .execute(&self.pool)
-        .await?;
+        ).execute(&self.pool).await?;
 
-        sqlx::query(r#"UPDATE whitelist_requests SET steamid64 = steam_id WHERE steamid64 IS NULL AND steam_id ~ '^[0-9]{17}$'"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"UPDATE whitelist_requests SET steamid = steam_id WHERE steamid IS NULL AND steam_id IS NOT NULL"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"UPDATE whitelist_requests SET nickname = COALESCE(steamid64, steam_id, '未知玩家') WHERE nickname IS NULL OR btrim(nickname) = ''"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"UPDATE whitelist_requests SET source = 'public' WHERE source IS NULL OR btrim(source) = ''"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"UPDATE whitelist_requests SET updated_at = COALESCE(approved_at, rejected_at, revoked_at, applied_at) WHERE updated_at IS NULL"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"UPDATE whitelist_requests SET applied_at = COALESCE(updated_at, now()) WHERE applied_at IS NULL"#)
-            .execute(&self.pool)
-            .await?;
+        // 数据修补
+        let fixes = [
+            r#"UPDATE whitelist_requests SET steamid64 = steam_id WHERE steamid64 IS NULL AND steam_id ~ '^[0-9]{17}$'"#,
+            r#"UPDATE whitelist_requests SET steamid = steam_id WHERE steamid IS NULL AND steam_id IS NOT NULL"#,
+            r#"UPDATE whitelist_requests SET nickname = COALESCE(steamid64, steam_id, '未知玩家') WHERE nickname IS NULL OR btrim(nickname) = ''"#,
+            r#"UPDATE whitelist_requests SET source = 'public' WHERE source IS NULL OR btrim(source) = ''"#,
+            r#"UPDATE whitelist_requests SET updated_at = COALESCE(approved_at, rejected_at, revoked_at, applied_at) WHERE updated_at IS NULL"#,
+            r#"UPDATE whitelist_requests SET applied_at = COALESCE(updated_at, now()) WHERE applied_at IS NULL"#,
+        ];
+        for sql in fixes {
+            sqlx::query(sql).execute(&self.pool).await?;
+        }
 
+        // 索引
         sqlx::query(r#"DROP INDEX IF EXISTS idx_whitelist_requests_steamid64"#)
-            .execute(&self.pool)
-            .await?;
+            .execute(&self.pool).await?;
         sqlx::query(
             r#"CREATE INDEX IF NOT EXISTS idx_whitelist_requests_steamid64_lookup
                ON whitelist_requests (steamid64, updated_at DESC, applied_at DESC)
                WHERE steamid64 IS NOT NULL"#,
-        )
-        .execute(&self.pool)
-        .await?;
+        ).execute(&self.pool).await?;
 
+        Ok(())
+    }
+
+    /// 日志、审计、离线操作、权限规则 + 性能索引 + 访问控制
+    async fn migrate_logs_operations_and_indexes(&self) -> anyhow::Result<()> {
+        // 服务器状态历史
         sqlx::query(
             r#"CREATE TABLE IF NOT EXISTS server_status_history (
               id UUID PRIMARY KEY,
@@ -683,15 +619,11 @@ impl Database {
               current_map TEXT NOT NULL DEFAULT '',
               reported_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )"#,
-        )
-        .execute(&self.pool)
-        .await?;
-
+        ).execute(&self.pool).await?;
         sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_server_status_history_server_id ON server_status_history (server_id, reported_at DESC)"#)
-            .execute(&self.pool)
-            .await?;
+            .execute(&self.pool).await?;
 
-        // 玩家进服权限规则表
+        // 玩家进服权限规则
         sqlx::query(
             r#"CREATE TABLE IF NOT EXISTS player_access_rules (
               id UUID PRIMARY KEY,
@@ -704,11 +636,9 @@ impl Database {
               created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )"#,
-        )
-        .execute(&self.pool)
-        .await?;
+        ).execute(&self.pool).await?;
 
-        // 审计日志表（全量审计）
+        // 审计日志
         sqlx::query(
             r#"CREATE TABLE IF NOT EXISTS audit_logs (
               id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -729,20 +659,18 @@ impl Database {
               idempotency_key TEXT UNIQUE,
               created_at TIMESTAMPTZ DEFAULT now()
             )"#,
-        )
-        .execute(&self.pool)
-        .await?;
-        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC)"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_audit_logs_server_id ON audit_logs (server_id)"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_audit_logs_operation ON audit_logs (operation)"#)
-            .execute(&self.pool)
-            .await?;
+        ).execute(&self.pool).await?;
 
-        // 离线操作同步表（接收插件上传的离线操作）
+        let audit_indexes = [
+            r#"CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC)"#,
+            r#"CREATE INDEX IF NOT EXISTS idx_audit_logs_server_id ON audit_logs (server_id)"#,
+            r#"CREATE INDEX IF NOT EXISTS idx_audit_logs_operation ON audit_logs (operation)"#,
+        ];
+        for sql in audit_indexes {
+            sqlx::query(sql).execute(&self.pool).await?;
+        }
+
+        // 离线操作同步表
         sqlx::query(
             r#"CREATE TABLE IF NOT EXISTS offline_operations (
               id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -762,97 +690,63 @@ impl Database {
               applied BOOLEAN NOT NULL DEFAULT false,
               apply_error TEXT
             )"#,
-        )
-        .execute(&self.pool)
-        .await?;
-        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_offline_operations_server_id ON offline_operations (server_id)"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_offline_operations_created_at ON offline_operations (created_at DESC)"#)
-            .execute(&self.pool)
-            .await?;
+        ).execute(&self.pool).await?;
+
+        let offline_indexes = [
+            r#"CREATE INDEX IF NOT EXISTS idx_offline_operations_server_id ON offline_operations (server_id)"#,
+            r#"CREATE INDEX IF NOT EXISTS idx_offline_operations_created_at ON offline_operations (created_at DESC)"#,
+        ];
+        for sql in offline_indexes {
+            sqlx::query(sql).execute(&self.pool).await?;
+        }
 
         // ========== 性能优化索引 ==========
-        // 封禁记录查询优化 - 用于快速查找活跃封禁
-        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_ban_records_status_expires ON ban_records (status, expires_at) WHERE status = 'active'"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_ban_records_steam_id ON ban_records (steam_id)"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_ban_records_ip_address ON ban_records (ip_address) WHERE ip_address IS NOT NULL"#)
-            .execute(&self.pool)
-            .await?;
-        // 封禁记录创建时间索引（用于列表排序）
-        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_ban_records_created_at ON ban_records (created_at DESC)"#)
-            .execute(&self.pool)
-            .await?;
-
-        // 白名单查询优化
-        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_whitelist_requests_status ON whitelist_requests (status)"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_whitelist_requests_steamid64 ON whitelist_requests (steamid64)"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_whitelist_requests_status_steamid64 ON whitelist_requests (status, steamid64)"#)
-            .execute(&self.pool)
-            .await?;
-
-        // 服务器查询优化 - 用于插件认证
-        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_servers_port ON servers (port)"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_servers_token_port ON servers (report_token, port)"#)
-            .execute(&self.pool)
-            .await?;
-
-        // 用户查询优化 - 用于解封权限检查
-        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_users_steamid64 ON users (steam_id) WHERE steam_id IS NOT NULL"#)
-            .execute(&self.pool)
-            .await?;
-
-        // Session 清理优化 - logout_all_for_user 按 user_id 查询
-        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions (user_id)"#)
-            .execute(&self.pool)
-            .await?;
-        // Session 过期清理优化
-        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions (expires_at)"#)
-            .execute(&self.pool)
-            .await?;
-
-        // 管理日志查询优化
-        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_admin_logs_operator_name ON admin_logs (operator_name)"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_admin_logs_created_at ON admin_logs (created_at DESC)"#)
-            .execute(&self.pool)
-            .await?;
-
-        // 封禁记录操作者查询优化
-        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_ban_records_operator_name ON ban_records (operator_name)"#)
-            .execute(&self.pool)
-            .await?;
+        let perf_indexes = [
+            // 封禁记录
+            r#"CREATE INDEX IF NOT EXISTS idx_ban_records_status_expires ON ban_records (status, expires_at) WHERE status = 'active'"#,
+            r#"CREATE INDEX IF NOT EXISTS idx_ban_records_steam_id ON ban_records (steam_id)"#,
+            r#"CREATE INDEX IF NOT EXISTS idx_ban_records_ip_address ON ban_records (ip_address) WHERE ip_address IS NOT NULL"#,
+            r#"CREATE INDEX IF NOT EXISTS idx_ban_records_created_at ON ban_records (created_at DESC)"#,
+            // 白名单
+            r#"CREATE INDEX IF NOT EXISTS idx_whitelist_requests_status ON whitelist_requests (status)"#,
+            r#"CREATE INDEX IF NOT EXISTS idx_whitelist_requests_steamid64 ON whitelist_requests (steamid64)"#,
+            r#"CREATE INDEX IF NOT EXISTS idx_whitelist_requests_status_steamid64 ON whitelist_requests (status, steamid64)"#,
+            // 服务器
+            r#"CREATE INDEX IF NOT EXISTS idx_servers_port ON servers (port)"#,
+            r#"CREATE INDEX IF NOT EXISTS idx_servers_token_port ON servers (report_token, port)"#,
+            // 用户
+            r#"CREATE INDEX IF NOT EXISTS idx_users_steamid64 ON users (steam_id) WHERE steam_id IS NOT NULL"#,
+            // Session
+            r#"CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions (user_id)"#,
+            r#"CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions (expires_at)"#,
+            // 管理日志
+            r#"CREATE INDEX IF NOT EXISTS idx_admin_logs_operator_name ON admin_logs (operator_name)"#,
+            r#"CREATE INDEX IF NOT EXISTS idx_admin_logs_created_at ON admin_logs (created_at DESC)"#,
+            // 封禁操作者
+            r#"CREATE INDEX IF NOT EXISTS idx_ban_records_operator_name ON ban_records (operator_name)"#,
+        ];
+        for sql in perf_indexes {
+            sqlx::query(sql).execute(&self.pool).await?;
+        }
 
         // 社区级访问限制
-        sqlx::query(r#"ALTER TABLE communities ADD COLUMN IF NOT EXISTS min_rating INTEGER NOT NULL DEFAULT 0"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE communities ADD COLUMN IF NOT EXISTS min_steam_level INTEGER NOT NULL DEFAULT 0"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE communities ADD COLUMN IF NOT EXISTS whitelist_mode_enabled BOOLEAN NOT NULL DEFAULT false"#)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS use_custom_access BOOLEAN NOT NULL DEFAULT false"#)
-            .execute(&self.pool)
-            .await?;
-        // 已有自定义设置的服务器保留原行为
+        let community_alters = [
+            r#"ALTER TABLE communities ADD COLUMN IF NOT EXISTS min_rating INTEGER NOT NULL DEFAULT 0"#,
+            r#"ALTER TABLE communities ADD COLUMN IF NOT EXISTS min_steam_level INTEGER NOT NULL DEFAULT 0"#,
+            r#"ALTER TABLE communities ADD COLUMN IF NOT EXISTS whitelist_mode_enabled BOOLEAN NOT NULL DEFAULT false"#,
+            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS use_custom_access BOOLEAN NOT NULL DEFAULT false"#,
+        ];
+        for sql in community_alters {
+            sqlx::query(sql).execute(&self.pool).await?;
+        }
         sqlx::query(r#"UPDATE servers SET use_custom_access = true WHERE access_restriction_enabled = true OR min_rating > 0 OR min_steam_level > 0"#)
-            .execute(&self.pool)
-            .await?;
+            .execute(&self.pool).await?;
 
-        // ========== 外部服务器（RCON 查询） ==========
+        Ok(())
+    }
+
+    /// 外部服务器（RCON/A2S 查询）
+    async fn migrate_external_servers_schema(&self) -> anyhow::Result<()> {
         sqlx::query(
             r#"CREATE TABLE IF NOT EXISTS external_servers (
               id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -864,9 +758,7 @@ impl Database {
               last_queried_at TIMESTAMPTZ,
               created_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )"#,
-        )
-        .execute(&self.pool)
-        .await?;
+        ).execute(&self.pool).await?;
 
         sqlx::query(
             r#"CREATE TABLE IF NOT EXISTS external_server_status (
@@ -878,50 +770,39 @@ impl Database {
               players TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
               queried_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )"#,
-        )
-        .execute(&self.pool)
-        .await?;
+        ).execute(&self.pool).await?;
 
         sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_external_servers_enabled ON external_servers (enabled) WHERE enabled = true"#)
-            .execute(&self.pool)
-            .await?;
-
+            .execute(&self.pool).await?;
         sqlx::query(r#"ALTER TABLE external_servers ALTER COLUMN rcon_password DROP NOT NULL"#)
-            .execute(&self.pool)
-            .await?;
-
+            .execute(&self.pool).await?;
         sqlx::query(r#"ALTER TABLE external_servers ADD COLUMN IF NOT EXISTS poll_interval INTEGER NOT NULL DEFAULT 30"#)
-            .execute(&self.pool)
-            .await?;
+            .execute(&self.pool).await?;
 
-        sqlx::query(r#"ALTER TABLE player_api_webhooks ADD COLUMN IF NOT EXISTS external_server_ids UUID[] NOT NULL DEFAULT ARRAY[]::UUID[]"#)
-            .execute(&self.pool)
-            .await?;
+        // player_api_webhooks 关联外部服务器
+        let webhook_alters = [
+            r#"ALTER TABLE player_api_webhooks ADD COLUMN IF NOT EXISTS external_server_ids UUID[] NOT NULL DEFAULT ARRAY[]::UUID[]"#,
+            r#"ALTER TABLE player_api_webhooks ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT true"#,
+            r#"ALTER TABLE player_api_webhooks ADD COLUMN IF NOT EXISTS public_access BOOLEAN NOT NULL DEFAULT true"#,
+            r#"ALTER TABLE player_api_webhooks ALTER COLUMN webhook_url DROP NOT NULL"#,
+        ];
+        for sql in webhook_alters {
+            sqlx::query(sql).execute(&self.pool).await?;
+        }
 
-        sqlx::query(r#"ALTER TABLE player_api_webhooks ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT true"#)
-            .execute(&self.pool)
-            .await?;
+        Ok(())
+    }
 
-        sqlx::query(r#"ALTER TABLE player_api_webhooks ADD COLUMN IF NOT EXISTS public_access BOOLEAN NOT NULL DEFAULT true"#)
-            .execute(&self.pool)
-            .await?;
-
-        sqlx::query(r#"ALTER TABLE player_api_webhooks ALTER COLUMN webhook_url DROP NOT NULL"#)
-            .execute(&self.pool)
-            .await?;
-
+    /// 地图等级表
+    async fn migrate_map_tiers_table(&self) -> anyhow::Result<()> {
         sqlx::query(
             r#"CREATE TABLE IF NOT EXISTS map_tiers (
               map_name TEXT PRIMARY KEY,
               tier INTEGER NOT NULL
             )"#,
-        )
-        .execute(&self.pool)
-        .await?;
-
+        ).execute(&self.pool).await?;
         Ok(())
     }
-
     pub async fn seed(&self, config: &Config) -> anyhow::Result<()> {
         let password_hash = crate::password::hash_password(&config.dev_password)?;
         sqlx::query(

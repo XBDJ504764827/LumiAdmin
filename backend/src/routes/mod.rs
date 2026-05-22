@@ -12,7 +12,6 @@ pub mod misc;
 pub mod tests;
 
 use axum::{
-    extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     routing::{delete, get, post, put},
     Json, Router,
@@ -30,7 +29,6 @@ use crate::{
     models::Operator,
     services::{
         access_snapshot_service::SnapshotStore,
-        rate_limit_service::extract_client_ip,
         server_config_cache::ServerConfigCache,
     },
 };

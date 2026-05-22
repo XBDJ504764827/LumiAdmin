@@ -10,7 +10,7 @@ mod rcon;
 mod routes;
 mod services;
 
-use axum::http::{Method, header};
+use axum::http::{Method, StatusCode, header};
 use config::Config;
 use db::Database;
 use rate_limit_middleware::RateLimitState;
@@ -90,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 cors
             })
-            .layer(TimeoutLayer::new(request_timeout)),
+            .layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, request_timeout)),
     );
     axum::serve(listener, app).await?;
     Ok(())

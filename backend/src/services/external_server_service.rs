@@ -10,6 +10,7 @@ pub struct ExternalServer {
     pub name: String,
     pub ip: String,
     pub port: i32,
+    #[serde(skip_serializing)]
     pub rcon_password: Option<String>,
     pub enabled: bool,
     pub poll_interval: i32,
@@ -23,6 +24,7 @@ pub struct ExternalServerWithStatus {
     pub name: String,
     pub ip: String,
     pub port: i32,
+    #[serde(skip_serializing)]
     pub rcon_password: Option<String>,
     pub enabled: bool,
     pub poll_interval: i32,

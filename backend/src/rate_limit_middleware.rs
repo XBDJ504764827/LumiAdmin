@@ -1,5 +1,4 @@
 use axum::{
-    body::Body,
     extract::{Request, State},
     http::{HeaderMap, StatusCode},
     middleware::Next,

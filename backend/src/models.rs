@@ -15,8 +15,8 @@ pub struct User {
     pub created_at: DateTime<Utc>,
 }
 
-/// 鉴权用的操作者信息，不包含 password_hash
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct Operator {
     pub id: Uuid,
     pub username: String,

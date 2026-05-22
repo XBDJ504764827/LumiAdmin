@@ -7,7 +7,6 @@ use axum::http::StatusCode;
 use serde::Deserialize;
 
 use crate::routes::{AppCtx, current_operator, forbidden, invalid_request, invalid_request_status};
-use crate::services::rate_limit_service::extract_client_ip;
 use crate::services::{offline_sync_service, permission_service, player_api_service, server_status_service};
 
 #[derive(Deserialize)]

@@ -30,14 +30,19 @@ pub async fn sync_map_tiers(pg: &Database, mysql_url: &str) -> anyhow::Result<us
 
     let mut tx = pg.pool.begin().await?;
 
-    for row in &rows {
-        let tier: i32 = row.tier.trim().parse().unwrap_or(0);
+    // 批量 upsert：每批 500 条
+    for chunk in rows.chunks(500) {
+        let map_names: Vec<&str> = chunk.iter().map(|r| r.map_name.as_str()).collect();
+        let tiers: Vec<i32> = chunk.iter().map(|r| r.tier.trim().parse().unwrap_or(0)).collect();
+
         sqlx::query(
-            r#"INSERT INTO map_tiers (map_name, tier) VALUES ($1, $2)
-               ON CONFLICT (map_name) DO UPDATE SET tier = $2"#,
+            r#"INSERT INTO map_tiers (map_name, tier)
+               SELECT u.map_name, u.tier
+               FROM UNNEST($1::TEXT[], $2::INTEGER[]) AS u(map_name, tier)
+               ON CONFLICT (map_name) DO UPDATE SET tier = EXCLUDED.tier"#,
         )
-        .bind(&row.map_name)
-        .bind(tier)
+        .bind(&map_names)
+        .bind(&tiers)
         .execute(&mut *tx)
         .await?;
     }

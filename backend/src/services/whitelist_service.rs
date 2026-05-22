@@ -540,7 +540,7 @@ pub async fn refresh_all_steam_persona_names(
     status_filter: Option<&str>,
 ) -> anyhow::Result<usize> {
     let status_condition = match status_filter {
-        Some(status) => format!("WHERE status = $1"),
+        Some(_status) => format!("WHERE status = $1"),
         None => String::new(),
     };
 

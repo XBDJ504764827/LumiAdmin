@@ -12,6 +12,7 @@ use crate::services::{permission_service, whitelist_service, log_service};
 use crate::services::rate_limit_service::extract_client_ip;
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub(crate) struct WhitelistBody {
     pub steam_input: String,
     pub nickname: String,
@@ -19,12 +20,14 @@ pub(crate) struct WhitelistBody {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub(crate) struct RejectWhitelistBody {
     pub reason: String,
     pub operator_name: Option<String>,
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub(crate) struct WhitelistActionBody {
     pub operator_name: Option<String>,
 }

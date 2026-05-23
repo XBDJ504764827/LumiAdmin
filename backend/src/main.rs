@@ -48,7 +48,8 @@ async fn main() -> anyhow::Result<()> {
 
     // 启动地图等级同步（如果配置了 MySQL），启动时同步一次，之后每 6 小时同步一次
     if let Some(ref mysql_url) = config.mysql_database_url {
-        services::map_tier_service::start_sync_loop(db.clone(), mysql_url.clone(), 6 * 3600);
+        let sync = services::map_tier_service::MapTierSync::new(mysql_url.clone());
+        sync.start_sync_loop(db.clone(), 6 * 3600);
     }
     // 启动服务器配置缓存，每 5 分钟刷新一次
     let server_config_cache = Arc::new(services::server_config_cache::ServerConfigCache::new(300));

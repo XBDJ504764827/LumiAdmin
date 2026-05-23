@@ -98,11 +98,13 @@ pub async fn refresh_snapshot(
     store: &SnapshotStore,
 ) -> anyhow::Result<AccessSnapshot> {
     let now = Utc::now();
-    let servers = load_snapshot_servers(db).await?;
-    let bans = load_snapshot_bans(db).await?;
-    let whitelist = load_snapshot_whitelist(db).await?;
-    let access_profiles = load_snapshot_access_profiles(db).await?;
-    let player_access_rules = load_snapshot_player_access_rules(db).await?;
+    let (servers, bans, whitelist, access_profiles, player_access_rules) = tokio::try_join!(
+        load_snapshot_servers(db),
+        load_snapshot_bans(db),
+        load_snapshot_whitelist(db),
+        load_snapshot_access_profiles(db),
+        load_snapshot_player_access_rules(db),
+    )?;
     let snapshot = with_version(AccessSnapshot {
         version: String::new(),
         generated_at: now,

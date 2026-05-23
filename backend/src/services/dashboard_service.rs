@@ -40,17 +40,20 @@ pub struct DashboardMetrics {
 }
 
 pub async fn get_metrics(db: &Database) -> anyhow::Result<DashboardMetrics> {
-    let total_servers: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM servers").fetch_one(&db.pool).await?;
-    let online_servers: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM servers WHERE status = 'online'")
-        .fetch_one(&db.pool)
-        .await?;
-    let offline_servers = total_servers.0 - online_servers.0;
-    let communities: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM communities").fetch_one(&db.pool).await?;
-    let online_players: (i64,) = sqlx::query_as(
-        "SELECT COALESCE(SUM(cardinality(players)), 0)::BIGINT FROM servers WHERE status = 'online'",
+    // 查询1: 服务器 + 社区组 + 在线玩家统计（合并为 1 个查询）
+    let stats: (i64, i64, i64, i64) = sqlx::query_as(
+        r#"SELECT
+            (SELECT COUNT(*) FROM servers) AS total_servers,
+            (SELECT COUNT(*) FROM servers WHERE status = 'online') AS online_servers,
+            (SELECT COUNT(*) FROM communities) AS communities,
+            (SELECT COALESCE(SUM(cardinality(players)), 0)::BIGINT FROM servers WHERE status = 'online') AS online_players"#,
     )
     .fetch_one(&db.pool)
     .await?;
+    let (total_servers, online_servers, communities, online_players) = stats;
+    let offline_servers = total_servers - online_servers;
+
+    // 查询2: 管理员预览
     let admin_rows: Vec<(String, String)> = sqlx::query_as(
         r#"SELECT display_name, role
            FROM users
@@ -70,38 +73,34 @@ pub async fn get_metrics(db: &Database) -> anyhow::Result<DashboardMetrics> {
         })
         .collect();
 
-    let whitelist_pending: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM whitelist_requests WHERE status = 'pending'")
-            .fetch_one(&db.pool)
-            .await?;
-    let whitelist_approved: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM whitelist_requests WHERE status = 'approved'")
-            .fetch_one(&db.pool)
-            .await?;
-    let whitelist_rejected: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM whitelist_requests WHERE status = 'rejected'")
-            .fetch_one(&db.pool)
-            .await?;
-    let whitelist_revoked: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM whitelist_requests WHERE status = 'revoked'")
-            .fetch_one(&db.pool)
-            .await?;
+    // 查询3: 白名单统计（条件 COUNT 合并为 1 个查询）
+    let whitelist_stats: (i64, i64, i64, i64) = sqlx::query_as(
+        r#"SELECT
+            COUNT(*) FILTER (WHERE status = 'pending'),
+            COUNT(*) FILTER (WHERE status = 'approved'),
+            COUNT(*) FILTER (WHERE status = 'rejected'),
+            COUNT(*) FILTER (WHERE status = 'revoked')
+           FROM whitelist_requests"#,
+    )
+    .fetch_one(&db.pool)
+    .await?;
 
+    // 查询4: 服务器性能指标
     let server_performance = get_server_performance_stats(db).await?;
 
     Ok(DashboardMetrics {
-        total_servers: total_servers.0,
-        online_servers: online_servers.0,
+        total_servers,
+        online_servers,
         offline_servers,
-        communities: communities.0,
-        online_players: online_players.0,
+        communities,
+        online_players,
         admins,
         admin_preview,
         whitelist_stats: WhitelistStats {
-            pending: whitelist_pending.0,
-            approved: whitelist_approved.0,
-            rejected: whitelist_rejected.0,
-            revoked: whitelist_revoked.0,
+            pending: whitelist_stats.0,
+            approved: whitelist_stats.1,
+            rejected: whitelist_stats.2,
+            revoked: whitelist_stats.3,
         },
         server_performance,
     })

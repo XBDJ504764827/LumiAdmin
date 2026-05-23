@@ -571,19 +571,43 @@ pub async fn refresh_all_steam_persona_names(
     let steamids: Vec<String> = records.iter().map(|(_, steamid64)| steamid64.clone()).collect();
     let profiles = resolver.fetch_profiles_batch(&steamids).await?;
 
-    // 批量更新
+    // 批量更新（每批 500 条）
     let mut updated_count = 0;
-    for (id, steamid64) in records {
-        if let Some(profile) = profiles.get(&steamid64) {
+    let mut ids: Vec<Uuid> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
+    for (id, steamid64) in &records {
+        if let Some(profile) = profiles.get(steamid64) {
+            ids.push(*id);
+            names.push(profile.persona_name.clone());
+        }
+        if ids.len() >= 500 {
             sqlx::query(
-                r#"UPDATE whitelist_requests SET steam_persona_name = $2, updated_at = now() WHERE id = $1"#,
+                r#"UPDATE whitelist_requests w
+                   SET steam_persona_name = u.name, updated_at = now()
+                   FROM UNNEST($1::UUID[], $2::TEXT[]) AS u(id, name)
+                   WHERE w.id = u.id"#,
             )
-            .bind(id)
-            .bind(&profile.persona_name)
+            .bind(&ids)
+            .bind(&names)
             .execute(&db.pool)
             .await?;
-            updated_count += 1;
+            updated_count += ids.len();
+            ids.clear();
+            names.clear();
         }
+    }
+    if !ids.is_empty() {
+        sqlx::query(
+            r#"UPDATE whitelist_requests w
+               SET steam_persona_name = u.name, updated_at = now()
+               FROM UNNEST($1::UUID[], $2::TEXT[]) AS u(id, name)
+               WHERE w.id = u.id"#,
+        )
+        .bind(&ids)
+        .bind(&names)
+        .execute(&db.pool)
+        .await?;
+        updated_count += ids.len();
     }
 
     Ok(updated_count)

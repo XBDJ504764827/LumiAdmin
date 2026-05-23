@@ -11,18 +11,16 @@ export function onlinePlayerFields(player) {
   ];
 }
 
-/** SteamID64 → SteamID2 (STEAM_X:Y:Z) */
-export function steamId64ToSteam2(steamId64) {
-  const auth = BigInt(steamId64) - 76561197960265728n;
-  const y = Number(auth % 2n);
-  const z = Number(auth / 2n);
-  return `STEAM_0:${y}:${z}`;
+/** SteamID64 → SteamID3 ([U:1:ACCOUNTID])，不依赖 STEAM_0/STEAM_1 universe */
+export function steamId64ToSteam3(steamId64) {
+  const accountId = BigInt(steamId64) - 76561197960265728n;
+  return `[U:1:${accountId}]`;
 }
 
 export function buildKickCommand(steamId64, reason = '') {
-  const steam2 = steamId64ToSteam2(steamId64);
+  const steam3 = steamId64ToSteam3(steamId64);
   const escapedReason = reason ? ` "${reason}"` : '';
-  return `sm_kick "${steam2}"${escapedReason}`;
+  return `sm_kick "${steam3}"${escapedReason}`;
 }
 
 export function buildBanCommand(steamId64, duration, reason) {

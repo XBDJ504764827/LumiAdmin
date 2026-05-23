@@ -11,11 +11,18 @@ export function onlinePlayerFields(player) {
   ];
 }
 
+/** SteamID64 → SteamID2 (STEAM_X:Y:Z) */
+export function steamId64ToSteam2(steamId64) {
+  const auth = BigInt(steamId64) - 76561197960265728n;
+  const y = Number(auth % 2n);
+  const z = Number(auth / 2n);
+  return `STEAM_0:${y}:${z}`;
+}
+
 export function buildKickCommand(steamId64, reason = '') {
-  // 使用 Source 引擎原生的 kickid 命令，而不是 SourceMod 的 sm_kick
-  // kickid 支持 SteamID64 作为参数，sm_kick 只支持玩家名或 userid
+  const steam2 = steamId64ToSteam2(steamId64);
   const escapedReason = reason ? ` "${reason}"` : '';
-  return `kickid "${steamId64}"${escapedReason}`;
+  return `sm_kick "${steam2}"${escapedReason}`;
 }
 
 export function buildBanCommand(steamId64, duration, reason) {

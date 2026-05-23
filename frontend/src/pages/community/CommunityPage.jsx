@@ -331,12 +331,10 @@ export function CommunityPage() {
     }
   }
 
-  async function handleKickPlayer(player) {
+  async function handleKickPlayer(player, reason) {
     if (!playersModal.serverId) return;
-    const confirmed = await confirm({ title: '踢出玩家', message: `确定要踢出玩家 ${player.name} 吗？`, confirmText: '确认踢出' });
-    if (!confirmed) return;
     try {
-      const command = buildKickCommand(player.steam_id64);
+      const command = buildKickCommand(player.steam_id64, reason);
       await api.executeRcon(token, playersModal.serverId, { command });
       toast({ title: '踢出成功', message: `玩家 ${player.name} 已被踢出。` });
       const response = await api.communityServerPlayers(token, playersModal.serverId);
@@ -741,7 +739,7 @@ export function CommunityPage() {
                   key={onlinePlayerKey(player)}
                   player={player}
                   canOperate={canMutate}
-                  onKick={() => handleKickPlayer(player)}
+                  onKick={(reason) => handleKickPlayer(player, reason)}
                   onBan={(duration, reason) => handleBanPlayer(player, duration, reason)}
                 />
               ))}
@@ -756,11 +754,20 @@ export function CommunityPage() {
 }
 
 function OnlinePlayerCard({ player, canOperate, onKick, onBan }) {
+  const [showKickForm, setShowKickForm] = React.useState(false);
+  const [kickReason, setKickReason] = React.useState('');
   const [showBanForm, setShowBanForm] = React.useState(false);
   const [banDuration, setBanDuration] = React.useState(0);
   const [banReason, setBanReason] = React.useState(BAN_REASON_OPTIONS[0]);
 
   const initial = (player.name || '?')[0].toUpperCase();
+
+  function handleKick() {
+    if (!kickReason.trim()) return;
+    onKick(kickReason.trim());
+    setShowKickForm(false);
+    setKickReason('');
+  }
 
   function handleBan() {
     onBan(banDuration, banReason);
@@ -783,11 +790,19 @@ function OnlinePlayerCard({ player, canOperate, onKick, onBan }) {
         </div>
         {canOperate ? (
           <div className="online-player-actions">
-            <button className="btn btn-outline btn-sm" onClick={onKick}>踢出</button>
+            <button className="btn btn-outline btn-sm" onClick={() => setShowKickForm(!showKickForm)}>{showKickForm ? '取消' : '踢出'}</button>
             <button className="btn btn-outline btn-sm" style={{ color: 'var(--accent)' }} onClick={() => setShowBanForm(!showBanForm)}>{showBanForm ? '取消' : '封禁'}</button>
           </div>
         ) : null}
       </div>
+      {showKickForm ? (
+        <div className="online-player-ban-form">
+          <div className="ban-form-row">
+            <div className="ban-form-field" style={{ flex: 1 }}><label>踢出理由</label><input type="text" placeholder="请输入踢出理由" value={kickReason} onChange={(e) => setKickReason(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') handleKick(); }} /></div>
+            <button className="btn btn-danger btn-sm" onClick={handleKick} disabled={!kickReason.trim()}>确认踢出</button>
+          </div>
+        </div>
+      ) : null}
       {showBanForm ? (
         <div className="online-player-ban-form">
           <div className="ban-form-row">

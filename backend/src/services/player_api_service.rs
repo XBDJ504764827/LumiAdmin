@@ -278,27 +278,38 @@ pub fn build_webhook_payload(generated_at: DateTime<Utc>, rows: Vec<PlayerApiDis
     let mut servers: Vec<WebhookServerPayload> = Vec::new();
 
     for row in rows {
-        let player = WebhookPlayerPayload {
-            player: row.player,
-            steam_id64: row.steam_id64,
-            ping: row.ping,
-            reported_at: row.reported_at,
-        };
-
+        let has_player = !row.player.is_empty();
         if let Some(server) = servers.iter_mut().find(|server| server.server_id == row.server_id) {
-            server.players.push(player);
-            server.player_count = server.players.len();
+            if has_player {
+                server.players.push(WebhookPlayerPayload {
+                    player: row.player,
+                    steam_id64: row.steam_id64,
+                    ping: row.ping,
+                    reported_at: row.reported_at,
+                });
+                server.player_count = server.players.len();
+            }
         } else {
+            let players = if has_player {
+                vec![WebhookPlayerPayload {
+                    player: row.player,
+                    steam_id64: row.steam_id64,
+                    ping: row.ping,
+                    reported_at: row.reported_at,
+                }]
+            } else {
+                Vec::new()
+            };
             servers.push(WebhookServerPayload {
                 server_id: row.server_id,
                 server_name: row.server_name,
                 server_ip: row.server_ip.clone(),
                 server_port: row.server_port,
                 current_map: row.current_map.clone(),
-                player_count: 1,
+                player_count: players.len(),
                 max_players: row.max_players,
                 map_tier: None,
-                players: vec![player],
+                players,
             });
         }
     }
@@ -375,15 +386,15 @@ async fn dispatch_rows_for_item(db: &Database, item: &PlayerApiWebhookConfig) ->
             r#"SELECT s.id AS server_id,
                       s.name AS server_name,
                       s.ip AS server_ip,
-                      p.server_port,
-                      p.current_map,
+                      s.port AS server_port,
+                      COALESCE(p.current_map, '') AS current_map,
                       s.max_players,
-                      p.name AS player,
-                      p.steam_id64,
-                      p.ping,
-                      p.reported_at
-               FROM server_online_players p
-               JOIN servers s ON s.id = p.server_id
+                      COALESCE(p.name, '') AS player,
+                      COALESCE(p.steam_id64, '') AS steam_id64,
+                      COALESCE(p.ping, 0) AS ping,
+                      COALESCE(p.reported_at, now()) AS reported_at
+               FROM servers s
+               LEFT JOIN server_online_players p ON p.server_id = s.id
                ORDER BY s.name ASC, p.name ASC"#,
         )
         .fetch_all(&db.pool)
@@ -395,15 +406,15 @@ async fn dispatch_rows_for_item(db: &Database, item: &PlayerApiWebhookConfig) ->
         r#"SELECT s.id AS server_id,
                   s.name AS server_name,
                   s.ip AS server_ip,
-                  p.server_port,
-                  p.current_map,
+                  s.port AS server_port,
+                  COALESCE(p.current_map, '') AS current_map,
                   s.max_players,
-                  p.name AS player,
-                  p.steam_id64,
-                  p.ping,
-                  p.reported_at
-           FROM server_online_players p
-           JOIN servers s ON s.id = p.server_id
+                  COALESCE(p.name, '') AS player,
+                  COALESCE(p.steam_id64, '') AS steam_id64,
+                  COALESCE(p.ping, 0) AS ping,
+                  COALESCE(p.reported_at, now()) AS reported_at
+           FROM servers s
+           LEFT JOIN server_online_players p ON p.server_id = s.id
            WHERE s.id = ANY($1)
            ORDER BY s.name ASC, p.name ASC"#,
     )
@@ -635,6 +646,80 @@ mod tests {
         assert_eq!(server2.player_count, 1);
         assert_eq!(server2.players.len(), 1);
         assert_eq!(server2.players[0].player, "Charlie");
+    }
+
+    #[test]
+    fn build_webhook_payload_includes_empty_servers() {
+        let server_id = Uuid::new_v4();
+        let server_id2 = Uuid::new_v4();
+        let server_id3 = Uuid::new_v4();
+        let generated_at = Utc.with_ymd_and_hms(2026, 5, 23, 10, 0, 0).unwrap();
+        let reported_at = Utc.with_ymd_and_hms(2026, 5, 23, 9, 59, 0).unwrap();
+
+        let payload = build_webhook_payload(
+            generated_at,
+            vec![
+                PlayerApiDispatchRow {
+                    server_id,
+                    server_name: "一号服".to_string(),
+                    server_ip: "203.0.113.100".to_string(),
+                    server_port: 27015,
+                    current_map: "de_dust2".to_string(),
+                    max_players: 32,
+                    player: "Alice".to_string(),
+                    steam_id64: "76561198000000001".to_string(),
+                    ping: 28,
+                    reported_at,
+                },
+                // 二号服没有任何玩家（LEFT JOIN 产生的空行）
+                PlayerApiDispatchRow {
+                    server_id: server_id2,
+                    server_name: "二号服".to_string(),
+                    server_ip: "203.0.113.200".to_string(),
+                    server_port: 27016,
+                    current_map: String::new(),
+                    max_players: 16,
+                    player: String::new(),
+                    steam_id64: String::new(),
+                    ping: 0,
+                    reported_at: generated_at,
+                },
+                // 三号服也没有玩家
+                PlayerApiDispatchRow {
+                    server_id: server_id3,
+                    server_name: "三号服".to_string(),
+                    server_ip: "203.0.113.300".to_string(),
+                    server_port: 27017,
+                    current_map: String::new(),
+                    max_players: 24,
+                    player: String::new(),
+                    steam_id64: String::new(),
+                    ping: 0,
+                    reported_at: generated_at,
+                },
+            ],
+        );
+
+        assert_eq!(payload.servers.len(), 3);
+
+        let server1 = &payload.servers[0];
+        assert_eq!(server1.server_id, server_id);
+        assert_eq!(server1.player_count, 1);
+        assert_eq!(server1.players.len(), 1);
+
+        let server2 = &payload.servers[1];
+        assert_eq!(server2.server_id, server_id2);
+        assert_eq!(server2.server_name, "二号服");
+        assert_eq!(server2.player_count, 0);
+        assert!(server2.players.is_empty());
+        assert_eq!(server2.max_players, 16);
+
+        let server3 = &payload.servers[2];
+        assert_eq!(server3.server_id, server_id3);
+        assert_eq!(server3.server_name, "三号服");
+        assert_eq!(server3.player_count, 0);
+        assert!(server3.players.is_empty());
+        assert_eq!(server3.max_players, 24);
     }
 
     #[test]

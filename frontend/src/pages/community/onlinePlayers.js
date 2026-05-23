@@ -11,16 +11,15 @@ export function onlinePlayerFields(player) {
   ];
 }
 
-/** SteamID64 → SteamID3 ([U:1:ACCOUNTID])，不依赖 STEAM_0/STEAM_1 universe */
-export function steamId64ToSteam3(steamId64) {
-  const accountId = BigInt(steamId64) - 76561197960265728n;
-  return `[U:1:${accountId}]`;
+/** 转义玩家名称中的双引号，防止破坏 RCON 命令 */
+function escapePlayerName(name) {
+  return name.replace(/"/g, '\'');
 }
 
-export function buildKickCommand(steamId64, reason = '') {
-  const steam3 = steamId64ToSteam3(steamId64);
+export function buildKickCommand(playerName, reason = '') {
+  const name = escapePlayerName(playerName);
   const escapedReason = reason ? ` "${reason}"` : '';
-  return `sm_kick "${steam3}"${escapedReason}`;
+  return `sm_kick "${name}"${escapedReason}`;
 }
 
 export function buildBanCommand(steamId64, duration, reason) {

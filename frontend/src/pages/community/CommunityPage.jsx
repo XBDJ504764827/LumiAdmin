@@ -334,7 +334,7 @@ export function CommunityPage() {
   async function handleKickPlayer(player, reason) {
     if (!playersModal.serverId) return;
     try {
-      const command = buildKickCommand(player.steam_id64, reason);
+      const command = buildKickCommand(player.name, reason);
       await api.executeRcon(token, playersModal.serverId, { command });
       toast({ title: '踢出成功', message: `玩家 ${player.name} 已被踢出。` });
       const response = await api.communityServerPlayers(token, playersModal.serverId);
@@ -350,7 +350,7 @@ export function CommunityPage() {
     if (!confirmed) return;
     try {
       await api.createBan(token, { player: player.name, steam_id: player.steam_id64, ban_type: 'steam', ip_address: player.ip, reason, duration_minutes: duration });
-      const command = buildKickCommand(player.steam_id64, `被封禁：${reason}`);
+      const command = buildKickCommand(player.name, `被封禁：${reason}`);
       await api.executeRcon(token, playersModal.serverId, { command });
       toast({ title: '封禁成功', message: `玩家 ${player.name} 已被封禁并添加到封禁列表。` });
       const response = await api.communityServerPlayers(token, playersModal.serverId);
@@ -796,9 +796,9 @@ function OnlinePlayerCard({ player, canOperate, onKick, onBan }) {
         ) : null}
       </div>
       {showKickForm ? (
-        <div className="online-player-ban-form">
-          <div className="ban-form-row">
-            <div className="ban-form-field" style={{ flex: 1 }}><label>踢出理由</label><input type="text" placeholder="请输入踢出理由" value={kickReason} onChange={(e) => setKickReason(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') handleKick(); }} /></div>
+        <div className="online-player-action-form">
+          <div className="action-form-input-row">
+            <input type="text" className="action-form-input" placeholder="请输入踢出理由" value={kickReason} onChange={(e) => setKickReason(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') handleKick(); }} autoFocus />
             <button className="btn btn-danger btn-sm" onClick={handleKick} disabled={!kickReason.trim()}>确认踢出</button>
           </div>
         </div>

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { onlinePlayerFields, onlinePlayerKey, buildKickCommand, buildBanCommand, steamId64ToSteam3 } from './onlinePlayers.js';
+import { onlinePlayerFields, onlinePlayerKey, buildKickCommand, buildBanCommand } from './onlinePlayers.js';
 
 test('onlinePlayerFields exposes structured player details for styled display', () => {
   const player = {
@@ -20,15 +20,14 @@ test('onlinePlayerFields exposes structured player details for styled display', 
   ]);
 });
 
-test('steamId64ToSteam3 converts SteamID64 to [U:1:ACCOUNTID] format', () => {
-  assert.equal(steamId64ToSteam3('76561198000000000'), '[U:1:39734272]');
-  assert.equal(steamId64ToSteam3('76561198298405388'), '[U:1:338139660]');
-  assert.equal(steamId64ToSteam3('76561197960265728'), '[U:1:0]');
+test('buildKickCommand generates sm_kick with player name', () => {
+  assert.equal(buildKickCommand('Player1'), 'sm_kick "Player1"');
+  assert.equal(buildKickCommand('Player1', '作弊'), 'sm_kick "Player1" "作弊"');
+  assert.equal(buildKickCommand('别逗你彩姐笑了', 'test'), 'sm_kick "别逗你彩姐笑了" "test"');
 });
 
-test('buildKickCommand generates correct sm_kick command with SteamID3', () => {
-  assert.equal(buildKickCommand('76561198000000000'), 'sm_kick "[U:1:39734272]"');
-  assert.equal(buildKickCommand('76561198000000000', '作弊'), 'sm_kick "[U:1:39734272]" "作弊"');
+test('buildKickCommand escapes double quotes in player name', () => {
+  assert.equal(buildKickCommand('He said "hi"'), 'sm_kick "He said \'hi\'"');
 });
 
 test('buildBanCommand generates correct RCON command', () => {

@@ -182,6 +182,15 @@
   background: var(--surface2);
   border-top-color: var(--border);
 }
+[data-theme='dark'] .online-player-action-form {
+  background: var(--surface2);
+  border-top-color: var(--border);
+}
+[data-theme='dark'] .action-form-input {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
 [data-theme='dark'] .ban-form-field select {
   background: var(--surface);
   border-color: var(--border2);
@@ -709,6 +718,11 @@ input[type="checkbox"], input[type="radio"] {
 .ban-form-field label { font-size: 11px; color: var(--text3); font-weight: 500; }
 .ban-form-field select { padding: 6px 10px; font-size: 13px; border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--surface); color: var(--text); min-width: 100px; }
 .ban-form-field select:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 2px var(--focus-ring); }
+.online-player-action-form { margin: 0; padding: 10px 16px; background: var(--surface2); border-top: 1px solid var(--border); }
+.action-form-input-row { display: flex; gap: 8px; align-items: center; }
+.action-form-input { flex: 1; padding: 7px 12px; font-size: 13px; border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--surface); color: var(--text); outline: none; transition: border-color 0.15s, box-shadow 0.15s; }
+.action-form-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--focus-ring); }
+.action-form-input::placeholder { color: var(--text3); }
 .btn-sm { padding: 6px 12px; font-size: 13px; }
 .online-player-header { padding: 16px 16px 12px; display: flex; align-items: center; justify-content: space-between; }
 .online-player-header-left { display: flex; align-items: center; gap: 8px; }

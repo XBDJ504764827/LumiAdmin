@@ -27,7 +27,7 @@ use tower_http::compression::CompressionLayer;
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("info").init();
     let config = Config::from_env();
-    http_client::init_http_client(config.http_timeout_secs, config.http_connect_timeout_secs);
+    http_client::init_http_client(config.http_timeout_secs, config.http_connect_timeout_secs)?;
     let db = Database::connect(&config.database_url, &config).await?;
     db.migrate().await?;
     db.seed(&config).await?;
@@ -88,6 +88,8 @@ async fn main() -> anyhow::Result<()> {
                 if let Some(origin) = cors_origin {
                     if let Ok(parsed) = origin.parse::<axum::http::HeaderValue>() {
                         cors = cors.allow_origin(parsed);
+                    } else {
+                        tracing::error!("CORS_ORIGIN 格式无效: {origin}，CORS 已禁用");
                     }
                 } else {
                     tracing::warn!("CORS_ORIGIN 未配置，允许所有来源访问。生产环境请设置 CORS_ORIGIN 环境变量");

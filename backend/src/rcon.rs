@@ -154,14 +154,18 @@ pub fn parse_status_output(output: &str) -> StatusResult {
 
 /// 从 "2 humans, 0 bots (16/0 max)" 格式中提取 (current_humans, max_players)
 fn extract_max_players(value: &str) -> Option<(i32, i32)> {
-    // 提取 (max/...) 模式中的 max 值
-    let re = regex::Regex::new(r"\((\d+)/(\d+)\s*max\)").ok()?;
-    let caps = re.captures(value)?;
+    use std::sync::LazyLock;
+    static MAX_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"\((\d+)/(\d+)\s*max\)").unwrap()
+    });
+    static HUMAN_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"^(\d+)\s+human").unwrap()
+    });
+
+    let caps = MAX_RE.captures(value)?;
     let max_players: i32 = caps.get(1)?.as_str().parse().ok()?;
 
-    // 提取第一个数字作为人类玩家数 (N humans...)
-    let human_re = regex::Regex::new(r"^(\d+)\s+human").ok()?;
-    let human_caps = human_re.captures(value);
+    let human_caps = HUMAN_RE.captures(value);
     let player_count = human_caps
         .and_then(|c| c.get(1)?.as_str().parse::<i32>().ok())
         .unwrap_or(0);

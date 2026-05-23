@@ -71,6 +71,7 @@ export function WhitelistPage() {
   const [error, setError] = useState('');
   const [manualModalOpen, setManualModalOpen] = useState(false);
   const [rejectModal, setRejectModal] = useState({ open: false, item: null, reason: '', error: '' });
+  const [approveModal, setApproveModal] = useState({ open: false, item: null, reason: '', error: '' });
   const [manualForm, setManualForm] = useState(emptyManualForm);
   const [manualError, setManualError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -161,6 +162,12 @@ export function WhitelistPage() {
   }
 
   async function handleApprove(item) {
+    const itemBans = globalBans[item.steamid64];
+    const hasGlobalBan = Array.isArray(itemBans) && itemBans.length > 0;
+    if (hasGlobalBan) {
+      setApproveModal({ open: true, item, reason: '', error: '' });
+      return;
+    }
     try {
       setSubmitting(true);
       await api.approveWhitelist(token, item.id);
@@ -168,6 +175,28 @@ export function WhitelistPage() {
       toast({ title: '审核通过', message: `${item.nickname} 的白名单申请已通过。` });
     } catch (actionError) {
       toast({ title: '操作失败', message: actionError.message, tone: 'danger' });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleApproveWithReason() {
+    if (!approveModal.item) return;
+    if (!approveModal.reason.trim()) {
+      setApproveModal((prev) => ({ ...prev, error: '该玩家有全球封禁记录，请说明通过理由。' }));
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+      await api.approveWhitelist(token, approveModal.item.id, {
+        reason: approveModal.reason.trim(),
+      });
+      setApproveModal({ open: false, item: null, reason: '', error: '' });
+      await loadItems();
+      toast({ title: '审核通过', message: `${approveModal.item.nickname} 的白名单申请已通过。` });
+    } catch (actionError) {
+      setApproveModal((prev) => ({ ...prev, error: actionError.message }));
     } finally {
       setSubmitting(false);
     }
@@ -345,7 +374,7 @@ export function WhitelistPage() {
                     <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>申请时间</th><th style={{ textAlign: 'right' }}>操作</th></tr>
                   ) : null}
                   {tab === 'approved' ? (
-                    <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>申请时间</th><th>通过时间</th><th>审核管理员</th><th style={{ textAlign: 'right' }}>操作</th></tr>
+                    <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>申请时间</th><th>通过时间</th><th>审核管理员</th><th>通过理由</th><th style={{ textAlign: 'right' }}>操作</th></tr>
                   ) : null}
                   {tab === 'rejected' ? (
                     <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>拒绝理由</th><th>申请时间</th><th>拒绝时间</th><th>审核管理员</th><th style={{ textAlign: 'right' }}>操作</th></tr>
@@ -353,7 +382,7 @@ export function WhitelistPage() {
                 </thead>
                 <tbody>
                   {items.length === 0 ? (
-                    <tr><td colSpan={tab === 'pending' ? 7 : tab === 'approved' ? 9 : 10} style={{ padding: 20, color: 'var(--text3)' }}>当前分区暂无记录。</td></tr>
+                    <tr><td colSpan={tab === 'pending' ? 7 : tab === 'approved' ? 10 : 10} style={{ padding: 20, color: 'var(--text3)' }}>当前分区暂无记录。</td></tr>
                   ) : null}
                   {tab === 'pending' ? items.map((item) => {
                     const itemBans = globalBans[item.steamid64];
@@ -433,6 +462,7 @@ export function WhitelistPage() {
                       <td style={{ color: 'var(--text3)' }}>{formatDateTime(item.applied_at)}</td>
                       <td style={{ color: 'var(--text3)' }}>{formatDateTime(item.approved_at)}</td>
                       <td>{item.approved_by ?? '-'}</td>
+                      <td style={{ color: item.approval_reason ? 'var(--accent2)' : 'var(--text3)', maxWidth: 200, wordBreak: 'break-word' }}>{item.approval_reason ?? '-'}</td>
                       <td style={{ textAlign: 'right' }}>
                         {canRevoke ? <button className="action-btn action-btn-danger" onClick={() => handleRevoke(item)} disabled={submitting}>删除审核</button> : null}
                       </td>
@@ -523,6 +553,32 @@ export function WhitelistPage() {
       >
         <div className="form-group"><label>拒绝理由</label><textarea className="form-control" rows={4} value={rejectModal.reason} onChange={(event) => setRejectModal((prev) => ({ ...prev, reason: event.target.value, error: '' }))} placeholder="请输入拒绝理由" /></div>
         {rejectModal.error ? <div style={{ color: 'var(--accent)' }}>{rejectModal.error}</div> : null}
+      </Modal>
+
+      <Modal
+        open={approveModal.open}
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 20, color: 'var(--accent)' }}>⚠</span>
+            <span>通过白名单申请（全球封禁）</span>
+          </div>
+        }
+        onClose={() => setApproveModal({ open: false, item: null, reason: '', error: '' })}
+        footer={(
+          <>
+            <button className="btn btn-outline" onClick={() => setApproveModal({ open: false, item: null, reason: '', error: '' })}>取消</button>
+            <button className="btn btn-primary" onClick={handleApproveWithReason} disabled={submitting}>确认通过</button>
+          </>
+        )}
+      >
+        <div className="global-ban-alert" style={{ marginBottom: 12 }}>
+          <div className="global-ban-alert-icon">⚠</div>
+          <div className="global-ban-alert-text">
+            该玩家在全球 KZ 封禁库中有封禁记录，请说明通过理由。
+          </div>
+        </div>
+        <div className="form-group"><label>通过理由</label><textarea className="form-control" rows={4} value={approveModal.reason} onChange={(event) => setApproveModal((prev) => ({ ...prev, reason: event.target.value, error: '' }))} placeholder="请说明为什么在有全球封禁记录的情况下仍然通过" /></div>
+        {approveModal.error ? <div style={{ color: 'var(--accent)' }}>{approveModal.error}</div> : null}
       </Modal>
 
       {/* 全球封禁详情弹窗 */}

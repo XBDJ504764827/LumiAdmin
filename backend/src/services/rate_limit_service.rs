@@ -192,26 +192,33 @@ impl Default for RateLimiters {
     }
 }
 
-/// 从请求中提取客户端 IP
+/// 从请求中提取客户端 IP（仅接受合法 IP 格式）
 pub fn extract_client_ip(headers: &axum::http::HeaderMap) -> String {
     // 尝试从 X-Forwarded-For 获取真实 IP
-    if let Some(forwarded) = headers.get("x-forwarded-for") {
-        if let Ok(forwarded_str) = forwarded.to_str() {
-            if let Some(ip) = forwarded_str.split(',').next() {
-                return ip.trim().to_string();
-            }
-        }
-    }
+    let forwarded = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim());
 
     // 尝试从 X-Real-IP 获取
-    if let Some(real_ip) = headers.get("x-real-ip") {
-        if let Ok(ip) = real_ip.to_str() {
-            return ip.to_string();
+    let real_ip = headers
+        .get("x-real-ip")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim());
+
+    // 优先使用 X-Forwarded-For，其次 X-Real-IP，校验格式
+    for candidate in forwarded.into_iter().chain(real_ip) {
+        if is_valid_ip(candidate) {
+            return candidate.to_string();
         }
     }
 
-    // 默认返回 unknown（应该被反向代理设置）
     "unknown".to_string()
+}
+
+fn is_valid_ip(s: &str) -> bool {
+    s.parse::<std::net::IpAddr>().is_ok()
 }
 
 #[cfg(test)]

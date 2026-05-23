@@ -1,4 +1,5 @@
 import React from 'react';
+import { useAuth } from '../../state/auth.jsx';
 import { api } from '../../lib/api.js';
 import { useAsync } from '../../shared/useAsync.js';
 import { normalizeEndpointRows } from './apiPages.js';
@@ -19,7 +20,8 @@ const toneClass = {
 };
 
 export function ApiListPage() {
-  const token = localStorage.getItem('manger_token');
+  const { session } = useAuth();
+  const token = session?.token ?? null;
   const { data, error, loading } = useAsync(() => api.docsEndpoints(token), [token]);
   const endpointRows = normalizeEndpointRows(data?.items ?? []);
 

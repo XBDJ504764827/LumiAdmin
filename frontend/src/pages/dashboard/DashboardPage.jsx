@@ -57,7 +57,7 @@ function cpuColor(cpu) {
 
 export function DashboardPage() {
   const { session } = useAuth();
-  const token = localStorage.getItem('manger_token');
+  const token = session?.token ?? null;
   const [refreshKey, setRefreshKey] = useState(0);
   const metrics = useAsync(() => api.dashboard(token), [token, refreshKey]);
   const publicWhitelist = useAsync(() => api.publicWhitelist(), [refreshKey]);

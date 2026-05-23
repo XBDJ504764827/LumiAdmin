@@ -756,11 +756,17 @@ pub fn start_stale_cleanup_loop(db: Database) {
 
 /// 验证 RCON 命令安全性，阻止破坏性命令
 fn validate_rcon_command(command: &str) -> anyhow::Result<()> {
-    let cmd = command.trim().to_lowercase();
+    // 移除前导分号和空格后检查
+    let cleaned = command.trim().trim_start_matches(';').trim();
+    let cmd = cleaned.to_lowercase();
     anyhow::ensure!(!cmd.is_empty(), "命令不能为空");
 
-    // 提取命令关键字（取第一个词）
-    let keyword = cmd.split_whitespace().next().unwrap_or("");
+    // 按分号和空格分割，检查每个 token
+    let keywords: Vec<&str> = cmd
+        .split(|c: char| c == ';' || c.is_whitespace())
+        .filter(|s| !s.is_empty())
+        .collect();
+
     const BLOCKED_COMMANDS: &[&str] = &[
         "quit",
         "exit",
@@ -776,11 +782,13 @@ fn validate_rcon_command(command: &str) -> anyhow::Result<()> {
         "alias",
     ];
 
-    anyhow::ensure!(
-        !BLOCKED_COMMANDS.contains(&keyword),
-        "命令 \"{}\" 被禁止执行",
-        keyword
-    );
+    for keyword in &keywords {
+        anyhow::ensure!(
+            !BLOCKED_COMMANDS.contains(keyword),
+            "命令 \"{}\" 被禁止执行",
+            keyword
+        );
+    }
 
     Ok(())
 }

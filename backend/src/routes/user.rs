@@ -62,7 +62,7 @@ pub(crate) async fn create_user(
     .await
     .map_err(invalid_request)?;
 
-    let _ = log_service::create_log(&ctx.db, &actor.display_name, "网站用户管理", "新增管理员", &item.username, &extract_client_ip(&headers)).await;
+    if let Err(e) = log_service::create_log(&ctx.db, &actor.display_name, "网站用户管理", "新增管理员", &item.username, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
     Ok((StatusCode::CREATED, Json(serde_json::json!({"item": item}))))
 }
 
@@ -93,7 +93,7 @@ pub(crate) async fn update_user(
     .await
     .map_err(invalid_request)?;
 
-    let _ = log_service::create_log(&ctx.db, &actor.display_name, "网站用户管理", "修改管理员信息", &item.username, &extract_client_ip(&headers)).await;
+    if let Err(e) = log_service::create_log(&ctx.db, &actor.display_name, "网站用户管理", "修改管理员信息", &item.username, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
     Ok(Json(serde_json::json!({"item": item})))
 }
 
@@ -112,7 +112,7 @@ pub(crate) async fn update_user_password(
     user_service::update_password(&ctx.db, id, &body.password)
         .await
         .map_err(invalid_request)?;
-    let _ = log_service::create_log(&ctx.db, &actor.display_name, "网站用户管理", "修改管理员密码", &target.username, &extract_client_ip(&headers)).await;
+    if let Err(e) = log_service::create_log(&ctx.db, &actor.display_name, "网站用户管理", "修改管理员密码", &target.username, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -130,7 +130,7 @@ pub(crate) async fn delete_user(
     user_service::delete_user(&ctx.db, id)
         .await
         .map_err(invalid_request)?;
-    let _ = log_service::create_log(&ctx.db, &actor.display_name, "网站用户管理", "删除管理员", &target.username, &extract_client_ip(&headers)).await;
+    if let Err(e) = log_service::create_log(&ctx.db, &actor.display_name, "网站用户管理", "删除管理员", &target.username, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -150,6 +150,6 @@ pub(crate) async fn toggle_user_enabled(
         .map_err(invalid_request)?;
 
     let action = if item.enabled { "启用账号" } else { "禁用账号" };
-    let _ = log_service::create_log(&ctx.db, &actor.display_name, "网站用户管理", action, &item.username, &extract_client_ip(&headers)).await;
+    if let Err(e) = log_service::create_log(&ctx.db, &actor.display_name, "网站用户管理", action, &item.username, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
     Ok(Json(serde_json::json!({"item": item})))
 }

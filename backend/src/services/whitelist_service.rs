@@ -21,6 +21,7 @@ pub struct WhitelistItem {
     pub applied_at: String,
     pub approved_at: Option<String>,
     pub approved_by: Option<String>,
+    pub approval_reason: Option<String>,
     pub rejected_at: Option<String>,
     pub rejected_by: Option<String>,
     pub rejection_reason: Option<String>,
@@ -51,6 +52,7 @@ struct WhitelistRow {
     applied_at: DateTime<Utc>,
     approved_at: Option<DateTime<Utc>>,
     approved_by: Option<String>,
+    approval_reason: Option<String>,
     rejected_at: Option<DateTime<Utc>>,
     rejected_by: Option<String>,
     rejection_reason: Option<String>,
@@ -69,6 +71,7 @@ struct WhitelistStatusRow {
     applied_at: DateTime<Utc>,
     approved_at: Option<DateTime<Utc>>,
     approved_by: Option<String>,
+    approval_reason: Option<String>,
     rejected_at: Option<DateTime<Utc>>,
     rejected_by: Option<String>,
     rejection_reason: Option<String>,
@@ -102,7 +105,7 @@ pub async fn list_whitelist(db: &Database, query: &ListQuery) -> anyhow::Result<
     let count_sql = format!("SELECT COUNT(*) FROM whitelist_requests {where_clause}");
     let data_sql = format!(
         r#"SELECT id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
-                  applied_at, approved_at, approved_by,
+                  applied_at, approved_at, approved_by, approval_reason,
                   rejected_at, rejected_by, rejection_reason
            FROM whitelist_requests {where_clause} ORDER BY applied_at DESC LIMIT ${param_idx} OFFSET ${}"#,
         param_idx + 1
@@ -173,7 +176,7 @@ pub async fn create_public_whitelist_request(
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', now(), 'public', now())
         RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
-                  applied_at, approved_at, approved_by,
+                  applied_at, approved_at, approved_by, approval_reason,
                   rejected_at, rejected_by, rejection_reason
         "#,
     )
@@ -217,7 +220,7 @@ pub async fn create_manual_whitelist(
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'approved', now(), now(), $9, 'manual', now())
         RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
-                  applied_at, approved_at, approved_by,
+                  applied_at, approved_at, approved_by, approval_reason,
                   rejected_at, rejected_by, rejection_reason
         "#,
     )
@@ -236,7 +239,7 @@ pub async fn create_manual_whitelist(
     Ok(map_whitelist_row(row))
 }
 
-pub async fn approve_whitelist(db: &Database, id: Uuid, operator_name: &str) -> anyhow::Result<WhitelistItem> {
+pub async fn approve_whitelist(db: &Database, id: Uuid, operator_name: &str, reason: Option<&str>) -> anyhow::Result<WhitelistItem> {
     let current = find_by_id(db, id).await?;
     anyhow::ensure!(current.status == "pending", "只有待审核记录可以通过");
 
@@ -246,6 +249,7 @@ pub async fn approve_whitelist(db: &Database, id: Uuid, operator_name: &str) -> 
         SET status = 'approved',
             approved_at = now(),
             approved_by = $2,
+            approval_reason = $3,
             rejected_at = NULL,
             rejected_by = NULL,
             rejection_reason = NULL,
@@ -254,12 +258,13 @@ pub async fn approve_whitelist(db: &Database, id: Uuid, operator_name: &str) -> 
             updated_at = now()
         WHERE id = $1
         RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
-                  applied_at, approved_at, approved_by,
+                  applied_at, approved_at, approved_by, approval_reason,
                   rejected_at, rejected_by, rejection_reason
         "#,
     )
     .bind(id)
     .bind(operator_name.trim())
+    .bind(reason.and_then(|r| if r.trim().is_empty() { None } else { Some(r.trim()) }))
     .fetch_one(&db.pool)
     .await?;
 
@@ -285,12 +290,13 @@ pub async fn reject_whitelist(
             rejection_reason = $3,
             approved_at = NULL,
             approved_by = NULL,
+            approval_reason = NULL,
             revoked_at = NULL,
             revoked_by = NULL,
             updated_at = now()
         WHERE id = $1
         RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
-                  applied_at, approved_at, approved_by,
+                  applied_at, approved_at, approved_by, approval_reason,
                   rejected_at, rejected_by, rejection_reason
         "#,
     )
@@ -313,6 +319,7 @@ pub async fn restore_whitelist(db: &Database, id: Uuid, operator_name: &str) -> 
         SET status = 'approved',
             approved_at = now(),
             approved_by = $2,
+            approval_reason = NULL,
             rejected_at = NULL,
             rejected_by = NULL,
             rejection_reason = NULL,
@@ -321,7 +328,7 @@ pub async fn restore_whitelist(db: &Database, id: Uuid, operator_name: &str) -> 
             updated_at = now()
         WHERE id = $1
         RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
-                  applied_at, approved_at, approved_by,
+                  applied_at, approved_at, approved_by, approval_reason,
                   rejected_at, rejected_by, rejection_reason
         "#,
     )
@@ -393,6 +400,7 @@ async fn reopen_revoked_whitelist(
             applied_at = now(),
             approved_at = NULL,
             approved_by = NULL,
+            approval_reason = NULL,
             rejected_at = NULL,
             rejected_by = NULL,
             rejection_reason = NULL,
@@ -402,7 +410,7 @@ async fn reopen_revoked_whitelist(
             updated_at = now()
         WHERE id = $1
         RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
-                  applied_at, approved_at, approved_by,
+                  applied_at, approved_at, approved_by, approval_reason,
                   rejected_at, rejected_by, rejection_reason
         "#,
     )
@@ -440,6 +448,7 @@ async fn approve_existing_record(
             applied_at = now(),
             approved_at = now(),
             approved_by = $7,
+            approval_reason = NULL,
             rejected_at = NULL,
             rejected_by = NULL,
             rejection_reason = NULL,
@@ -449,7 +458,7 @@ async fn approve_existing_record(
             updated_at = now()
         WHERE id = $1
         RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
-                  applied_at, approved_at, approved_by,
+                  applied_at, approved_at, approved_by, approval_reason,
                   rejected_at, rejected_by, rejection_reason
         "#,
     )
@@ -470,7 +479,7 @@ async fn find_by_steamid64(db: &Database, steamid64: &str) -> anyhow::Result<Opt
     sqlx::query_as::<_, WhitelistStatusRow>(
         r#"
         SELECT id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
-               applied_at, approved_at, approved_by,
+               applied_at, approved_at, approved_by, approval_reason,
                rejected_at, rejected_by, rejection_reason,
                revoked_at, revoked_by, source
         FROM whitelist_requests
@@ -491,7 +500,7 @@ async fn find_by_id(db: &Database, id: Uuid) -> anyhow::Result<WhitelistStatusRo
     sqlx::query_as::<_, WhitelistStatusRow>(
         r#"
         SELECT id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
-               applied_at, approved_at, approved_by,
+               applied_at, approved_at, approved_by, approval_reason,
                rejected_at, rejected_by, rejection_reason,
                revoked_at, revoked_by, source
         FROM whitelist_requests
@@ -593,6 +602,7 @@ fn map_whitelist_row(row: WhitelistRow) -> WhitelistItem {
         applied_at: row.applied_at.to_rfc3339(),
         approved_at: row.approved_at.map(|value| value.to_rfc3339()),
         approved_by: row.approved_by,
+        approval_reason: row.approval_reason,
         rejected_at: row.rejected_at.map(|value| value.to_rfc3339()),
         rejected_by: row.rejected_by,
         rejection_reason: row.rejection_reason,

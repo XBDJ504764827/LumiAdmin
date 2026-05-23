@@ -57,7 +57,10 @@ impl Config {
             bind_addr: std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:3001".into()),
             session_ttl_hours: std::env::var("SESSION_TTL_HOURS").ok().and_then(|v| v.parse().ok()).unwrap_or(24),
             dev_username: std::env::var("DEV_USERNAME").unwrap_or_else(|_| "dev".into()),
-            dev_password: std::env::var("DEV_PASSWORD").unwrap_or_else(|_| "dev123".into()),
+            dev_password: std::env::var("DEV_PASSWORD").unwrap_or_else(|_| {
+                tracing::warn!("DEV_PASSWORD 未设置，使用不安全的默认密码，请在生产环境中配置");
+                "dev123".into()
+            }),
             steam_api_key,
             steam_web_key,
             steamchina_profile_key,

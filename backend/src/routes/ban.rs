@@ -101,7 +101,7 @@ pub(crate) async fn create_ban(
     let log_target = item.player.as_deref().unwrap_or(&item.steam_id);
     let client_ip = extract_client_ip(&headers);
     let log_ip = item.ip_address.as_deref().unwrap_or(&client_ip);
-    let _ = log_service::create_log(&ctx.db, &operator_name, "封禁管理", "添加封禁", log_target, log_ip).await;
+    if let Err(e) = log_service::create_log(&ctx.db, &operator_name, "封禁管理", "添加封禁", log_target, log_ip).await { tracing::warn!(%e, "日志写入失败"); }
     Ok((StatusCode::CREATED, Json(serde_json::json!({ "item": item }))))
 }
 
@@ -132,7 +132,7 @@ pub(crate) async fn update_ban(
     .await
     .map_err(invalid_request)?;
     let log_target = item.player.as_deref().unwrap_or(&item.steam_id);
-    let _ = log_service::create_log(&ctx.db, &actor.display_name, "封禁管理", "编辑封禁", log_target, &extract_client_ip(&headers)).await;
+    if let Err(e) = log_service::create_log(&ctx.db, &actor.display_name, "封禁管理", "编辑封禁", log_target, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
     Ok(Json(serde_json::json!({ "item": item })))
 }
 
@@ -149,7 +149,7 @@ pub(crate) async fn delete_ban(
 
     ban_service::delete_ban(&ctx.db, id).await.map_err(invalid_request)?;
     let log_target = record.player.as_deref().unwrap_or(&record.steam_id);
-    let _ = log_service::create_log(&ctx.db, &actor.display_name, "封禁管理", "删除封禁", log_target, &extract_client_ip(&headers)).await;
+    if let Err(e) = log_service::create_log(&ctx.db, &actor.display_name, "封禁管理", "删除封禁", log_target, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -166,7 +166,7 @@ pub(crate) async fn unban_ban(
 
     let item = ban_service::unban(&ctx.db, id, &actor.display_name).await.map_err(invalid_request)?;
     let log_target = item.player.as_deref().unwrap_or(&item.steam_id);
-    let _ = log_service::create_log(&ctx.db, &actor.display_name, "封禁管理", "解封", log_target, &extract_client_ip(&headers)).await;
+    if let Err(e) = log_service::create_log(&ctx.db, &actor.display_name, "封禁管理", "解封", log_target, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
     Ok(Json(serde_json::json!({ "item": item })))
 }
 

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { useAuth } from '../../state/auth.jsx';
 import { api } from '../../lib/api.js';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
@@ -32,7 +33,8 @@ function modulePillClass(module) {
 }
 
 export function LogsPage() {
-  const token = localStorage.getItem('manger_token');
+  const { session } = useAuth();
+  const token = session?.token ?? null;
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [data, setData] = useState(null);

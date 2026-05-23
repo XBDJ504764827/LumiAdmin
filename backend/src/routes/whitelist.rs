@@ -30,6 +30,7 @@ pub(crate) struct RejectWhitelistBody {
 #[allow(dead_code)]
 pub(crate) struct WhitelistActionBody {
     pub operator_name: Option<String>,
+    pub reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -66,7 +67,7 @@ pub(crate) async fn create_whitelist(
     )
     .await
     .map_err(invalid_request)?;
-    let _ = log_service::create_log(&ctx.db, &operator_name, "白名单管理", "手动添加白名单", &item.nickname, &extract_client_ip(&headers)).await;
+    if let Err(e) = log_service::create_log(&ctx.db, &operator_name, "白名单管理", "手动添加白名单", &item.nickname, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
     Ok((StatusCode::CREATED, Json(serde_json::json!({"item": item}))))
 }
 
@@ -74,17 +75,17 @@ pub(crate) async fn approve_whitelist_request(
     State(ctx): State<AppCtx>,
     headers: HeaderMap,
     Path(id): Path<Uuid>,
-    Json(_body): Json<WhitelistActionBody>,
+    Json(body): Json<WhitelistActionBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let actor = current_operator(&ctx, &headers).await?;
     if !permission_service::can_review_whitelist(&actor) {
         return Err(forbidden());
     }
     let operator_name = actor.display_name.clone();
-    let item = whitelist_service::approve_whitelist(&ctx.db, id, &operator_name)
+    let item = whitelist_service::approve_whitelist(&ctx.db, id, &operator_name, body.reason.as_deref())
         .await
         .map_err(invalid_request)?;
-    let _ = log_service::create_log(&ctx.db, &operator_name, "白名单管理", "通过白名单申请", &item.nickname, &extract_client_ip(&headers)).await;
+    if let Err(e) = log_service::create_log(&ctx.db, &operator_name, "白名单管理", "通过白名单申请", &item.nickname, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
     Ok(Json(serde_json::json!({"item": item})))
 }
 
@@ -102,7 +103,7 @@ pub(crate) async fn reject_whitelist_request(
     let item = whitelist_service::reject_whitelist(&ctx.db, id, &body.reason, &operator_name)
         .await
         .map_err(invalid_request)?;
-    let _ = log_service::create_log(&ctx.db, &operator_name, "白名单管理", "拒绝白名单申请", &item.nickname, &extract_client_ip(&headers)).await;
+    if let Err(e) = log_service::create_log(&ctx.db, &operator_name, "白名单管理", "拒绝白名单申请", &item.nickname, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
     Ok(Json(serde_json::json!({"item": item})))
 }
 
@@ -120,7 +121,7 @@ pub(crate) async fn restore_whitelist_request(
     let item = whitelist_service::restore_whitelist(&ctx.db, id, &operator_name)
         .await
         .map_err(invalid_request)?;
-    let _ = log_service::create_log(&ctx.db, &operator_name, "白名单管理", "恢复白名单通过", &item.nickname, &extract_client_ip(&headers)).await;
+    if let Err(e) = log_service::create_log(&ctx.db, &operator_name, "白名单管理", "恢复白名单通过", &item.nickname, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
     Ok(Json(serde_json::json!({"item": item})))
 }
 
@@ -138,7 +139,7 @@ pub(crate) async fn revoke_whitelist_request(
     let item = whitelist_service::revoke_whitelist(&ctx.db, id, &operator_name)
         .await
         .map_err(invalid_request)?;
-    let _ = log_service::create_log(&ctx.db, &operator_name, "白名单管理", "删除白名单审核", &item.nickname, &extract_client_ip(&headers)).await;
+    if let Err(e) = log_service::create_log(&ctx.db, &operator_name, "白名单管理", "删除白名单审核", &item.nickname, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
     Ok(Json(serde_json::json!({"item": item})))
 }
 
@@ -174,6 +175,6 @@ pub(crate) async fn refresh_all_steam_names(
         .await
         .map_err(invalid_request)?;
     let operator_name = actor.display_name.clone();
-    let _ = log_service::create_log(&ctx.db, &operator_name, "白名单管理", "批量刷新Steam名称", &format!("更新了{}条记录", updated_count), &extract_client_ip(&headers)).await;
+    if let Err(e) = log_service::create_log(&ctx.db, &operator_name, "白名单管理", "批量刷新Steam名称", &format!("更新了{}条记录", updated_count), &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
     Ok(Json(serde_json::json!({ "updated_count": updated_count })))
 }

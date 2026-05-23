@@ -115,7 +115,7 @@ pub(crate) async fn create_player_access_rule(
     .await
     .map_err(invalid_request)?;
 
-    let _ = log_service::create_log(
+    if let Err(e) = log_service::create_log(
         &ctx.db,
         &actor.display_name,
         "玩家进服设置",
@@ -123,7 +123,7 @@ pub(crate) async fn create_player_access_rule(
         &format!("{} ({})", rule.nickname, rule.steamid64),
         &extract_client_ip(&headers),
     )
-    .await;
+    .await { tracing::warn!(%e, "日志写入失败"); }
 
     Ok((StatusCode::CREATED, Json(serde_json::json!({ "item": rule }))))
 }
@@ -162,7 +162,7 @@ pub(crate) async fn update_player_access_rule(
     .await
     .map_err(invalid_request)?;
 
-    let _ = log_service::create_log(
+    if let Err(e) = log_service::create_log(
         &ctx.db,
         &actor.display_name,
         "玩家进服设置",
@@ -170,7 +170,7 @@ pub(crate) async fn update_player_access_rule(
         &format!("{} ({})", rule.nickname, rule.steamid64),
         &extract_client_ip(&headers),
     )
-    .await;
+    .await { tracing::warn!(%e, "日志写入失败"); }
 
     Ok(Json(serde_json::json!({ "item": rule })))
 }
@@ -194,7 +194,7 @@ pub(crate) async fn delete_player_access_rule(
         .await
         .map_err(invalid_request)?;
 
-    let _ = log_service::create_log(
+    if let Err(e) = log_service::create_log(
         &ctx.db,
         &actor.display_name,
         "玩家进服设置",
@@ -202,7 +202,7 @@ pub(crate) async fn delete_player_access_rule(
         &format!("{} ({})", rule.nickname, rule.steamid64),
         &extract_client_ip(&headers),
     )
-    .await;
+    .await { tracing::warn!(%e, "日志写入失败"); }
 
     Ok(StatusCode::NO_CONTENT)
 }

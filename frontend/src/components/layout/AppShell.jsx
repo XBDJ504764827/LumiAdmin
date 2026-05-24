@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../state/auth.jsx';
 import { ThemeToggle } from '../../shared/ThemeToggle.jsx';
+import { NotificationBell } from '../NotificationBell.jsx';
 import { sidebarSections } from './sidebarSections.jsx';
 
 export function AppShell({ children }) {
@@ -61,6 +62,7 @@ export function AppShell({ children }) {
             <span className="search-shortcut">⌘ K</span>
           </div>
           <div className="topbar-actions">
+            <NotificationBell />
             <ThemeToggle compact />
             <button className="icon-btn" type="button" onClick={() => navigate('/public/apply')} title="公开页面">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

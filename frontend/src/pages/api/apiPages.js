@@ -21,6 +21,7 @@ export function formatEndpointAuth(authRequired) {
 
 export const defaultWebhookConfig = {
   publicPath: '',
+  webhookUrl: '',
   secret: '',
   serverIds: [],
   externalServerIds: [],
@@ -52,6 +53,7 @@ export function normalizePlayerApiConfig(config = {}) {
     items: (config.items ?? []).map((item) => ({
       id: item.id,
       publicPath: item.public_path ?? '',
+      webhookUrl: item.webhook_url ?? '',
       secret: item.secret ?? '',
       serverIds: item.server_ids ?? [],
       externalServerIds: item.external_server_ids ?? [],
@@ -66,13 +68,15 @@ export function normalizePlayerApiConfig(config = {}) {
 
 export function buildWebhookConfigPayload(config) {
   const secret = config.secret.trim();
+  const webhookUrl = config.webhookUrl?.trim() || null;
   return {
     public_path: config.publicPath.trim(),
+    webhook_url: webhookUrl,
     secret: secret || null,
-    server_ids: config.serverIds,
-    external_server_ids: config.externalServerIds,
-    enabled: config.enabled,
-    public_access: config.publicAccess,
+    server_ids: config.serverIds ?? [],
+    external_server_ids: config.externalServerIds ?? [],
+    enabled: config.enabled ?? true,
+    public_access: config.publicAccess ?? true,
   };
 }
 

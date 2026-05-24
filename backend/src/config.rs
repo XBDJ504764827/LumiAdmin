@@ -24,6 +24,14 @@ pub struct Config {
     pub cors_origin: Option<String>,
     // MySQL 数据库（地图等级同步）
     pub mysql_database_url: Option<String>,
+    // 后台任务间隔配置
+    pub ban_expiry_check_interval_secs: u64,
+    pub steam_name_refresh_interval_secs: u64,
+    pub session_cleanup_interval_secs: u64,
+    pub rcon_poll_scan_interval_secs: u64,
+    pub map_tier_sync_interval_secs: u64,
+    pub server_config_cache_ttl_secs: u64,
+    pub server_config_cache_refresh_interval_secs: u64,
 }
 
 impl Config {
@@ -79,6 +87,18 @@ impl Config {
             // CORS 允许的来源
             cors_origin: std::env::var("CORS_ORIGIN").ok().filter(|v| !v.is_empty()),
             mysql_database_url: std::env::var("MYSQL_DATABASE_URL").ok().filter(|v| !v.is_empty()),
+            // 后台任务间隔配置
+            ban_expiry_check_interval_secs: env_u64("BAN_EXPIRY_CHECK_INTERVAL_SECS", 60),
+            steam_name_refresh_interval_secs: env_u64("STEAM_NAME_REFRESH_INTERVAL_SECS", 6 * 3600),
+            session_cleanup_interval_secs: env_u64("SESSION_CLEANUP_INTERVAL_SECS", 600),
+            rcon_poll_scan_interval_secs: env_u64("RCON_POLL_SCAN_INTERVAL_SECS", 5),
+            map_tier_sync_interval_secs: env_u64("MAP_TIER_SYNC_INTERVAL_SECS", 6 * 3600),
+            server_config_cache_ttl_secs: env_u64("SERVER_CONFIG_CACHE_TTL_SECS", 300),
+            server_config_cache_refresh_interval_secs: env_u64("SERVER_CONFIG_CACHE_REFRESH_INTERVAL_SECS", 300),
         }
     }
+}
+
+fn env_u64(key: &str, default: u64) -> u64 {
+    std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
 }

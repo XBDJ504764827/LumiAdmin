@@ -76,13 +76,13 @@ pub async fn refresh_steam_names(db: &Database, resolver: &SteamResolver) -> any
 
                 // 本地计算缺失的 SteamID2/SteamID3/ProfileURL
                 if let Ok(identity) = resolver.parse_local(&record.steamid64) {
-                    if record.steamid.as_deref().map_or(true, |v| v.trim().is_empty()) {
+                    if record.steamid.as_deref().is_none_or(|v| v.trim().is_empty()) {
                         result.steamid = identity.steamid;
                     }
-                    if record.steamid3.as_deref().map_or(true, |v| v.trim().is_empty()) {
+                    if record.steamid3.as_deref().is_none_or(|v| v.trim().is_empty()) {
                         result.steamid3 = identity.steamid3;
                     }
-                    if record.profile_url.as_deref().map_or(true, |v| v.trim().is_empty()) {
+                    if record.profile_url.as_deref().is_none_or(|v| v.trim().is_empty()) {
                         result.profile_url = identity.profile_url;
                     }
                 }
@@ -168,6 +168,7 @@ struct RefreshResult {
 }
 
 /// 刷新单条记录的Steam名称
+#[allow(dead_code)]
 pub async fn refresh_single_steam_name(
     db: &Database,
     resolver: &SteamResolver,
@@ -200,6 +201,7 @@ pub async fn refresh_single_steam_name(
 }
 
 /// 批量刷新指定状态的记录的Steam名称
+#[allow(dead_code)]
 pub async fn refresh_steam_names_by_status(
     db: &Database,
     resolver: &SteamResolver,

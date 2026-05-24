@@ -47,6 +47,8 @@ impl Database {
         self.migrate_logs_operations_and_indexes().await?;
         self.migrate_external_servers_schema().await?;
         self.migrate_map_tiers_table().await?;
+        self.migrate_notifications_schema().await?;
+        self.migrate_ban_appeals_schema().await?;
         Ok(())
     }
 
@@ -804,6 +806,66 @@ impl Database {
         ).execute(&self.pool).await?;
         Ok(())
     }
+    /// 通知表
+    async fn migrate_notifications_schema(&self) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"CREATE TABLE IF NOT EXISTS notifications (
+              id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+              user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              type TEXT NOT NULL,
+              title TEXT NOT NULL,
+              message TEXT NOT NULL,
+              link TEXT,
+              read BOOLEAN NOT NULL DEFAULT false,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )"#,
+        ).execute(&self.pool).await?;
+
+        sqlx::query(
+            r#"CREATE INDEX IF NOT EXISTS idx_notifications_user_unread
+               ON notifications (user_id, read, created_at DESC) WHERE read = false"#,
+        ).execute(&self.pool).await?;
+
+        sqlx::query(
+            r#"CREATE INDEX IF NOT EXISTS idx_notifications_created_at
+               ON notifications (created_at)"#,
+        ).execute(&self.pool).await?;
+
+        Ok(())
+    }
+
+    /// 封禁申诉表
+    async fn migrate_ban_appeals_schema(&self) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"CREATE TABLE IF NOT EXISTS ban_appeals (
+              id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+              ban_id UUID NOT NULL REFERENCES ban_records(id) ON DELETE CASCADE,
+              steam_id TEXT NOT NULL,
+              player_name TEXT NOT NULL,
+              appeal_reason TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'pending',
+              reviewed_by TEXT,
+              review_note TEXT,
+              reviewed_at TIMESTAMPTZ,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )"#,
+        ).execute(&self.pool).await?;
+
+        sqlx::query(
+            r#"CREATE INDEX IF NOT EXISTS idx_ban_appeals_status ON ban_appeals (status)"#,
+        ).execute(&self.pool).await?;
+        sqlx::query(
+            r#"CREATE INDEX IF NOT EXISTS idx_ban_appeals_steam_id ON ban_appeals (steam_id)"#,
+        ).execute(&self.pool).await?;
+        sqlx::query(
+            r#"CREATE INDEX IF NOT EXISTS idx_ban_appeals_created_at ON ban_appeals (created_at DESC)"#,
+        ).execute(&self.pool).await?;
+        sqlx::query(
+            r#"ALTER TABLE ban_appeals ADD COLUMN IF NOT EXISTS evidence_paths TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]"#,
+        ).execute(&self.pool).await?;
+        Ok(())
+    }
+
     pub async fn seed(&self, config: &Config) -> anyhow::Result<()> {
         let password_hash = crate::password::hash_password(&config.dev_password)?;
         sqlx::query(
@@ -1321,9 +1383,13 @@ mod tests {
 
             db.migrate().await?;
 
-            let items = whitelist_service::list_whitelist(&db).await?;
-            assert_eq!(items.len(), 2);
-            assert!(items.iter().any(|item| {
+            let items = whitelist_service::list_whitelist(
+                &db,
+                &crate::routes::ListQuery { search: None, status: None, page: None, page_size: None },
+            )
+            .await?;
+            assert_eq!(items.items.len(), 2);
+            assert!(items.items.iter().any(|item| {
                 item.nickname == "旧版被拒玩家"
                     && item.steamid64 == "76561198000000001"
                     && item.profile_url.as_deref() == Some("https://steamcommunity.com/profiles/76561198000000001")
@@ -1331,7 +1397,7 @@ mod tests {
                     && item.rejected_by.as_deref() == Some("Alex")
                     && item.rejected_at.is_some()
             }));
-            assert!(items.iter().any(|item| {
+            assert!(items.items.iter().any(|item| {
                 item.nickname == "旧版已通过玩家"
                     && item.steamid64 == "76561198000000002"
                     && item.approved_by.as_deref() == Some("DevAdmin")

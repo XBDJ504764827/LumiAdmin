@@ -2,12 +2,14 @@ pub mod auth;
 pub mod community;
 pub mod external_server;
 pub mod ban;
+pub mod ban_appeal;
 pub mod whitelist;
 pub mod user;
 pub mod public;
 pub mod access;
 pub mod plugin;
 pub mod misc;
+pub mod notification;
 #[cfg(test)]
 pub mod tests;
 
@@ -29,6 +31,7 @@ use crate::{
     models::Operator,
     services::{
         access_snapshot_service::SnapshotStore,
+        notification_service::{NotificationHub, create_notification_hub},
         server_config_cache::ServerConfigCache,
         steam_service::SteamResolver,
     },
@@ -38,14 +41,17 @@ use crate::{
 // Shared context
 // ---------------------------------------------------------------------------
 
+type GlobalBansCache = Arc<RwLock<HashMap<String, (serde_json::Value, chrono::DateTime<Utc>)>>>;
+
 #[derive(Clone)]
 pub struct AppCtx {
     pub config: Config,
     pub db: Database,
     pub access_snapshot: SnapshotStore,
-    pub global_bans_cache: Arc<RwLock<HashMap<String, (serde_json::Value, chrono::DateTime<Utc>)>>>,
+    pub global_bans_cache: GlobalBansCache,
     pub server_config_cache: Arc<ServerConfigCache>,
     pub steam_resolver: SteamResolver,
+    pub notification_hub: NotificationHub,
 }
 
 // ---------------------------------------------------------------------------
@@ -74,11 +80,11 @@ impl ListQuery {
     }
 
     pub fn search_pattern(&self) -> Option<String> {
-        self.search.as_ref().map(|s| {
+        self.search.as_ref().and_then(|s| {
             let trimmed = s.trim().to_string();
             if trimmed.is_empty() { return None; }
             Some(format!("%{}%", trimmed.replace('%', "\\%").replace('_', "\\_")))
-        }).flatten()
+        })
     }
 }
 
@@ -157,6 +163,10 @@ pub fn router(
         .route("/api/bans", get(ban::bans).post(ban::create_ban))
         .route("/api/bans/:id", put(ban::update_ban).delete(ban::delete_ban))
         .route("/api/bans/:id/unban", post(ban::unban_ban))
+        // -- ban appeals --
+        .route("/api/ban-appeals", get(ban_appeal::list_appeals))
+        .route("/api/ban-appeals/:id/approve", post(ban_appeal::approve_appeal))
+        .route("/api/ban-appeals/:id/reject", post(ban_appeal::reject_appeal))
         // -- audit --
         .route("/api/audit/logs", get(misc::list_audit_logs))
         // -- users --
@@ -172,10 +182,18 @@ pub fn router(
         // -- player access rules --
         .route("/api/player-access/rules", get(access::player_access_rules).post(access::create_player_access_rule))
         .route("/api/player-access/rules/:id", put(access::update_player_access_rule).delete(access::delete_player_access_rule))
+        // -- notifications --
+        .route("/api/notifications", get(notification::list_notifications))
+        .route("/api/notifications/unread-count", get(notification::unread_count))
+        .route("/api/notifications/:id/read", post(notification::mark_read))
+        .route("/api/notifications/read-all", post(notification::mark_all_read))
+        .route("/ws/notifications", get(notification::ws_handler))
         // -- public --
         .route("/api/public/whitelist", get(public::public_whitelist).post(public::submit_whitelist))
         .route("/api/public/bans", get(public::public_bans))
         .route("/api/public/steam/resolve", post(public::resolve_steam))
+        .route("/api/public/bans/query", post(public::query_active_bans))
+        .route("/api/public/ban-appeals", post(public::submit_ban_appeal))
         .route("/api/public/global-bans/:steamid64", get(public::get_global_bans))
         .route("/api/public/global-bans/batch", post(public::get_global_bans_batch))
         .with_state(AppCtx {
@@ -185,6 +203,7 @@ pub fn router(
             global_bans_cache: Arc::new(RwLock::new(HashMap::new())),
             server_config_cache,
             steam_resolver,
+            notification_hub: create_notification_hub(),
         })
 }
 

@@ -86,6 +86,7 @@ impl RateLimiter {
     }
 
     /// 获取当前计数（用于监控）
+    #[allow(dead_code)]
     pub async fn get_count(&self, key: &str) -> u32 {
         let entries = self.entries.read().await;
         entries.get(key).map(|e| e.count).unwrap_or(0)
@@ -114,6 +115,7 @@ impl RateLimiter {
     }
 
     /// 获取统计信息
+    #[allow(dead_code)]
     pub async fn stats(&self) -> RateLimiterStats {
         let entries = self.entries.read().await;
         RateLimiterStats {
@@ -123,6 +125,7 @@ impl RateLimiter {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct RateLimiterStats {
     pub total_keys: usize,

@@ -35,26 +35,6 @@ pub struct OfflineSyncResult {
     pub errors: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
-pub struct OfflineOperationItem {
-    pub id: Uuid,
-    pub operation: String,
-    pub target: String,
-    pub target_type: String,
-    pub player_name: Option<String>,
-    pub reason: Option<String>,
-    pub duration_minutes: Option<i32>,
-    pub operator_name: String,
-    pub operator_steamid: Option<String>,
-    pub server_id: Uuid,
-    pub server_port: i32,
-    pub created_at: DateTime<Utc>,
-    pub synced_at: DateTime<Utc>,
-    pub idempotency_key: String,
-    pub applied: bool,
-    pub apply_error: Option<String>,
-}
-
 /// 接收并处理离线操作
 pub async fn sync_offline_operations(
     db: &Database,
@@ -109,7 +89,7 @@ pub async fn sync_offline_operations(
         .bind(&op.target_type)
         .bind(&op.player_name)
         .bind(&op.reason)
-        .bind(&op.duration_minutes)
+        .bind(op.duration_minutes)
         .bind(&op.operator_name)
         .bind(&op.operator_steamid)
         .bind(server.id)

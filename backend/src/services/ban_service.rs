@@ -26,24 +26,9 @@ pub struct BanItem {
 
 #[derive(Clone, Debug, sqlx::FromRow)]
 pub struct BanRecord {
-    pub id: Uuid,
     pub player: Option<String>,
     pub steam_id: String,
-    pub ip_address: Option<String>,
-    pub server_name: Option<String>,
-    pub ban_type: String,
-    pub duration_minutes: i32,
-    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub reason: String,
-    pub status: String,
     pub operator_name: String,
-    pub source: String,
-    pub server_id: Option<Uuid>,
-    pub server_port: Option<i32>,
-    pub removed_reason: Option<String>,
-    pub removed_by: Option<String>,
-    pub removed_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -259,6 +244,17 @@ pub async fn find_ban(db: &Database, id: Uuid) -> anyhow::Result<BanRecord> {
         .fetch_one(&db.pool)
         .await
         .map_err(Into::into)
+}
+
+/// 按 SteamID64 查询该玩家的所有活跃封禁记录（供公开申诉页使用）
+pub async fn find_active_bans_by_steamid(db: &Database, steamid64: &str) -> anyhow::Result<Vec<BanItem>> {
+    let rows = sqlx::query_as::<_, BanRow>(
+        &format!("SELECT {BAN_FIELDS} FROM ban_records WHERE steam_id = $1 AND status = 'active' ORDER BY created_at DESC"),
+    )
+    .bind(steamid64)
+    .fetch_all(&db.pool)
+    .await?;
+    Ok(rows.into_iter().map(row_to_item).collect())
 }
 
 pub async fn unban(db: &Database, id: Uuid, removed_by: &str) -> anyhow::Result<BanItem> {

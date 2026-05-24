@@ -387,6 +387,63 @@ fn reject(message: &str) -> AccessCheckResult {
     }
 }
 
+/// 查询 Steam 等级：优先 steamchina，失败用 steampowered
+async fn fetch_steam_level(config: &Config, steam_id64: &str) -> Option<i32> {
+    // 主：steamchina
+    if let Some(ref china_key) = config.steamchina_level_key {
+        let url = format!(
+            "https://api.steamchina.com/IPlayerService/GetSteamLevel/v0001/?key={china_key}&steamid={steam_id64}"
+        );
+        match http_client::http_client().get(&url).send().await {
+            Ok(response) if response.status().is_success() => {
+                match response.json::<SteamLevelEnvelope>().await {
+                    Ok(body) => {
+                        if body.response.player_level.is_some() {
+                            return body.response.player_level;
+                        }
+                    }
+                    Err(error) => {
+                        warn!(steam_id64, error = %error, "steamchina 等级解析失败，尝试备用");
+                    }
+                }
+            }
+            Ok(response) => {
+                warn!(steam_id64, status = %response.status(), "steamchina 等级请求失败，尝试备用");
+            }
+            Err(error) => {
+                warn!(steam_id64, error = %error, "steamchina 等级请求异常，尝试备用");
+            }
+        }
+    }
+
+    // 备：steampowered
+    if let Some(steam_web_key) = config.steam_web_key.as_deref() {
+        let url = format!(
+            "https://api.steampowered.com/IPlayerService/GetSteamLevel/v1/?key={steam_web_key}&steamid={steam_id64}"
+        );
+        match http_client::http_client().get(&url).send().await {
+            Ok(response) if response.status().is_success() => {
+                match response.json::<SteamLevelEnvelope>().await {
+                    Ok(body) => {
+                        return body.response.player_level;
+                    }
+                    Err(error) => {
+                        warn!(steam_id64, error = %error, "steampowered 等级解析失败");
+                    }
+                }
+            }
+            Ok(response) => {
+                warn!(steam_id64, status = %response.status(), "steampowered 等级请求失败");
+            }
+            Err(error) => {
+                warn!(steam_id64, error = %error, "steampowered 等级请求异常");
+            }
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,6 +460,7 @@ mod tests {
             min_steam_level,
             whitelist_mode_enabled: false,
             use_custom_access: true,
+            community_whitelist_mode_enabled: false,
             community_min_rating: 0,
             community_min_steam_level: 0,
         }
@@ -468,61 +526,4 @@ mod tests {
         assert!(!result.allowed);
         assert_eq!(result.message, "你的白名单状态无法确认，请稍后再试。");
     }
-}
-
-/// 查询 Steam 等级：优先 steamchina，失败用 steampowered
-async fn fetch_steam_level(config: &Config, steam_id64: &str) -> Option<i32> {
-    // 主：steamchina
-    if let Some(ref china_key) = config.steamchina_level_key {
-        let url = format!(
-            "https://api.steamchina.com/IPlayerService/GetSteamLevel/v0001/?key={china_key}&steamid={steam_id64}"
-        );
-        match http_client::http_client().get(&url).send().await {
-            Ok(response) if response.status().is_success() => {
-                match response.json::<SteamLevelEnvelope>().await {
-                    Ok(body) => {
-                        if body.response.player_level.is_some() {
-                            return body.response.player_level;
-                        }
-                    }
-                    Err(error) => {
-                        warn!(steam_id64, error = %error, "steamchina 等级解析失败，尝试备用");
-                    }
-                }
-            }
-            Ok(response) => {
-                warn!(steam_id64, status = %response.status(), "steamchina 等级请求失败，尝试备用");
-            }
-            Err(error) => {
-                warn!(steam_id64, error = %error, "steamchina 等级请求异常，尝试备用");
-            }
-        }
-    }
-
-    // 备：steampowered
-    if let Some(steam_web_key) = config.steam_web_key.as_deref() {
-        let url = format!(
-            "https://api.steampowered.com/IPlayerService/GetSteamLevel/v1/?key={steam_web_key}&steamid={steam_id64}"
-        );
-        match http_client::http_client().get(&url).send().await {
-            Ok(response) if response.status().is_success() => {
-                match response.json::<SteamLevelEnvelope>().await {
-                    Ok(body) => {
-                        return body.response.player_level;
-                    }
-                    Err(error) => {
-                        warn!(steam_id64, error = %error, "steampowered 等级解析失败");
-                    }
-                }
-            }
-            Ok(response) => {
-                warn!(steam_id64, status = %response.status(), "steampowered 等级请求失败");
-            }
-            Err(error) => {
-                warn!(steam_id64, error = %error, "steampowered 等级请求异常");
-            }
-        }
-    }
-
-    None
 }

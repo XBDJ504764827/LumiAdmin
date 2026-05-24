@@ -45,8 +45,8 @@ pub async fn rate_limit_middleware(
 fn extract_user_key(headers: &HeaderMap) -> String {
     if let Some(auth) = headers.get("authorization") {
         if let Ok(auth_str) = auth.to_str() {
-            if auth_str.starts_with("Bearer ") {
-                return auth_str[7..].to_string();
+            if let Some(token) = auth_str.strip_prefix("Bearer ") {
+                return token.to_string();
             }
             return auth_str.to_string();
         }

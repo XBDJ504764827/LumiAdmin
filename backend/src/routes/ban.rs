@@ -7,7 +7,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::routes::{AppCtx, ListQuery, current_operator, forbidden, invalid_request};
-use crate::services::{ban_service, log_service, plugin_ban_service, permission_service};
+use crate::services::{ban_service, log_service, notification_service, plugin_ban_service, permission_service};
 use crate::services::rate_limit_service::extract_client_ip;
 
 #[derive(Deserialize)]
@@ -102,6 +102,17 @@ pub(crate) async fn create_ban(
     let client_ip = extract_client_ip(&headers);
     let log_ip = item.ip_address.as_deref().unwrap_or(&client_ip);
     if let Err(e) = log_service::create_log(&ctx.db, &operator_name, "封禁管理", "添加封禁", log_target, log_ip).await { tracing::warn!(%e, "日志写入失败"); }
+    if let Err(e) = notification_service::notify_ban_create(
+        &ctx.db,
+        &ctx.notification_hub,
+        &actor.id,
+        &operator_name,
+        item.player.as_deref(),
+        &item.steam_id,
+        &item.reason,
+    ).await {
+        tracing::warn!(%e, "ban create notification failed");
+    }
     Ok((StatusCode::CREATED, Json(serde_json::json!({ "item": item }))))
 }
 
@@ -190,6 +201,17 @@ pub(crate) async fn create_plugin_ban(
     )
     .await
     .map_err(invalid_request)?;
+
+    if let Err(e) = notification_service::notify_plugin_ban(
+        &ctx.db,
+        &ctx.notification_hub,
+        item.server_name.as_deref().unwrap_or("未知服务器"),
+        item.player.as_deref(),
+        &item.steam_id,
+        &item.reason,
+    ).await {
+        tracing::warn!(%e, "plugin ban notification failed");
+    }
 
     let kick_message = if item.duration_minutes == 0 {
         format!("你已被永久封禁，原因：{}", item.reason)

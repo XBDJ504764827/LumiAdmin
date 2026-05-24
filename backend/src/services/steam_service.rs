@@ -77,6 +77,7 @@ impl SteamResolver {
         }
     }
 
+    #[cfg(test)]
     pub fn for_tests() -> Self {
         Self {
             steam_api_key: None,

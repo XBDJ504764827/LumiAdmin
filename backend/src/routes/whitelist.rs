@@ -63,7 +63,7 @@ pub(crate) async fn create_whitelist(
             steam_input: body.steam_input,
         },
         &operator_name,
-        &resolver,
+        resolver,
     )
     .await
     .map_err(invalid_request)?;
@@ -154,7 +154,7 @@ pub(crate) async fn refresh_single_steam_name(
         return Err(forbidden());
     }
     let resolver = &ctx.steam_resolver;
-    let steam_name = whitelist_service::update_steam_persona_name(&ctx.db, id, &resolver)
+    let steam_name = whitelist_service::update_steam_persona_name(&ctx.db, id, resolver)
         .await
         .map_err(invalid_request)?;
     Ok(Json(serde_json::json!({ "steam_persona_name": steam_name })))
@@ -171,7 +171,7 @@ pub(crate) async fn refresh_all_steam_names(
         return Err(forbidden());
     }
     let resolver = &ctx.steam_resolver;
-    let updated_count = whitelist_service::refresh_all_steam_persona_names(&ctx.db, &resolver, body.status.as_deref())
+    let updated_count = whitelist_service::refresh_all_steam_persona_names(&ctx.db, resolver, body.status.as_deref())
         .await
         .map_err(invalid_request)?;
     let operator_name = actor.display_name.clone();

@@ -75,14 +75,14 @@ pub async fn write_audit_log(db: &Database, input: AuditLogInput) -> anyhow::Res
     .bind(&input.target_type)
     .bind(&input.player_name)
     .bind(&input.reason)
-    .bind(&input.duration_minutes)
+    .bind(input.duration_minutes)
     .bind(&input.operator_name)
     .bind(&input.operator_steamid)
     .bind(&input.source)
-    .bind(&input.server_id)
+    .bind(input.server_id)
     .bind(&input.server_name)
-    .bind(&input.server_port)
-    .bind(&input.success)
+    .bind(input.server_port)
+    .bind(input.success)
     .bind(&input.message)
     .bind(&input.idempotency_key)
     .fetch_one(&db.pool)
@@ -190,15 +190,4 @@ pub async fn list_audit_logs(
     let items = data_query.fetch_all(&db.pool).await?;
 
     Ok((items, total))
-}
-
-/// 检查幂等键是否已存在
-pub async fn check_idempotency_key_exists(db: &Database, key: &str) -> anyhow::Result<bool> {
-    let count: (i64,) = sqlx::query_as(
-        r#"SELECT COUNT(*) FROM audit_logs WHERE idempotency_key = $1"#,
-    )
-    .bind(key)
-    .fetch_one(&db.pool)
-    .await?;
-    Ok(count.0 > 0)
 }

@@ -6,8 +6,9 @@ use axum::{
 use std::collections::HashMap;
 use std::time::Duration;
 use futures::stream::StreamExt;
+use uuid::Uuid;
 use crate::routes::{AppCtx, ListQuery, invalid_request};
-use crate::services::{whitelist_service, public_service, log_service, rate_limit_service::extract_client_ip};
+use crate::services::{whitelist_service, public_service, log_service, notification_service, ban_service, ban_appeal_service, rate_limit_service::extract_client_ip};
 
 #[derive(serde::Deserialize)]
 #[allow(dead_code)]
@@ -36,6 +37,19 @@ pub(crate) struct GlobalBansBatchBody {
     steamids: Vec<String>,
 }
 
+#[derive(serde::Deserialize)]
+pub(crate) struct QueryBansBody {
+    steam_input: String,
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct SubmitAppealBody {
+    pub ban_id: Uuid,
+    pub steam_id: String,
+    pub player_name: String,
+    pub appeal_reason: String,
+}
+
 pub(crate) async fn public_whitelist(State(ctx): State<AppCtx>, Query(query): Query<ListQuery>) -> Result<Json<serde_json::Value>, StatusCode> {
     let result = public_service::list_public_whitelist(&ctx.db, &query)
         .await
@@ -55,11 +69,16 @@ pub(crate) async fn submit_whitelist(
             nickname: body.nickname,
             steam_input: body.steam_input,
         },
-        &resolver,
+        resolver,
     )
     .await
     .map_err(invalid_request)?;
     let _ = log_service::create_log(&ctx.db, "guest", "公共展示页", "提交白名单申请", &item.nickname, &extract_client_ip(&headers)).await;
+    if let Err(e) = notification_service::notify_whitelist_apply(
+        &ctx.db, &ctx.notification_hub, &item.nickname, &item.steamid64,
+    ).await {
+        tracing::warn!(%e, "whitelist apply notification failed");
+    }
     Ok((StatusCode::CREATED, Json(serde_json::json!({"item": item}))))
 }
 
@@ -106,6 +125,25 @@ pub(crate) async fn resolve_steam(
         profile_url: parsed.profile_url,
         persona_name,
     }))
+}
+
+/// 按 Steam 标识符查询该玩家的活跃封禁记录（供公开申诉页使用）
+pub(crate) async fn query_active_bans(
+    State(ctx): State<AppCtx>,
+    Json(body): Json<QueryBansBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let resolver = &ctx.steam_resolver;
+    let parsed = resolver.resolve(&body.steam_input).await
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": e.to_string()}))))?;
+
+    let bans = ban_service::find_active_bans_by_steamid(&ctx.db, &parsed.steamid64)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "查询失败"}))))?;
+
+    Ok(Json(serde_json::json!({
+        "steamid64": parsed.steamid64,
+        "bans": bans,
+    })))
 }
 
 /// 查询全球封禁记录（代理 API，解决 CORS 问题，带缓存）
@@ -226,6 +264,42 @@ pub(crate) async fn get_global_bans_batch(
     Ok(Json(serde_json::json!({ "results": results })))
 }
 
+/// 公开页提交封禁申诉
+pub(crate) async fn submit_ban_appeal(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Json(body): Json<SubmitAppealBody>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+    let item = ban_appeal_service::create_appeal(
+        &ctx.db,
+        ban_appeal_service::CreateAppealInput {
+            ban_id: body.ban_id,
+            steam_id: body.steam_id,
+            player_name: body.player_name,
+            appeal_reason: body.appeal_reason,
+        },
+    )
+    .await
+    .map_err(invalid_request)?;
+
+    let log_target = format!("{} ({})", item.player_name, item.steam_id);
+    let _ = log_service::create_log(&ctx.db, "guest", "公共展示页", "提交封禁申诉", &log_target, &extract_client_ip(&headers)).await;
+
+    if let Err(e) = notification_service::notify_all_admins(
+        &ctx.db,
+        &ctx.notification_hub,
+        None,
+        "ban_appeal",
+        "新封禁申诉",
+        &format!("玩家 {} 提交了封禁申诉，请尽快审核。", item.player_name),
+        Some("/ban-appeal"),
+    ).await {
+        tracing::warn!(%e, "ban appeal notification failed");
+    }
+
+    Ok((StatusCode::CREATED, Json(serde_json::json!({ "item": item }))))
+}
+
 /// 从第三方 API 获取封禁记录
 async fn fetch_global_bans_from_api(
     steamid64: &str,
@@ -247,23 +321,19 @@ async fn fetch_global_bans_from_api(
     );
 
     // 先尝试主 API
-    if let Ok(response) = tokio::time::timeout(timeout, http_client::http_client().get(&primary_url).send()).await {
-        if let Ok(response) = response {
-            if response.status().is_success() {
-                if let Ok(Ok(data)) = tokio::time::timeout(timeout, response.json::<serde_json::Value>()).await {
-                    return Ok(data);
-                }
+    if let Ok(Ok(response)) = tokio::time::timeout(timeout, http_client::http_client().get(&primary_url).send()).await {
+        if response.status().is_success() {
+            if let Ok(Ok(data)) = tokio::time::timeout(timeout, response.json::<serde_json::Value>()).await {
+                return Ok(data);
             }
         }
     }
 
     // 主 API 失败，尝试备用 API
-    if let Ok(response) = tokio::time::timeout(timeout, http_client::http_client().get(&fallback_url).send()).await {
-        if let Ok(response) = response {
-            if response.status().is_success() {
-                if let Ok(Ok(data)) = tokio::time::timeout(timeout, response.json::<serde_json::Value>()).await {
-                    return Ok(data);
-                }
+    if let Ok(Ok(response)) = tokio::time::timeout(timeout, http_client::http_client().get(&fallback_url).send()).await {
+        if response.status().is_success() {
+            if let Ok(Ok(data)) = tokio::time::timeout(timeout, response.json::<serde_json::Value>()).await {
+                return Ok(data);
             }
         }
     }

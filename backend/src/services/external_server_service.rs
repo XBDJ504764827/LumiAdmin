@@ -18,6 +18,7 @@ pub struct ExternalServer {
     pub created_at: DateTime<Utc>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct ExternalServerWithStatus {
     pub id: Uuid,

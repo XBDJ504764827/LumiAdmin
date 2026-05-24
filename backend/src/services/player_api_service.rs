@@ -115,6 +115,9 @@ pub struct WebhookPlayerPayload {
     pub reported_at: DateTime<Utc>,
 }
 
+type ExistingWebhookRow = (Uuid, String, Option<String>, Option<String>, Option<DateTime<Utc>>);
+type ExistingWebhookState = (Uuid, Option<String>, Option<String>, Option<DateTime<Utc>>);
+
 #[derive(sqlx::FromRow)]
 struct PlayerApiConfigRow {
     max_api_count: i32,
@@ -185,7 +188,7 @@ pub async fn save_config(db: &Database, input: PlayerApiConfigInput) -> anyhow::
     .await?;
 
     // 获取现有配置，用于保留状态信息
-    let existing_rows: Vec<(Uuid, String, Option<String>, Option<String>, Option<DateTime<Utc>>)> = sqlx::query_as(
+    let existing_rows: Vec<ExistingWebhookRow> = sqlx::query_as(
         r#"SELECT id, public_path, last_status, last_error, last_dispatched_at
            FROM player_api_webhooks"#,
     )
@@ -193,7 +196,7 @@ pub async fn save_config(db: &Database, input: PlayerApiConfigInput) -> anyhow::
     .await?;
 
     // 建立 public_path -> (id, last_status, last_error, last_dispatched_at) 的映射
-    let existing_map: std::collections::HashMap<String, (Uuid, Option<String>, Option<String>, Option<DateTime<Utc>>)> = existing_rows
+    let existing_map: std::collections::HashMap<String, ExistingWebhookState> = existing_rows
         .into_iter()
         .map(|(id, public_path, last_status, last_error, last_dispatched_at)| {
             (public_path, (id, last_status, last_error, last_dispatched_at))

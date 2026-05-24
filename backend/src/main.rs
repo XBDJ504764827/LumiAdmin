@@ -35,25 +35,27 @@ async fn main() -> anyhow::Result<()> {
     let access_snapshot =
         services::access_snapshot_service::SnapshotStore::new("runtime/access_snapshot.json");
     services::access_snapshot_service::start_refresh_loop(db.clone(), access_snapshot.clone());
-    // 启动封禁过期检查循环，每 60 秒检查一次
-    services::ban_expiry_service::start_expiry_loop(db.clone(), 60);
-    // 启动Steam名称定时刷新循环，每 6 小时刷新一次
-    services::steam_name_refresh_service::start_steam_name_refresh_loop(db.clone(), config.clone(), 6 * 3600);
-    // 启动过期 session 定时清理，每 10 分钟清理一次
-    services::auth_service::start_session_cleanup_loop(db.clone(), 600);
-    // 启动外部服务器轮询，每 5 秒扫描一次，各服务器按自身 poll_interval 独立轮询
-    services::rcon_poll_service::start_rcon_poll_loop(db.clone(), 5);
+    // 启动封禁过期检查循环
+    services::ban_expiry_service::start_expiry_loop(db.clone(), config.ban_expiry_check_interval_secs);
+    // 启动Steam名称定时刷新循环
+    services::steam_name_refresh_service::start_steam_name_refresh_loop(db.clone(), config.clone(), config.steam_name_refresh_interval_secs);
+    // 启动过期 session 定时清理
+    services::auth_service::start_session_cleanup_loop(db.clone(), config.session_cleanup_interval_secs);
+    // 启动外部服务器轮询，各服务器按自身 poll_interval 独立轮询
+    services::rcon_poll_service::start_rcon_poll_loop(db.clone(), config.rcon_poll_scan_interval_secs);
     // 启动过期服务器状态清理，每 30 秒执行一次
     services::community_service::start_stale_cleanup_loop(db.clone());
+    // 启动通知清理，每 24 小时清理 30 天前的已读通知
+    services::notification_service::start_cleanup_loop(db.clone(), 86400);
 
     // 启动地图等级同步（如果配置了 MySQL），启动时同步一次，之后每 6 小时同步一次
     if let Some(ref mysql_url) = config.mysql_database_url {
         let sync = services::map_tier_service::MapTierSync::new(mysql_url.clone());
-        sync.start_sync_loop(db.clone(), 6 * 3600);
+        sync.start_sync_loop(db.clone(), config.map_tier_sync_interval_secs);
     }
-    // 启动服务器配置缓存，每 5 分钟刷新一次
-    let server_config_cache = Arc::new(services::server_config_cache::ServerConfigCache::new(300));
-    services::server_config_cache::start_refresh_loop(db.clone(), server_config_cache.clone(), 300);
+    // 启动服务器配置缓存
+    let server_config_cache = Arc::new(services::server_config_cache::ServerConfigCache::new(config.server_config_cache_ttl_secs));
+    services::server_config_cache::start_refresh_loop(db.clone(), server_config_cache.clone(), config.server_config_cache_refresh_interval_secs);
 
     // 启动限流器
     let rate_limiters = Arc::new(RateLimiters::new());

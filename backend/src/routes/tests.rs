@@ -1,8 +1,17 @@
 use crate::routes::router;
-    use crate::{config::Config, db::Database, services::access_snapshot_service::SnapshotStore};
-    use axum::{body::{to_bytes, Body}, http::{Request, StatusCode}};
+    use crate::{
+        config::Config,
+        db::Database,
+        services::{
+            access_snapshot_service::SnapshotStore,
+            server_config_cache::ServerConfigCache,
+            steam_service::SteamResolver,
+        },
+    };
+    use axum::{body::{to_bytes, Body}, http::{Request, StatusCode}, Router};
     use serde_json::json;
     use sqlx::postgres::PgPoolOptions;
+    use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tower::ServiceExt;
@@ -10,6 +19,16 @@ use crate::routes::router;
 
     fn test_snapshot_store() -> SnapshotStore {
         SnapshotStore::new(std::env::temp_dir().join(format!("manger-test-snapshot-{}.json", Uuid::new_v4())))
+    }
+
+    fn test_app(config: Config, db: Database) -> Router {
+        router(
+            config.clone(),
+            db,
+            test_snapshot_store(),
+            Arc::new(ServerConfigCache::new(300)),
+            SteamResolver::new(&config),
+        )
     }
 
     fn schema_url(base_url: &str, schema: &str) -> String {
@@ -37,7 +56,7 @@ use crate::routes::router;
         create_schema(&base_url, &schema).await;
 
         let result = async {
-            let db = Database::connect(&scoped_url).await?;
+            let db = Database::connect_for_test(&scoped_url).await?;
             db.migrate().await?;
             db.seed(&config).await?;
             test(db, config).await
@@ -85,7 +104,7 @@ use crate::routes::router;
         ensure_test_user_exists(db, user_id).await?;
 
         let user = sqlx::query_as::<_, crate::models::User>(
-            r#"SELECT id, username, display_name, password_hash, role, steam_id, remark, created_at FROM users WHERE id = $1::uuid"#,
+            r#"SELECT id, username, display_name, password_hash, role, steam_id, remark, enabled, created_at FROM users WHERE id = $1::uuid"#,
         )
         .bind(user_id)
         .fetch_one(&db.pool)
@@ -283,7 +302,7 @@ use crate::routes::router;
             .await?;
 
             let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
             let response = app
                 .oneshot(
                     Request::builder()
@@ -317,7 +336,7 @@ use crate::routes::router;
                 .await?;
             let (rcon_port, rcon_server) = spawn_fake_rcon_server().await;
             let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
-            let app = router(config, db.clone(), test_snapshot_store());
+            let app = test_app(config, db.clone());
 
             let response = app
                 .oneshot(
@@ -372,7 +391,7 @@ use crate::routes::router;
                 .await?;
 
             let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
 
             let request = Request::builder()
                 .method("GET")
@@ -397,7 +416,7 @@ use crate::routes::router;
         with_test_app(async |db, config| {
             let (group_id, _) = insert_community_with_server(&db, "普通管理员不可删除").await;
             let token = create_session_for_user(&db, "33333333-3333-3333-3333-333333333333").await?;
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
 
             let request = Request::builder()
                 .method("DELETE")
@@ -417,7 +436,7 @@ use crate::routes::router;
         with_test_app(async |db, config| {
             let (group_id, server_id) = insert_community_with_server(&db, "系统管理员可删除").await;
             let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
-            let app = router(config, db.clone(), test_snapshot_store());
+            let app = test_app(config, db.clone());
 
             let request = Request::builder()
                 .method("DELETE")
@@ -449,7 +468,7 @@ use crate::routes::router;
         with_test_app(async |db, config| {
             let (_, server_id) = insert_community_with_server(&db, "Token 管理").await;
             let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
-            let app = router(config, db.clone(), test_snapshot_store());
+            let app = test_app(config, db.clone());
 
             let request = Request::builder()
                 .method("GET")
@@ -483,7 +502,7 @@ use crate::routes::router;
         with_test_app(async |db, config| {
             let (_, server_id) = insert_community_with_server(&db, "Token 权限").await;
             let token = create_session_for_user(&db, "33333333-3333-3333-3333-333333333333").await?;
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
 
             let request = Request::builder()
                 .method("GET")
@@ -528,7 +547,7 @@ use crate::routes::router;
             .execute(&db.pool)
             .await?;
 
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
             let response = app
                 .oneshot(
                     Request::builder()
@@ -545,7 +564,7 @@ use crate::routes::router;
             let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
             let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(payload["result"]["allowed"], false);
-            assert_eq!(payload["result"]["message"], "你已被封禁，无法进入服务器。");
+            assert_eq!(payload["result"]["message"], "你已被永久封禁，原因：作弊");
             Ok(())
         }).await;
     }
@@ -568,7 +587,7 @@ use crate::routes::router;
             .execute(&db.pool)
             .await?;
 
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
             let response = app
                 .oneshot(
                     Request::builder()
@@ -599,15 +618,15 @@ use crate::routes::router;
                 .execute(&db.pool)
                 .await?;
             sqlx::query(
-                r#"INSERT INTO servers (id, community_id, name, ip, port, rcon_password, report_token, status, players, whitelist_mode_enabled)
-                   VALUES ($1, $2, '白名单服', '127.0.0.1', 27015, 'secret', 'access-token-whitelist', 'online', $3, true)"#,
+                r#"INSERT INTO servers (id, community_id, name, ip, port, rcon_password, report_token, status, players, whitelist_mode_enabled, use_custom_access)
+                   VALUES ($1, $2, '白名单服', '127.0.0.1', 27015, 'secret', 'access-token-whitelist', 'online', $3, true, true)"#,
             )
             .bind(Uuid::new_v4())
             .bind(community_id)
             .bind(Vec::<String>::new())
             .execute(&db.pool)
             .await?;
-            let app = router(config, db.clone(), test_snapshot_store());
+            let app = test_app(config, db.clone());
 
             let rejected = app
                 .clone()
@@ -659,9 +678,9 @@ use crate::routes::router;
             sqlx::query(
                 r#"INSERT INTO servers (
                     id, community_id, name, ip, port, rcon_password, report_token, status, players,
-                    access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled
+                    access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled, use_custom_access
                    )
-                   VALUES ($1, $2, '限制服', '127.0.0.1', 27015, 'secret', 'access-token-restrict', 'online', $3, true, 2000, 20, false)"#,
+                   VALUES ($1, $2, '限制服', '127.0.0.1', 27015, 'secret', 'access-token-restrict', 'online', $3, true, 2000, 20, false, true)"#,
             )
             .bind(Uuid::new_v4())
             .bind(community_id)
@@ -676,7 +695,7 @@ use crate::routes::router;
             .execute(&db.pool)
             .await?;
 
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
             let response = app
                 .oneshot(
                     Request::builder()
@@ -729,9 +748,9 @@ use crate::routes::router;
             sqlx::query(
                 r#"INSERT INTO servers (
                     id, community_id, name, ip, port, rcon_password, report_token, status, players,
-                    access_restriction_enabled, min_rating, min_steam_level
+                    access_restriction_enabled, min_rating, min_steam_level, use_custom_access
                    )
-                   VALUES ($1, $2, '查询失败拒绝服', '127.0.0.1', 27015, 'secret', 'access-token-fail-closed', 'online', $3, true, 9999, 99)"#,
+                   VALUES ($1, $2, '查询失败拒绝服', '127.0.0.1', 27015, 'secret', 'access-token-fail-closed', 'online', $3, true, 9999, 99, true)"#,
             )
             .bind(Uuid::new_v4())
             .bind(community_id)
@@ -739,7 +758,7 @@ use crate::routes::router;
             .execute(&db.pool)
             .await?;
 
-            let app = router(config, db.clone(), test_snapshot_store());
+            let app = test_app(config, db.clone());
             let response = app
                 .oneshot(
                     Request::builder()
@@ -756,7 +775,7 @@ use crate::routes::router;
             let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
             let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(payload["result"]["allowed"], false);
-            assert_eq!(payload["result"]["message"], "访问控制服务暂时不可用，请稍后再试。");
+            assert_eq!(payload["result"]["message"], "无法验证您的进入资格，请稍后再试。");
 
             let cache_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM player_access_cache WHERE steamid64 = $1")
                 .bind("76561198000000005")
@@ -780,7 +799,7 @@ use crate::routes::router;
             .execute(&db.pool)
             .await?;
 
-            let app = router(config.clone(), db.clone(), test_snapshot_store());
+            let app = test_app(config.clone(), db.clone());
             let players_request = Request::builder()
                 .method("GET")
                 .uri("/api/player-api/players")
@@ -796,7 +815,7 @@ use crate::routes::router;
             assert_eq!(payload["items"][0]["server_name"], "一号服");
             assert_eq!(payload["items"][0]["server_port"], 25575);
 
-            let app = router(config.clone(), db.clone(), test_snapshot_store());
+            let app = test_app(config.clone(), db.clone());
             let config_request = Request::builder()
                 .method("PUT")
                 .uri("/api/player-api/config")
@@ -819,7 +838,7 @@ use crate::routes::router;
             assert_eq!(payload["config"]["items"][0]["public_path"], "my-hook");
             assert_eq!(payload["config"]["items"][0]["webhook_url"], "https://api.example.com/a");
 
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
             let over_limit_request = Request::builder()
                 .method("PUT")
                 .uri("/api/player-api/config")
@@ -860,9 +879,12 @@ use crate::routes::router;
                     interval_seconds: 30,
                     items: vec![crate::services::player_api_service::PlayerApiWebhookInput {
                         public_path: "test-webhook".to_string(),
-                        webhook_url: url,
+                        webhook_url: Some(url),
                         secret: Some("dispatch-secret".to_string()),
                         server_ids: vec![server_id],
+                        external_server_ids: vec![],
+                        enabled: true,
+                        public_access: true,
                     }],
                 },
             )
@@ -898,9 +920,12 @@ use crate::routes::router;
                     interval_seconds: 30,
                     items: vec![crate::services::player_api_service::PlayerApiWebhookInput {
                         public_path: "test-webhook".to_string(),
-                        webhook_url: url,
+                        webhook_url: Some(url),
                         secret: None,
                         server_ids: vec![server_id],
+                        external_server_ids: vec![],
+                        enabled: true,
+                        public_access: true,
                     }],
                 },
             )
@@ -926,7 +951,7 @@ use crate::routes::router;
     async fn normal_admin_cannot_manage_player_api_config() {
         with_test_app(async |db, config| {
             let token = create_session_for_user(&db, "33333333-3333-3333-3333-333333333333").await?;
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
             let request = Request::builder()
                 .method("PUT")
                 .uri("/api/player-api/config")
@@ -945,7 +970,7 @@ use crate::routes::router;
     async fn plugin_report_updates_online_players_when_token_and_port_match() {
         with_test_app(async |db, config| {
             let (_, server_id) = insert_community_with_server(&db, "插件上报").await;
-            let app = router(config, db.clone(), test_snapshot_store());
+            let app = test_app(config, db.clone());
 
             let request = Request::builder()
                 .method("POST")
@@ -998,7 +1023,7 @@ use crate::routes::router;
     async fn plugin_report_accepts_legacy_payload_with_steam2_id() {
         with_test_app(async |db, config| {
             let (_, server_id) = insert_community_with_server(&db, "旧插件上报").await;
-            let app = router(config, db.clone(), test_snapshot_store());
+            let app = test_app(config, db.clone());
 
             let request = Request::builder()
                 .method("POST")
@@ -1052,7 +1077,7 @@ use crate::routes::router;
     async fn plugin_report_rejects_matching_token_with_wrong_port() {
         with_test_app(async |db, config| {
             let _ = insert_community_with_server(&db, "插件上报拒绝").await;
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
 
             let request = Request::builder()
                 .method("POST")
@@ -1074,7 +1099,7 @@ use crate::routes::router;
     #[tokio::test]
     async fn submit_whitelist_returns_json_body() {
         with_test_app(async |db, config| {
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
             let request = Request::builder()
                 .method("POST")
                 .uri("/api/public/whitelist")
@@ -1098,7 +1123,7 @@ use crate::routes::router;
     async fn admin_can_list_api_endpoint_docs() {
         with_test_app(async |db, config| {
             let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
             let request = Request::builder()
                 .method("GET")
                 .uri("/api/docs/endpoints")
@@ -1121,7 +1146,7 @@ use crate::routes::router;
     async fn normal_admin_cannot_list_api_endpoint_docs() {
         with_test_app(async |db, config| {
             let token = create_session_for_user(&db, "33333333-3333-3333-3333-333333333333").await?;
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
             let request = Request::builder()
                 .method("GET")
                 .uri("/api/docs/endpoints")
@@ -1140,7 +1165,7 @@ use crate::routes::router;
         with_test_app(async |db, config| {
             let id = insert_whitelist(&db, "pending").await;
             let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
             let request = Request::builder()
                 .method("POST")
                 .uri(format!("/api/whitelist/{id}/approve"))
@@ -1163,7 +1188,7 @@ use crate::routes::router;
         with_test_app(async |db, config| {
             let id = insert_whitelist(&db, "rejected").await;
             let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
             let request = Request::builder()
                 .method("POST")
                 .uri(format!("/api/whitelist/{id}/restore"))
@@ -1185,7 +1210,7 @@ use crate::routes::router;
     async fn admin_can_create_manual_ip_ban_with_missing_player_and_ip() {
         with_test_app(async |db, config| {
             let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
-            let app = router(config, db.clone(), test_snapshot_store());
+            let app = test_app(config, db.clone());
             let request = Request::builder()
                 .method("POST")
                 .uri("/api/bans")
@@ -1253,7 +1278,7 @@ use crate::routes::router;
             .execute(&db.pool)
             .await?;
 
-            let app = router(config, db.clone(), test_snapshot_store());
+            let app = test_app(config, db.clone());
             let request = Request::builder()
                 .method("POST")
                 .uri("/api/plugin/bans/check")
@@ -1291,7 +1316,7 @@ use crate::routes::router;
     async fn plugin_can_create_timed_ban() {
         with_test_app(async |db, config| {
             let (_, _) = insert_community_with_server(&db, "插件封禁服").await;
-            let app = router(config, db.clone(), test_snapshot_store());
+            let app = test_app(config, db.clone());
             let request = Request::builder()
                 .method("POST")
                 .uri("/api/plugin/bans")
@@ -1325,7 +1350,7 @@ use crate::routes::router;
     async fn plugin_ban_rejects_invalid_token() {
         with_test_app(async |db, config| {
             let (_, _) = insert_community_with_server(&db, "插件封禁服").await;
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
             let request = Request::builder()
                 .method("POST")
                 .uri("/api/plugin/bans")
@@ -1353,7 +1378,7 @@ use crate::routes::router;
     async fn plugin_can_check_and_unban_target() {
         with_test_app(async |db, config| {
             let (_, _) = insert_community_with_server(&db, "插件封禁服").await;
-            let app = router(config.clone(), db.clone(), test_snapshot_store());
+            let app = test_app(config.clone(), db.clone());
             let create_request = Request::builder()
                 .method("POST")
                 .uri("/api/plugin/bans")
@@ -1373,7 +1398,7 @@ use crate::routes::router;
             let create_response = app.oneshot(create_request).await.unwrap();
             assert_eq!(create_response.status(), StatusCode::CREATED);
 
-            let app = router(config.clone(), db.clone(), test_snapshot_store());
+            let app = test_app(config.clone(), db.clone());
             let check_request = Request::builder()
                 .method("POST")
                 .uri("/api/plugin/bans/check")
@@ -1391,7 +1416,7 @@ use crate::routes::router;
             let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
             assert_eq!(payload["banned"], true);
 
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
             let unban_request = Request::builder()
                 .method("POST")
                 .uri("/api/plugin/bans/unban")
@@ -1431,7 +1456,7 @@ use crate::routes::router;
             .execute(&db.pool)
             .await?;
 
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
             let request = Request::builder()
                 .method("POST")
                 .uri("/api/plugin/bans/poll")
@@ -1458,7 +1483,7 @@ use crate::routes::router;
     async fn create_manual_ban_rejects_missing_reason() {
         with_test_app(async |db, config| {
             let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
             let request = Request::builder()
                 .method("POST")
                 .uri("/api/bans")
@@ -1500,7 +1525,7 @@ use crate::routes::router;
             .execute(&db.pool)
             .await?;
 
-            let app = router(config.clone(), db.clone(), test_snapshot_store());
+            let app = test_app(config.clone(), db.clone());
             let update_request = Request::builder()
                 .method("PUT")
                 .uri(format!("/api/bans/{ban_id}"))
@@ -1523,7 +1548,7 @@ use crate::routes::router;
             assert_eq!(payload["item"]["ip_address"], "192.168.1.6");
             assert_eq!(payload["item"]["reason"], "新原因");
 
-            let app = router(config, db.clone(), test_snapshot_store());
+            let app = test_app(config, db.clone());
             let delete_request = Request::builder()
                 .method("DELETE")
                 .uri(format!("/api/bans/{ban_id}"))
@@ -1546,7 +1571,7 @@ use crate::routes::router;
     async fn create_manual_ban_normalizes_steamid2_to_steamid64() {
         with_test_app(async |db, config| {
             let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
-            let app = router(config, db.clone(), test_snapshot_store());
+            let app = test_app(config, db.clone());
             let request = Request::builder()
                 .method("POST")
                 .uri("/api/bans")
@@ -1574,7 +1599,7 @@ use crate::routes::router;
     async fn create_manual_ban_rejects_missing_steamid64() {
         with_test_app(async |db, config| {
             let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
             let request = Request::builder()
                 .method("POST")
                 .uri("/api/bans")
@@ -1602,7 +1627,7 @@ use crate::routes::router;
     async fn create_manual_ban_rejects_invalid_ban_type() {
         with_test_app(async |db, config| {
             let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
             let request = Request::builder()
                 .method("POST")
                 .uri("/api/bans")
@@ -1629,7 +1654,7 @@ use crate::routes::router;
     #[tokio::test]
     async fn normal_admin_only_sees_self_in_users_list() {
         with_test_app(async |db, config| {
-            let app = router(config, db.clone(), test_snapshot_store());
+            let app = test_app(config, db.clone());
             let token = create_session_for_user(&db, "33333333-3333-3333-3333-333333333333").await?;
 
             let request = Request::builder()
@@ -1652,7 +1677,7 @@ use crate::routes::router;
     #[tokio::test]
     async fn admin_cannot_update_developer_user() {
         with_test_app(async |db, config| {
-            let app = router(config, db.clone(), test_snapshot_store());
+            let app = test_app(config, db.clone());
             let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
 
             let request = Request::builder()
@@ -1680,7 +1705,7 @@ use crate::routes::router;
             let pending_id = insert_whitelist(&db, "pending").await;
             let approved_id = insert_whitelist(&db, "approved").await;
             let token = create_session_for_user(&db, "33333333-3333-3333-3333-333333333333").await?;
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
 
             let approve_request = Request::builder()
                 .method("POST")
@@ -1709,7 +1734,7 @@ use crate::routes::router;
     async fn admin_can_create_user_without_steam_id() {
         with_test_app(async |db, config| {
             let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
             let request = Request::builder()
                 .method("POST")
                 .uri("/api/users")
@@ -1738,7 +1763,7 @@ use crate::routes::router;
         with_test_app(async |db, config| {
             ensure_test_user_exists(&db, "33333333-3333-3333-3333-333333333333").await?;
             let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
-            let app = router(config, db, test_snapshot_store());
+            let app = test_app(config, db);
             let request = Request::builder()
                 .method("PUT")
                 .uri("/api/users/33333333-3333-3333-3333-333333333333")

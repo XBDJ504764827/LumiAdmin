@@ -20,6 +20,8 @@ test('buildServerPayloadWithAccess trims base fields and converts access values'
     min_rating: '1500',
     min_steam_level: '12',
     whitelist_mode_enabled: true,
+    max_players: '32',
+    use_custom_access: true,
   });
 
   assert.deepEqual(payload, {
@@ -33,6 +35,8 @@ test('buildServerPayloadWithAccess trims base fields and converts access values'
     min_rating: 1500,
     min_steam_level: 12,
     whitelist_mode_enabled: true,
+    max_players: 32,
+    use_custom_access: true,
   });
 });
 
@@ -47,12 +51,14 @@ test('fillAccessConfigFromServer maps missing values to defaults', () => {
     min_rating: '0',
     min_steam_level: '0',
     whitelist_mode_enabled: false,
+    use_custom_access: false,
   });
 });
 
 test('buildAccessSummary describes enabled modes', () => {
-  assert.equal(buildAccessSummary({ access_restriction_enabled: false, whitelist_mode_enabled: false }), '无限制');
-  assert.equal(buildAccessSummary({ access_restriction_enabled: true, min_rating: 1200, min_steam_level: 10, whitelist_mode_enabled: false }), '限制：rating ≥ 1200，Steam 等级 ≥ 10');
-  assert.equal(buildAccessSummary({ access_restriction_enabled: false, whitelist_mode_enabled: true }), '白名单模式');
-  assert.equal(buildAccessSummary({ access_restriction_enabled: true, min_rating: 1200, min_steam_level: 10, whitelist_mode_enabled: true }), '白名单优先；未通过白名单需 rating ≥ 1200，Steam 等级 ≥ 10');
+  assert.equal(buildAccessSummary({ use_custom_access: true, access_restriction_enabled: false, whitelist_mode_enabled: false }), '无限制');
+  assert.equal(buildAccessSummary({ use_custom_access: true, access_restriction_enabled: true, min_rating: 1200, min_steam_level: 10, whitelist_mode_enabled: false }), '限制：rating ≥ 1200，Steam 等级 ≥ 10');
+  assert.equal(buildAccessSummary({ use_custom_access: true, access_restriction_enabled: false, whitelist_mode_enabled: true }), '白名单模式');
+  assert.equal(buildAccessSummary({ use_custom_access: true, access_restriction_enabled: true, min_rating: 1200, min_steam_level: 10, whitelist_mode_enabled: true }), '满足限制即可进；不满足需通过白名单（rating ≥ 1200，Steam 等级 ≥ 10）');
+  assert.equal(buildAccessSummary({ use_custom_access: false }, { min_rating: 1200, min_steam_level: 10 }), '限制：rating ≥ 1200，Steam 等级 ≥ 10（社区）');
 });

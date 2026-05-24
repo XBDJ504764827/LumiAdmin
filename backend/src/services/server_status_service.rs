@@ -23,6 +23,7 @@ pub struct ServerStatusInput {
     pub current_map: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize)]
 pub struct ServerStatusItem {
     pub server_id: Uuid,
@@ -44,6 +45,7 @@ pub struct ServerStatusReportResult {
     pub server_id: Uuid,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize)]
 pub struct ServerPerformanceMetrics {
     pub avg_fps: f32,
@@ -120,6 +122,7 @@ pub async fn report_server_status(
     Ok(ServerStatusReportResult { server_id })
 }
 
+#[allow(dead_code)]
 pub async fn get_latest_status(db: &Database) -> anyhow::Result<Vec<ServerStatusItem>> {
     let rows = sqlx::query_as::<_, ServerStatusRow>(
         r#"
@@ -149,6 +152,7 @@ pub async fn get_latest_status(db: &Database) -> anyhow::Result<Vec<ServerStatus
     Ok(rows.into_iter().map(Into::into).collect())
 }
 
+#[allow(dead_code)]
 pub async fn get_performance_metrics(db: &Database) -> anyhow::Result<ServerPerformanceMetrics> {
     let rows = get_latest_status(db).await?;
 
@@ -180,6 +184,7 @@ pub async fn get_performance_metrics(db: &Database) -> anyhow::Result<ServerPerf
     })
 }
 
+#[allow(dead_code)]
 #[derive(Debug, sqlx::FromRow)]
 struct ServerStatusRow {
     server_id: Uuid,

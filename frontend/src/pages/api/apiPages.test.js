@@ -56,6 +56,9 @@ test('buildWebhookConfigPayload trims publicPath and converts empty secret to nu
     webhook_url: 'https://api.example.com/webhook',
     secret: null,
     server_ids: ['server-1', 'server-2'],
+    external_server_ids: [],
+    enabled: true,
+    public_access: true,
   });
 });
 
@@ -104,6 +107,9 @@ test('normalizePlayerApiConfig maps backend config and max api count', () => {
       webhookUrl: 'https://a.test',
       secret: '',
       serverIds: [],
+      externalServerIds: [],
+      enabled: true,
+      publicAccess: true,
       lastStatus: 'success',
       lastError: null,
       lastDispatchedAt: '2026-04-27T13:00:00Z',
@@ -131,6 +137,9 @@ test('buildPlayerApiConfigPayload builds full replacement backend payload', () =
       webhook_url: 'https://api.example.com/a',
       secret: 'secret',
       server_ids: ['server-1'],
+      external_server_ids: [],
+      enabled: true,
+      public_access: true,
     }],
   });
 });
@@ -145,7 +154,7 @@ test('flattenServerOptions maps community groups to checkbox options', () => {
 });
 
 test('defaultPlayerApiConfig exposes safe defaults', () => {
-  assert.equal(defaultPlayerApiConfig.maxApiCount, 3);
+  assert.equal(defaultPlayerApiConfig.maxApiCount, 5);
   assert.equal(defaultPlayerApiConfig.intervalSeconds, 30);
   assert.deepEqual(defaultPlayerApiConfig.items, []);
 });

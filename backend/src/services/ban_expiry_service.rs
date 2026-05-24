@@ -44,8 +44,9 @@ pub async fn process_expired_bans(db: &Database) -> anyhow::Result<usize> {
 mod tests {
     use super::*;
     use crate::{config::Config, db::Database};
-    use chrono::Duration;
+    use chrono::{Duration, Utc};
     use sqlx::postgres::PgPoolOptions;
+    use uuid::Uuid;
 
     fn schema_url(base_url: &str, schema: &str) -> String {
         let separator = if base_url.contains('?') { '&' } else { '?' };
@@ -77,7 +78,7 @@ mod tests {
         create_schema(&base_url, &schema).await;
 
         let result = async {
-            let db = Database::connect(&scoped_url).await?;
+            let db = Database::connect_for_test(&scoped_url).await?;
             db.migrate().await?;
 
             // 插入一条已过期的封禁记录
@@ -183,7 +184,7 @@ mod tests {
         create_schema(&base_url, &schema).await;
 
         let result = async {
-            let db = Database::connect(&scoped_url).await?;
+            let db = Database::connect_for_test(&scoped_url).await?;
             db.migrate().await?;
 
             let count = process_expired_bans(&db).await?;

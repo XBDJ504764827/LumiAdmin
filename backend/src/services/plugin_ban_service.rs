@@ -83,14 +83,6 @@ pub struct PluginBanPollInput {
     pub port: i32,
 }
 
-#[derive(Debug, Clone)]
-pub struct PluginBanPollIncrementalInput {
-    pub report_token: String,
-    pub port: i32,
-    pub cursor: Option<String>,
-    pub limit: Option<i32>,
-}
-
 #[derive(Serialize)]
 pub struct PluginBanCheckResult {
     pub banned: bool,
@@ -379,7 +371,7 @@ pub async fn poll_active_bans_incremental(
     limit: Option<i32>,
 ) -> anyhow::Result<BanPollIncrementalResult> {
     let server = authenticate_server(db, input.port, &input.report_token).await?;
-    let limit = limit.unwrap_or(100).min(500).max(10);
+    let limit = limit.unwrap_or(100).clamp(10, 500);
 
     // 解析游标（游标是 created_at 的时间戳）
     let since = match cursor {
@@ -387,7 +379,7 @@ pub async fn poll_active_bans_incremental(
             // 游标格式：时间戳字符串
             match c.parse::<i64>() {
                 Ok(ts) => Some(chrono::DateTime::from_timestamp(ts, 0)
-                    .unwrap_or_else(|| chrono::Utc::now())),
+                    .unwrap_or_else(chrono::Utc::now)),
                 Err(_) => None,
             }
         }
@@ -656,8 +648,8 @@ mod tests {
 
     #[test]
     fn normalize_steam_id_converts_steam2() {
-        // STEAM_0:1:12345 -> 76561197960265728 + 12345 * 2 + 1 = 76561197960290401
-        assert_eq!(normalize_steam_id("STEAM_0:1:12345"), "76561197960290401");
+        // STEAM_0:1:12345 -> 76561197960265728 + 12345 * 2 + 1 = 76561197960290419
+        assert_eq!(normalize_steam_id("STEAM_0:1:12345"), "76561197960290419");
         assert_eq!(normalize_steam_id("STEAM_1:0:54321"), "76561197960374370"); // universe bit ignored
     }
 

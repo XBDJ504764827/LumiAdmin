@@ -252,7 +252,7 @@ mod tests {
         create_schema(&base_url, &schema).await;
 
         let result = async {
-            let db = Database::connect(&scoped_url).await?;
+            let db = Database::connect_for_test(&scoped_url).await?;
             db.migrate().await?;
 
             let rule = create_rule(
@@ -292,7 +292,7 @@ mod tests {
         create_schema(&base_url, &schema).await;
 
         let result = async {
-            let db = Database::connect(&scoped_url).await?;
+            let db = Database::connect_for_test(&scoped_url).await?;
             db.migrate().await?;
 
             let server_id = Uuid::new_v4();

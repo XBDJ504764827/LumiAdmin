@@ -58,10 +58,7 @@ pub fn query_server(address: &str, timeout_secs: u64) -> Result<ServerInfo, Stri
     let info = parse_a2s_info(info_data)?;
 
     // A2S_PLAYER
-    let players = match query_players(&socket) {
-        Ok(p) => p,
-        Err(_) => Vec::new(), // 服务器可能禁用玩家查询，不报错
-    };
+    let players = query_players(&socket).unwrap_or_default();
 
     Ok(ServerInfo {
         server_name: info.0,

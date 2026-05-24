@@ -58,6 +58,8 @@ impl CachedServerConfig {
     }
 }
 
+type ServerConfigRow = (Uuid, Uuid, String, i32, String, bool, i32, i32, bool, bool, bool, i32, i32);
+
 /// 服务器配置缓存
 ///
 /// 用于缓存服务器配置，减少数据库查询次数。
@@ -115,6 +117,7 @@ impl ServerConfigCache {
     }
 
     /// 根据 server_id 获取服务器配置
+    #[allow(dead_code)]
     pub async fn get_by_id(
         &self,
         db: &Database,
@@ -164,6 +167,7 @@ impl ServerConfigCache {
     }
 
     /// 使指定服务器的缓存失效
+    #[allow(dead_code)]
     pub async fn invalidate(&self, server_id: Uuid) {
         let mut cache_by_token = self.by_token_port.write().await;
         let mut cache_by_id = self.by_id.write().await;
@@ -174,6 +178,7 @@ impl ServerConfigCache {
     }
 
     /// 使所有缓存失效
+    #[allow(dead_code)]
     pub async fn invalidate_all(&self) {
         let mut cache_by_token = self.by_token_port.write().await;
         let mut cache_by_id = self.by_id.write().await;
@@ -183,6 +188,7 @@ impl ServerConfigCache {
     }
 
     /// 检查缓存是否需要刷新
+    #[allow(dead_code)]
     pub async fn needs_refresh(&self) -> bool {
         let last_refresh = self.last_refresh.read().await;
         last_refresh.elapsed() > self.cache_ttl
@@ -195,7 +201,7 @@ impl ServerConfigCache {
         report_token: &str,
         port: i32,
     ) -> anyhow::Result<Option<CachedServerConfig>> {
-        let row: Option<(Uuid, Uuid, String, i32, String, bool, i32, i32, bool, bool, bool, i32, i32)> = sqlx::query_as(
+        let row: Option<ServerConfigRow> = sqlx::query_as(
             r#"SELECT s.id, s.community_id, s.name, s.port, s.report_token,
                       s.access_restriction_enabled, s.min_rating, s.min_steam_level, s.whitelist_mode_enabled,
                       s.use_custom_access, c.whitelist_mode_enabled, c.min_rating, c.min_steam_level
@@ -228,12 +234,13 @@ impl ServerConfigCache {
     }
 
     /// 根据 ID 加载服务器配置
+    #[allow(dead_code)]
     async fn load_server_config_by_id(
         &self,
         db: &Database,
         server_id: Uuid,
     ) -> anyhow::Result<Option<CachedServerConfig>> {
-        let row: Option<(Uuid, Uuid, String, i32, String, bool, i32, i32, bool, bool, bool, i32, i32)> = sqlx::query_as(
+        let row: Option<ServerConfigRow> = sqlx::query_as(
             r#"SELECT s.id, s.community_id, s.name, s.port, s.report_token,
                       s.access_restriction_enabled, s.min_rating, s.min_steam_level, s.whitelist_mode_enabled,
                       s.use_custom_access, c.whitelist_mode_enabled, c.min_rating, c.min_steam_level
@@ -266,7 +273,7 @@ impl ServerConfigCache {
 
     /// 从数据库加载所有服务器配置
     async fn load_all_server_configs(&self, db: &Database) -> anyhow::Result<Vec<CachedServerConfig>> {
-        let rows: Vec<(Uuid, Uuid, String, i32, String, bool, i32, i32, bool, bool, bool, i32, i32)> = sqlx::query_as(
+        let rows: Vec<ServerConfigRow> = sqlx::query_as(
             r#"SELECT s.id, s.community_id, s.name, s.port, s.report_token,
                       s.access_restriction_enabled, s.min_rating, s.min_steam_level, s.whitelist_mode_enabled,
                       s.use_custom_access, c.whitelist_mode_enabled, c.min_rating, c.min_steam_level
@@ -319,11 +326,10 @@ pub fn start_refresh_loop(db: Database, cache: Arc<ServerConfigCache>, interval_
 mod tests {
     use super::*;
 
-    #[test]
-    fn cache_ttl_check_works() {
+    #[tokio::test]
+    async fn cache_ttl_check_works() {
         let cache = ServerConfigCache::new(60);
 
-        // 刚创建时应该需要刷新
-        assert!(tokio_test::block_on(cache.needs_refresh()));
+        assert!(cache.needs_refresh().await);
     }
 }

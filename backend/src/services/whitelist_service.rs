@@ -1,6 +1,5 @@
 use crate::{
     db::Database,
-    models::PublicWhitelistItem,
     routes::ListQuery,
     services::steam_service::{ParsedSteamIdentity, SteamResolver},
 };
@@ -58,6 +57,7 @@ struct WhitelistRow {
     rejection_reason: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(sqlx::FromRow)]
 struct WhitelistStatusRow {
     id: Uuid,
@@ -365,20 +365,6 @@ pub async fn revoke_whitelist(db: &Database, id: Uuid, operator_name: &str) -> a
     Ok(map_whitelist_row(row))
 }
 
-pub async fn list_public_whitelist(db: &Database) -> anyhow::Result<Vec<PublicWhitelistItem>> {
-    sqlx::query_as::<_, PublicWhitelistItem>(
-        r#"
-        SELECT id, nickname, steamid64, applied_at, approved_at
-        FROM whitelist_requests
-        WHERE status = 'approved'
-        ORDER BY approved_at DESC NULLS LAST, applied_at DESC
-        "#,
-    )
-    .fetch_all(&db.pool)
-    .await
-    .map_err(Into::into)
-}
-
 async fn reopen_revoked_whitelist(
     db: &Database,
     id: Uuid,
@@ -544,15 +530,15 @@ pub async fn refresh_all_steam_persona_names(
     status_filter: Option<&str>,
 ) -> anyhow::Result<usize> {
     let status_condition = match status_filter {
-        Some(_status) => format!("WHERE status = $1"),
+        Some(_) => "WHERE status = $1".to_string(),
         None => String::new(),
     };
 
-    let records: Vec<(Uuid, String)> = if status_filter.is_some() {
+    let records: Vec<(Uuid, String)> = if let Some(status) = status_filter {
         sqlx::query_as(&format!(
             r#"SELECT id, steamid64 FROM whitelist_requests {status_condition}"#
         ))
-        .bind(status_filter.unwrap())
+        .bind(status)
         .fetch_all(&db.pool)
         .await?
     } else {
@@ -672,7 +658,7 @@ mod tests {
         create_schema(&base_url, &schema).await;
 
         let result = async {
-            let db = Database::connect(&scoped_url).await?;
+            let db = Database::connect_for_test(&scoped_url).await?;
             db.migrate().await?;
             test(db).await
         }

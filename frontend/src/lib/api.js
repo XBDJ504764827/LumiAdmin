@@ -109,7 +109,17 @@ export const api = {
   publicBans: (params = {}) => request(`/api/public/bans${buildQueryString(params)}`),
   submitWhitelist: (body) => request('/api/public/whitelist', { method: 'POST', body: JSON.stringify(body) }),
   resolveSteam: (body) => request('/api/public/steam/resolve', { method: 'POST', body: JSON.stringify(body) }),
+  queryActiveBans: (body) => request('/api/public/bans/query', { method: 'POST', body: JSON.stringify(body) }),
+  submitBanAppeal: (body) => request('/api/public/ban-appeals', { method: 'POST', body: JSON.stringify(body) }),
+  banAppeals: (token, params = {}) => request(`/api/ban-appeals${buildQueryString(params)}`, { headers: withAuth(token) }),
+  approveBanAppeal: (token, id, body = {}) => request(`/api/ban-appeals/${id}/approve`, { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
+  rejectBanAppeal: (token, id, body = {}) => request(`/api/ban-appeals/${id}/reject`, { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   auditLogs: (token, params = {}) => request(`/api/audit/logs${buildQueryString(params)}`, { headers: withAuth(token) }),
+  // Notifications
+  notifications: (token, params = {}) => request(`/api/notifications${buildQueryString(params)}`, { headers: withAuth(token) }),
+  notificationUnreadCount: (token) => request('/api/notifications/unread-count', { headers: withAuth(token) }),
+  markNotificationRead: (token, id) => request(`/api/notifications/${id}/read`, { method: 'POST', headers: withAuth(token) }),
+  markAllNotificationsRead: (token) => request('/api/notifications/read-all', { method: 'POST', headers: withAuth(token) }),
 };
 
 export function useAppApi() {

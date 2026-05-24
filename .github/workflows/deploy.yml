@@ -52,10 +52,15 @@ jobs:
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Build Frontend
+      - name: Test Frontend
         run: |
           cd frontend
           npm ci
+          npm test
+
+      - name: Build Frontend
+        run: |
+          cd frontend
           npm run build
 
       - name: Upload Frontend Artifact
@@ -88,6 +93,12 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
+
+      - name: Check Backend
+        run: |
+          cd backend
+          cargo clippy --all-targets
+          cargo test --no-run
 
       - name: Build Backend
         run: |

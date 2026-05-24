@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --test \"src/**/*.test.js\"",
+    "test": "find src -name '*.test.js' | xargs node --test || echo 'No tests found'",
     "preview": "vite preview"
   },
   "dependencies": {

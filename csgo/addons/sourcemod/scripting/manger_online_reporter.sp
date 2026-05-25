@@ -957,8 +957,6 @@ bool SubmitPluginBan(int client, int target, const char[] banType, const char[] 
         char payload[MAX_BAN_PAYLOAD];
         BuildPluginBanPayload(payload, sizeof(payload), token, currentPort, banType, steamId, ipAddress, player, duration, reason, adminName);
         PostJsonPayload(banUrl, payload, OnPluginBanResponse);
-
-        ReplyToCommand(client, "[Manger] 封禁已提交到网站。");
     }
     else
     {
@@ -1104,11 +1102,12 @@ public Action CommandBan(int client, int args)
             GetClientIP(target, ipAddress, sizeof(ipAddress), true);
             GetClientName(target, player, sizeof(player));
             SubmitPluginBan(client, target, "steam", steamId64, ipAddress, player, duration, reason);
+            ReplyToCommand(client, "[Manger] 封禁已生效。");
         }
         else
         {
             SubmitPluginBan(client, 0, "steam", targetArg, "", "", duration, reason);
-            ReplyToCommand(client, "[Manger] 玩家不在线，封禁记录已提交到网站。");
+            ReplyToCommand(client, "[Manger] 玩家不在线，封禁记录已上传。");
         }
         return Plugin_Handled;
     }
@@ -1275,7 +1274,6 @@ public Action CommandUnban(int client, int args)
     {
         BuildPluginUnbanPayload(payload, sizeof(payload), token, currentPort, target, reason, adminName, adminSteamid);
         PostJsonPayload(url, payload, OnPluginUnbanResponse, g_UnbanAdminUserId);
-        ReplyToCommand(client, "[Manger] 解封请求已发送到网站。");
     }
     else
     {
@@ -1545,7 +1543,7 @@ public void OnPluginUnbanResponse(HTTPResponse response, any value, const char[]
         // 成功解封
         if (client > 0)
         {
-            PrintToChat(client, "[Manger] 解封成功。");
+            PrintToChat(client, "[Manger] 成功解封该玩家，后台面板中同步解除封禁。");
         }
         return;
     }

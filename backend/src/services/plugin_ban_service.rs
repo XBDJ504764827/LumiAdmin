@@ -258,8 +258,7 @@ pub async fn unban_plugin_target(
         let original_operator = original_row.operator_name.trim();
         if original_operator != operator_name {
             anyhow::bail!(
-                "您无法解封该玩家，请联系封禁该玩家的管理人员（{}）",
-                original_row.operator_name
+                "您无法解除其他管理员的封禁，请联系相关管理员"
             );
         }
     }

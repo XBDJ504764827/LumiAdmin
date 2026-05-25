@@ -54,6 +54,7 @@ public Plugin myinfo =
 
 public void OnPluginStart()
 {
+    PrintToServer("[Manger] Plugin v20260525 loaded - SteamID2 matching with universe-agnostic comparison");
     g_ApiBaseUrl = CreateConVar("manger_api_base_url", DEFAULT_API_BASE_URL, "Manger plugin API base URL.");
     g_ReportInterval = CreateConVar("manger_report_interval", DEFAULT_REPORT_INTERVAL, "Online player report interval in seconds.", _, true, 5.0);
     g_AccessSnapshotInterval = CreateConVar("manger_access_snapshot_interval", DEFAULT_ACCESS_SNAPSHOT_INTERVAL, "Access snapshot refresh interval in seconds.", _, true, 30.0);
@@ -992,9 +993,11 @@ int FindClientBySteamId2(const char[] steamId2)
     int firstColon = FindCharInString(steamId2, ':');
     if (firstColon == -1)
     {
+        PrintToServer("[Manger Ban Debug] FindClientBySteamId2: input=\"%s\" has no colon, returning -1", steamId2);
         return -1;
     }
     strcopy(inputYz, sizeof(inputYz), steamId2[firstColon + 1]);
+    PrintToServer("[Manger Ban Debug] FindClientBySteamId2: input=\"%s\" -> inputYz=\"%s\"", steamId2, inputYz);
 
     for (int i = 1; i <= MaxClients; i++)
     {
@@ -1006,17 +1009,19 @@ int FindClientBySteamId2(const char[] steamId2)
         char clientSteamId2[64];
         if (GetClientAuthId(i, AuthId_Steam2, clientSteamId2, sizeof(clientSteamId2), true))
         {
-            // 比较 Y:Z 部分，忽略 STEAM_0 和 STEAM_1 的差异
             int clientFirstColon = FindCharInString(clientSteamId2, ':');
             if (clientFirstColon != -1)
             {
+                PrintToServer("[Manger Ban Debug] FindClientBySteamId2: client[%d] steam=\"%s\" yz=\"%s\" vs inputYz=\"%s\"", i, clientSteamId2, clientSteamId2[clientFirstColon + 1], inputYz);
                 if (StrEqual(clientSteamId2[clientFirstColon + 1], inputYz, false))
                 {
+                    PrintToServer("[Manger Ban Debug] FindClientBySteamId2: MATCH found at client index %d", i);
                     return i;
                 }
             }
         }
     }
+    PrintToServer("[Manger Ban Debug] FindClientBySteamId2: no match found for input=\"%s\"", steamId2);
     return -1;
 }
 
@@ -1048,6 +1053,9 @@ public Action CommandBan(int client, int args)
 
     char reason[256];
     AppendCommandReason(3, args, reason, sizeof(reason));
+
+    // 诊断日志：解析结果
+    PrintToServer("[Manger Ban Debug] targetArg=\"%s\" timeArg=\"%s\" duration=%d reason=\"%s\" args=%d", targetArg, timeArg, duration, reason, args);
 
     // SteamID2 格式 (STEAM_X:Y:Z)：搜索在线玩家或直接提交封禁
     if (StrContains(targetArg, "STEAM_") == 0)

@@ -1551,20 +1551,37 @@ public void OnPluginUnbanResponse(HTTPResponse response, any value, const char[]
     // HTTP 错误
     if (response.Status == HTTPStatus_BadRequest)
     {
-        // 解析错误消息
         JSONObject data = view_as<JSONObject>(response.Data);
         if (data != null)
         {
             char message[256];
-            if (data.GetString("message", message, sizeof(message)))
+            // 后端可能使用 "message" 或 "error" 作为错误 key
+            if (data.GetString("message", message, sizeof(message)) && message[0] != '\0')
             {
-                if (client > 0)
-                {
-                    PrintToChat(client, "[Manger] %s", message);
-                }
-                LogError("Manger unban failed: %s", message);
+                // nothing more needed, message already filled
             }
+            else if (data.GetString("error", message, sizeof(message)) && message[0] != '\0')
+            {
+                // nothing more needed
+            }
+            else
+            {
+                strcopy(message, sizeof(message), "解封失败，请稍后重试");
+            }
+
+            if (client > 0)
+            {
+                PrintToChat(client, "[Manger] %s", message);
+            }
+            LogError("Manger unban failed: %s", message);
             delete data;
+        }
+        else
+        {
+            if (client > 0)
+            {
+                PrintToChat(client, "[Manger] 解封请求失败，请稍后重试。");
+            }
         }
     }
     else

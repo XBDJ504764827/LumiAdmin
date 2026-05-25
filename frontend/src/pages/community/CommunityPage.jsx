@@ -95,6 +95,7 @@ export function CommunityPage() {
   const { toast, toasts, dismiss: dismissToast } = useToast();
   const token = session?.token ?? null;
   const canMutate = session?.role === 'developer' || session?.role === 'admin';
+  const isDeveloper = session?.role === 'developer';
   const canManageToken = canManageServerReportToken(session?.role);
 
   const [groups, setGroups] = useState([]);
@@ -212,6 +213,44 @@ export function CommunityPage() {
     } finally {
       setSubmittingGroup(false);
     }
+  }
+
+  async function handleReloadPlugins(group) {
+    const serverCount = (group.servers || []).length;
+    if (serverCount === 0) {
+      toast({ title: '该社区没有服务器', message: '无需重启。', tone: 'warning' });
+      return;
+    }
+    const confirmed = await confirm({
+      title: '重启服务器插件',
+      message: `即将对社区「${group.name}」下的 ${serverCount} 个服务器依次执行插件重启命令：\n\nsm plugins reload manger_edge_sync\nsm plugins reload manger_online_reporter\n\n此操作将重新加载所有配套插件，确定继续？`,
+      confirmText: '确认重启',
+    });
+    if (!confirmed) return;
+
+    const commands = [
+      'sm plugins reload manger_edge_sync',
+      'sm plugins reload manger_online_reporter',
+    ];
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const server of group.servers) {
+      for (const cmd of commands) {
+        try {
+          await api.executeRcon(token, server.id, { command: cmd });
+          successCount++;
+        } catch {
+          failCount++;
+        }
+      }
+    }
+
+    toast({
+      title: '插件重启完成',
+      message: `成功执行 ${successCount} 条命令，失败 ${failCount} 条。`,
+      tone: failCount > 0 ? 'warning' : 'success',
+    });
   }
 
   async function handleTestRcon() {
@@ -663,6 +702,9 @@ export function CommunityPage() {
             </div>
             {canMutate ? (
               <div className="action-btn-group">
+                {isDeveloper ? (
+                  <button className="action-btn" onClick={() => handleReloadPlugins(group)}>重启插件</button>
+                ) : null}
                 <button className="action-btn" onClick={() => openCommunityAccessModal(group)}>访问限制</button>
                 <button className="action-btn" onClick={() => openCreateServerModal(group.id)}>+ 添加服务器</button>
               </div>

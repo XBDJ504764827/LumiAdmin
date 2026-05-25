@@ -7,7 +7,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 /// Convert Steam2 ID (STEAM_0:1:xxx) or Steam3 ID ([U:1:xxx]) to SteamID64
-fn normalize_steam_id(steam_id: &str) -> String {
+pub fn normalize_steam_id(steam_id: &str) -> String {
     let steam_id = steam_id.trim();
 
     // Already SteamID64 (17 digits starting with 7656119)

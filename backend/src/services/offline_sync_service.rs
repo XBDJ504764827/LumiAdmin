@@ -149,6 +149,11 @@ async fn apply_offline_ban(
     let duration = op.duration_minutes.unwrap_or(0);
     let reason = op.reason.as_deref().unwrap_or("未填写");
     let ban_type = op.target_type.as_str();
+    let normalized_target = if ban_type == "steam" {
+        plugin_ban_service::normalize_steam_id(&op.target)
+    } else {
+        op.target.clone()
+    };
 
     // 检查是否已存在有效封禁
     let existing: (i64,) = sqlx::query_as(
@@ -157,8 +162,8 @@ async fn apply_offline_ban(
              AND (expires_at IS NULL OR expires_at > now())
              AND (($1::TEXT IS NOT NULL AND steam_id = $1) OR ($2::TEXT IS NOT NULL AND ip_address = $2))"#,
     )
-    .bind(if ban_type == "steam" { Some(&op.target) } else { None })
-    .bind(if ban_type == "ip" { Some(&op.target) } else { None })
+    .bind(if ban_type == "steam" { Some(&normalized_target) } else { None })
+    .bind(if ban_type == "ip" { Some(&normalized_target) } else { None })
     .fetch_one(&db.pool)
     .await?;
 
@@ -202,8 +207,8 @@ async fn apply_offline_ban(
     )
     .bind(Uuid::new_v4())
     .bind(&op.player_name)
-    .bind(if ban_type == "steam" { &op.target } else { "" })
-    .bind(if ban_type == "ip" { Some(&op.target) } else { None })
+    .bind(if ban_type == "steam" { &normalized_target } else { "" })
+    .bind(if ban_type == "ip" { Some(&normalized_target) } else { None })
     .bind(&server.name)
     .bind(ban_type)
     .bind(duration)

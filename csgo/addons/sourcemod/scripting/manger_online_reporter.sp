@@ -966,6 +966,15 @@ bool SubmitPluginBan(int client, int target, const char[] banType, const char[] 
 
 int FindClientBySteamId2(const char[] steamId2)
 {
+    // 提取输入的 Y:Z 部分，忽略 STEAM_X 中的 universe 差异
+    char inputYz[64];
+    int firstColon = FindCharInString(steamId2, ':');
+    if (firstColon == -1)
+    {
+        return -1;
+    }
+    strcopy(inputYz, sizeof(inputYz), steamId2[firstColon + 1]);
+
     for (int i = 1; i <= MaxClients; i++)
     {
         if (!IsClientInGame(i) || IsFakeClient(i))
@@ -976,9 +985,14 @@ int FindClientBySteamId2(const char[] steamId2)
         char clientSteamId2[64];
         if (GetClientAuthId(i, AuthId_Steam2, clientSteamId2, sizeof(clientSteamId2), true))
         {
-            if (StrEqual(clientSteamId2, steamId2, false))
+            // 比较 Y:Z 部分，忽略 STEAM_0 和 STEAM_1 的差异
+            int clientFirstColon = FindCharInString(clientSteamId2, ':');
+            if (clientFirstColon != -1)
             {
-                return i;
+                if (StrEqual(clientSteamId2[clientFirstColon + 1], inputYz, false))
+                {
+                    return i;
+                }
             }
         }
     }

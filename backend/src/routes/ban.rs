@@ -213,6 +213,11 @@ pub(crate) async fn create_plugin_ban(
         tracing::warn!(%e, "plugin ban notification failed");
     }
 
+    let duration_text = if item.duration_minutes == 0 { "永久".to_string() } else { format!("{}分钟", item.duration_minutes) };
+    let log_target = format!("{} | SteamID: {} | 时长: {} | 理由: {}", item.player.as_deref().unwrap_or("未知玩家"), item.steam_id, duration_text, item.reason);
+    let server_info = item.server_name.as_deref().unwrap_or("未知服务器");
+    if let Err(e) = log_service::create_log(&ctx.db, &item.operator_name, "游戏封禁", &format!("通过 {} 封禁玩家", server_info), &log_target, "").await { tracing::warn!(%e, "插件封禁审计日志写入失败"); }
+
     let kick_message = if item.duration_minutes == 0 {
         format!("你已被永久封禁，原因：{}", item.reason)
     } else {
@@ -277,6 +282,11 @@ pub(crate) async fn unban_plugin_ban(
     )
     .await
     .map_err(invalid_request)?;
+
+    let log_target = format!("{} | SteamID: {} | 理由: {}", item.player.as_deref().unwrap_or("未知玩家"), item.steam_id, item.removed_reason.as_deref().unwrap_or("未填写"));
+    let unban_operator = item.removed_by.as_deref().unwrap_or("未知管理员");
+    if let Err(e) = log_service::create_log(&ctx.db, unban_operator, "游戏解封", "通过游戏服务器解封玩家", &log_target, "").await { tracing::warn!(%e, "插件解封审计日志写入失败"); }
+
     Ok(Json(serde_json::json!({ "item": item })))
 }
 

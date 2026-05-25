@@ -290,7 +290,7 @@ pub async fn unban_plugin_target(
 }
 
 /// 检查操作员是否具有特权（developer 或 admin）
-async fn check_operator_privilege(db: &Database, operator_steamid: Option<&str>) -> anyhow::Result<bool> {
+pub async fn check_operator_privilege(db: &Database, operator_steamid: Option<&str>) -> anyhow::Result<bool> {
     let Some(steamid) = operator_steamid else {
         // 没有 SteamID，视为普通游戏内管理员
         return Ok(false);

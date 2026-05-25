@@ -254,9 +254,12 @@ async fn apply_offline_unban(
         op.target.clone()
     };
 
-    // 查找有效封禁
-    let ban_id: Option<Uuid> = sqlx::query_scalar(
-        r#"SELECT id FROM ban_records
+    // 查找有效封禁（含操作人信息用于权限校验）
+    let original_row: Option<super::ban_service::BanRow> = sqlx::query_as(
+        r#"SELECT id, player, steam_id, ip_address, server_name, ban_type,
+                  duration_minutes, expires_at, reason, status, operator_name, source,
+                  server_id, server_port, removed_reason, removed_by, removed_at, created_at
+           FROM ban_records
            WHERE status = 'active'
              AND (expires_at IS NULL OR expires_at > now())
              AND (steam_id = $1 OR ip_address = $1)
@@ -267,8 +270,7 @@ async fn apply_offline_unban(
     .fetch_optional(&db.pool)
     .await?;
 
-    let Some(id) = ban_id else {
-        // 写入审计日志（跳过）
+    let Some(original_row) = original_row else {
         audit_service::write_audit_log(db, audit_service::AuditLogInput {
             operation: "unban".to_string(),
             target: op.target.clone(),
@@ -289,13 +291,43 @@ async fn apply_offline_unban(
         return Ok(());
     };
 
+    // 权限检查：非特权管理员只能解封自己创建的封禁
+    let is_privileged = plugin_ban_service::check_operator_privilege(
+        db,
+        op.operator_steamid.as_deref(),
+    ).await?;
+    if !is_privileged {
+        let original_operator = original_row.operator_name.trim();
+        let current_operator = op.operator_name.trim();
+        if original_operator != current_operator {
+            audit_service::write_audit_log(db, audit_service::AuditLogInput {
+                operation: "unban".to_string(),
+                target: op.target.clone(),
+                target_type: op.target_type.clone(),
+                player_name: op.player_name.clone(),
+                reason: op.reason.clone(),
+                duration_minutes: None,
+                operator_name: op.operator_name.clone(),
+                operator_steamid: op.operator_steamid.clone(),
+                source: "offline_sync".to_string(),
+                server_id: Some(server.id),
+                server_name: Some(server.name.clone()),
+                server_port: Some(server.port),
+                success: false,
+                message: Some("您无法解除其他管理员的封禁，请联系相关管理员".to_string()),
+                idempotency_key: Some(op.idempotency_key.clone()),
+            }).await?;
+            return Ok(());
+        }
+    }
+
     // 执行解封
     sqlx::query(
         r#"UPDATE ban_records
            SET status = 'inactive', removed_reason = $2, removed_by = $3, removed_at = now()
            WHERE id = $1"#,
     )
-    .bind(id)
+    .bind(original_row.id)
     .bind(reason)
     .bind(&op.operator_name)
     .execute(&db.pool)
@@ -316,7 +348,7 @@ async fn apply_offline_unban(
         server_name: Some(server.name.clone()),
         server_port: Some(server.port),
         success: true,
-        message: Some(format!("离线解封已同步，原封禁ID: {}", id)),
+        message: Some(format!("离线解封已同步，原封禁ID: {}", original_row.id)),
         idempotency_key: Some(op.idempotency_key.clone()),
     }).await?;
 

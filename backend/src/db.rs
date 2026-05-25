@@ -49,6 +49,7 @@ impl Database {
         self.migrate_map_tiers_table().await?;
         self.migrate_notifications_schema().await?;
         self.migrate_ban_appeals_schema().await?;
+        self.migrate_adds_missing_constraints_and_indexes().await?;
         Ok(())
     }
 
@@ -897,6 +898,57 @@ impl Database {
         if !rows.is_empty() {
             tracing::info!(count = rows.len(), "migrated plaintext passwords to argon2 hashes");
         }
+
+        Ok(())
+    }
+
+    /// 添加缺失的外键约束和复合索引
+    async fn migrate_adds_missing_constraints_and_indexes(&self) -> anyhow::Result<()> {
+        // ban_records.server_id 外键约束
+        sqlx::query(
+            r#"DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_ban_records_server_id') THEN
+                    UPDATE ban_records SET server_id = NULL
+                    WHERE server_id IS NOT NULL
+                      AND server_id NOT IN (SELECT id FROM servers);
+                    ALTER TABLE ban_records
+                    ADD CONSTRAINT fk_ban_records_server_id
+                    FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE SET NULL;
+                END IF;
+            END $$;"#,
+        ).execute(&self.pool).await?;
+
+        // communities.created_by 外键约束
+        sqlx::query(
+            r#"DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_communities_created_by') THEN
+                    UPDATE communities SET created_by = NULL
+                    WHERE created_by IS NOT NULL
+                      AND created_by NOT IN (SELECT id FROM users);
+                    ALTER TABLE communities
+                    ADD CONSTRAINT fk_communities_created_by
+                    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL;
+                END IF;
+            END $$;"#,
+        ).execute(&self.pool).await?;
+
+        // whitelist_requests 复合索引
+        sqlx::query(
+            r#"CREATE INDEX IF NOT EXISTS idx_whitelist_requests_status_applied
+               ON whitelist_requests (status, applied_at DESC)"#,
+        ).execute(&self.pool).await?;
+
+        // ban_records 复合索引
+        sqlx::query(
+            r#"CREATE INDEX IF NOT EXISTS idx_ban_records_status_created
+               ON ban_records (status, created_at DESC)"#,
+        ).execute(&self.pool).await?;
+
+        // ban_appeals 复合索引
+        sqlx::query(
+            r#"CREATE INDEX IF NOT EXISTS idx_ban_appeals_ban_id_status
+               ON ban_appeals (ban_id, status)"#,
+        ).execute(&self.pool).await?;
 
         Ok(())
     }

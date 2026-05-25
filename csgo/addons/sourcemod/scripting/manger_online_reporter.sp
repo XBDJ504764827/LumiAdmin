@@ -491,10 +491,13 @@ public void OnAccessSnapshotResponse(HTTPResponse response, any value, const cha
     if (item == null)
     {
         LogError("Manger access snapshot response missed item.");
+        delete root;
         return;
     }
 
     SaveAccessSnapshot(item);
+    delete item;
+    delete root;
 }
 
 void SaveAccessSnapshot(JSONObject item)
@@ -729,8 +732,26 @@ public void OnBanPollResponse(HTTPResponse response, any value, const char[] err
     }
 
     JSONObject data = view_as<JSONObject>(response.Data);
+    if (data == null)
+    {
+        LogError("Manger ban poll response data was null.");
+        return;
+    }
+
     JSON rawItems = data.Get("items");
+    if (rawItems == null)
+    {
+        LogError("Manger ban poll response missing items.");
+        delete data;
+        return;
+    }
+
     JSONArray items = view_as<JSONArray>(rawItems);
+    if (items == null)
+    {
+        delete data;
+        return;
+    }
 
     for (int i = 0; i < items.Length; i++)
     {
@@ -1513,7 +1534,25 @@ public void OnAccessCheckResponse(HTTPResponse response, any value, const char[]
     }
 
     JSONObject data = view_as<JSONObject>(response.Data);
-    JSONObject result = view_as<JSONObject>(data.Get("result"));
+    if (data == null)
+    {
+        return;
+    }
+
+    JSON rawResult = data.Get("result");
+    if (rawResult == null)
+    {
+        delete data;
+        return;
+    }
+
+    JSONObject result = view_as<JSONObject>(rawResult);
+    if (result == null)
+    {
+        delete data;
+        return;
+    }
+
     bool allowed = result.GetBool("allowed");
     if (!allowed)
     {
@@ -1796,10 +1835,38 @@ void EscapeJsonString(const char[] input, char[] output, int maxLen)
 
     for (int i = 0; input[i] != '\0'; i++)
     {
-        char chunk[3];
-        if (input[i] == '"' || input[i] == '\\')
+        char chunk[8];
+        if (input[i] == '"')
         {
-            Format(chunk, sizeof(chunk), "\\%c", input[i]);
+            strcopy(chunk, sizeof(chunk), "\\\"");
+        }
+        else if (input[i] == '\\')
+        {
+            strcopy(chunk, sizeof(chunk), "\\\\");
+        }
+        else if (input[i] == '\n')
+        {
+            strcopy(chunk, sizeof(chunk), "\\n");
+        }
+        else if (input[i] == '\r')
+        {
+            strcopy(chunk, sizeof(chunk), "\\r");
+        }
+        else if (input[i] == '\t')
+        {
+            strcopy(chunk, sizeof(chunk), "\\t");
+        }
+        else if (input[i] == '\b')
+        {
+            strcopy(chunk, sizeof(chunk), "\\b");
+        }
+        else if (input[i] == '\f')
+        {
+            strcopy(chunk, sizeof(chunk), "\\f");
+        }
+        else if (input[i] < 0x20)
+        {
+            Format(chunk, sizeof(chunk), "\\u%04x", input[i]);
         }
         else
         {

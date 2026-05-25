@@ -268,8 +268,11 @@ void SyncOfflineQueue()
 
     if (results == null) return;
 
-    ArrayList operations = new ArrayList();
     ArrayList ids = new ArrayList();
+    JSONObject jsonPayload = new JSONObject();
+    jsonPayload.SetString("report_token", g_ServerReportToken);
+    jsonPayload.SetInt("port", g_ServerPort);
+    JSONArray opsArray = new JSONArray();
 
     while (SQL_FetchRow(results))
     {
@@ -298,48 +301,39 @@ void SyncOfflineQueue()
         createdAt = SQL_FetchInt(results, 9);
         SQL_FetchString(results, 10, idempotencyKey, sizeof(idempotencyKey));
 
-        // 构建JSON对象
-        char jsonEntry[512];
-        Format(jsonEntry, sizeof(jsonEntry), "{\"operation\":\"%s\",\"target\":\"%s\",\"target_type\":\"%s\",\"player_name\":\"%s\",\"reason\":\"%s\",\"duration_minutes\":%d,\"operator_name\":\"%s\",\"operator_steamid\":\"%s\",\"created_at_unix\":%d,\"idempotency_key\":\"%s\"}", operation, target, targetType, playerName, reason, durationMinutes, operatorName, operatorSteamid, createdAt, idempotencyKey);
+        // 构建 JSON 对象（使用 JSON API 避免注入）
+        JSONObject entry = new JSONObject();
+        entry.SetString("operation", operation);
+        entry.SetString("target", target);
+        entry.SetString("target_type", targetType);
+        entry.SetString("player_name", playerName);
+        entry.SetString("reason", reason);
+        entry.SetInt("duration_minutes", durationMinutes);
+        entry.SetString("operator_name", operatorName);
+        entry.SetString("operator_steamid", operatorSteamid);
+        entry.SetInt("created_at_unix", createdAt);
+        entry.SetString("idempotency_key", idempotencyKey);
 
-        operations.PushString(jsonEntry);
+        opsArray.Push(entry);
+        delete entry;
     }
     delete results;
 
-    if (operations.Length == 0)
+    if (opsArray.Length == 0)
     {
-        delete operations;
+        delete opsArray;
+        delete jsonPayload;
         delete ids;
         return;
     }
 
-    // 构建批量同步请求
-    char payload[MAX_SYNC_PAYLOAD];
-    Format(payload, sizeof(payload), "{\"report_token\":\"%s\",\"port\":%d,\"operations\":[", g_ServerReportToken, g_ServerPort);
-
-    for (int i = 0; i < operations.Length; i++)
-    {
-        char entry[512];
-        operations.GetString(i, entry, sizeof(entry));
-        if (i > 0) StrCat(payload, sizeof(payload), ",");
-        StrCat(payload, sizeof(payload), entry);
-    }
-    StrCat(payload, sizeof(payload), "]}");
-
-    delete operations;
+    jsonPayload.Set("operations", opsArray);
+    delete opsArray;
 
     // 发送同步请求
     char url[512];
     g_ApiBaseUrl.GetString(url, sizeof(url));
     StrCat(url, sizeof(url), "/offline/sync");
-
-    JSONObject jsonPayload = JSONObject.FromString(payload);
-    if (jsonPayload == null)
-    {
-        LogError("[EdgeSync] Failed to parse sync payload");
-        delete ids;
-        return;
-    }
 
     HTTPRequest request = new HTTPRequest(url);
     request.Post(jsonPayload, OnSyncResponse, ids);

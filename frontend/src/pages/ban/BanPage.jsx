@@ -36,6 +36,7 @@ export function BanPage() {
   const [page, setPage] = useState(1);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [open, setOpen] = useState(false);
   const [modalMode, setModalMode] = useState('create');
   const [editingBanId, setEditingBanId] = useState(null);
@@ -49,6 +50,7 @@ export function BanPage() {
   const loadItems = useCallback(async () => {
     try {
       setLoading(true);
+      setLoadError('');
       const params = { page, page_size: 20 };
       if (search) params.search = search;
       if (status) params.status = status;
@@ -56,6 +58,7 @@ export function BanPage() {
       setData(result);
     } catch {
       setData(null);
+      setLoadError('加载封禁数据失败，请稍后重试');
     } finally {
       setLoading(false);
     }
@@ -183,6 +186,8 @@ export function BanPage() {
               </thead>
               <tbody>
                 {loading ? <tr><td colSpan={13} style={{ textAlign: 'center', color: 'var(--text2)' }}>正在加载封禁数据...</td></tr> : null}
+                {!loading && loadError ? <tr><td colSpan={13} style={{ textAlign: 'center', color: 'var(--danger)' }}>{loadError}</td></tr> : null}
+                {!loading && !loadError && items.length === 0 ? <tr><td colSpan={13} style={{ textAlign: 'center', color: 'var(--text2)' }}>暂无封禁数据</td></tr> : null}
                 {!loading && items.map((x) => (
                   <tr key={x.id}>
                     <td style={{ fontWeight: 600 }}>{x.player || '待自动获取'}</td>

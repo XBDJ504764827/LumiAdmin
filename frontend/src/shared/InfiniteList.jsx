@@ -53,7 +53,7 @@ export function InfiniteList({
 
       setTotal(result.total || 0);
       setPage(pageNum);
-      setHasMore(items.length + newItems.length < (result.total || 0));
+      setHasMore(newItems.length >= pageSize);
     } catch (err) {
       setError(err.message || '加载失败');
     } finally {

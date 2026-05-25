@@ -297,16 +297,16 @@ async fn check_operator_privilege(db: &Database, operator_steamid: Option<&str>)
         return Ok(false);
     };
 
-    let steamid = steamid.trim();
+    let steamid = normalize_steam_id(steamid.trim());
     if steamid.is_empty() {
         return Ok(false);
     }
 
     // 查询用户角色
     let role: Option<(String,)> = sqlx::query_as(
-        r#"SELECT role FROM users WHERE steamid64 = $1 LIMIT 1"#,
+        r#"SELECT role FROM users WHERE steam_id = $1 LIMIT 1"#,
     )
-    .bind(steamid)
+    .bind(&steamid)
     .fetch_optional(&db.pool)
     .await?;
 

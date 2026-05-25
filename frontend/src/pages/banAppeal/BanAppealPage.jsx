@@ -58,6 +58,7 @@ export function BanAppealPage() {
   const [page, setPage] = useState(1);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
 
   // 审核弹窗
   const [reviewOpen, setReviewOpen] = useState(false);
@@ -77,6 +78,7 @@ export function BanAppealPage() {
   const loadItems = useCallback(async () => {
     try {
       setLoading(true);
+      setLoadError('');
       const params = { page, page_size: 20 };
       if (search) params.search = search;
       if (status) params.status = status;
@@ -84,6 +86,7 @@ export function BanAppealPage() {
       setData(result);
     } catch {
       setData(null);
+      setLoadError('加载申诉数据失败，请稍后重试');
     } finally {
       setLoading(false);
     }
@@ -191,6 +194,9 @@ export function BanAppealPage() {
               <tbody>
                 {loading ? (
                   <tr><td colSpan={9} style={{ textAlign: 'center', color: 'var(--text2)' }}>正在加载申诉数据...</td></tr>
+                ) : null}
+                {!loading && loadError ? (
+                  <tr><td colSpan={9} style={{ textAlign: 'center', color: 'var(--danger)' }}>{loadError}</td></tr>
                 ) : null}
                 {!loading && items.map((item) => {
                   const st = STATUS_MAP[item.status] || { label: item.status, pill: '' };

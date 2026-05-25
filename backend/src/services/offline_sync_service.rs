@@ -248,6 +248,11 @@ async fn apply_offline_unban(
     server: &plugin_ban_service::ServerAuth,
 ) -> anyhow::Result<()> {
     let reason = op.reason.as_deref().unwrap_or("离线解封");
+    let normalized_target = if op.target_type == "steam" {
+        plugin_ban_service::normalize_steam_id(&op.target)
+    } else {
+        op.target.clone()
+    };
 
     // 查找有效封禁
     let ban_id: Option<Uuid> = sqlx::query_scalar(
@@ -258,7 +263,7 @@ async fn apply_offline_unban(
            ORDER BY created_at DESC
            LIMIT 1"#,
     )
-    .bind(&op.target)
+    .bind(&normalized_target)
     .fetch_optional(&db.pool)
     .await?;
 

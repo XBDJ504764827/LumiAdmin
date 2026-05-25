@@ -39,6 +39,7 @@ export function RconPage() {
 
   const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [selectedServerId, setSelectedServerId] = useState('');
   const [executing, setExecuting] = useState('');
   const [customCommand, setCustomCommand] = useState('');
@@ -59,10 +60,12 @@ export function RconPage() {
   const loadServers = useCallback(async () => {
     try {
       setLoading(true);
+      setLoadError('');
       const response = await api.servers(token);
       setGroups(response?.groups ?? []);
     } catch {
       setGroups([]);
+      setLoadError('加载服务器列表失败，请稍后重试');
     } finally {
       setLoading(false);
     }
@@ -121,6 +124,8 @@ export function RconPage() {
         <div className="card-body">
           {loading ? (
             <div style={{ color: 'var(--text3)' }}>正在加载服务器列表...</div>
+          ) : loadError ? (
+            <div style={{ color: 'var(--danger)' }}>{loadError}</div>
           ) : allServers.length === 0 ? (
             <div style={{ color: 'var(--text3)' }}>暂无可用服务器，请先在社区组管理中添加服务器。</div>
           ) : (

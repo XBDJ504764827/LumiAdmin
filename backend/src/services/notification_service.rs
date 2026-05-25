@@ -209,14 +209,35 @@ pub async fn notify_all_admins(
     .fetch_all(&db.pool)
     .await?;
 
-    for (user_id,) in &admins {
-        if let Some(exclude) = exclude_user_id {
-            if exclude == user_id {
-                continue;
-            }
-        }
-        let _ = create_notification(db, hub, *user_id, notification_type, title, message, link)
-            .await;
+    let user_ids: Vec<Uuid> = admins
+        .into_iter()
+        .map(|(uid,)| uid)
+        .filter(|uid| !exclude_user_id.map_or(false, |e| e == uid))
+        .collect();
+
+    if user_ids.is_empty() {
+        return Ok(());
+    }
+
+    // 批量插入通知，避免 N+1 查询
+    let rows: Vec<NotificationRow> = sqlx::query_as(
+        r#"INSERT INTO notifications (id, user_id, type, title, message, link, read, created_at)
+           SELECT gen_random_uuid(), u.id, $1, $2, $3, $4, false, now()
+           FROM UNNEST($5::uuid[]) AS u(id)
+           RETURNING id, user_id, type, title, message, link, read, created_at"#,
+    )
+    .bind(notification_type)
+    .bind(title)
+    .bind(message)
+    .bind(link)
+    .bind(&user_ids)
+    .fetch_all(&db.pool)
+    .await?;
+
+    for row in rows {
+        let user_id = row.user_id;
+        let item = map_row(row);
+        push_to_user(hub, &user_id, &item).await;
     }
     Ok(())
 }

@@ -1039,10 +1039,43 @@ public Action CommandBan(int client, int args)
         return Plugin_Handled;
     }
 
-    char targetArg[128];
-    char timeArg[32];
-    GetCmdArg(1, targetArg, sizeof(targetArg));
-    GetCmdArg(2, timeArg, sizeof(timeArg));
+    // CS:GO 聊天命令可能将 STEAM_X:Y:Z 中的冒号拆分为独立参数
+    // 因此手动重建参数：先拼回完整的 SteamID，再解析时长和理由
+    char targetArg[128] = "";
+    char timeArg[32] = "";
+    int argIdx = 1;
+
+    // 第一步：提取目标（SteamID 或玩家名/#userid）
+    {
+        char part[64];
+        GetCmdArg(argIdx, part, sizeof(part));
+        strcopy(targetArg, sizeof(targetArg), part);
+        argIdx++;
+
+        // 如果目标以 STEAM_ 开头，但冒号被拆分了，需要重建完整 SteamID
+        if (StrContains(targetArg, "STEAM_") == 0)
+        {
+            // SteamID 格式为 STEAM_X:Y:Z，需要 3 个非冒号段
+            int steamSegments = 1;
+            while (steamSegments < 3 && argIdx <= args)
+            {
+                GetCmdArg(argIdx, part, sizeof(part));
+                StrCat(targetArg, sizeof(targetArg), part);
+                if (!StrEqual(part, ":"))
+                {
+                    steamSegments++;
+                }
+                argIdx++;
+            }
+        }
+    }
+
+    // 第二步：提取封禁时长
+    if (argIdx <= args)
+    {
+        GetCmdArg(argIdx, timeArg, sizeof(timeArg));
+        argIdx++;
+    }
 
     int duration = StringToInt(timeArg);
     if (duration < 0)
@@ -1051,10 +1084,11 @@ public Action CommandBan(int client, int args)
         return Plugin_Handled;
     }
 
+    // 第三步：提取封禁理由
     char reason[256];
-    AppendCommandReason(3, args, reason, sizeof(reason));
+    AppendCommandReason(argIdx, args, reason, sizeof(reason));
 
-    // 诊断日志：解析结果
+    // 诊断日志
     PrintToServer("[Manger Ban Debug] targetArg=\"%s\" timeArg=\"%s\" duration=%d reason=\"%s\" args=%d", targetArg, timeArg, duration, reason, args);
 
     // SteamID2 格式 (STEAM_X:Y:Z)：搜索在线玩家或直接提交封禁
@@ -1188,8 +1222,32 @@ public Action CommandUnban(int client, int args)
     char adminName[128];
     char adminSteamid[64];
     char payload[MAX_BAN_PAYLOAD];
-    GetCmdArg(1, target, sizeof(target));
-    AppendCommandReason(2, args, reason, sizeof(reason));
+
+    // 重建可能被冒号拆分的 SteamID
+    {
+        char part[64];
+        GetCmdArg(1, part, sizeof(part));
+        strcopy(target, sizeof(target), part);
+        if (StrContains(target, "STEAM_") == 0)
+        {
+            int seg = 1;
+            int idx = 2;
+            while (seg < 3 && idx <= args)
+            {
+                GetCmdArg(idx, part, sizeof(part));
+                StrCat(target, sizeof(target), part);
+                if (!StrEqual(part, ":"))
+                    seg++;
+                idx++;
+            }
+            // reason 从 idx 开始
+            AppendCommandReason(idx, args, reason, sizeof(reason));
+        }
+        else
+        {
+            AppendCommandReason(2, args, reason, sizeof(reason));
+        }
+    }
 
     // 处理服务器控制台（client=0）的情况
     if (client == 0)

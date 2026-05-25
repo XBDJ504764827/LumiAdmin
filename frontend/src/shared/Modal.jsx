@@ -1,10 +1,11 @@
 import React from 'react';
 
-export function Modal({ open, title, subtitle, children, footer, onClose, wide = false }) {
+export function Modal({ open, title, subtitle, children, footer, onClose, wide = false, extraWide = false }) {
   if (!open) return null;
+  const widthStyle = extraWide ? { maxWidth: 920 } : wide ? { maxWidth: 640 } : undefined;
   return (
     <div className="modal-overlay active" onClick={onClose}>
-      <div className="modal" style={wide ? { maxWidth: 640 } : undefined} onClick={(e) => e.stopPropagation()}>
+      <div className="modal" style={widthStyle} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div>
             <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>{title}</h2>

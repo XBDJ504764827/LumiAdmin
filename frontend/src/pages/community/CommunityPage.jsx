@@ -23,6 +23,7 @@ import {
   buildAccessSummary,
 } from './communityAccess.js';
 import { onlinePlayerKey, buildKickCommand, buildBanCommand, BAN_DURATION_OPTIONS, BAN_REASON_OPTIONS } from './onlinePlayers.js';
+import { COMMAND_CATEGORIES } from '../rcon/RconPage.jsx';
 import { useAuth } from '../../state/auth.jsx';
 import { useToast, ToastContainer } from '../../shared/Toast.jsx';
 
@@ -114,6 +115,7 @@ export function CommunityPage() {
   const [submittingServer, setSubmittingServer] = useState(false);
   const [groupError, setGroupError] = useState('');
   const [tokenPanel, setTokenPanel] = useState({ serverId: null, token: '', loading: false, error: '' });
+  const [rconModal, setRconModal] = useState({ open: false, serverId: null, serverName: '', executing: '', customCommand: '' });
 
   const loadGroups = useCallback(async () => {
     try {
@@ -314,6 +316,37 @@ export function CommunityPage() {
     } catch (_copyError) {
       toast({ title: '复制失败', message: '复制失败，请手动复制 Token。', tone: 'danger' });
     }
+  }
+
+  function openRconModal(server) {
+    if (!canMutate) return;
+    setRconModal({ open: true, serverId: server.id, serverName: server.name, executing: '', customCommand: '' });
+  }
+
+  async function handleRconExecute(cmd) {
+    if (!rconModal.serverId) return;
+    const confirmed = await confirm({
+      title: '确认执行命令',
+      message: `即将在服务器「${rconModal.serverName}」上执行：\n\n${cmd}\n\n确定继续？`,
+      confirmText: '确认执行',
+    });
+    if (!confirmed) return;
+    setRconModal((prev) => ({ ...prev, executing: cmd }));
+    try {
+      await api.executeRcon(token, rconModal.serverId, { command: cmd });
+      toast({ title: '执行成功', message: `命令已发送至「${rconModal.serverName}」。` });
+    } catch (e) {
+      toast({ title: '执行失败', message: e.message, tone: 'danger' });
+    } finally {
+      setRconModal((prev) => ({ ...prev, executing: '' }));
+    }
+  }
+
+  async function handleRconCustomExecute() {
+    const cmd = rconModal.customCommand.trim();
+    if (!cmd) return;
+    await handleRconExecute(cmd);
+    setRconModal((prev) => ({ ...prev, customCommand: '' }));
   }
 
   async function handleResetReportToken(server) {
@@ -575,6 +608,12 @@ export function CommunityPage() {
           玩家
         </button>
         {canMutate ? (
+          <button className="action-btn" onClick={() => openRconModal(server)} disabled={!isOnline} title={!isOnline ? '服务器离线，无法执行' : ''}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></svg>
+            RCON
+          </button>
+        ) : null}
+        {canMutate ? (
           <>
             <button className="action-btn action-btn-accent" onClick={() => openEditServerModal(server.id, server)}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
@@ -746,6 +785,82 @@ export function CommunityPage() {
             </div>
           </>
         ) : null}
+      </Modal>
+
+      {/* RCON 命令弹窗 */}
+      <Modal
+        open={rconModal.open}
+        title={`RCON 命令 — ${rconModal.serverName}`}
+        onClose={() => setRconModal({ open: false, serverId: null, serverName: '', executing: '', customCommand: '' })}
+        extraWide
+        footer={<button className="btn btn-primary" onClick={() => setRconModal({ open: false, serverId: null, serverName: '', executing: '', customCommand: '' })}>关闭</button>}
+      >
+        {COMMAND_CATEGORIES.map((cat) => (
+          <div key={cat.name} style={{ marginBottom: 20 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <span style={{ color: 'var(--accent)' }}>{cat.icon}</span>
+              <span style={{ fontWeight: 600, fontSize: 14 }}>{cat.name}</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
+              {cat.commands.map((cmd) => (
+                <button
+                  key={cmd.command}
+                  className="rcon-cmd-card"
+                  disabled={!!rconModal.executing}
+                  onClick={() => handleRconExecute(cmd.command)}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 4,
+                    padding: '12px 14px',
+                    borderRadius: 8,
+                    border: `1px solid ${cmd.danger ? 'var(--danger-border, rgba(220,38,38,0.3))' : 'var(--border)'}`,
+                    background: cmd.danger ? 'var(--danger-surface, rgba(220,38,38,0.06))' : 'var(--surface2)',
+                    cursor: rconModal.executing ? 'not-allowed' : 'pointer',
+                    textAlign: 'left',
+                    transition: 'background 0.15s',
+                  }}
+                >
+                  <span style={{ fontWeight: 600, fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {cmd.name}
+                    {cmd.danger ? <span style={{ fontSize: 10, color: 'var(--danger-text, #dc2626)', fontWeight: 400 }}>⚠ 高影响</span> : null}
+                    {rconModal.executing === cmd.command ? <span style={{ fontSize: 11, color: 'var(--text3)' }}>执行中...</span> : null}
+                  </span>
+                  <span style={{ fontSize: 12, color: 'var(--text3)', lineHeight: 1.4 }}>{cmd.desc}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+            <span style={{ color: 'var(--accent)' }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="20" height="20">
+                <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
+              </svg>
+            </span>
+            <span style={{ fontWeight: 600, fontSize: 14 }}>自定义命令</span>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input
+              type="text"
+              className="form-control"
+              value={rconModal.customCommand}
+              onChange={(e) => setRconModal((prev) => ({ ...prev, customCommand: e.target.value }))}
+              placeholder={'输入 RCON 命令，如 sm_kick "玩家名"'}
+              disabled={!!rconModal.executing}
+              onKeyDown={(e) => { if (e.key === 'Enter' && rconModal.customCommand.trim()) handleRconCustomExecute(); }}
+            />
+            <button
+              className="btn btn-primary"
+              disabled={!rconModal.customCommand.trim() || !!rconModal.executing}
+              onClick={handleRconCustomExecute}
+              style={{ flexShrink: 0 }}
+            >
+              {rconModal.executing && rconModal.executing === rconModal.customCommand.trim() ? '执行中...' : '执行'}
+            </button>
+          </div>
+        </div>
       </Modal>
       {dialog}
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />

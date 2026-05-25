@@ -964,6 +964,27 @@ bool SubmitPluginBan(int client, int target, const char[] banType, const char[] 
     return true;
 }
 
+int FindClientBySteamId2(const char[] steamId2)
+{
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        if (!IsClientInGame(i) || IsFakeClient(i))
+        {
+            continue;
+        }
+
+        char clientSteamId2[64];
+        if (GetClientAuthId(i, AuthId_Steam2, clientSteamId2, sizeof(clientSteamId2), true))
+        {
+            if (StrEqual(clientSteamId2, steamId2, false))
+            {
+                return i;
+            }
+        }
+    }
+    return -1;
+}
+
 public Action CommandBan(int client, int args)
 {
     if (args == 0 && client > 0)
@@ -974,7 +995,7 @@ public Action CommandBan(int client, int args)
 
     if (args < 2)
     {
-        ReplyToCommand(client, "用法: sm_ban <#userid|name> <minutes|0> [reason]");
+        ReplyToCommand(client, "用法: sm_ban <#userid|name|steamid2> <minutes|0> [reason]");
         return Plugin_Handled;
     }
 
@@ -982,23 +1003,6 @@ public Action CommandBan(int client, int args)
     char timeArg[32];
     GetCmdArg(1, targetArg, sizeof(targetArg));
     GetCmdArg(2, timeArg, sizeof(timeArg));
-
-    // 如果是从 RCON 执行且参数是 SteamID64（17位数字），跳过 FindTarget
-    // 这种情况通常是网站已经创建了封禁记录，只是想踢出玩家
-    bool isSteamId64 = (strlen(targetArg) == 17 && targetArg[0] == '7');
-    if (client == 0 && isSteamId64)
-    {
-        // RCON 通过 SteamID64 执行，无法踢出玩家，忽略此命令
-        // 封禁记录应该已经在网站创建，玩家会通过轮询机制被踢出
-        ReplyToCommand(client, "[Manger] 封禁记录已创建，玩家将在下次轮询时被踢出。");
-        return Plugin_Handled;
-    }
-
-    int target = FindTarget(client, targetArg, true);
-    if (target <= 0)
-    {
-        return Plugin_Handled;
-    }
 
     int duration = StringToInt(timeArg);
     if (duration < 0)
@@ -1009,6 +1013,43 @@ public Action CommandBan(int client, int args)
 
     char reason[256];
     AppendCommandReason(3, args, reason, sizeof(reason));
+
+    // SteamID2 格式 (STEAM_X:Y:Z)：搜索在线玩家或直接提交封禁
+    if (StrContains(targetArg, "STEAM_") == 0)
+    {
+        int target = FindClientBySteamId2(targetArg);
+        if (target > 0 && IsClientInGame(target))
+        {
+            char steamId64[64];
+            char ipAddress[64];
+            char player[128];
+            GetClientAuthId(target, AuthId_SteamID64, steamId64, sizeof(steamId64), true);
+            GetClientIP(target, ipAddress, sizeof(ipAddress), true);
+            GetClientName(target, player, sizeof(player));
+            SubmitPluginBan(client, target, "steam", steamId64, ipAddress, player, duration, reason);
+        }
+        else
+        {
+            SubmitPluginBan(client, 0, "steam", targetArg, "", "", duration, reason);
+            ReplyToCommand(client, "[Manger] 玩家不在线，封禁记录已提交到网站。");
+        }
+        return Plugin_Handled;
+    }
+
+    // RCON 通过 SteamID64 执行，网站已创建封禁记录
+    bool isSteamId64 = (strlen(targetArg) == 17 && targetArg[0] == '7');
+    if (client == 0 && isSteamId64)
+    {
+        ReplyToCommand(client, "[Manger] 封禁记录已创建，玩家将在下次轮询时被踢出。");
+        return Plugin_Handled;
+    }
+
+    // 通过玩家名称或 #userid 查找
+    int target = FindTarget(client, targetArg, true);
+    if (target <= 0)
+    {
+        return Plugin_Handled;
+    }
 
     char steamId[64];
     char ipAddress[64];

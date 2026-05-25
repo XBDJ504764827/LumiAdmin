@@ -2,6 +2,7 @@ import React, { lazy, Suspense } from 'react';
 
 const DashboardPage = lazy(() => import('../pages/dashboard/DashboardPage.jsx').then(m => ({ default: m.DashboardPage })));
 const CommunityPage = lazy(() => import('../pages/community/CommunityPage.jsx').then(m => ({ default: m.CommunityPage })));
+const RconPage = lazy(() => import('../pages/rcon/RconPage.jsx').then(m => ({ default: m.RconPage })));
 const WhitelistPage = lazy(() => import('../pages/whitelist/WhitelistPage.jsx').then(m => ({ default: m.WhitelistPage })));
 const BanPage = lazy(() => import('../pages/ban/BanPage.jsx').then(m => ({ default: m.BanPage })));
 const BanAppealPage = lazy(() => import('../pages/banAppeal/BanAppealPage.jsx').then(m => ({ default: m.BanAppealPage })));
@@ -25,6 +26,7 @@ function Lazy({ children }) {
 export const protectedRoutes = [
   { path: '/dashboard', element: <Lazy><DashboardPage /></Lazy>, roles: ['admin', 'developer'] },
   { path: '/community', element: <Lazy><CommunityPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },
+  { path: '/rcon', element: <Lazy><RconPage /></Lazy>, roles: ['admin', 'developer'] },
   { path: '/whitelist', element: <Lazy><WhitelistPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },
   { path: '/ban', element: <Lazy><BanPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },
   { path: '/ban-appeal', element: <Lazy><BanAppealPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },

@@ -9,6 +9,7 @@ const icon = (children) => (
 const icons = {
   grid: icon(<><rect x="1" y="1" width="6" height="6" rx="1.5" /><rect x="9" y="1" width="6" height="6" rx="1.5" /><rect x="1" y="9" width="6" height="6" rx="1.5" /><rect x="9" y="9" width="6" height="6" rx="1.5" /></>),
   community: icon(<><path d="M12 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V3a1 1 0 00-1-1z" /><path d="M5 6h6M5 9h4" /></>),
+  rcon: icon(<><rect x="2" y="2" width="20" height="8" rx="2" /><rect x="2" y="14" width="20" height="8" rx="2" /><circle cx="6" cy="6" r="1" /><circle cx="6" cy="18" r="1" /><path d="M12 6h6M12 18h6" strokeLinecap="round" /></>),
   whitelist: icon(<><path d="M2 12L5 8l3 2 3-5 3 3" /><rect x="1" y="1" width="14" height="14" rx="2" /></>),
   ban: icon(<><circle cx="8" cy="8" r="6" /><path d="M5 5L11 11M11 5L5 11" /></>),
   banAppeal: icon(<><path d="M8 1.5C5.5 1.5 3.5 3.5 3 6c0 2.5-1 3.5-2.5 5h15C14 9.5 13 8.5 13 6c-.5-2.5-2.5-4.5-5-4.5z" /><path d="M6 12.5c.5 1 1 1.5 2 1.5s1.5-.5 2-1.5" strokeLinecap="round" /><path d="M3 1.5L13 11.5" strokeLinecap="round" /></>),
@@ -39,7 +40,7 @@ export function sidebarSections(role) {
         { path: '/ban', label: '封禁管理', icon: icons.ban },
         { path: '/ban-appeal', label: '封禁申诉', icon: icons.banAppeal },
         ...(canSeeUserManagement ? [{ path: '/users', label: '网站用户管理', icon: icons.users }] : []),
-      ],
+      ].filter((item) => !item.roles || item.roles.includes(role)),
     },
     {
       label: '系统功能',
@@ -64,6 +65,7 @@ export function sidebarSections(role) {
         { path: '/public/apply', label: '白名单申请', icon: icons.apply },
         { path: '/public/whitelist', label: '白名单公示', icon: icons.table },
         { path: '/public/ban', label: '封禁公示', icon: icons.banPublic },
+        { path: '/public/ban-appeal', label: '封禁申诉', icon: icons.banAppeal },
       ],
     },
   ].filter((section) => section.items.length > 0);

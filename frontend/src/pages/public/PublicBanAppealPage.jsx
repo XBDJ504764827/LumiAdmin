@@ -193,6 +193,9 @@ export function PublicBanAppealPage() {
       });
       appealId = result.item?.id;
       uploadToken = result.item?.upload_token;
+      if (!appealId) {
+        throw new Error('服务器未返回申诉编号，请刷新页面后重试。');
+      }
     } catch (e) {
       setError(e.message || '提交失败，请稍后重试。');
       setPhase('idle');

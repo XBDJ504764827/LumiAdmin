@@ -318,7 +318,14 @@ pub fn router(
         .route("/api/public/bans", get(public::public_bans))
         .route("/api/public/steam/resolve", post(public::resolve_steam))
         .route("/api/public/bans/query", post(public::query_active_bans))
-        .route("/api/public/ban-appeals", post(public::submit_ban_appeal))
+        .route(
+            "/api/public/ban-appeals",
+            get(public::public_ban_appeals_info).post(public::submit_ban_appeal),
+        )
+        .route(
+            "/api/public/ban-appeals/",
+            get(public::public_ban_appeals_info).post(public::submit_ban_appeal),
+        )
         .route(
             "/api/public/ban-appeals/:id/files",
             post(public::upload_appeal_files),

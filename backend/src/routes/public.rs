@@ -118,6 +118,13 @@ pub(crate) async fn public_bans(
     ))
 }
 
+pub(crate) async fn public_ban_appeals_info() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "ok": true,
+        "message": "Use POST /api/public/ban-appeals to submit a ban appeal."
+    }))
+}
+
 pub(crate) async fn resolve_steam(
     State(ctx): State<AppCtx>,
     Json(body): Json<ResolveSteamBody>,

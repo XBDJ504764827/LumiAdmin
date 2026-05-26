@@ -7,6 +7,7 @@ mod models;
 mod password;
 mod rate_limit_middleware;
 mod rcon;
+mod request_log_middleware;
 mod routes;
 mod services;
 
@@ -70,6 +71,7 @@ async fn main() -> anyhow::Result<()> {
     let cors_origin = config.cors_origin.clone();
     let steam_resolver = services::steam_service::SteamResolver::new(&config);
     let app = routes::router(config, db, access_snapshot, server_config_cache, steam_resolver)
+        .layer(axum::middleware::from_fn(request_log_middleware::request_log_middleware))
         .layer(axum::middleware::from_fn_with_state(
             rate_limit_state,
             rate_limit_middleware::rate_limit_middleware,

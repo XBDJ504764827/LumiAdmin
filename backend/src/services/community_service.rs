@@ -706,7 +706,7 @@ fn generate_report_token() -> String {
 fn is_report_stale(last_reported_at: Option<chrono::DateTime<chrono::Utc>>) -> bool {
     match last_reported_at {
         Some(value) => chrono::Utc::now().signed_duration_since(value).num_seconds() > OFFLINE_AFTER_SECONDS,
-        None => false,
+        None => true,
     }
 }
 
@@ -778,6 +778,13 @@ fn validate_rcon_command(command: &str) -> anyhow::Result<()> {
         "removeip",
         "exec",
         "alias",
+        "sm_rcon",
+        "changelevel",
+        "map",
+        "kickid",
+        "banip",
+        "_restart",
+        "restart",
     ];
 
     for keyword in &keywords {

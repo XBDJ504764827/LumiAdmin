@@ -238,8 +238,9 @@ pub async fn delete_ban(db: &Database, id: Uuid) -> anyhow::Result<()> {
 }
 
 pub async fn find_ban(db: &Database, id: Uuid) -> anyhow::Result<BanRecord> {
-    let query = format!("SELECT {BAN_FIELDS} FROM ban_records WHERE id = $1");
-    sqlx::query_as::<_, BanRecord>(&query)
+    sqlx::query_as::<_, BanRecord>(
+        "SELECT player, steam_id, operator_name FROM ban_records WHERE id = $1"
+    )
         .bind(id)
         .fetch_one(&db.pool)
         .await

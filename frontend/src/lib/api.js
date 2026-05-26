@@ -10,9 +10,7 @@ function buildQueryString(params = {}) {
 function handleUnauthorized() {
   if (typeof window !== 'undefined') {
     window.localStorage.removeItem('manger_token');
-    if (!window.location.pathname.endsWith('/login')) {
-      window.location.href = '/login';
-    }
+    window.dispatchEvent(new CustomEvent('manger:unauthorized'));
   }
 }
 

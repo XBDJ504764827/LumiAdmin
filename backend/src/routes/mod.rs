@@ -108,7 +108,7 @@ pub fn router(
     steam_resolver: SteamResolver,
 ) -> Router {
     Router::new()
-        .route("/health", get(|| async { Json(serde_json::json!({ "ok": true })) }))
+        .route("/health", get(misc::health_check))
         // -- auth --
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/logout", post(auth::logout))

@@ -98,7 +98,7 @@ jobs:
         run: |
           cd backend
           cargo clippy --all-targets
-          cargo test --no-run
+          cargo test
 
       - name: Build Backend
         run: |

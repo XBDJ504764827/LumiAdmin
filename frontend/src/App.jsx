@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Navigate, Route, Routes } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './state/auth.jsx';
 import { ThemeProvider } from './state/theme.jsx';
 import { AppShell } from './components/layout/AppShell.jsx';
@@ -145,7 +145,17 @@ function LoginScreen() {
 }
 
 function AppRoutes() {
-  const { session, bootstrapLoading } = useAuth();
+  const { session, bootstrapLoading, logout } = useAuth();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    function handleUnauthorizedEvent() {
+      logout();
+      navigate('/login', { replace: true });
+    }
+    window.addEventListener('manger:unauthorized', handleUnauthorizedEvent);
+    return () => window.removeEventListener('manger:unauthorized', handleUnauthorizedEvent);
+  }, [logout, navigate]);
 
   if (bootstrapLoading) {
     return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>正在加载登录状态...</div>;

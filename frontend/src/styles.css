@@ -1942,3 +1942,17 @@ input[type="checkbox"], input[type="radio"] {
   box-shadow: 0 0 0 1px var(--accent2);
 }
 
+/* ===== Skeleton Loading Animation ===== */
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+:root {
+  --skeleton-bg: #e8e8e8;
+}
+
+[data-theme="dark"] {
+  --skeleton-bg: #333;
+}
+

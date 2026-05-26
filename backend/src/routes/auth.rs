@@ -26,10 +26,11 @@ pub(crate) async fn login(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let resp = auth_service::login(&ctx.db, &body.username, &body.password, ctx.config.session_ttl_hours)
         .await
-        .map_err(|_| {
+        .map_err(|err| {
+            tracing::warn!(username = %body.username, error = %err, "login failed");
             (
                 StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({"error":"invalid credentials"})),
+                Json(serde_json::json!({"error":"用户名或密码错误"})),
             )
         })?;
     Ok(Json(serde_json::json!({"session": resp.session})))
@@ -58,21 +59,37 @@ pub(crate) async fn me(State(ctx): State<AppCtx>, headers: HeaderMap) -> Result<
     let session = auth_service::current_session(&ctx.db, token)
         .await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
+
+    let enabled: (bool,) = sqlx::query_as("SELECT enabled FROM users WHERE id = $1")
+        .bind(session.user_id)
+        .fetch_optional(&ctx.db.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    if !enabled.0 {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
     Ok(Json(serde_json::json!({"session": session})))
 }
 
 /// 登出当前用户的所有其他设备（保留当前 session）
 pub(crate) async fn logout_all_devices(
     State(ctx): State<AppCtx>,
-    _headers: HeaderMap,
-    Json(body): Json<LogoutAllBody>,
+    headers: HeaderMap,
+    _body: Json<LogoutAllBody>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    // 验证当前 session 有效
-    let session = auth_service::current_session(&ctx.db, body.current_token)
+    let token_str = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    let token = Uuid::parse_str(token_str).map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let session = auth_service::current_session(&ctx.db, token)
         .await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
 
-    let count = auth_service::logout_all_for_user(&ctx.db, session.user_id, Some(body.current_token))
+    let count = auth_service::logout_all_for_user(&ctx.db, session.user_id, Some(token))
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 

@@ -157,10 +157,25 @@ async fn handle_ws(
     let send_tx = tx.clone();
     let send_user_id = user_id;
     let send_task = tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            if let Ok(text) = serde_json::to_string(&msg) {
-                if sender.send(Message::Text(text)).await.is_err() {
-                    break;
+        let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        loop {
+            tokio::select! {
+                msg = rx.recv() => {
+                    match msg {
+                        Some(msg) => {
+                            if let Ok(text) = serde_json::to_string(&msg) {
+                                if sender.send(Message::Text(text)).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                        None => break,
+                    }
+                }
+                _ = ping_interval.tick() => {
+                    if sender.send(Message::Ping(vec![])).await.is_err() {
+                        break;
+                    }
                 }
             }
         }
@@ -181,6 +196,7 @@ async fn handle_ws(
         notification_service::unregister_connection(&recv_hub, &recv_user_id, &recv_tx).await;
     });
 
+    // 发送任务已内置定时 Ping（见上方 send_task）
     tokio::select! {
         _ = send_task => {},
         _ = recv_task => {},

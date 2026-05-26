@@ -1,4 +1,5 @@
 import React, { lazy, Suspense } from 'react';
+import { PageSkeleton } from '../shared/PageSkeleton.jsx';
 
 const DashboardPage = lazy(() => import('../pages/dashboard/DashboardPage.jsx').then(m => ({ default: m.DashboardPage })));
 const CommunityPage = lazy(() => import('../pages/community/CommunityPage.jsx').then(m => ({ default: m.CommunityPage })));
@@ -20,7 +21,7 @@ const PublicBanPage = lazy(() => import('../pages/public/PublicBanPage.jsx').the
 const PublicBanAppealPage = lazy(() => import('../pages/public/PublicBanAppealPage.jsx').then(m => ({ default: m.PublicBanAppealPage })));
 
 function Lazy({ children }) {
-  return <Suspense fallback={<div style={{ padding: 24, color: 'var(--text-secondary)' }}>加载中...</div>}>{children}</Suspense>;
+  return <Suspense fallback={<PageSkeleton />}>{children}</Suspense>;
 }
 
 export const protectedRoutes = [

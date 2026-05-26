@@ -40,23 +40,45 @@ struct RateLimitEntry {
     window_start: Instant,
 }
 
-/// 基于 Key 的通用速率限制器
+/// 基于 Key 的分片速率限制器
+/// 使用多分片 RwLock 减少锁竞争，适用于高并发场景
 pub struct RateLimiter {
-    entries: RwLock<HashMap<String, RateLimitEntry>>,
+    /// 分片数量
+    shard_count: usize,
+    /// 分片数据
+    shards: Vec<RwLock<HashMap<String, RateLimitEntry>>>,
     config: RateLimitConfig,
 }
 
 impl RateLimiter {
+    /// 默认分片数
+    const DEFAULT_SHARD_COUNT: usize = 16;
+
     pub fn new(config: RateLimitConfig) -> Self {
+        let shard_count = Self::DEFAULT_SHARD_COUNT;
+        let mut shards = Vec::with_capacity(shard_count);
+        for _ in 0..shard_count {
+            shards.push(RwLock::new(HashMap::new()));
+        }
         Self {
-            entries: RwLock::new(HashMap::new()),
+            shard_count,
+            shards,
             config,
         }
     }
 
+    /// 根据 key 计算分片索引
+    fn shard_index(&self, key: &str) -> usize {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::hash::DefaultHasher::new();
+        key.hash(&mut hasher);
+        hasher.finish() as usize % self.shard_count
+    }
+
     /// 检查是否允许请求
     pub async fn check(&self, key: &str) -> Result<(), RateLimitError> {
-        let mut entries = self.entries.write().await;
+        let idx = self.shard_index(key);
+        let mut entries = self.shards[idx].write().await;
         let now = Instant::now();
         let window_duration = Duration::from_secs(self.config.window_secs);
 
@@ -88,27 +110,33 @@ impl RateLimiter {
     /// 获取当前计数（用于监控）
     #[allow(dead_code)]
     pub async fn get_count(&self, key: &str) -> u32 {
-        let entries = self.entries.read().await;
+        let idx = self.shard_index(key);
+        let entries = self.shards[idx].read().await;
         entries.get(key).map(|e| e.count).unwrap_or(0)
     }
 
     /// 清理过期条目
     pub async fn cleanup(&self) {
-        let mut entries = self.entries.write().await;
         let now = Instant::now();
         let cleanup_threshold = Duration::from_secs(self.config.window_secs * 2);
 
-        let before = entries.len();
-        entries.retain(|_, entry| {
-            now.duration_since(entry.window_start) < cleanup_threshold
-        });
-        let after = entries.len();
+        let mut total_before = 0usize;
+        let mut total_after = 0usize;
 
-        if before != after {
+        for shard in &self.shards {
+            let mut entries = shard.write().await;
+            total_before += entries.len();
+            entries.retain(|_, entry| {
+                now.duration_since(entry.window_start) < cleanup_threshold
+            });
+            total_after += entries.len();
+        }
+
+        if total_before != total_after {
             info!(
                 name = %self.config.name,
-                removed = before - after,
-                remaining = after,
+                removed = total_before - total_after,
+                remaining = total_after,
                 "Rate limiter cleanup"
             );
         }
@@ -117,9 +145,12 @@ impl RateLimiter {
     /// 获取统计信息
     #[allow(dead_code)]
     pub async fn stats(&self) -> RateLimiterStats {
-        let entries = self.entries.read().await;
+        let mut total_keys = 0usize;
+        for shard in &self.shards {
+            total_keys += shard.read().await.len();
+        }
         RateLimiterStats {
-            total_keys: entries.len(),
+            total_keys,
             config: self.config.clone(),
         }
     }
@@ -258,5 +289,23 @@ mod tests {
 
         assert!(err.retry_after > 0);
         assert!(err.retry_after <= 60);
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_sharding_isolation() {
+        // 验证不同分片的 key 不互相影响
+        let limiter = RateLimiter::new(RateLimitConfig {
+            max_requests: 2,
+            window_secs: 60,
+            name: "test".to_string(),
+        });
+
+        // key_a 用满限制
+        limiter.check("key_a").await.unwrap();
+        limiter.check("key_a").await.unwrap();
+        assert!(limiter.check("key_a").await.is_err());
+
+        // key_b 不应该受影响（即使它们可能在同一个分片上，但独立计数）
+        assert!(limiter.check("key_b").await.is_ok());
     }
 }

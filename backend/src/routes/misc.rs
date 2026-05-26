@@ -10,6 +10,13 @@ use uuid::Uuid;
 use crate::routes::{AppCtx, ListQuery, current_operator, forbidden};
 use crate::services::{audit_service, dashboard_service, docs_service, log_service, permission_service};
 
+pub(crate) async fn health_check(State(ctx): State<AppCtx>) -> Json<serde_json::Value> {
+    let db_ok = sqlx::query("SELECT 1").execute(&ctx.db.pool).await.is_ok();
+    Json(serde_json::json!({
+        "ok": db_ok,
+        "database": db_ok,
+    }))
+}
 pub(crate) async fn dashboard(State(ctx): State<AppCtx>) -> Result<Json<serde_json::Value>, StatusCode> {
     let data = dashboard_service::get_metrics(&ctx.db)
         .await

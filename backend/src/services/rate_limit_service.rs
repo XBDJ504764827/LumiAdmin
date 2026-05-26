@@ -163,7 +163,9 @@ pub struct RateLimiterStats {
 
 /// 预定义的限流器配置
 pub struct RateLimiters {
-    /// 公开 API 限流器（按 IP）
+    /// 公开读取 API 限流器（按 IP）
+    pub public_read_api: RateLimiter,
+    /// 公开提交/上传 API 限流器（按 IP）
     pub public_api: RateLimiter,
     /// 认证 API 限流器（按 IP，更严格）
     pub auth_api: RateLimiter,
@@ -176,9 +178,15 @@ pub struct RateLimiters {
 impl RateLimiters {
     pub fn new() -> Self {
         Self {
-            // 公开 API：每 10 分钟 5 次/IP
+            // 公开读取 API：每分钟 120 次/IP
+            public_read_api: RateLimiter::new(RateLimitConfig {
+                max_requests: 120,
+                window_secs: 60,
+                name: "public_read_api".to_string(),
+            }),
+            // 公开提交/上传 API：每 10 分钟 50 次/IP
             public_api: RateLimiter::new(RateLimitConfig {
-                max_requests: 5,
+                max_requests: 50,
                 window_secs: 600,
                 name: "public_api".to_string(),
             }),
@@ -209,6 +217,7 @@ impl RateLimiters {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             loop {
                 interval.tick().await;
+                self.public_read_api.cleanup().await;
                 self.public_api.cleanup().await;
                 self.auth_api.cleanup().await;
                 self.plugin_api.cleanup().await;

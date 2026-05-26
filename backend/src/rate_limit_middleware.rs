@@ -1,7 +1,7 @@
 use axum::{
     extract::ConnectInfo,
     extract::{Request, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, Method, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
 };
@@ -23,6 +23,7 @@ pub async fn rate_limit_middleware(
     next: Next,
 ) -> Result<Response, RateLimitResponse> {
     let path = request.uri().path();
+    let method = request.method().clone();
     let headers = request.headers();
     let peer_ip = request
         .extensions()
@@ -32,7 +33,11 @@ pub async fn rate_limit_middleware(
 
     // 根据路径选择不同的限流策略
     if path.starts_with("/api/public/") {
-        state.limiters.public_api.check(&rate_limit_ip).await?;
+        if method == Method::GET {
+            state.limiters.public_read_api.check(&rate_limit_ip).await?;
+        } else {
+            state.limiters.public_api.check(&rate_limit_ip).await?;
+        }
     } else if path.starts_with("/api/auth/login") || path.starts_with("/api/auth/logout") {
         state.limiters.auth_api.check(&rate_limit_ip).await?;
     } else if path.starts_with("/api/plugin/") {

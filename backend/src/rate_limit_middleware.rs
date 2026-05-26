@@ -5,7 +5,7 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use crate::services::rate_limit_service::{RateLimitError, RateLimiters};
@@ -27,22 +27,52 @@ pub async fn rate_limit_middleware(
     let peer_ip = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
-        .map(|ConnectInfo(addr)| addr.ip().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
+        .map(|ConnectInfo(addr)| addr.ip());
+    let rate_limit_ip = client_ip_for_rate_limit(headers, peer_ip);
 
     // 根据路径选择不同的限流策略
     if path.starts_with("/api/public/") {
-        state.limiters.public_api.check(&peer_ip).await?;
+        state.limiters.public_api.check(&rate_limit_ip).await?;
     } else if path.starts_with("/api/auth/login") || path.starts_with("/api/auth/logout") {
-        state.limiters.auth_api.check(&peer_ip).await?;
+        state.limiters.auth_api.check(&rate_limit_ip).await?;
     } else if path.starts_with("/api/plugin/") {
-        state.limiters.plugin_api.check(&peer_ip).await?;
+        state.limiters.plugin_api.check(&rate_limit_ip).await?;
     } else if path.starts_with("/api/") {
-        let user_key = extract_user_key(headers, &peer_ip);
+        let user_key = extract_user_key(headers, &rate_limit_ip);
         state.limiters.admin_api.check(&user_key).await?;
     }
 
     Ok(next.run(request).await)
+}
+
+fn client_ip_for_rate_limit(headers: &HeaderMap, peer_ip: Option<IpAddr>) -> String {
+    let fallback = peer_ip
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    if !peer_ip.is_some_and(|ip| ip.is_loopback()) {
+        return fallback;
+    }
+
+    forwarded_client_ip(headers).unwrap_or(fallback)
+}
+
+fn forwarded_client_ip(headers: &HeaderMap) -> Option<String> {
+    let real_ip = headers
+        .get("x-real-ip")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim());
+    let forwarded = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim());
+
+    real_ip
+        .into_iter()
+        .chain(forwarded)
+        .find(|candidate| candidate.parse::<IpAddr>().is_ok())
+        .map(ToString::to_string)
 }
 
 /// 从请求头提取用户标识

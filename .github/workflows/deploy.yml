@@ -26,6 +26,7 @@ jobs:
               - 'frontend/**'
             backend:
               - 'backend/**'
+              - '.github/workflows/**'
             plugin:
               - 'csgo/**'
 
@@ -75,6 +76,22 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: lumiadmin_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d lumiadmin_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/lumiadmin_test
 
     steps:
       - name: Checkout

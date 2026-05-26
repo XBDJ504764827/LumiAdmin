@@ -35,7 +35,6 @@ impl Database {
         Ok(Self { pool })
     }
 
-
     pub async fn migrate(&self) -> anyhow::Result<()> {
         self.migrate_core_tables().await?;
         self.migrate_ban_records_schema().await?;
@@ -49,6 +48,7 @@ impl Database {
         self.migrate_map_tiers_table().await?;
         self.migrate_notifications_schema().await?;
         self.migrate_ban_appeals_schema().await?;
+        self.migrate_appeal_files_schema().await?;
         self.migrate_adds_missing_constraints_and_indexes().await?;
         Ok(())
     }
@@ -247,12 +247,14 @@ impl Database {
         sqlx::query(r#"UPDATE servers SET report_token = md5(random()::TEXT || clock_timestamp()::TEXT) WHERE report_token IS NULL OR btrim(report_token) = ''"#)
             .execute(&self.pool).await?;
         sqlx::query(r#"ALTER TABLE servers ALTER COLUMN report_token SET NOT NULL"#)
-            .execute(&self.pool).await?;
+            .execute(&self.pool)
+            .await?;
         sqlx::query(r#"CREATE UNIQUE INDEX IF NOT EXISTS idx_servers_report_token_unique ON servers (report_token)"#)
             .execute(&self.pool).await?;
 
         sqlx::query(r#"ALTER TABLE servers ALTER COLUMN status SET DEFAULT 'untested'"#)
-            .execute(&self.pool).await?;
+            .execute(&self.pool)
+            .await?;
 
         // player_access_cache 表 + 索引
         sqlx::query(
@@ -263,7 +265,9 @@ impl Database {
               expires_at TIMESTAMPTZ NOT NULL,
               updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )"#,
-        ).execute(&self.pool).await?;
+        )
+        .execute(&self.pool)
+        .await?;
         sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_player_access_cache_expires_at ON player_access_cache (expires_at)"#)
             .execute(&self.pool).await?;
 
@@ -279,7 +283,9 @@ impl Database {
               current_map TEXT NOT NULL DEFAULT '',
               reported_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )"#,
-        ).execute(&self.pool).await?;
+        )
+        .execute(&self.pool)
+        .await?;
         sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_server_online_players_server_id ON server_online_players (server_id)"#)
             .execute(&self.pool).await?;
         sqlx::query(r#"ALTER TABLE server_online_players ADD COLUMN IF NOT EXISTS current_map TEXT NOT NULL DEFAULT ''"#)
@@ -298,7 +304,9 @@ impl Database {
               updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               CONSTRAINT player_api_config_single_row CHECK (id)
             )"#,
-        ).execute(&self.pool).await?;
+        )
+        .execute(&self.pool)
+        .await?;
 
         sqlx::query(
             r#"CREATE TABLE IF NOT EXISTS player_api_webhooks (
@@ -313,7 +321,9 @@ impl Database {
               created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )"#,
-        ).execute(&self.pool).await?;
+        )
+        .execute(&self.pool)
+        .await?;
 
         let alters = [
             r#"ALTER TABLE player_api_webhooks ADD COLUMN IF NOT EXISTS public_path TEXT NOT NULL DEFAULT ''"#,
@@ -334,7 +344,9 @@ impl Database {
             r#"INSERT INTO player_api_config (id, max_api_count, interval_seconds)
                VALUES (true, 3, 30)
                ON CONFLICT (id) DO NOTHING"#,
-        ).execute(&self.pool).await?;
+        )
+        .execute(&self.pool)
+        .await?;
 
         Ok(())
     }
@@ -368,14 +380,19 @@ impl Database {
             END
             $$;
             "#,
-        ).execute(&self.pool).await?;
+        )
+        .execute(&self.pool)
+        .await?;
 
         sqlx::query(r#"ALTER TABLE servers ALTER COLUMN players SET DEFAULT ARRAY[]::TEXT[]"#)
-            .execute(&self.pool).await?;
+            .execute(&self.pool)
+            .await?;
         sqlx::query(r#"UPDATE servers SET players = ARRAY[]::TEXT[] WHERE players IS NULL"#)
-            .execute(&self.pool).await?;
+            .execute(&self.pool)
+            .await?;
         sqlx::query(r#"ALTER TABLE servers ALTER COLUMN players SET NOT NULL"#)
-            .execute(&self.pool).await?;
+            .execute(&self.pool)
+            .await?;
 
         // addr → ip/port 迁移
         sqlx::query(
@@ -595,12 +612,15 @@ impl Database {
 
         // 索引
         sqlx::query(r#"DROP INDEX IF EXISTS idx_whitelist_requests_steamid64"#)
-            .execute(&self.pool).await?;
+            .execute(&self.pool)
+            .await?;
         sqlx::query(
             r#"CREATE INDEX IF NOT EXISTS idx_whitelist_requests_steamid64_lookup
                ON whitelist_requests (steamid64, updated_at DESC, applied_at DESC)
                WHERE steamid64 IS NOT NULL"#,
-        ).execute(&self.pool).await?;
+        )
+        .execute(&self.pool)
+        .await?;
 
         Ok(())
     }
@@ -623,7 +643,9 @@ impl Database {
               current_map TEXT NOT NULL DEFAULT '',
               reported_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )"#,
-        ).execute(&self.pool).await?;
+        )
+        .execute(&self.pool)
+        .await?;
         sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_server_status_history_server_id ON server_status_history (server_id, reported_at DESC)"#)
             .execute(&self.pool).await?;
 
@@ -640,7 +662,9 @@ impl Database {
               created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )"#,
-        ).execute(&self.pool).await?;
+        )
+        .execute(&self.pool)
+        .await?;
 
         // 审计日志
         sqlx::query(
@@ -663,7 +687,9 @@ impl Database {
               idempotency_key TEXT UNIQUE,
               created_at TIMESTAMPTZ DEFAULT now()
             )"#,
-        ).execute(&self.pool).await?;
+        )
+        .execute(&self.pool)
+        .await?;
 
         let audit_indexes = [
             r#"CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC)"#,
@@ -694,7 +720,9 @@ impl Database {
               applied BOOLEAN NOT NULL DEFAULT false,
               apply_error TEXT
             )"#,
-        ).execute(&self.pool).await?;
+        )
+        .execute(&self.pool)
+        .await?;
 
         let offline_indexes = [
             r#"CREATE INDEX IF NOT EXISTS idx_offline_operations_server_id ON offline_operations (server_id)"#,
@@ -762,7 +790,9 @@ impl Database {
               last_queried_at TIMESTAMPTZ,
               created_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )"#,
-        ).execute(&self.pool).await?;
+        )
+        .execute(&self.pool)
+        .await?;
 
         sqlx::query(
             r#"CREATE TABLE IF NOT EXISTS external_server_status (
@@ -774,12 +804,15 @@ impl Database {
               players TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
               queried_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )"#,
-        ).execute(&self.pool).await?;
+        )
+        .execute(&self.pool)
+        .await?;
 
         sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_external_servers_enabled ON external_servers (enabled) WHERE enabled = true"#)
             .execute(&self.pool).await?;
         sqlx::query(r#"ALTER TABLE external_servers ALTER COLUMN rcon_password DROP NOT NULL"#)
-            .execute(&self.pool).await?;
+            .execute(&self.pool)
+            .await?;
         sqlx::query(r#"ALTER TABLE external_servers ADD COLUMN IF NOT EXISTS poll_interval INTEGER NOT NULL DEFAULT 30"#)
             .execute(&self.pool).await?;
 
@@ -804,7 +837,9 @@ impl Database {
               map_name TEXT PRIMARY KEY,
               tier INTEGER NOT NULL
             )"#,
-        ).execute(&self.pool).await?;
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
     /// 通知表
@@ -820,17 +855,23 @@ impl Database {
               read BOOLEAN NOT NULL DEFAULT false,
               created_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )"#,
-        ).execute(&self.pool).await?;
+        )
+        .execute(&self.pool)
+        .await?;
 
         sqlx::query(
             r#"CREATE INDEX IF NOT EXISTS idx_notifications_user_unread
                ON notifications (user_id, read, created_at DESC) WHERE read = false"#,
-        ).execute(&self.pool).await?;
+        )
+        .execute(&self.pool)
+        .await?;
 
         sqlx::query(
             r#"CREATE INDEX IF NOT EXISTS idx_notifications_created_at
                ON notifications (created_at)"#,
-        ).execute(&self.pool).await?;
+        )
+        .execute(&self.pool)
+        .await?;
 
         Ok(())
     }
@@ -850,20 +891,51 @@ impl Database {
               reviewed_at TIMESTAMPTZ,
               created_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )"#,
-        ).execute(&self.pool).await?;
+        )
+        .execute(&self.pool)
+        .await?;
 
-        sqlx::query(
-            r#"CREATE INDEX IF NOT EXISTS idx_ban_appeals_status ON ban_appeals (status)"#,
-        ).execute(&self.pool).await?;
+        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_ban_appeals_status ON ban_appeals (status)"#)
+            .execute(&self.pool)
+            .await?;
         sqlx::query(
             r#"CREATE INDEX IF NOT EXISTS idx_ban_appeals_steam_id ON ban_appeals (steam_id)"#,
-        ).execute(&self.pool).await?;
+        )
+        .execute(&self.pool)
+        .await?;
         sqlx::query(
             r#"CREATE INDEX IF NOT EXISTS idx_ban_appeals_created_at ON ban_appeals (created_at DESC)"#,
         ).execute(&self.pool).await?;
         sqlx::query(
             r#"ALTER TABLE ban_appeals ADD COLUMN IF NOT EXISTS evidence_paths TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]"#,
         ).execute(&self.pool).await?;
+        sqlx::query(r#"ALTER TABLE ban_appeals ADD COLUMN IF NOT EXISTS upload_token_hash TEXT"#)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn migrate_appeal_files_schema(&self) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"CREATE TABLE IF NOT EXISTS appeal_files (
+              id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+              appeal_id UUID NOT NULL REFERENCES ban_appeals(id) ON DELETE CASCADE,
+              file_name TEXT NOT NULL,
+              file_size BIGINT NOT NULL,
+              content_type TEXT NOT NULL,
+              storage_key TEXT NOT NULL,
+              category TEXT NOT NULL,
+              uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )"#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"CREATE INDEX IF NOT EXISTS idx_appeal_files_appeal_id ON appeal_files (appeal_id)"#,
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -896,7 +968,10 @@ impl Database {
                 .await?;
         }
         if !rows.is_empty() {
-            tracing::info!(count = rows.len(), "migrated plaintext passwords to argon2 hashes");
+            tracing::info!(
+                count = rows.len(),
+                "migrated plaintext passwords to argon2 hashes"
+            );
         }
 
         Ok(())
@@ -936,19 +1011,25 @@ impl Database {
         sqlx::query(
             r#"CREATE INDEX IF NOT EXISTS idx_whitelist_requests_status_applied
                ON whitelist_requests (status, applied_at DESC)"#,
-        ).execute(&self.pool).await?;
+        )
+        .execute(&self.pool)
+        .await?;
 
         // ban_records 复合索引
         sqlx::query(
             r#"CREATE INDEX IF NOT EXISTS idx_ban_records_status_created
                ON ban_records (status, created_at DESC)"#,
-        ).execute(&self.pool).await?;
+        )
+        .execute(&self.pool)
+        .await?;
 
         // ban_appeals 复合索引
         sqlx::query(
             r#"CREATE INDEX IF NOT EXISTS idx_ban_appeals_ban_id_status
                ON ban_appeals (ban_id, status)"#,
-        ).execute(&self.pool).await?;
+        )
+        .execute(&self.pool)
+        .await?;
 
         Ok(())
     }
@@ -957,7 +1038,10 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::Database;
-    use crate::{config::Config, services::{dashboard_service, public_service, whitelist_service}};
+    use crate::{
+        config::Config,
+        services::{dashboard_service, public_service, whitelist_service},
+    };
     use sqlx::postgres::PgPoolOptions;
     use uuid::Uuid;
 
@@ -1081,7 +1165,10 @@ mod tests {
 
             assert_eq!(metrics.admins, 3);
             assert_eq!(preview_names, vec!["Admin One", "Dev One", "Normal One"]);
-            assert!(metrics.admin_preview.iter().all(|item| item.status == "可用"));
+            assert!(metrics
+                .admin_preview
+                .iter()
+                .all(|item| item.status == "可用"));
 
             Ok::<(), anyhow::Error>(())
         }
@@ -1304,7 +1391,10 @@ mod tests {
             )
             .fetch_all(&db.pool)
             .await?;
-            let names = webhook_columns.into_iter().map(|row| row.0).collect::<Vec<_>>();
+            let names = webhook_columns
+                .into_iter()
+                .map(|row| row.0)
+                .collect::<Vec<_>>();
             assert!(names.contains(&"webhook_url".to_string()));
             assert!(names.contains(&"secret".to_string()));
             assert!(names.contains(&"server_ids".to_string()));
@@ -1437,14 +1527,20 @@ mod tests {
 
             let items = whitelist_service::list_whitelist(
                 &db,
-                &crate::routes::ListQuery { search: None, status: None, page: None, page_size: None },
+                &crate::routes::ListQuery {
+                    search: None,
+                    status: None,
+                    page: None,
+                    page_size: None,
+                },
             )
             .await?;
             assert_eq!(items.items.len(), 2);
             assert!(items.items.iter().any(|item| {
                 item.nickname == "旧版被拒玩家"
                     && item.steamid64 == "76561198000000001"
-                    && item.profile_url.as_deref() == Some("https://steamcommunity.com/profiles/76561198000000001")
+                    && item.profile_url.as_deref()
+                        == Some("https://steamcommunity.com/profiles/76561198000000001")
                     && item.rejection_reason.as_deref() == Some("资料不完整")
                     && item.rejected_by.as_deref() == Some("Alex")
                     && item.rejected_at.is_some()
@@ -1456,7 +1552,16 @@ mod tests {
                     && item.approved_at.is_some()
             }));
 
-            let public_items = public_service::list_public_whitelist(&db, &crate::routes::ListQuery { search: None, status: None, page: None, page_size: None }).await?;
+            let public_items = public_service::list_public_whitelist(
+                &db,
+                &crate::routes::ListQuery {
+                    search: None,
+                    status: None,
+                    page: None,
+                    page_size: None,
+                },
+            )
+            .await?;
             assert_eq!(public_items.items.len(), 1);
             assert_eq!(public_items.items[0].nickname, "旧版已通过玩家");
             assert_eq!(public_items.items[0].steamid64, "76561198000000002");
@@ -1755,7 +1860,10 @@ mod tests {
             )
             .fetch_all(&db.pool)
             .await?;
-            let server_names = server_columns.into_iter().map(|row| row.0).collect::<Vec<_>>();
+            let server_names = server_columns
+                .into_iter()
+                .map(|row| row.0)
+                .collect::<Vec<_>>();
             assert!(server_names.contains(&"report_token".to_string()));
 
             Ok::<(), anyhow::Error>(())

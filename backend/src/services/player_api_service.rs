@@ -72,7 +72,9 @@ pub struct NormalizedWebhookInput {
     pub public_access: bool,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct PlayerApiDispatchRow {
@@ -115,7 +117,13 @@ pub struct WebhookPlayerPayload {
     pub reported_at: DateTime<Utc>,
 }
 
-type ExistingWebhookRow = (Uuid, String, Option<String>, Option<String>, Option<DateTime<Utc>>);
+type ExistingWebhookRow = (
+    Uuid,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<DateTime<Utc>>,
+);
 type ExistingWebhookState = (Uuid, Option<String>, Option<String>, Option<DateTime<Utc>>);
 
 #[derive(sqlx::FromRow)]
@@ -165,10 +173,16 @@ pub async fn get_config(db: &Database) -> anyhow::Result<PlayerApiConfigResponse
     })
 }
 
-pub async fn save_config(db: &Database, input: PlayerApiConfigInput) -> anyhow::Result<PlayerApiConfigResponse> {
+pub async fn save_config(
+    db: &Database,
+    input: PlayerApiConfigInput,
+) -> anyhow::Result<PlayerApiConfigResponse> {
     anyhow::ensure!(input.max_api_count >= 0, "最大 API 数量不能为负数");
     anyhow::ensure!(input.interval_seconds > 0, "分发周期必须大于 0 秒");
-    anyhow::ensure!(input.items.len() <= input.max_api_count as usize, "Webhook 数量超过限制");
+    anyhow::ensure!(
+        input.items.len() <= input.max_api_count as usize,
+        "Webhook 数量超过限制"
+    );
 
     let normalized_items = input
         .items
@@ -198,13 +212,21 @@ pub async fn save_config(db: &Database, input: PlayerApiConfigInput) -> anyhow::
     // 建立 public_path -> (id, last_status, last_error, last_dispatched_at) 的映射
     let existing_map: std::collections::HashMap<String, ExistingWebhookState> = existing_rows
         .into_iter()
-        .map(|(id, public_path, last_status, last_error, last_dispatched_at)| {
-            (public_path, (id, last_status, last_error, last_dispatched_at))
-        })
+        .map(
+            |(id, public_path, last_status, last_error, last_dispatched_at)| {
+                (
+                    public_path,
+                    (id, last_status, last_error, last_dispatched_at),
+                )
+            },
+        )
         .collect();
 
     // 收集需要保留的 ID
-    let new_public_paths: Vec<&str> = normalized_items.iter().map(|item| item.public_path.as_str()).collect();
+    let new_public_paths: Vec<&str> = normalized_items
+        .iter()
+        .map(|item| item.public_path.as_str())
+        .collect();
 
     // 删除不再需要的 webhook
     sqlx::query(r#"DELETE FROM player_api_webhooks WHERE NOT (public_path = ANY($1))"#)
@@ -214,7 +236,9 @@ pub async fn save_config(db: &Database, input: PlayerApiConfigInput) -> anyhow::
 
     // 插入或更新 webhook
     for item in normalized_items {
-        if let Some((existing_id, _last_status, _last_error, _last_dispatched_at)) = existing_map.get(&item.public_path) {
+        if let Some((existing_id, _last_status, _last_error, _last_dispatched_at)) =
+            existing_map.get(&item.public_path)
+        {
             // 更新现有记录，保留状态信息
             sqlx::query(
                 r#"UPDATE player_api_webhooks
@@ -254,16 +278,26 @@ pub async fn save_config(db: &Database, input: PlayerApiConfigInput) -> anyhow::
     get_config(db).await
 }
 
-pub fn normalize_webhook_input(input: PlayerApiWebhookInput) -> anyhow::Result<NormalizedWebhookInput> {
+pub fn normalize_webhook_input(
+    input: PlayerApiWebhookInput,
+) -> anyhow::Result<NormalizedWebhookInput> {
     let public_path = input.public_path.trim().to_string();
     anyhow::ensure!(!public_path.is_empty(), "自定义后缀不能为空");
     let webhook_url = input.webhook_url.and_then(|value| {
         let trimmed = value.trim().to_string();
-        if trimmed.is_empty() { None } else { Some(trimmed) }
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
     });
     let secret = input.secret.and_then(|value| {
         let trimmed = value.trim().to_string();
-        if trimmed.is_empty() { None } else { Some(trimmed) }
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
     });
 
     Ok(NormalizedWebhookInput {
@@ -277,12 +311,18 @@ pub fn normalize_webhook_input(input: PlayerApiWebhookInput) -> anyhow::Result<N
     })
 }
 
-pub fn build_webhook_payload(generated_at: DateTime<Utc>, rows: Vec<PlayerApiDispatchRow>) -> WebhookPayload {
+pub fn build_webhook_payload(
+    generated_at: DateTime<Utc>,
+    rows: Vec<PlayerApiDispatchRow>,
+) -> WebhookPayload {
     let mut servers: Vec<WebhookServerPayload> = Vec::new();
 
     for row in rows {
         let has_player = !row.player.is_empty();
-        if let Some(server) = servers.iter_mut().find(|server| server.server_id == row.server_id) {
+        if let Some(server) = servers
+            .iter_mut()
+            .find(|server| server.server_id == row.server_id)
+        {
             if has_player {
                 server.players.push(WebhookPlayerPayload {
                     player: row.player,
@@ -317,16 +357,16 @@ pub fn build_webhook_payload(generated_at: DateTime<Utc>, rows: Vec<PlayerApiDis
         }
     }
 
-    WebhookPayload { generated_at, servers }
+    WebhookPayload {
+        generated_at,
+        servers,
+    }
 }
 
 /// 按 id 列表的顺序排列 servers。不在列表中的排到末尾并按名称字母排序。
 pub fn sort_servers_by_ids(servers: &mut [WebhookServerPayload], order: &[Uuid]) {
-    let position: std::collections::HashMap<Uuid, usize> = order
-        .iter()
-        .enumerate()
-        .map(|(i, id)| (*id, i))
-        .collect();
+    let position: std::collections::HashMap<Uuid, usize> =
+        order.iter().enumerate().map(|(i, id)| (*id, i)).collect();
     servers.sort_by(|a, b| {
         let pa = position.get(&a.server_id).unwrap_or(&usize::MAX);
         let pb = position.get(&b.server_id).unwrap_or(&usize::MAX);
@@ -336,7 +376,8 @@ pub fn sort_servers_by_ids(servers: &mut [WebhookServerPayload], order: &[Uuid])
 
 /// 批量查询 map_tier 并填充到每个 server 中
 async fn fill_map_tiers(db: &Database, servers: &mut [WebhookServerPayload]) {
-    let map_names: Vec<String> = servers.iter()
+    let map_names: Vec<String> = servers
+        .iter()
         .map(|s| s.current_map.clone())
         .filter(|m| !m.is_empty())
         .collect();
@@ -351,39 +392,54 @@ async fn fill_map_tiers(db: &Database, servers: &mut [WebhookServerPayload]) {
     }
 }
 
-async fn fetch_external_server_rows(db: &Database, ids: &[Uuid]) -> anyhow::Result<Vec<WebhookServerPayload>> {
+async fn fetch_external_server_rows(
+    db: &Database,
+    ids: &[Uuid],
+) -> anyhow::Result<Vec<WebhookServerPayload>> {
     let servers = if ids.is_empty() {
         crate::services::external_server_service::get_all_with_status(db).await?
     } else {
         crate::services::external_server_service::get_status_by_ids(db, ids).await?
     };
 
-    Ok(servers.into_iter().map(|s| {
-        let server_name = s.server_name
-            .as_deref()
-            .filter(|n| !n.is_empty())
-            .unwrap_or(&s.name)
-            .to_string();
-        WebhookServerPayload {
-            server_id: s.id,
-            server_name,
-            server_ip: s.ip,
-            server_port: s.port,
-            current_map: s.current_map.clone().unwrap_or_default(),
-            player_count: s.player_count.unwrap_or(0) as usize,
-            max_players: s.max_players.unwrap_or(0),
-            map_tier: None,
-            players: s.players.unwrap_or_default().into_iter().map(|name| WebhookPlayerPayload {
-                player: name,
-                steam_id64: String::new(),
-                ping: 0,
-                reported_at: s.status_queried_at.unwrap_or_default(),
-            }).collect(),
-        }
-    }).collect())
+    Ok(servers
+        .into_iter()
+        .map(|s| {
+            let server_name = s
+                .server_name
+                .as_deref()
+                .filter(|n| !n.is_empty())
+                .unwrap_or(&s.name)
+                .to_string();
+            WebhookServerPayload {
+                server_id: s.id,
+                server_name,
+                server_ip: s.ip,
+                server_port: s.port,
+                current_map: s.current_map.clone().unwrap_or_default(),
+                player_count: s.player_count.unwrap_or(0) as usize,
+                max_players: s.max_players.unwrap_or(0),
+                map_tier: None,
+                players: s
+                    .players
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|name| WebhookPlayerPayload {
+                        player: name,
+                        steam_id64: String::new(),
+                        ping: 0,
+                        reported_at: s.status_queried_at.unwrap_or_default(),
+                    })
+                    .collect(),
+            }
+        })
+        .collect())
 }
 
-async fn dispatch_rows_for_item(db: &Database, item: &PlayerApiWebhookConfig) -> anyhow::Result<Vec<PlayerApiDispatchRow>> {
+async fn dispatch_rows_for_item(
+    db: &Database,
+    item: &PlayerApiWebhookConfig,
+) -> anyhow::Result<Vec<PlayerApiDispatchRow>> {
     if item.server_ids.is_empty() {
         return sqlx::query_as::<_, PlayerApiDispatchRow>(
             r#"SELECT s.id AS server_id,
@@ -427,7 +483,12 @@ async fn dispatch_rows_for_item(db: &Database, item: &PlayerApiWebhookConfig) ->
     .map_err(Into::into)
 }
 
-async fn record_dispatch_result(db: &Database, id: Uuid, status: &str, error: Option<String>) -> anyhow::Result<()> {
+async fn record_dispatch_result(
+    db: &Database,
+    id: Uuid,
+    status: &str,
+    error: Option<String>,
+) -> anyhow::Result<()> {
     sqlx::query(
         r#"UPDATE player_api_webhooks
            SET last_status = $2,
@@ -460,11 +521,14 @@ pub async fn dispatch_once(db: &Database, client: &Client) -> anyhow::Result<()>
         };
         let rows = dispatch_rows_for_item(db, &item).await?;
         let mut payload = build_webhook_payload(Utc::now(), rows);
-        let mut external_servers = fetch_external_server_rows(db, &item.external_server_ids).await?;
+        let mut external_servers =
+            fetch_external_server_rows(db, &item.external_server_ids).await?;
         if !item.server_ids.is_empty() {
             sort_servers_by_ids(&mut payload.servers, &item.server_ids);
         } else {
-            payload.servers.sort_by(|a, b| a.server_name.cmp(&b.server_name));
+            payload
+                .servers
+                .sort_by(|a, b| a.server_name.cmp(&b.server_name));
         }
         if !item.external_server_ids.is_empty() {
             sort_servers_by_ids(&mut external_servers, &item.external_server_ids);
@@ -483,7 +547,13 @@ pub async fn dispatch_once(db: &Database, client: &Client) -> anyhow::Result<()>
                 record_dispatch_result(db, item.id, "success", None).await?;
             }
             Ok(response) => {
-                record_dispatch_result(db, item.id, "failed", Some(format!("HTTP {}", response.status()))).await?;
+                record_dispatch_result(
+                    db,
+                    item.id,
+                    "failed",
+                    Some(format!("HTTP {}", response.status())),
+                )
+                .await?;
             }
             Err(error) => {
                 record_dispatch_result(db, item.id, "failed", Some(error.to_string())).await?;
@@ -494,7 +564,11 @@ pub async fn dispatch_once(db: &Database, client: &Client) -> anyhow::Result<()>
     Ok(())
 }
 
-pub async fn fetch_webhook_payload_by_path(db: &Database, public_path: &str, secret_header: Option<&str>) -> anyhow::Result<WebhookPayload> {
+pub async fn fetch_webhook_payload_by_path(
+    db: &Database,
+    public_path: &str,
+    secret_header: Option<&str>,
+) -> anyhow::Result<WebhookPayload> {
     let item = sqlx::query_as::<_, PlayerApiWebhookConfig>(
         r#"SELECT id, public_path, webhook_url, secret, server_ids, external_server_ids,
                   enabled, public_access, last_status, last_error, last_dispatched_at
@@ -526,7 +600,9 @@ pub async fn fetch_webhook_payload_by_path(db: &Database, public_path: &str, sec
     if !item.server_ids.is_empty() {
         sort_servers_by_ids(&mut payload.servers, &item.server_ids);
     } else {
-        payload.servers.sort_by(|a, b| a.server_name.cmp(&b.server_name));
+        payload
+            .servers
+            .sort_by(|a, b| a.server_name.cmp(&b.server_name));
     }
     if !item.external_server_ids.is_empty() {
         sort_servers_by_ids(&mut external_servers, &item.external_server_ids);
@@ -740,7 +816,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(normalized.public_path, "my-hook");
-        assert_eq!(normalized.webhook_url.as_deref(), Some("https://api.example.com/players"));
+        assert_eq!(
+            normalized.webhook_url.as_deref(),
+            Some("https://api.example.com/players")
+        );
         assert_eq!(normalized.secret.as_deref(), Some("token"));
         assert_eq!(normalized.server_ids, vec![server_id]);
     }

@@ -54,13 +54,24 @@ mod tests {
     }
 
     async fn create_schema(base_url: &str, schema: &str) {
-        let pool = PgPoolOptions::new().max_connections(1).connect(base_url).await.unwrap();
-        sqlx::query(&format!(r#"CREATE SCHEMA "{schema}""#)).execute(&pool).await.unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(base_url)
+            .await
+            .unwrap();
+        sqlx::query(&format!(r#"CREATE SCHEMA "{schema}""#))
+            .execute(&pool)
+            .await
+            .unwrap();
         pool.close().await;
     }
 
     async fn drop_schema(base_url: &str, schema: &str) {
-        let pool = PgPoolOptions::new().max_connections(1).connect(base_url).await.unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(base_url)
+            .await
+            .unwrap();
         sqlx::query(&format!(r#"DROP SCHEMA IF EXISTS "{schema}" CASCADE"#))
             .execute(&pool)
             .await
@@ -145,25 +156,26 @@ mod tests {
             .fetch_one(&db.pool)
             .await?;
             assert_eq!(expired_status.0, "inactive");
-            assert_eq!(expired_status.1, Some("临时封禁已到期，自动解封".to_string()));
+            assert_eq!(
+                expired_status.1,
+                Some("临时封禁已到期，自动解封".to_string())
+            );
             assert_eq!(expired_status.2, Some("system".to_string()));
 
             // 验证未过期记录仍为 active
-            let active_status: (String,) = sqlx::query_as(
-                "SELECT status FROM ban_records WHERE id = $1",
-            )
-            .bind(active_id)
-            .fetch_one(&db.pool)
-            .await?;
+            let active_status: (String,) =
+                sqlx::query_as("SELECT status FROM ban_records WHERE id = $1")
+                    .bind(active_id)
+                    .fetch_one(&db.pool)
+                    .await?;
             assert_eq!(active_status.0, "active");
 
             // 验证永久封禁记录仍为 active
-            let permanent_status: (String,) = sqlx::query_as(
-                "SELECT status FROM ban_records WHERE id = $1",
-            )
-            .bind(permanent_id)
-            .fetch_one(&db.pool)
-            .await?;
+            let permanent_status: (String,) =
+                sqlx::query_as("SELECT status FROM ban_records WHERE id = $1")
+                    .bind(permanent_id)
+                    .fetch_one(&db.pool)
+                    .await?;
             assert_eq!(permanent_status.0, "active");
 
             Ok::<(), anyhow::Error>(())

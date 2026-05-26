@@ -1,7 +1,17 @@
-use crate::{auth::session::{build_session, to_view}, db::Database, models::{SessionResponse, SessionView, User}, password::verify_password};
+use crate::{
+    auth::session::{build_session, to_view},
+    db::Database,
+    models::{SessionResponse, SessionView, User},
+    password::verify_password,
+};
 use uuid::Uuid;
 
-pub async fn login(db: &Database, username: &str, password: &str, ttl_hours: i64) -> anyhow::Result<SessionResponse> {
+pub async fn login(
+    db: &Database,
+    username: &str,
+    password: &str,
+    ttl_hours: i64,
+) -> anyhow::Result<SessionResponse> {
     let user = sqlx::query_as::<_, User>(
         r#"SELECT id, username, display_name, password_hash, role, steam_id, remark, enabled, created_at FROM users WHERE username = $1"#,
     )
@@ -33,7 +43,9 @@ pub async fn login(db: &Database, username: &str, password: &str, ttl_hours: i64
     .execute(&db.pool)
     .await?;
 
-    Ok(SessionResponse { session: to_view(session) })
+    Ok(SessionResponse {
+        session: to_view(session),
+    })
 }
 
 pub async fn current_session(db: &Database, token: Uuid) -> anyhow::Result<SessionView> {
@@ -55,7 +67,10 @@ pub async fn current_session(db: &Database, token: Uuid) -> anyhow::Result<Sessi
 }
 
 pub async fn logout(db: &Database, token: Uuid) -> anyhow::Result<()> {
-    sqlx::query("DELETE FROM sessions WHERE token = $1").bind(token).execute(&db.pool).await?;
+    sqlx::query("DELETE FROM sessions WHERE token = $1")
+        .bind(token)
+        .execute(&db.pool)
+        .await?;
     Ok(())
 }
 

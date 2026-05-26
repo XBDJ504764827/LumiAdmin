@@ -1,5 +1,8 @@
 use axum::{
-    extract::{Path, Query, State, WebSocketUpgrade, ws::{Message, WebSocket}},
+    extract::{
+        ws::{Message, WebSocket},
+        Path, Query, State, WebSocketUpgrade,
+    },
     response::IntoResponse,
     Json,
 };
@@ -27,19 +30,15 @@ pub(crate) async fn list_notifications(
     let page = query.page.unwrap_or(1);
     let page_size = query.page_size.unwrap_or(20);
 
-    let (items, total) = notification_service::list_notifications(
-        &ctx.db,
-        actor.id,
-        page,
-        page_size,
-    )
-    .await
-    .map_err(|_| {
-        (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "查询失败"})),
-        )
-    })?;
+    let (items, total) =
+        notification_service::list_notifications(&ctx.db, actor.id, page, page_size)
+            .await
+            .map_err(|_| {
+                (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "查询失败"})),
+                )
+            })?;
 
     Ok(Json(serde_json::json!({
         "items": items,

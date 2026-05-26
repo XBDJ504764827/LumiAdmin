@@ -195,13 +195,16 @@ async fn load_snapshot_player_access_rules(
     .await
     .context("加载玩家进服规则快照失败")?;
 
-    Ok(rows.into_iter().map(|r| SnapshotPlayerAccessRule {
-        steamid64: r.steamid64,
-        allowed_servers: r.allowed_servers,
-        blocked_servers: r.blocked_servers,
-        allowed_communities: r.allowed_communities,
-        blocked_communities: r.blocked_communities,
-    }).collect())
+    Ok(rows
+        .into_iter()
+        .map(|r| SnapshotPlayerAccessRule {
+            steamid64: r.steamid64,
+            allowed_servers: r.allowed_servers,
+            blocked_servers: r.blocked_servers,
+            allowed_communities: r.allowed_communities,
+            blocked_communities: r.blocked_communities,
+        })
+        .collect())
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -518,7 +521,11 @@ pub fn evaluate_access_snapshot(
     }
 
     // 检查玩家进服规则
-    if let Some(rule) = snapshot.player_access_rules.iter().find(|r| r.steamid64 == input.steam_id64) {
+    if let Some(rule) = snapshot
+        .player_access_rules
+        .iter()
+        .find(|r| r.steamid64 == input.steam_id64)
+    {
         if rule.allowed_servers.contains(&server.id) {
             return allow("允许进入服务器。");
         }
@@ -557,22 +564,30 @@ pub fn evaluate_access_snapshot(
 
     // 仅进入限制：检查 rating/steam level
     if !has_whitelist && has_restriction {
-        let Some(profile) = snapshot.access_profiles.iter().find(|p| {
-            p.steam_id64 == input.steam_id64 && p.expires_at > input.now
-        }) else {
+        let Some(profile) = snapshot
+            .access_profiles
+            .iter()
+            .find(|p| p.steam_id64 == input.steam_id64 && p.expires_at > input.now)
+        else {
             return reject("你的资料未满足服务器进入要求。");
         };
-        if profile.rating < effective_min_rating(server) || profile.steam_level < effective_min_steam_level(server) {
+        if profile.rating < effective_min_rating(server)
+            || profile.steam_level < effective_min_steam_level(server)
+        {
             return reject("你的资料未满足服务器进入要求。");
         }
         return allow("已满足服务器进入限制，允许进入服务器。");
     }
 
     // 两者都开：满足限制即可进，不满足则看白名单
-    if let Some(profile) = snapshot.access_profiles.iter().find(|p| {
-        p.steam_id64 == input.steam_id64 && p.expires_at > input.now
-    }) {
-        if profile.rating >= effective_min_rating(server) && profile.steam_level >= effective_min_steam_level(server) {
+    if let Some(profile) = snapshot
+        .access_profiles
+        .iter()
+        .find(|p| p.steam_id64 == input.steam_id64 && p.expires_at > input.now)
+    {
+        if profile.rating >= effective_min_rating(server)
+            && profile.steam_level >= effective_min_steam_level(server)
+        {
             return allow("已满足服务器进入限制，允许进入服务器。");
         }
     }

@@ -41,7 +41,8 @@ pub async fn sync_offline_operations(
     input: OfflineSyncInput,
 ) -> anyhow::Result<OfflineSyncResult> {
     // 验证服务器身份
-    let server = plugin_ban_service::ServerAuth::authenticate(db, input.port, &input.report_token).await?;
+    let server =
+        plugin_ban_service::ServerAuth::authenticate(db, input.port, &input.report_token).await?;
 
     let mut result = OfflineSyncResult {
         received: 0,
@@ -71,8 +72,7 @@ pub async fn sync_offline_operations(
         }
 
         // 写入离线操作记录
-        let created_at = DateTime::from_timestamp(op.created_at_unix, 0)
-            .unwrap_or_else(Utc::now);
+        let created_at = DateTime::from_timestamp(op.created_at_unix, 0).unwrap_or_else(Utc::now);
 
         let offline_id = Uuid::new_v4();
         sqlx::query(
@@ -102,24 +102,22 @@ pub async fn sync_offline_operations(
         // 尝试应用操作
         match apply_offline_operation(db, &op, &server).await {
             Ok(_) => {
-                sqlx::query(
-                    r#"UPDATE offline_operations SET applied = true WHERE id = $1"#,
-                )
-                .bind(offline_id)
-                .execute(&db.pool)
-                .await?;
+                sqlx::query(r#"UPDATE offline_operations SET applied = true WHERE id = $1"#)
+                    .bind(offline_id)
+                    .execute(&db.pool)
+                    .await?;
                 result.applied += 1;
             }
             Err(error) => {
                 let error_msg = error.to_string();
-                sqlx::query(
-                    r#"UPDATE offline_operations SET apply_error = $2 WHERE id = $1"#,
-                )
-                .bind(offline_id)
-                .bind(&error_msg)
-                .execute(&db.pool)
-                .await?;
-                result.errors.push(format!("{}: {}", op.idempotency_key, error_msg));
+                sqlx::query(r#"UPDATE offline_operations SET apply_error = $2 WHERE id = $1"#)
+                    .bind(offline_id)
+                    .bind(&error_msg)
+                    .execute(&db.pool)
+                    .await?;
+                result
+                    .errors
+                    .push(format!("{}: {}", op.idempotency_key, error_msg));
             }
         }
     }
@@ -169,23 +167,27 @@ async fn apply_offline_ban(
 
     if existing.0 > 0 {
         // 写入审计日志（跳过）
-        audit_service::write_audit_log(db, audit_service::AuditLogInput {
-            operation: "ban".to_string(),
-            target: op.target.clone(),
-            target_type: op.target_type.clone(),
-            player_name: op.player_name.clone(),
-            reason: op.reason.clone(),
-            duration_minutes: op.duration_minutes,
-            operator_name: op.operator_name.clone(),
-            operator_steamid: op.operator_steamid.clone(),
-            source: "offline_sync".to_string(),
-            server_id: Some(server.id),
-            server_name: Some(server.name.clone()),
-            server_port: Some(server.port),
-            success: false,
-            message: Some("目标已有有效封禁，跳过".to_string()),
-            idempotency_key: Some(op.idempotency_key.clone()),
-        }).await?;
+        audit_service::write_audit_log(
+            db,
+            audit_service::AuditLogInput {
+                operation: "ban".to_string(),
+                target: op.target.clone(),
+                target_type: op.target_type.clone(),
+                player_name: op.player_name.clone(),
+                reason: op.reason.clone(),
+                duration_minutes: op.duration_minutes,
+                operator_name: op.operator_name.clone(),
+                operator_steamid: op.operator_steamid.clone(),
+                source: "offline_sync".to_string(),
+                server_id: Some(server.id),
+                server_name: Some(server.name.clone()),
+                server_port: Some(server.port),
+                success: false,
+                message: Some("目标已有有效封禁，跳过".to_string()),
+                idempotency_key: Some(op.idempotency_key.clone()),
+            },
+        )
+        .await?;
         return Ok(());
     }
 
@@ -207,8 +209,16 @@ async fn apply_offline_ban(
     )
     .bind(Uuid::new_v4())
     .bind(&op.player_name)
-    .bind(if ban_type == "steam" { &normalized_target } else { "" })
-    .bind(if ban_type == "ip" { Some(&normalized_target) } else { None })
+    .bind(if ban_type == "steam" {
+        &normalized_target
+    } else {
+        ""
+    })
+    .bind(if ban_type == "ip" {
+        Some(&normalized_target)
+    } else {
+        None
+    })
     .bind(&server.name)
     .bind(ban_type)
     .bind(duration)
@@ -221,23 +231,27 @@ async fn apply_offline_ban(
     .await?;
 
     // 写入审计日志
-    audit_service::write_audit_log(db, audit_service::AuditLogInput {
-        operation: "ban".to_string(),
-        target: op.target.clone(),
-        target_type: op.target_type.clone(),
-        player_name: op.player_name.clone(),
-        reason: op.reason.clone(),
-        duration_minutes: op.duration_minutes,
-        operator_name: op.operator_name.clone(),
-        operator_steamid: op.operator_steamid.clone(),
-        source: "offline_sync".to_string(),
-        server_id: Some(server.id),
-        server_name: Some(server.name.clone()),
-        server_port: Some(server.port),
-        success: true,
-        message: Some(format!("离线封禁已同步，ID: {}", ban_id.0)),
-        idempotency_key: Some(op.idempotency_key.clone()),
-    }).await?;
+    audit_service::write_audit_log(
+        db,
+        audit_service::AuditLogInput {
+            operation: "ban".to_string(),
+            target: op.target.clone(),
+            target_type: op.target_type.clone(),
+            player_name: op.player_name.clone(),
+            reason: op.reason.clone(),
+            duration_minutes: op.duration_minutes,
+            operator_name: op.operator_name.clone(),
+            operator_steamid: op.operator_steamid.clone(),
+            source: "offline_sync".to_string(),
+            server_id: Some(server.id),
+            server_name: Some(server.name.clone()),
+            server_port: Some(server.port),
+            success: true,
+            message: Some(format!("离线封禁已同步，ID: {}", ban_id.0)),
+            idempotency_key: Some(op.idempotency_key.clone()),
+        },
+    )
+    .await?;
 
     Ok(())
 }
@@ -271,36 +285,9 @@ async fn apply_offline_unban(
     .await?;
 
     let Some(original_row) = original_row else {
-        audit_service::write_audit_log(db, audit_service::AuditLogInput {
-            operation: "unban".to_string(),
-            target: op.target.clone(),
-            target_type: op.target_type.clone(),
-            player_name: op.player_name.clone(),
-            reason: op.reason.clone(),
-            duration_minutes: None,
-            operator_name: op.operator_name.clone(),
-            operator_steamid: op.operator_steamid.clone(),
-            source: "offline_sync".to_string(),
-            server_id: Some(server.id),
-            server_name: Some(server.name.clone()),
-            server_port: Some(server.port),
-            success: false,
-            message: Some("未找到有效封禁，跳过".to_string()),
-            idempotency_key: Some(op.idempotency_key.clone()),
-        }).await?;
-        return Ok(());
-    };
-
-    // 权限检查：非特权管理员只能解封自己创建的封禁
-    let is_privileged = plugin_ban_service::check_operator_privilege(
-        db,
-        op.operator_steamid.as_deref(),
-    ).await?;
-    if !is_privileged {
-        let original_operator = original_row.operator_name.trim();
-        let current_operator = op.operator_name.trim();
-        if original_operator != current_operator {
-            audit_service::write_audit_log(db, audit_service::AuditLogInput {
+        audit_service::write_audit_log(
+            db,
+            audit_service::AuditLogInput {
                 operation: "unban".to_string(),
                 target: op.target.clone(),
                 target_type: op.target_type.clone(),
@@ -314,9 +301,42 @@ async fn apply_offline_unban(
                 server_name: Some(server.name.clone()),
                 server_port: Some(server.port),
                 success: false,
-                message: Some("您无法解除其他管理员的封禁，请联系相关管理员".to_string()),
+                message: Some("未找到有效封禁，跳过".to_string()),
                 idempotency_key: Some(op.idempotency_key.clone()),
-            }).await?;
+            },
+        )
+        .await?;
+        return Ok(());
+    };
+
+    // 权限检查：非特权管理员只能解封自己创建的封禁
+    let is_privileged =
+        plugin_ban_service::check_operator_privilege(db, op.operator_steamid.as_deref()).await?;
+    if !is_privileged {
+        let original_operator = original_row.operator_name.trim();
+        let current_operator = op.operator_name.trim();
+        if original_operator != current_operator {
+            audit_service::write_audit_log(
+                db,
+                audit_service::AuditLogInput {
+                    operation: "unban".to_string(),
+                    target: op.target.clone(),
+                    target_type: op.target_type.clone(),
+                    player_name: op.player_name.clone(),
+                    reason: op.reason.clone(),
+                    duration_minutes: None,
+                    operator_name: op.operator_name.clone(),
+                    operator_steamid: op.operator_steamid.clone(),
+                    source: "offline_sync".to_string(),
+                    server_id: Some(server.id),
+                    server_name: Some(server.name.clone()),
+                    server_port: Some(server.port),
+                    success: false,
+                    message: Some("您无法解除其他管理员的封禁，请联系相关管理员".to_string()),
+                    idempotency_key: Some(op.idempotency_key.clone()),
+                },
+            )
+            .await?;
             return Ok(());
         }
     }
@@ -334,23 +354,27 @@ async fn apply_offline_unban(
     .await?;
 
     // 写入审计日志
-    audit_service::write_audit_log(db, audit_service::AuditLogInput {
-        operation: "unban".to_string(),
-        target: op.target.clone(),
-        target_type: op.target_type.clone(),
-        player_name: op.player_name.clone(),
-        reason: op.reason.clone(),
-        duration_minutes: None,
-        operator_name: op.operator_name.clone(),
-        operator_steamid: op.operator_steamid.clone(),
-        source: "offline_sync".to_string(),
-        server_id: Some(server.id),
-        server_name: Some(server.name.clone()),
-        server_port: Some(server.port),
-        success: true,
-        message: Some(format!("离线解封已同步，原封禁ID: {}", original_row.id)),
-        idempotency_key: Some(op.idempotency_key.clone()),
-    }).await?;
+    audit_service::write_audit_log(
+        db,
+        audit_service::AuditLogInput {
+            operation: "unban".to_string(),
+            target: op.target.clone(),
+            target_type: op.target_type.clone(),
+            player_name: op.player_name.clone(),
+            reason: op.reason.clone(),
+            duration_minutes: None,
+            operator_name: op.operator_name.clone(),
+            operator_steamid: op.operator_steamid.clone(),
+            source: "offline_sync".to_string(),
+            server_id: Some(server.id),
+            server_name: Some(server.name.clone()),
+            server_port: Some(server.port),
+            success: true,
+            message: Some(format!("离线解封已同步，原封禁ID: {}", original_row.id)),
+            idempotency_key: Some(op.idempotency_key.clone()),
+        },
+    )
+    .await?;
 
     Ok(())
 }
@@ -371,23 +395,27 @@ async fn apply_offline_whitelist_add(
     match existing {
         Some((status,)) if status == "approved" => {
             // 已通过，跳过
-            audit_service::write_audit_log(db, audit_service::AuditLogInput {
-                operation: "whitelist_add".to_string(),
-                target: op.target.clone(),
-                target_type: "steam".to_string(),
-                player_name: op.player_name.clone(),
-                reason: None,
-                duration_minutes: None,
-                operator_name: op.operator_name.clone(),
-                operator_steamid: op.operator_steamid.clone(),
-                source: "offline_sync".to_string(),
-                server_id: Some(server.id),
-                server_name: Some(server.name.clone()),
-                server_port: Some(server.port),
-                success: false,
-                message: Some("白名单已存在且已通过，跳过".to_string()),
-                idempotency_key: Some(op.idempotency_key.clone()),
-            }).await?;
+            audit_service::write_audit_log(
+                db,
+                audit_service::AuditLogInput {
+                    operation: "whitelist_add".to_string(),
+                    target: op.target.clone(),
+                    target_type: "steam".to_string(),
+                    player_name: op.player_name.clone(),
+                    reason: None,
+                    duration_minutes: None,
+                    operator_name: op.operator_name.clone(),
+                    operator_steamid: op.operator_steamid.clone(),
+                    source: "offline_sync".to_string(),
+                    server_id: Some(server.id),
+                    server_name: Some(server.name.clone()),
+                    server_port: Some(server.port),
+                    success: false,
+                    message: Some("白名单已存在且已通过，跳过".to_string()),
+                    idempotency_key: Some(op.idempotency_key.clone()),
+                },
+            )
+            .await?;
         }
         Some((status,)) if status == "pending" => {
             // 待审核，自动通过
@@ -401,23 +429,27 @@ async fn apply_offline_whitelist_add(
             .execute(&db.pool)
             .await?;
 
-            audit_service::write_audit_log(db, audit_service::AuditLogInput {
-                operation: "whitelist_add".to_string(),
-                target: op.target.clone(),
-                target_type: "steam".to_string(),
-                player_name: op.player_name.clone(),
-                reason: None,
-                duration_minutes: None,
-                operator_name: op.operator_name.clone(),
-                operator_steamid: op.operator_steamid.clone(),
-                source: "offline_sync".to_string(),
-                server_id: Some(server.id),
-                server_name: Some(server.name.clone()),
-                server_port: Some(server.port),
-                success: true,
-                message: Some("待审核白名单已自动通过".to_string()),
-                idempotency_key: Some(op.idempotency_key.clone()),
-            }).await?;
+            audit_service::write_audit_log(
+                db,
+                audit_service::AuditLogInput {
+                    operation: "whitelist_add".to_string(),
+                    target: op.target.clone(),
+                    target_type: "steam".to_string(),
+                    player_name: op.player_name.clone(),
+                    reason: None,
+                    duration_minutes: None,
+                    operator_name: op.operator_name.clone(),
+                    operator_steamid: op.operator_steamid.clone(),
+                    source: "offline_sync".to_string(),
+                    server_id: Some(server.id),
+                    server_name: Some(server.name.clone()),
+                    server_port: Some(server.port),
+                    success: true,
+                    message: Some("待审核白名单已自动通过".to_string()),
+                    idempotency_key: Some(op.idempotency_key.clone()),
+                },
+            )
+            .await?;
         }
         _ => {
             // 创建新的白名单记录
@@ -437,23 +469,27 @@ async fn apply_offline_whitelist_add(
             .execute(&db.pool)
             .await?;
 
-            audit_service::write_audit_log(db, audit_service::AuditLogInput {
-                operation: "whitelist_add".to_string(),
-                target: op.target.clone(),
-                target_type: "steam".to_string(),
-                player_name: op.player_name.clone(),
-                reason: None,
-                duration_minutes: None,
-                operator_name: op.operator_name.clone(),
-                operator_steamid: op.operator_steamid.clone(),
-                source: "offline_sync".to_string(),
-                server_id: Some(server.id),
-                server_name: Some(server.name.clone()),
-                server_port: Some(server.port),
-                success: true,
-                message: Some("离线白名单已同步".to_string()),
-                idempotency_key: Some(op.idempotency_key.clone()),
-            }).await?;
+            audit_service::write_audit_log(
+                db,
+                audit_service::AuditLogInput {
+                    operation: "whitelist_add".to_string(),
+                    target: op.target.clone(),
+                    target_type: "steam".to_string(),
+                    player_name: op.player_name.clone(),
+                    reason: None,
+                    duration_minutes: None,
+                    operator_name: op.operator_name.clone(),
+                    operator_steamid: op.operator_steamid.clone(),
+                    source: "offline_sync".to_string(),
+                    server_id: Some(server.id),
+                    server_name: Some(server.name.clone()),
+                    server_port: Some(server.port),
+                    success: true,
+                    message: Some("离线白名单已同步".to_string()),
+                    idempotency_key: Some(op.idempotency_key.clone()),
+                },
+            )
+            .await?;
         }
     }
 
@@ -478,41 +514,49 @@ async fn apply_offline_whitelist_remove(
     .await?;
 
     if result.rows_affected() == 0 {
-        audit_service::write_audit_log(db, audit_service::AuditLogInput {
-            operation: "whitelist_remove".to_string(),
-            target: op.target.clone(),
-            target_type: "steam".to_string(),
-            player_name: op.player_name.clone(),
-            reason: op.reason.clone(),
-            duration_minutes: None,
-            operator_name: op.operator_name.clone(),
-            operator_steamid: op.operator_steamid.clone(),
-            source: "offline_sync".to_string(),
-            server_id: Some(server.id),
-            server_name: Some(server.name.clone()),
-            server_port: Some(server.port),
-            success: false,
-            message: Some("未找到已通过的白名单，跳过".to_string()),
-            idempotency_key: Some(op.idempotency_key.clone()),
-        }).await?;
+        audit_service::write_audit_log(
+            db,
+            audit_service::AuditLogInput {
+                operation: "whitelist_remove".to_string(),
+                target: op.target.clone(),
+                target_type: "steam".to_string(),
+                player_name: op.player_name.clone(),
+                reason: op.reason.clone(),
+                duration_minutes: None,
+                operator_name: op.operator_name.clone(),
+                operator_steamid: op.operator_steamid.clone(),
+                source: "offline_sync".to_string(),
+                server_id: Some(server.id),
+                server_name: Some(server.name.clone()),
+                server_port: Some(server.port),
+                success: false,
+                message: Some("未找到已通过的白名单，跳过".to_string()),
+                idempotency_key: Some(op.idempotency_key.clone()),
+            },
+        )
+        .await?;
     } else {
-        audit_service::write_audit_log(db, audit_service::AuditLogInput {
-            operation: "whitelist_remove".to_string(),
-            target: op.target.clone(),
-            target_type: "steam".to_string(),
-            player_name: op.player_name.clone(),
-            reason: op.reason.clone(),
-            duration_minutes: None,
-            operator_name: op.operator_name.clone(),
-            operator_steamid: op.operator_steamid.clone(),
-            source: "offline_sync".to_string(),
-            server_id: Some(server.id),
-            server_name: Some(server.name.clone()),
-            server_port: Some(server.port),
-            success: true,
-            message: Some("离线白名单移除已同步".to_string()),
-            idempotency_key: Some(op.idempotency_key.clone()),
-        }).await?;
+        audit_service::write_audit_log(
+            db,
+            audit_service::AuditLogInput {
+                operation: "whitelist_remove".to_string(),
+                target: op.target.clone(),
+                target_type: "steam".to_string(),
+                player_name: op.player_name.clone(),
+                reason: op.reason.clone(),
+                duration_minutes: None,
+                operator_name: op.operator_name.clone(),
+                operator_steamid: op.operator_steamid.clone(),
+                source: "offline_sync".to_string(),
+                server_id: Some(server.id),
+                server_name: Some(server.name.clone()),
+                server_port: Some(server.port),
+                success: true,
+                message: Some("离线白名单移除已同步".to_string()),
+                idempotency_key: Some(op.idempotency_key.clone()),
+            },
+        )
+        .await?;
     }
 
     Ok(())

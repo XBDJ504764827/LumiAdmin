@@ -6,7 +6,7 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::routes::{AppCtx, current_operator, forbidden, invalid_request};
+use crate::routes::{current_operator, forbidden, invalid_request, AppCtx};
 use crate::services::external_server_service;
 
 pub(crate) async fn list_external_servers(
@@ -16,7 +16,12 @@ pub(crate) async fn list_external_servers(
     let _actor = current_operator(&ctx, &headers).await?;
     let items = external_server_service::list_servers(&ctx.db)
         .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error":"查询外部服务器失败"}))))?;
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error":"查询外部服务器失败"})),
+            )
+        })?;
     Ok(Json(serde_json::json!({ "items": items })))
 }
 
@@ -32,8 +37,12 @@ pub(crate) struct CreateBody {
     pub poll_interval: i32,
 }
 
-fn default_true() -> bool { true }
-fn default_poll_interval() -> i32 { 30 }
+fn default_true() -> bool {
+    true
+}
+fn default_poll_interval() -> i32 {
+    30
+}
 
 pub(crate) async fn create_external_server(
     State(ctx): State<AppCtx>,
@@ -44,14 +53,17 @@ pub(crate) async fn create_external_server(
     if !matches!(actor.role.as_str(), "admin" | "developer") {
         return Err(forbidden());
     }
-    let server = external_server_service::create_server(&ctx.db, external_server_service::CreateExternalServerInput {
-        name: body.name,
-        ip: body.ip,
-        port: body.port,
-        rcon_password: body.rcon_password,
-        enabled: body.enabled,
-        poll_interval: body.poll_interval,
-    })
+    let server = external_server_service::create_server(
+        &ctx.db,
+        external_server_service::CreateExternalServerInput {
+            name: body.name,
+            ip: body.ip,
+            port: body.port,
+            rcon_password: body.rcon_password,
+            enabled: body.enabled,
+            poll_interval: body.poll_interval,
+        },
+    )
     .await
     .map_err(invalid_request)?;
     Ok(Json(serde_json::json!({ "server": server })))
@@ -79,14 +91,18 @@ pub(crate) async fn update_external_server(
     if !matches!(actor.role.as_str(), "admin" | "developer") {
         return Err(forbidden());
     }
-    let server = external_server_service::update_server(&ctx.db, id, external_server_service::UpdateExternalServerInput {
-        name: body.name,
-        ip: body.ip,
-        port: body.port,
-        rcon_password: body.rcon_password,
-        enabled: body.enabled,
-        poll_interval: body.poll_interval,
-    })
+    let server = external_server_service::update_server(
+        &ctx.db,
+        id,
+        external_server_service::UpdateExternalServerInput {
+            name: body.name,
+            ip: body.ip,
+            port: body.port,
+            rcon_password: body.rcon_password,
+            enabled: body.enabled,
+            poll_interval: body.poll_interval,
+        },
+    )
     .await
     .map_err(invalid_request)?;
     Ok(Json(serde_json::json!({ "server": server })))

@@ -217,24 +217,26 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
     let mut groups: BTreeMap<Uuid, CommunityGroup> = BTreeMap::new();
 
     for row in rows {
-        let group = groups.entry(row.community_id).or_insert_with(|| CommunityGroup {
-            id: row.community_id,
-            name: row.community_name,
-            whitelist_mode_enabled: row.community_whitelist_mode_enabled.unwrap_or(false),
-            min_rating: row.community_min_rating.unwrap_or(0),
-            min_steam_level: row.community_min_steam_level.unwrap_or(0),
-            servers: Vec::new(),
-        });
+        let group = groups
+            .entry(row.community_id)
+            .or_insert_with(|| CommunityGroup {
+                id: row.community_id,
+                name: row.community_name,
+                whitelist_mode_enabled: row.community_whitelist_mode_enabled.unwrap_or(false),
+                min_rating: row.community_min_rating.unwrap_or(0),
+                min_steam_level: row.community_min_steam_level.unwrap_or(0),
+                servers: Vec::new(),
+            });
 
-        if let (Some(id), Some(name), Some(ip), Some(port), Some(status)) = (
-            row.server_id,
-            row.server_name,
-            row.ip,
-            row.port,
-            row.status,
-        ) {
+        if let (Some(id), Some(name), Some(ip), Some(port), Some(status)) =
+            (row.server_id, row.server_name, row.ip, row.port, row.status)
+        {
             let stale = is_report_stale(row.last_reported_at);
-            let players = if stale { Vec::new() } else { row.online_players.unwrap_or_default() };
+            let players = if stale {
+                Vec::new()
+            } else {
+                row.online_players.unwrap_or_default()
+            };
             let online_player_count = players.len();
             group.servers.push(ServerItem {
                 id,
@@ -261,7 +263,10 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
     Ok(groups.into_values().collect())
 }
 
-pub async fn create_group(db: &Database, input: CreateCommunityInput) -> anyhow::Result<CommunityGroup> {
+pub async fn create_group(
+    db: &Database,
+    input: CreateCommunityInput,
+) -> anyhow::Result<CommunityGroup> {
     let name = input.name.trim();
     anyhow::ensure!(!name.is_empty(), "社区名称不能为空");
 
@@ -282,7 +287,11 @@ pub async fn create_group(db: &Database, input: CreateCommunityInput) -> anyhow:
     })
 }
 
-pub async fn create_server(db: &Database, community_id: Uuid, input: ServerInput) -> anyhow::Result<ServerItem> {
+pub async fn create_server(
+    db: &Database,
+    community_id: Uuid,
+    input: ServerInput,
+) -> anyhow::Result<ServerItem> {
     let tested = test_rcon_connection(&input).await?;
     anyhow::ensure!(tested.ok, "RCON 测试未通过，无法保存服务器");
 
@@ -290,7 +299,8 @@ pub async fn create_server(db: &Database, community_id: Uuid, input: ServerInput
     let name = input.name.trim();
     let ip = input.ip.trim();
     let password = input.rcon_password.trim();
-    let report_token = super::normalize_optional_text(input.report_token.as_deref()).unwrap_or_else(generate_report_token);
+    let report_token = super::normalize_optional_text(input.report_token.as_deref())
+        .unwrap_or_else(generate_report_token);
     let note = super::normalize_optional_text(input.note.as_deref());
 
     anyhow::ensure!(!name.is_empty(), "服务器名称不能为空");
@@ -349,7 +359,11 @@ pub async fn create_server(db: &Database, community_id: Uuid, input: ServerInput
     })
 }
 
-pub async fn update_server(db: &Database, server_id: Uuid, input: ServerInput) -> anyhow::Result<ServerItem> {
+pub async fn update_server(
+    db: &Database,
+    server_id: Uuid,
+    input: ServerInput,
+) -> anyhow::Result<ServerItem> {
     let name = input.name.trim();
     let ip = input.ip.trim();
     let password = input.rcon_password.trim();
@@ -502,10 +516,15 @@ pub async fn get_report_token(db: &Database, server_id: Uuid) -> anyhow::Result<
         .fetch_one(&db.pool)
         .await?;
 
-    Ok(ServerReportToken { report_token: token.0 })
+    Ok(ServerReportToken {
+        report_token: token.0,
+    })
 }
 
-pub async fn reset_report_token(db: &Database, server_id: Uuid) -> anyhow::Result<ServerReportToken> {
+pub async fn reset_report_token(
+    db: &Database,
+    server_id: Uuid,
+) -> anyhow::Result<ServerReportToken> {
     let report_token = generate_report_token();
     let row: (String,) = sqlx::query_as(
         r#"
@@ -520,7 +539,9 @@ pub async fn reset_report_token(db: &Database, server_id: Uuid) -> anyhow::Resul
     .fetch_one(&db.pool)
     .await?;
 
-    Ok(ServerReportToken { report_token: row.0 })
+    Ok(ServerReportToken {
+        report_token: row.0,
+    })
 }
 
 pub async fn report_online_players(
@@ -574,10 +595,16 @@ pub async fn report_online_players(
 
     if !normalized_players.is_empty() {
         let names: Vec<&str> = normalized_players.iter().map(|p| p.name.as_str()).collect();
-        let steam_ids: Vec<&str> = normalized_players.iter().map(|p| p.steam_id64.as_str()).collect();
+        let steam_ids: Vec<&str> = normalized_players
+            .iter()
+            .map(|p| p.steam_id64.as_str())
+            .collect();
         let ips: Vec<&str> = normalized_players.iter().map(|p| p.ip.as_str()).collect();
         let pings: Vec<i32> = normalized_players.iter().map(|p| p.ping).collect();
-        let ports: Vec<i32> = normalized_players.iter().map(|p| i32::from(p.server_port)).collect();
+        let ports: Vec<i32> = normalized_players
+            .iter()
+            .map(|p| i32::from(p.server_port))
+            .collect();
         let current_map = &input.current_map;
 
         sqlx::query(
@@ -601,7 +628,10 @@ pub async fn report_online_players(
     Ok(OnlinePlayersReportResult { server_id })
 }
 
-pub async fn list_online_players(db: &Database, server_id: Uuid) -> anyhow::Result<OnlinePlayersResponse> {
+pub async fn list_online_players(
+    db: &Database,
+    server_id: Uuid,
+) -> anyhow::Result<OnlinePlayersResponse> {
     let details = sqlx::query_as::<_, OnlinePlayerItem>(
         r#"
         SELECT name, steam_id64, ip, ping, server_port
@@ -636,7 +666,8 @@ async fn test_rcon_connection(input: &ServerInput) -> anyhow::Result<RconTestRes
 
     match crate::rcon::RconConnection::connect(&address, password, 3).await {
         Ok(mut conn) => {
-            let players = conn.execute("listplayers")
+            let players = conn
+                .execute("listplayers")
                 .await
                 .map(|response| parse_players_from_response(&response))
                 .unwrap_or_default();
@@ -664,11 +695,19 @@ fn parse_players_from_response(response: &str) -> Vec<String> {
         .collect()
 }
 
-fn normalize_online_player(player: OnlinePlayerInput, report_port: u16) -> anyhow::Result<NormalizedOnlinePlayer> {
+fn normalize_online_player(
+    player: OnlinePlayerInput,
+    report_port: u16,
+) -> anyhow::Result<NormalizedOnlinePlayer> {
     let name = player.name.trim();
     anyhow::ensure!(!name.is_empty(), "玩家名称不能为空");
 
-    let steam_id64 = match player.steam_id64.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+    let steam_id64 = match player
+        .steam_id64
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         Some(value) => value.to_string(),
         None => {
             let steam_id = player
@@ -682,7 +721,10 @@ fn normalize_online_player(player: OnlinePlayerInput, report_port: u16) -> anyho
     };
 
     let server_port = player.server_port.unwrap_or(report_port);
-    anyhow::ensure!(server_port == report_port, "玩家所在服务器端口与上报端口不一致");
+    anyhow::ensure!(
+        server_port == report_port,
+        "玩家所在服务器端口与上报端口不一致"
+    );
 
     Ok(NormalizedOnlinePlayer {
         name: name.to_string(),
@@ -705,7 +747,12 @@ fn generate_report_token() -> String {
 
 fn is_report_stale(last_reported_at: Option<chrono::DateTime<chrono::Utc>>) -> bool {
     match last_reported_at {
-        Some(value) => chrono::Utc::now().signed_duration_since(value).num_seconds() > OFFLINE_AFTER_SECONDS,
+        Some(value) => {
+            chrono::Utc::now()
+                .signed_duration_since(value)
+                .num_seconds()
+                > OFFLINE_AFTER_SECONDS
+        }
         None => true,
     }
 }
@@ -750,7 +797,6 @@ pub fn start_stale_cleanup_loop(db: Database) {
         }
     });
 }
-
 
 /// 验证 RCON 命令安全性，阻止破坏性命令
 fn validate_rcon_command(command: &str) -> anyhow::Result<()> {
@@ -813,20 +859,20 @@ pub async fn execute_rcon_command(
         rcon_password: String,
     }
 
-    let server: ServerRconInfo = sqlx::query_as(
-        r#"SELECT ip, port, rcon_password FROM servers WHERE id = $1"#,
-    )
-    .bind(server_id)
-    .fetch_optional(&db.pool)
-    .await?
-    .ok_or_else(|| anyhow::anyhow!("服务器不存在"))?;
+    let server: ServerRconInfo =
+        sqlx::query_as(r#"SELECT ip, port, rcon_password FROM servers WHERE id = $1"#)
+            .bind(server_id)
+            .fetch_optional(&db.pool)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("服务器不存在"))?;
 
     let address = format!("{}:{}", server.ip, server.port);
     let mut conn = crate::rcon::RconConnection::connect(&address, &server.rcon_password, 3)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    let response = conn.execute(command)
+    let response = conn
+        .execute(command)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
@@ -869,8 +915,16 @@ mod tests {
         server.await.unwrap().unwrap();
 
         assert!(!result.ok, "unexpected success: {}", result.message);
-        assert!(result.message.contains("密码"), "unexpected message: {}", result.message);
-        assert!(result.players.is_empty(), "unexpected players: {:?}", result.players);
+        assert!(
+            result.message.contains("密码"),
+            "unexpected message: {}",
+            result.message
+        );
+        assert!(
+            result.players.is_empty(),
+            "unexpected players: {:?}",
+            result.players
+        );
     }
 
     #[tokio::test]
@@ -948,7 +1002,9 @@ mod tests {
         (port, handle)
     }
 
-    async fn read_packet(stream: &mut tokio::net::TcpStream) -> std::io::Result<(i32, i32, String)> {
+    async fn read_packet(
+        stream: &mut tokio::net::TcpStream,
+    ) -> std::io::Result<(i32, i32, String)> {
         let mut size_bytes = [0_u8; 4];
         stream.read_exact(&mut size_bytes).await?;
         let size = i32::from_le_bytes(size_bytes);

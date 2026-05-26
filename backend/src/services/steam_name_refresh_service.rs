@@ -70,19 +70,36 @@ pub async fn refresh_steam_names(db: &Database, resolver: &SteamResolver) -> any
                 let mut result = RefreshResult::default();
 
                 // 获取 Steam Profile（名称）
-                if let Some(profile) = resolver.fetch_profile(&record.steamid64).await.ok().flatten() {
+                if let Some(profile) = resolver
+                    .fetch_profile(&record.steamid64)
+                    .await
+                    .ok()
+                    .flatten()
+                {
                     result.persona_name = Some(profile.persona_name);
                 }
 
                 // 本地计算缺失的 SteamID2/SteamID3/ProfileURL
                 if let Ok(identity) = resolver.parse_local(&record.steamid64) {
-                    if record.steamid.as_deref().is_none_or(|v| v.trim().is_empty()) {
+                    if record
+                        .steamid
+                        .as_deref()
+                        .is_none_or(|v| v.trim().is_empty())
+                    {
                         result.steamid = identity.steamid;
                     }
-                    if record.steamid3.as_deref().is_none_or(|v| v.trim().is_empty()) {
+                    if record
+                        .steamid3
+                        .as_deref()
+                        .is_none_or(|v| v.trim().is_empty())
+                    {
                         result.steamid3 = identity.steamid3;
                     }
-                    if record.profile_url.as_deref().is_none_or(|v| v.trim().is_empty()) {
+                    if record
+                        .profile_url
+                        .as_deref()
+                        .is_none_or(|v| v.trim().is_empty())
+                    {
                         result.profile_url = identity.profile_url;
                     }
                 }
@@ -174,12 +191,11 @@ pub async fn refresh_single_steam_name(
     resolver: &SteamResolver,
     id: uuid::Uuid,
 ) -> anyhow::Result<Option<String>> {
-    let steamid64: Option<(String,)> = sqlx::query_as(
-        r#"SELECT steamid64 FROM whitelist_requests WHERE id = $1"#,
-    )
-    .bind(id)
-    .fetch_optional(&db.pool)
-    .await?;
+    let steamid64: Option<(String,)> =
+        sqlx::query_as(r#"SELECT steamid64 FROM whitelist_requests WHERE id = $1"#)
+            .bind(id)
+            .fetch_optional(&db.pool)
+            .await?;
 
     let Some((steamid64,)) = steamid64 else {
         anyhow::bail!("记录不存在");
@@ -210,12 +226,11 @@ pub async fn refresh_steam_names_by_status(
     const CONCURRENT_REQUESTS: usize = 5;
     const BATCH_DELAY_MS: u64 = 500;
 
-    let steamids: Vec<(uuid::Uuid, String)> = sqlx::query_as(
-        r#"SELECT id, steamid64 FROM whitelist_requests WHERE status = $1"#,
-    )
-    .bind(status)
-    .fetch_all(&db.pool)
-    .await?;
+    let steamids: Vec<(uuid::Uuid, String)> =
+        sqlx::query_as(r#"SELECT id, steamid64 FROM whitelist_requests WHERE status = $1"#)
+            .bind(status)
+            .fetch_all(&db.pool)
+            .await?;
 
     if steamids.is_empty() {
         return Ok(0);

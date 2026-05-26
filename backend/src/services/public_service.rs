@@ -20,16 +20,25 @@ pub async fn ban_stats(db: &Database) -> anyhow::Result<BanStats> {
     )
     .fetch_one(&db.pool)
     .await?;
-    Ok(BanStats { active: row.0, permanent: row.1, expired: row.2 })
+    Ok(BanStats {
+        active: row.0,
+        permanent: row.1,
+        expired: row.2,
+    })
 }
 
-pub async fn list_public_whitelist(db: &Database, query: &ListQuery) -> anyhow::Result<crate::routes::PaginatedResponse<PublicWhitelistItem>> {
+pub async fn list_public_whitelist(
+    db: &Database,
+    query: &ListQuery,
+) -> anyhow::Result<crate::routes::PaginatedResponse<PublicWhitelistItem>> {
     let mut conditions = vec!["status = 'approved'".to_string()];
     let mut param_idx = 1u32;
     let search_pattern = query.search_pattern();
 
     if search_pattern.is_some() {
-        conditions.push(format!("(steamid64 ILIKE ${param_idx} OR nickname ILIKE ${param_idx})"));
+        conditions.push(format!(
+            "(steamid64 ILIKE ${param_idx} OR nickname ILIKE ${param_idx})"
+        ));
         param_idx += 1;
     }
 
@@ -64,14 +73,19 @@ pub async fn list_public_whitelist(db: &Database, query: &ListQuery) -> anyhow::
     })
 }
 
-pub async fn list_public_bans(db: &Database, query: &ListQuery) -> anyhow::Result<crate::routes::PaginatedResponse<PublicBanItem>> {
+pub async fn list_public_bans(
+    db: &Database,
+    query: &ListQuery,
+) -> anyhow::Result<crate::routes::PaginatedResponse<PublicBanItem>> {
     // 显示 active 和 inactive（已过期）状态的封禁
     let mut conditions = vec!["status IN ('active', 'inactive')".to_string()];
     let mut param_idx = 1u32;
     let search_pattern = query.search_pattern();
 
     if search_pattern.is_some() {
-        conditions.push(format!("(player ILIKE ${param_idx} OR steam_id ILIKE ${param_idx})"));
+        conditions.push(format!(
+            "(player ILIKE ${param_idx} OR steam_id ILIKE ${param_idx})"
+        ));
         param_idx += 1;
     }
 

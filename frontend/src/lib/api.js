@@ -16,12 +16,13 @@ function handleUnauthorized() {
 
 async function request(path, options = {}) {
   const { headers: optionHeaders, ...restOptions } = options;
+  const isFormData = typeof FormData !== 'undefined' && restOptions.body instanceof FormData;
 
   const response = await fetch(`${API_BASE}${path}`, {
     cache: 'no-store',
     ...restOptions,
     headers: {
-      'Content-Type': 'application/json',
+      ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
       ...(optionHeaders ?? {}),
     },
   });
@@ -109,7 +110,10 @@ export const api = {
   resolveSteam: (body) => request('/api/public/steam/resolve', { method: 'POST', body: JSON.stringify(body) }),
   queryActiveBans: (body) => request('/api/public/bans/query', { method: 'POST', body: JSON.stringify(body) }),
   submitBanAppeal: (body) => request('/api/public/ban-appeals', { method: 'POST', body: JSON.stringify(body) }),
+  uploadAppealFiles: (appealId, formData) => request(`/api/public/ban-appeals/${appealId}/files`, { method: 'POST', headers: {}, body: formData }),
   banAppeals: (token, params = {}) => request(`/api/ban-appeals${buildQueryString(params)}`, { headers: withAuth(token) }),
+  listAdminAppealFiles: (token, appealId) => request(`/api/ban-appeals/${appealId}/files`, { headers: withAuth(token) }),
+  getAppealFileUrl: (token, fileId) => request(`/api/ban-appeals/files/${fileId}/url`, { headers: withAuth(token) }),
   approveBanAppeal: (token, id, body = {}) => request(`/api/ban-appeals/${id}/approve`, { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   rejectBanAppeal: (token, id, body = {}) => request(`/api/ban-appeals/${id}/reject`, { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   auditLogs: (token, params = {}) => request(`/api/audit/logs${buildQueryString(params)}`, { headers: withAuth(token) }),

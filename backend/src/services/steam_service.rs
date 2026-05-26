@@ -23,10 +23,12 @@ fn re_steam3() -> &'static Regex {
     RE_STEAM3.get_or_init(|| Regex::new(r"^\[U:1:(\d+)\]$").unwrap())
 }
 fn re_profile_url() -> &'static Regex {
-    RE_PROFILE_URL.get_or_init(|| Regex::new(r"^https?://steamcommunity\.com/profiles/(\d{17})/?$").unwrap())
+    RE_PROFILE_URL
+        .get_or_init(|| Regex::new(r"^https?://steamcommunity\.com/profiles/(\d{17})/?$").unwrap())
 }
 fn re_vanity_url() -> &'static Regex {
-    RE_VANITY_URL.get_or_init(|| Regex::new(r"^https?://steamcommunity\.com/id/([^/?#]+)/?$").unwrap())
+    RE_VANITY_URL
+        .get_or_init(|| Regex::new(r"^https?://steamcommunity\.com/id/([^/?#]+)/?$").unwrap())
 }
 const CACHE_TTL_SECS: u64 = 300; // 5分钟缓存
 
@@ -157,7 +159,10 @@ impl SteamResolver {
 
         let payload: ResolveVanityUrlEnvelope = response.json().await?;
         anyhow::ensure!(payload.response.success == 1, "无法解析 Steam 个人主页链接");
-        let steamid64 = payload.response.steamid.context("Steam 接口未返回 steamid64")?;
+        let steamid64 = payload
+            .response
+            .steamid
+            .context("Steam 接口未返回 steamid64")?;
 
         Ok(build_identity(
             steamid64.clone(),
@@ -191,7 +196,10 @@ impl SteamResolver {
                     // 更新缓存
                     {
                         let mut cache = self.profile_cache.write().await;
-                        cache.insert(steamid64.to_string(), CacheEntry::new(profile.clone(), CACHE_TTL_SECS));
+                        cache.insert(
+                            steamid64.to_string(),
+                            CacheEntry::new(profile.clone(), CACHE_TTL_SECS),
+                        );
                     }
                     return Ok(profile);
                 }
@@ -214,13 +222,20 @@ impl SteamResolver {
         last_error.map_or(Ok(None), Err)
     }
 
-    async fn fetch_profile_internal(&self, steamid64: &str, api_key: &str) -> anyhow::Result<Option<SteamProfile>> {
+    async fn fetch_profile_internal(
+        &self,
+        steamid64: &str,
+        api_key: &str,
+    ) -> anyhow::Result<Option<SteamProfile>> {
         // 优先使用 steamchina（国内更快）
         if let Some(ref china_key) = self.steamchina_profile_key {
             if let Ok(Some(profile)) = Self::fetch_profile_from(
                 "https://api.steamchina.com/ISteamUser/GetPlayerSummaries/v2/",
-                steamid64, china_key,
-            ).await {
+                steamid64,
+                china_key,
+            )
+            .await
+            {
                 return Ok(Some(profile));
             }
         }
@@ -228,11 +243,17 @@ impl SteamResolver {
         // 备用：steampowered
         Self::fetch_profile_from(
             "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/",
-            steamid64, api_key,
-        ).await
+            steamid64,
+            api_key,
+        )
+        .await
     }
 
-    async fn fetch_profile_from(base_url: &str, steamid64: &str, api_key: &str) -> anyhow::Result<Option<SteamProfile>> {
+    async fn fetch_profile_from(
+        base_url: &str,
+        steamid64: &str,
+        api_key: &str,
+    ) -> anyhow::Result<Option<SteamProfile>> {
         let response = http_client::http_client()
             .get(base_url)
             .query(&[("key", api_key), ("steamids", steamid64)])
@@ -252,7 +273,10 @@ impl SteamResolver {
     }
 
     /// 批量查询 Steam Profile（最多100个）
-    pub async fn fetch_profiles_batch(&self, steamids: &[String]) -> anyhow::Result<HashMap<String, SteamProfile>> {
+    pub async fn fetch_profiles_batch(
+        &self,
+        steamids: &[String],
+    ) -> anyhow::Result<HashMap<String, SteamProfile>> {
         if steamids.is_empty() {
             return Ok(HashMap::new());
         }
@@ -296,7 +320,10 @@ impl SteamResolver {
                     let mut cache = self.profile_cache.write().await;
                     for steamid in chunk {
                         let profile = profiles.get(steamid).cloned();
-                        cache.insert(steamid.clone(), CacheEntry::new(profile.clone(), CACHE_TTL_SECS));
+                        cache.insert(
+                            steamid.clone(),
+                            CacheEntry::new(profile.clone(), CACHE_TTL_SECS),
+                        );
                         if let Some(p) = profile {
                             result.insert(steamid.clone(), p);
                         }
@@ -316,13 +343,20 @@ impl SteamResolver {
         Ok(result)
     }
 
-    async fn fetch_profiles_batch_internal(&self, steamids: &str, api_key: &str) -> anyhow::Result<HashMap<String, SteamProfile>> {
+    async fn fetch_profiles_batch_internal(
+        &self,
+        steamids: &str,
+        api_key: &str,
+    ) -> anyhow::Result<HashMap<String, SteamProfile>> {
         // 优先使用 steamchina
         if let Some(ref china_key) = self.steamchina_profile_key {
             if let Ok(result) = Self::fetch_profiles_batch_from(
                 "https://api.steamchina.com/ISteamUser/GetPlayerSummaries/v2/",
-                steamids, china_key,
-            ).await {
+                steamids,
+                china_key,
+            )
+            .await
+            {
                 return Ok(result);
             }
         }
@@ -330,11 +364,17 @@ impl SteamResolver {
         // 备用：steampowered
         Self::fetch_profiles_batch_from(
             "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/",
-            steamids, api_key,
-        ).await
+            steamids,
+            api_key,
+        )
+        .await
     }
 
-    async fn fetch_profiles_batch_from(base_url: &str, steamids: &str, api_key: &str) -> anyhow::Result<HashMap<String, SteamProfile>> {
+    async fn fetch_profiles_batch_from(
+        base_url: &str,
+        steamids: &str,
+        api_key: &str,
+    ) -> anyhow::Result<HashMap<String, SteamProfile>> {
         let response = http_client::http_client()
             .get(base_url)
             .query(&[("key", api_key), ("steamids", steamids)])
@@ -346,9 +386,12 @@ impl SteamResolver {
 
         let mut result = HashMap::new();
         for player in payload.response.players {
-            result.insert(player.steamid, SteamProfile {
-                persona_name: player.personaname,
-            });
+            result.insert(
+                player.steamid,
+                SteamProfile {
+                    persona_name: player.personaname,
+                },
+            );
         }
 
         Ok(result)
@@ -417,7 +460,10 @@ pub fn steam2_to_steamid64(steam_id: &str) -> anyhow::Result<String> {
     let auth_server = parts.next().unwrap_or_default();
     let account = parts.next().unwrap_or_default();
 
-    anyhow::ensure!(prefix == "STEAM_0" || prefix == "STEAM_1", "旧 SteamID 格式无效");
+    anyhow::ensure!(
+        prefix == "STEAM_0" || prefix == "STEAM_1",
+        "旧 SteamID 格式无效"
+    );
     let auth_server = auth_server.parse::<u64>()?;
     let account = account.parse::<u64>()?;
     anyhow::ensure!(auth_server <= 1, "旧 SteamID 格式无效");

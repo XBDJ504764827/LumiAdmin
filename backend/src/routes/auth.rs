@@ -6,7 +6,7 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::routes::{AppCtx, current_operator, forbidden};
+use crate::routes::{current_operator, forbidden, AppCtx};
 use crate::services::{auth_service, log_service, rate_limit_service::extract_client_ip};
 
 #[derive(Deserialize)]
@@ -24,15 +24,20 @@ pub(crate) async fn login(
     State(ctx): State<AppCtx>,
     Json(body): Json<LoginBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let resp = auth_service::login(&ctx.db, &body.username, &body.password, ctx.config.session_ttl_hours)
-        .await
-        .map_err(|err| {
-            tracing::warn!(username = %body.username, error = %err, "login failed");
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({"error":"用户名或密码错误"})),
-            )
-        })?;
+    let resp = auth_service::login(
+        &ctx.db,
+        &body.username,
+        &body.password,
+        ctx.config.session_ttl_hours,
+    )
+    .await
+    .map_err(|err| {
+        tracing::warn!(username = %body.username, error = %err, "login failed");
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error":"用户名或密码错误"})),
+        )
+    })?;
     Ok(Json(serde_json::json!({"session": resp.session})))
 }
 
@@ -49,7 +54,10 @@ pub(crate) async fn logout(State(ctx): State<AppCtx>, headers: HeaderMap) -> Sta
     StatusCode::NO_CONTENT
 }
 
-pub(crate) async fn me(State(ctx): State<AppCtx>, headers: HeaderMap) -> Result<Json<serde_json::Value>, StatusCode> {
+pub(crate) async fn me(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, StatusCode> {
     let token = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -77,7 +85,7 @@ pub(crate) async fn me(State(ctx): State<AppCtx>, headers: HeaderMap) -> Result<
 pub(crate) async fn logout_all_devices(
     State(ctx): State<AppCtx>,
     headers: HeaderMap,
-    _body: Json<LogoutAllBody>,
+    Json(body): Json<LogoutAllBody>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let token_str = headers
         .get(header::AUTHORIZATION)
@@ -85,6 +93,10 @@ pub(crate) async fn logout_all_devices(
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or(StatusCode::UNAUTHORIZED)?;
     let token = Uuid::parse_str(token_str).map_err(|_| StatusCode::UNAUTHORIZED)?;
+    if body.current_token != token {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
     let session = auth_service::current_session(&ctx.db, token)
         .await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
@@ -109,8 +121,21 @@ pub(crate) async fn revoke_user_sessions(
 
     let count = auth_service::logout_all_for_user(&ctx.db, user_id, None)
         .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "操作失败"}))))?;
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "操作失败"})),
+            )
+        })?;
 
-    let _ = log_service::create_log(&ctx.db, &actor.display_name, "网站用户管理", "强制登出", &user_id.to_string(), &extract_client_ip(&headers)).await;
+    let _ = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "网站用户管理",
+        "强制登出",
+        &user_id.to_string(),
+        &extract_client_ip(&headers),
+    )
+    .await;
     Ok(Json(serde_json::json!({ "revoked_count": count })))
 }

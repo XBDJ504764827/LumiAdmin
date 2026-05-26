@@ -126,9 +126,7 @@ impl RateLimiter {
         for shard in &self.shards {
             let mut entries = shard.write().await;
             total_before += entries.len();
-            entries.retain(|_, entry| {
-                now.duration_since(entry.window_start) < cleanup_threshold
-            });
+            entries.retain(|_, entry| now.duration_since(entry.window_start) < cleanup_threshold);
             total_after += entries.len();
         }
 
@@ -178,10 +176,10 @@ pub struct RateLimiters {
 impl RateLimiters {
     pub fn new() -> Self {
         Self {
-            // 公开 API：每分钟 60 次/IP
+            // 公开 API：每 10 分钟 5 次/IP
             public_api: RateLimiter::new(RateLimitConfig {
-                max_requests: 60,
-                window_secs: 60,
+                max_requests: 5,
+                window_secs: 600,
                 name: "public_api".to_string(),
             }),
             // 认证 API：每分钟 10 次/IP（防暴力破解）

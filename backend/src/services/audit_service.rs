@@ -145,7 +145,9 @@ pub async fn list_audit_logs(
            FROM audit_logs {}
            ORDER BY created_at DESC
            LIMIT ${} OFFSET ${}"#,
-        where_clause, param_idx, param_idx + 1
+        where_clause,
+        param_idx,
+        param_idx + 1
     );
 
     let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql);
@@ -184,7 +186,9 @@ pub async fn list_audit_logs(
         data_query = data_query.bind(success);
     }
 
-    data_query = data_query.bind(query.page_size).bind((query.page - 1) * query.page_size);
+    data_query = data_query
+        .bind(query.page_size)
+        .bind((query.page - 1) * query.page_size);
 
     let total = count_query.fetch_one(&db.pool).await?;
     let items = data_query.fetch_all(&db.pool).await?;

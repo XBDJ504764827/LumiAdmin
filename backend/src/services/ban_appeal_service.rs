@@ -1,6 +1,7 @@
 use crate::db::Database;
 use crate::routes::{ListQuery, PaginatedResponse};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 const APPEAL_FIELDS: &str = "id, ban_id, steam_id, player_name, appeal_reason, status, reviewed_by, review_note, reviewed_at, created_at";
@@ -22,6 +23,8 @@ pub struct BanAppealItem {
     pub ban_type: Option<String>,
     pub ban_operator_name: Option<String>,
     pub ban_server_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upload_token: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -64,52 +67,53 @@ pub struct CreateAppealInput {
     pub appeal_reason: String,
 }
 
-#[derive(Deserialize)]
-pub struct ReviewAppealInput {
-    pub review_note: Option<String>,
-}
-
-pub async fn create_appeal(db: &Database, input: CreateAppealInput) -> anyhow::Result<BanAppealItem> {
+pub async fn create_appeal(
+    db: &Database,
+    input: CreateAppealInput,
+) -> anyhow::Result<BanAppealItem> {
     let steam_id = input.steam_id.trim();
     let player_name = input.player_name.trim();
     let reason = input.appeal_reason.trim();
+    let upload_token = new_upload_token();
+    let upload_token_hash = hash_upload_token(&upload_token);
 
     anyhow::ensure!(!steam_id.is_empty(), "SteamID 不能为空");
     anyhow::ensure!(!player_name.is_empty(), "玩家名称不能为空");
     anyhow::ensure!(!reason.is_empty(), "申诉理由不能为空");
 
-    // 检查封禁记录是否存在且为活跃状态
-    let ban_status: Option<(String,)> = sqlx::query_as(
-        "SELECT status FROM ban_records WHERE id = $1",
-    )
-    .bind(input.ban_id)
-    .fetch_optional(&db.pool)
-    .await?;
+    // 检查封禁记录是否存在、仍活跃，并且确实属于提交申诉的 SteamID。
+    let ban_record: Option<(String, String)> =
+        sqlx::query_as("SELECT status, steam_id FROM ban_records WHERE id = $1")
+            .bind(input.ban_id)
+            .fetch_optional(&db.pool)
+            .await?;
 
-    let status = ban_status.ok_or_else(|| anyhow::anyhow!("封禁记录不存在"))?;
-    anyhow::ensure!(status.0 == "active", "该封禁记录已非活跃状态，无需申诉");
+    let (status, banned_steam_id) = ban_record.ok_or_else(|| anyhow::anyhow!("封禁记录不存在"))?;
+    anyhow::ensure!(status == "active", "该封禁记录已非活跃状态，无需申诉");
+    anyhow::ensure!(
+        banned_steam_id.trim() == steam_id,
+        "该封禁记录不属于当前 SteamID，无法提交申诉"
+    );
 
     // 检查该封禁是否已有待审核的申诉
-    let existing: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM ban_appeals WHERE ban_id = $1 AND status = 'pending'",
-    )
-    .bind(input.ban_id)
-    .fetch_optional(&db.pool)
-    .await?;
+    let existing: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM ban_appeals WHERE ban_id = $1 AND status = 'pending'")
+            .bind(input.ban_id)
+            .fetch_optional(&db.pool)
+            .await?;
     anyhow::ensure!(existing.is_none(), "该封禁记录已有待审核的申诉");
 
-    let row = sqlx::query_as::<_, AppealRow>(
-        &format!(
-            r#"INSERT INTO ban_appeals (id, ban_id, steam_id, player_name, appeal_reason)
-               VALUES ($1, $2, $3, $4, $5)
+    let row = sqlx::query_as::<_, AppealRow>(&format!(
+        r#"INSERT INTO ban_appeals (id, ban_id, steam_id, player_name, appeal_reason, upload_token_hash)
+               VALUES ($1, $2, $3, $4, $5, $6)
                RETURNING {APPEAL_FIELDS}"#
-        ),
-    )
+    ))
     .bind(Uuid::new_v4())
     .bind(input.ban_id)
     .bind(steam_id)
     .bind(player_name)
     .bind(reason)
+    .bind(upload_token_hash)
     .fetch_one(&db.pool)
     .await?;
 
@@ -135,16 +139,22 @@ pub async fn create_appeal(db: &Database, input: CreateAppealInput) -> anyhow::R
         ban_type: ban_info.as_ref().map(|b| b.1.clone()),
         ban_operator_name: ban_info.as_ref().map(|b| b.2.clone()),
         ban_server_name: ban_info.as_ref().and_then(|b| b.3.clone()),
+        upload_token: Some(upload_token),
     })
 }
 
-pub async fn list_appeals(db: &Database, query: &ListQuery) -> anyhow::Result<PaginatedResponse<BanAppealItem>> {
+pub async fn list_appeals(
+    db: &Database,
+    query: &ListQuery,
+) -> anyhow::Result<PaginatedResponse<BanAppealItem>> {
     let mut conditions = Vec::new();
     let mut param_idx = 1u32;
     let search_pattern = query.search_pattern();
 
     if search_pattern.is_some() {
-        conditions.push(format!("(ba.steam_id ILIKE ${param_idx} OR ba.player_name ILIKE ${param_idx})"));
+        conditions.push(format!(
+            "(ba.steam_id ILIKE ${param_idx} OR ba.player_name ILIKE ${param_idx})"
+        ));
         param_idx += 1;
     }
     if let Some(ref status) = query.status {
@@ -191,22 +201,26 @@ pub async fn list_appeals(db: &Database, query: &ListQuery) -> anyhow::Result<Pa
     let total = count_query.fetch_one(&db.pool).await?;
     let rows = data_query.fetch_all(&db.pool).await?;
 
-    let items = rows.into_iter().map(|row| BanAppealItem {
-        id: row.id,
-        ban_id: row.ban_id,
-        steam_id: row.steam_id,
-        player_name: row.player_name,
-        appeal_reason: row.appeal_reason,
-        status: row.status,
-        reviewed_by: row.reviewed_by,
-        review_note: row.review_note,
-        reviewed_at: row.reviewed_at.map(|v| v.to_rfc3339()),
-        created_at: row.created_at.to_rfc3339(),
-        ban_reason: row.ban_reason,
-        ban_type: row.ban_type,
-        ban_operator_name: row.ban_operator_name,
-        ban_server_name: row.ban_server_name,
-    }).collect();
+    let items = rows
+        .into_iter()
+        .map(|row| BanAppealItem {
+            id: row.id,
+            ban_id: row.ban_id,
+            steam_id: row.steam_id,
+            player_name: row.player_name,
+            appeal_reason: row.appeal_reason,
+            status: row.status,
+            reviewed_by: row.reviewed_by,
+            review_note: row.review_note,
+            reviewed_at: row.reviewed_at.map(|v| v.to_rfc3339()),
+            created_at: row.created_at.to_rfc3339(),
+            ban_reason: row.ban_reason,
+            ban_type: row.ban_type,
+            ban_operator_name: row.ban_operator_name,
+            ban_server_name: row.ban_server_name,
+            upload_token: None,
+        })
+        .collect();
 
     Ok(PaginatedResponse {
         items,
@@ -216,11 +230,16 @@ pub async fn list_appeals(db: &Database, query: &ListQuery) -> anyhow::Result<Pa
     })
 }
 
-pub async fn approve_appeal(db: &Database, appeal_id: Uuid, reviewer_name: &str, review_note: Option<String>) -> anyhow::Result<BanAppealItem> {
+pub async fn approve_appeal(
+    db: &Database,
+    appeal_id: Uuid,
+    reviewer_name: &str,
+    review_note: Option<String>,
+) -> anyhow::Result<BanAppealItem> {
     // 获取申诉记录
-    let row = sqlx::query_as::<_, AppealRow>(
-        &format!("SELECT {APPEAL_FIELDS} FROM ban_appeals WHERE id = $1"),
-    )
+    let row = sqlx::query_as::<_, AppealRow>(&format!(
+        "SELECT {APPEAL_FIELDS} FROM ban_appeals WHERE id = $1"
+    ))
     .bind(appeal_id)
     .fetch_optional(&db.pool)
     .await?
@@ -250,9 +269,9 @@ pub async fn approve_appeal(db: &Database, appeal_id: Uuid, reviewer_name: &str,
     .fetch_optional(&db.pool)
     .await?;
 
-    let updated: AppealRow = sqlx::query_as(
-        &format!("SELECT {APPEAL_FIELDS} FROM ban_appeals WHERE id = $1"),
-    )
+    let updated: AppealRow = sqlx::query_as(&format!(
+        "SELECT {APPEAL_FIELDS} FROM ban_appeals WHERE id = $1"
+    ))
     .bind(appeal_id)
     .fetch_one(&db.pool)
     .await?;
@@ -272,13 +291,19 @@ pub async fn approve_appeal(db: &Database, appeal_id: Uuid, reviewer_name: &str,
         ban_type: ban_info.as_ref().map(|b| b.1.clone()),
         ban_operator_name: ban_info.as_ref().map(|b| b.2.clone()),
         ban_server_name: ban_info.as_ref().and_then(|b| b.3.clone()),
+        upload_token: None,
     })
 }
 
-pub async fn reject_appeal(db: &Database, appeal_id: Uuid, reviewer_name: &str, review_note: Option<String>) -> anyhow::Result<BanAppealItem> {
-    let row = sqlx::query_as::<_, AppealRow>(
-        &format!("SELECT {APPEAL_FIELDS} FROM ban_appeals WHERE id = $1"),
-    )
+pub async fn reject_appeal(
+    db: &Database,
+    appeal_id: Uuid,
+    reviewer_name: &str,
+    review_note: Option<String>,
+) -> anyhow::Result<BanAppealItem> {
+    let row = sqlx::query_as::<_, AppealRow>(&format!(
+        "SELECT {APPEAL_FIELDS} FROM ban_appeals WHERE id = $1"
+    ))
     .bind(appeal_id)
     .fetch_optional(&db.pool)
     .await?
@@ -303,9 +328,9 @@ pub async fn reject_appeal(db: &Database, appeal_id: Uuid, reviewer_name: &str, 
     .fetch_optional(&db.pool)
     .await?;
 
-    let updated: AppealRow = sqlx::query_as(
-        &format!("SELECT {APPEAL_FIELDS} FROM ban_appeals WHERE id = $1"),
-    )
+    let updated: AppealRow = sqlx::query_as(&format!(
+        "SELECT {APPEAL_FIELDS} FROM ban_appeals WHERE id = $1"
+    ))
     .bind(appeal_id)
     .fetch_one(&db.pool)
     .await?;
@@ -325,5 +350,21 @@ pub async fn reject_appeal(db: &Database, appeal_id: Uuid, reviewer_name: &str, 
         ban_type: ban_info.as_ref().map(|b| b.1.clone()),
         ban_operator_name: ban_info.as_ref().map(|b| b.2.clone()),
         ban_server_name: ban_info.as_ref().and_then(|b| b.3.clone()),
+        upload_token: None,
     })
+}
+
+pub fn verify_upload_token(stored_hash: Option<&str>, token: &str) -> bool {
+    let Some(stored_hash) = stored_hash else {
+        return false;
+    };
+    !token.trim().is_empty() && hash_upload_token(token.trim()) == stored_hash
+}
+
+fn new_upload_token() -> String {
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+}
+
+fn hash_upload_token(token: &str) -> String {
+    hex::encode(Sha256::digest(token.as_bytes()))
 }

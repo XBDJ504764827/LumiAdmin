@@ -1,12 +1,14 @@
 use axum::{
+    extract::ConnectInfo,
     extract::{Request, State},
     http::{HeaderMap, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use std::net::SocketAddr;
 use std::sync::Arc;
 
-use crate::services::rate_limit_service::{extract_client_ip, RateLimitError, RateLimiters};
+use crate::services::rate_limit_service::{RateLimitError, RateLimiters};
 
 /// 限流中间件状态
 #[derive(Clone)]
@@ -22,19 +24,21 @@ pub async fn rate_limit_middleware(
 ) -> Result<Response, RateLimitResponse> {
     let path = request.uri().path();
     let headers = request.headers();
+    let peer_ip = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(addr)| addr.ip().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
 
     // 根据路径选择不同的限流策略
     if path.starts_with("/api/public/") {
-        let ip = extract_client_ip(headers);
-        state.limiters.public_api.check(&ip).await?;
+        state.limiters.public_api.check(&peer_ip).await?;
     } else if path.starts_with("/api/auth/login") || path.starts_with("/api/auth/logout") {
-        let ip = extract_client_ip(headers);
-        state.limiters.auth_api.check(&ip).await?;
+        state.limiters.auth_api.check(&peer_ip).await?;
     } else if path.starts_with("/api/plugin/") {
-        let ip = extract_client_ip(headers);
-        state.limiters.plugin_api.check(&ip).await?;
+        state.limiters.plugin_api.check(&peer_ip).await?;
     } else if path.starts_with("/api/") {
-        let user_key = extract_user_key(headers);
+        let user_key = extract_user_key(headers, &peer_ip);
         state.limiters.admin_api.check(&user_key).await?;
     }
 
@@ -42,7 +46,7 @@ pub async fn rate_limit_middleware(
 }
 
 /// 从请求头提取用户标识
-fn extract_user_key(headers: &HeaderMap) -> String {
+fn extract_user_key(headers: &HeaderMap, fallback_ip: &str) -> String {
     if let Some(auth) = headers.get("authorization") {
         if let Ok(auth_str) = auth.to_str() {
             if let Some(token) = auth_str.strip_prefix("Bearer ") {
@@ -51,7 +55,7 @@ fn extract_user_key(headers: &HeaderMap) -> String {
             return auth_str.to_string();
         }
     }
-    extract_client_ip(headers)
+    fallback_ip.to_string()
 }
 
 /// 限流错误响应

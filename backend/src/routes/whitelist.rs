@@ -7,9 +7,9 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::routes::{AppCtx, ListQuery, current_operator, forbidden, invalid_request};
-use crate::services::{permission_service, whitelist_service, log_service};
+use crate::routes::{current_operator, forbidden, invalid_request, AppCtx, ListQuery};
 use crate::services::rate_limit_service::extract_client_ip;
+use crate::services::{log_service, permission_service, whitelist_service};
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
@@ -38,11 +38,24 @@ pub(crate) struct RefreshSteamNamesBody {
     pub status: Option<String>,
 }
 
-pub(crate) async fn whitelist(State(ctx): State<AppCtx>, Query(query): Query<ListQuery>) -> Result<Json<serde_json::Value>, StatusCode> {
+pub(crate) async fn whitelist(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Query(query): Query<ListQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let _actor = current_operator(&ctx, &headers).await?;
+
     let result = whitelist_service::list_whitelist(&ctx.db, &query)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(serde_json::json!({ "items": result.items, "total": result.total, "page": result.page, "page_size": result.page_size })))
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "加载白名单列表失败" })),
+            )
+        })?;
+    Ok(Json(
+        serde_json::json!({ "items": result.items, "total": result.total, "page": result.page, "page_size": result.page_size }),
+    ))
 }
 
 pub(crate) async fn create_whitelist(
@@ -67,7 +80,18 @@ pub(crate) async fn create_whitelist(
     )
     .await
     .map_err(invalid_request)?;
-    if let Err(e) = log_service::create_log(&ctx.db, &operator_name, "白名单管理", "手动添加白名单", &item.nickname, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &operator_name,
+        "白名单管理",
+        "手动添加白名单",
+        &item.nickname,
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok((StatusCode::CREATED, Json(serde_json::json!({"item": item}))))
 }
 
@@ -82,10 +106,22 @@ pub(crate) async fn approve_whitelist_request(
         return Err(forbidden());
     }
     let operator_name = actor.display_name.clone();
-    let item = whitelist_service::approve_whitelist(&ctx.db, id, &operator_name, body.reason.as_deref())
-        .await
-        .map_err(invalid_request)?;
-    if let Err(e) = log_service::create_log(&ctx.db, &operator_name, "白名单管理", "通过白名单申请", &item.nickname, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
+    let item =
+        whitelist_service::approve_whitelist(&ctx.db, id, &operator_name, body.reason.as_deref())
+            .await
+            .map_err(invalid_request)?;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &operator_name,
+        "白名单管理",
+        "通过白名单申请",
+        &item.nickname,
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(Json(serde_json::json!({"item": item})))
 }
 
@@ -103,7 +139,18 @@ pub(crate) async fn reject_whitelist_request(
     let item = whitelist_service::reject_whitelist(&ctx.db, id, &body.reason, &operator_name)
         .await
         .map_err(invalid_request)?;
-    if let Err(e) = log_service::create_log(&ctx.db, &operator_name, "白名单管理", "拒绝白名单申请", &item.nickname, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &operator_name,
+        "白名单管理",
+        "拒绝白名单申请",
+        &item.nickname,
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(Json(serde_json::json!({"item": item})))
 }
 
@@ -121,7 +168,18 @@ pub(crate) async fn restore_whitelist_request(
     let item = whitelist_service::restore_whitelist(&ctx.db, id, &operator_name)
         .await
         .map_err(invalid_request)?;
-    if let Err(e) = log_service::create_log(&ctx.db, &operator_name, "白名单管理", "恢复白名单通过", &item.nickname, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &operator_name,
+        "白名单管理",
+        "恢复白名单通过",
+        &item.nickname,
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(Json(serde_json::json!({"item": item})))
 }
 
@@ -139,7 +197,18 @@ pub(crate) async fn revoke_whitelist_request(
     let item = whitelist_service::revoke_whitelist(&ctx.db, id, &operator_name)
         .await
         .map_err(invalid_request)?;
-    if let Err(e) = log_service::create_log(&ctx.db, &operator_name, "白名单管理", "删除白名单审核", &item.nickname, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &operator_name,
+        "白名单管理",
+        "删除白名单审核",
+        &item.nickname,
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(Json(serde_json::json!({"item": item})))
 }
 
@@ -157,7 +226,9 @@ pub(crate) async fn refresh_single_steam_name(
     let steam_name = whitelist_service::update_steam_persona_name(&ctx.db, id, resolver)
         .await
         .map_err(invalid_request)?;
-    Ok(Json(serde_json::json!({ "steam_persona_name": steam_name })))
+    Ok(Json(
+        serde_json::json!({ "steam_persona_name": steam_name }),
+    ))
 }
 
 /// 批量刷新白名单记录的Steam名称
@@ -171,10 +242,25 @@ pub(crate) async fn refresh_all_steam_names(
         return Err(forbidden());
     }
     let resolver = &ctx.steam_resolver;
-    let updated_count = whitelist_service::refresh_all_steam_persona_names(&ctx.db, resolver, body.status.as_deref())
-        .await
-        .map_err(invalid_request)?;
+    let updated_count = whitelist_service::refresh_all_steam_persona_names(
+        &ctx.db,
+        resolver,
+        body.status.as_deref(),
+    )
+    .await
+    .map_err(invalid_request)?;
     let operator_name = actor.display_name.clone();
-    if let Err(e) = log_service::create_log(&ctx.db, &operator_name, "白名单管理", "批量刷新Steam名称", &format!("更新了{}条记录", updated_count), &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &operator_name,
+        "白名单管理",
+        "批量刷新Steam名称",
+        &format!("更新了{}条记录", updated_count),
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(Json(serde_json::json!({ "updated_count": updated_count })))
 }

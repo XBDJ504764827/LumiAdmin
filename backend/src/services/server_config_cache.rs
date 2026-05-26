@@ -58,7 +58,21 @@ impl CachedServerConfig {
     }
 }
 
-type ServerConfigRow = (Uuid, Uuid, String, i32, String, bool, i32, i32, bool, bool, bool, i32, i32);
+type ServerConfigRow = (
+    Uuid,
+    Uuid,
+    String,
+    i32,
+    String,
+    bool,
+    i32,
+    i32,
+    bool,
+    bool,
+    bool,
+    i32,
+    i32,
+);
 
 /// 服务器配置缓存
 ///
@@ -214,8 +228,8 @@ impl ServerConfigCache {
         .fetch_optional(&db.pool)
         .await?;
 
-        Ok(row.map(|(id, community_id, name, port, report_token, access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled, use_custom_access, community_whitelist_mode_enabled, community_min_rating, community_min_level)| {
-            CachedServerConfig {
+        Ok(row.map(
+            |(
                 id,
                 community_id,
                 name,
@@ -228,9 +242,25 @@ impl ServerConfigCache {
                 use_custom_access,
                 community_whitelist_mode_enabled,
                 community_min_rating,
-                community_min_steam_level: community_min_level,
-            }
-        }))
+                community_min_level,
+            )| {
+                CachedServerConfig {
+                    id,
+                    community_id,
+                    name,
+                    port,
+                    report_token,
+                    access_restriction_enabled,
+                    min_rating,
+                    min_steam_level,
+                    whitelist_mode_enabled,
+                    use_custom_access,
+                    community_whitelist_mode_enabled,
+                    community_min_rating,
+                    community_min_steam_level: community_min_level,
+                }
+            },
+        ))
     }
 
     /// 根据 ID 加载服务器配置
@@ -252,8 +282,8 @@ impl ServerConfigCache {
         .fetch_optional(&db.pool)
         .await?;
 
-        Ok(row.map(|(id, community_id, name, port, report_token, access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled, use_custom_access, community_whitelist_mode_enabled, community_min_rating, community_min_level)| {
-            CachedServerConfig {
+        Ok(row.map(
+            |(
                 id,
                 community_id,
                 name,
@@ -266,13 +296,32 @@ impl ServerConfigCache {
                 use_custom_access,
                 community_whitelist_mode_enabled,
                 community_min_rating,
-                community_min_steam_level: community_min_level,
-            }
-        }))
+                community_min_level,
+            )| {
+                CachedServerConfig {
+                    id,
+                    community_id,
+                    name,
+                    port,
+                    report_token,
+                    access_restriction_enabled,
+                    min_rating,
+                    min_steam_level,
+                    whitelist_mode_enabled,
+                    use_custom_access,
+                    community_whitelist_mode_enabled,
+                    community_min_rating,
+                    community_min_steam_level: community_min_level,
+                }
+            },
+        ))
     }
 
     /// 从数据库加载所有服务器配置
-    async fn load_all_server_configs(&self, db: &Database) -> anyhow::Result<Vec<CachedServerConfig>> {
+    async fn load_all_server_configs(
+        &self,
+        db: &Database,
+    ) -> anyhow::Result<Vec<CachedServerConfig>> {
         let rows: Vec<ServerConfigRow> = sqlx::query_as(
             r#"SELECT s.id, s.community_id, s.name, s.port, s.report_token,
                       s.access_restriction_enabled, s.min_rating, s.min_steam_level, s.whitelist_mode_enabled,
@@ -284,23 +333,42 @@ impl ServerConfigCache {
         .fetch_all(&db.pool)
         .await?;
 
-        Ok(rows.into_iter().map(|(id, community_id, name, port, report_token, access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled, use_custom_access, community_whitelist_mode_enabled, community_min_rating, community_min_level)| {
-            CachedServerConfig {
-                id,
-                community_id,
-                name,
-                port,
-                report_token,
-                access_restriction_enabled,
-                min_rating,
-                min_steam_level,
-                whitelist_mode_enabled,
-                use_custom_access,
-                community_whitelist_mode_enabled,
-                community_min_rating,
-                community_min_steam_level: community_min_level,
-            }
-        }).collect())
+        Ok(rows
+            .into_iter()
+            .map(
+                |(
+                    id,
+                    community_id,
+                    name,
+                    port,
+                    report_token,
+                    access_restriction_enabled,
+                    min_rating,
+                    min_steam_level,
+                    whitelist_mode_enabled,
+                    use_custom_access,
+                    community_whitelist_mode_enabled,
+                    community_min_rating,
+                    community_min_level,
+                )| {
+                    CachedServerConfig {
+                        id,
+                        community_id,
+                        name,
+                        port,
+                        report_token,
+                        access_restriction_enabled,
+                        min_rating,
+                        min_steam_level,
+                        whitelist_mode_enabled,
+                        use_custom_access,
+                        community_whitelist_mode_enabled,
+                        community_min_rating,
+                        community_min_steam_level: community_min_level,
+                    }
+                },
+            )
+            .collect())
     }
 }
 

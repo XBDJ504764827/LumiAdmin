@@ -12,7 +12,10 @@ pub struct LogItem {
     pub created_at: String,
 }
 
-pub async fn list_logs(db: &Database, query: &ListQuery) -> anyhow::Result<crate::routes::PaginatedResponse<LogItem>> {
+pub async fn list_logs(
+    db: &Database,
+    query: &ListQuery,
+) -> anyhow::Result<crate::routes::PaginatedResponse<LogItem>> {
     let mut conditions = vec!["COALESCE(u.role, '') <> 'developer'".to_string()];
     let mut param_idx = 1u32;
     let search_pattern = query.search_pattern();
@@ -33,7 +36,17 @@ pub async fn list_logs(db: &Database, query: &ListQuery) -> anyhow::Result<crate
     );
 
     let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql);
-    let mut data_query = sqlx::query_as::<_, (String, String, String, String, String, chrono::DateTime<chrono::Utc>)>(&data_sql);
+    let mut data_query = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            String,
+            String,
+            String,
+            chrono::DateTime<chrono::Utc>,
+        ),
+    >(&data_sql);
 
     if let Some(ref pattern) = search_pattern {
         count_query = count_query.bind(pattern);
@@ -42,15 +55,20 @@ pub async fn list_logs(db: &Database, query: &ListQuery) -> anyhow::Result<crate
     data_query = data_query.bind(query.page_size()).bind(query.offset());
 
     let total = count_query.fetch_one(&db.pool).await?;
-    let items = data_query.fetch_all(&db.pool).await?.into_iter()
-        .map(|(operator_name, module, action, target_detail, ip_address, created_at)| LogItem {
-            operator_name,
-            module,
-            action,
-            target_detail,
-            ip_address,
-            created_at: created_at.to_rfc3339(),
-        })
+    let items = data_query
+        .fetch_all(&db.pool)
+        .await?
+        .into_iter()
+        .map(
+            |(operator_name, module, action, target_detail, ip_address, created_at)| LogItem {
+                operator_name,
+                module,
+                action,
+                target_detail,
+                ip_address,
+                created_at: created_at.to_rfc3339(),
+            },
+        )
         .collect();
 
     Ok(crate::routes::PaginatedResponse {
@@ -61,7 +79,14 @@ pub async fn list_logs(db: &Database, query: &ListQuery) -> anyhow::Result<crate
     })
 }
 
-pub async fn create_log(db: &Database, operator_name: &str, module: &str, action: &str, target_detail: &str, ip_address: &str) -> anyhow::Result<()> {
+pub async fn create_log(
+    db: &Database,
+    operator_name: &str,
+    module: &str,
+    action: &str,
+    target_detail: &str,
+    ip_address: &str,
+) -> anyhow::Result<()> {
     sqlx::query(
         r#"INSERT INTO admin_logs (id, operator_name, module, action, target_detail, ip_address)
            VALUES ($1, $2, $3, $4, $5, $6)"#,

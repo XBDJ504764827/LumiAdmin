@@ -7,9 +7,14 @@ use chrono::Utc;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::routes::{AppCtx, current_operator, forbidden, invalid_request, invalid_request_status, internal_error};
+use crate::routes::{
+    current_operator, forbidden, internal_error, invalid_request, invalid_request_status, AppCtx,
+};
 use crate::services::rate_limit_service::extract_client_ip;
-use crate::services::{access_service, access_snapshot_service, log_service, permission_service, player_access_rule_service};
+use crate::services::{
+    access_service, access_snapshot_service, log_service, permission_service,
+    player_access_rule_service,
+};
 
 #[derive(Deserialize)]
 pub(crate) struct PluginAccessCheckBody {
@@ -50,12 +55,16 @@ pub(crate) async fn check_plugin_access(
     Ok(Json(serde_json::json!({ "result": result })))
 }
 
-
 pub(crate) async fn plugin_access_snapshot(
     State(ctx): State<AppCtx>,
     Json(body): Json<PluginAccessSnapshotBody>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let snapshot = match ctx.access_snapshot.read_snapshot().await.map_err(internal_error)? {
+    let snapshot = match ctx
+        .access_snapshot
+        .read_snapshot()
+        .await
+        .map_err(internal_error)?
+    {
         Some(snapshot) => snapshot,
         None => return Err(StatusCode::SERVICE_UNAVAILABLE),
     };
@@ -123,9 +132,15 @@ pub(crate) async fn create_player_access_rule(
         &format!("{} ({})", rule.nickname, rule.steamid64),
         &extract_client_ip(&headers),
     )
-    .await { tracing::warn!(%e, "日志写入失败"); }
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
 
-    Ok((StatusCode::CREATED, Json(serde_json::json!({ "item": rule }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "item": rule })),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -170,7 +185,10 @@ pub(crate) async fn update_player_access_rule(
         &format!("{} ({})", rule.nickname, rule.steamid64),
         &extract_client_ip(&headers),
     )
-    .await { tracing::warn!(%e, "日志写入失败"); }
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
 
     Ok(Json(serde_json::json!({ "item": rule })))
 }
@@ -188,7 +206,12 @@ pub(crate) async fn delete_player_access_rule(
     let rule = player_access_rule_service::find_rule_by_id(&ctx.db, id)
         .await
         .map_err(invalid_request)?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "规则不存在" }))))?;
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "规则不存在" })),
+            )
+        })?;
 
     player_access_rule_service::delete_rule(&ctx.db, id)
         .await
@@ -202,7 +225,10 @@ pub(crate) async fn delete_player_access_rule(
         &format!("{} ({})", rule.nickname, rule.steamid64),
         &extract_client_ip(&headers),
     )
-    .await { tracing::warn!(%e, "日志写入失败"); }
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }

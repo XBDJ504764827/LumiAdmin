@@ -68,7 +68,10 @@ pub async fn list_rules(db: &Database) -> anyhow::Result<Vec<PlayerAccessRule>> 
 }
 
 /// 根据 SteamID64 查找规则
-pub async fn find_rule_by_steamid64(db: &Database, steamid64: &str) -> anyhow::Result<Option<PlayerAccessRule>> {
+pub async fn find_rule_by_steamid64(
+    db: &Database,
+    steamid64: &str,
+) -> anyhow::Result<Option<PlayerAccessRule>> {
     let row = sqlx::query_as::<_, PlayerAccessRuleRow>(
         r#"SELECT id, steamid64, nickname, allowed_communities, blocked_communities,
                   allowed_servers, blocked_servers, created_at, updated_at
@@ -98,7 +101,10 @@ pub async fn find_rule_by_id(db: &Database, id: Uuid) -> anyhow::Result<Option<P
 }
 
 /// 创建新规则
-pub async fn create_rule(db: &Database, input: CreatePlayerAccessRuleInput) -> anyhow::Result<PlayerAccessRule> {
+pub async fn create_rule(
+    db: &Database,
+    input: CreatePlayerAccessRuleInput,
+) -> anyhow::Result<PlayerAccessRule> {
     let steamid64 = input.steamid64.trim();
     anyhow::ensure!(!steamid64.is_empty(), "SteamID64 不能为空");
     anyhow::ensure!(!input.nickname.trim().is_empty(), "玩家昵称不能为空");
@@ -130,8 +136,14 @@ pub async fn create_rule(db: &Database, input: CreatePlayerAccessRuleInput) -> a
 }
 
 /// 更新规则
-pub async fn update_rule(db: &Database, id: Uuid, input: UpdatePlayerAccessRuleInput) -> anyhow::Result<PlayerAccessRule> {
-    let _existing = find_rule_by_id(db, id).await?.ok_or_else(|| anyhow::anyhow!("规则不存在"))?;
+pub async fn update_rule(
+    db: &Database,
+    id: Uuid,
+    input: UpdatePlayerAccessRuleInput,
+) -> anyhow::Result<PlayerAccessRule> {
+    let _existing = find_rule_by_id(db, id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("规则不存在"))?;
 
     let row = sqlx::query_as::<_, PlayerAccessRuleRow>(
         r#"UPDATE player_access_rules
@@ -228,13 +240,24 @@ mod tests {
     }
 
     async fn create_schema(base_url: &str, schema: &str) {
-        let pool = PgPoolOptions::new().max_connections(1).connect(base_url).await.unwrap();
-        sqlx::query(&format!(r#"CREATE SCHEMA "{schema}""#)).execute(&pool).await.unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(base_url)
+            .await
+            .unwrap();
+        sqlx::query(&format!(r#"CREATE SCHEMA "{schema}""#))
+            .execute(&pool)
+            .await
+            .unwrap();
         pool.close().await;
     }
 
     async fn drop_schema(base_url: &str, schema: &str) {
-        let pool = PgPoolOptions::new().max_connections(1).connect(base_url).await.unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(base_url)
+            .await
+            .unwrap();
         sqlx::query(&format!(r#"DROP SCHEMA IF EXISTS "{schema}" CASCADE"#))
             .execute(&pool)
             .await
@@ -311,7 +334,8 @@ mod tests {
             )
             .await?;
 
-            let (allowed, reason) = check_player_access(&db, "76561198000000002", server_id, community_id).await?;
+            let (allowed, reason) =
+                check_player_access(&db, "76561198000000002", server_id, community_id).await?;
             assert!(!allowed);
             assert!(reason.is_some());
 

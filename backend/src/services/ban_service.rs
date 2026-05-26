@@ -1,4 +1,6 @@
-use crate::{config::Config, db::Database, routes::ListQuery, services::steam_service::SteamResolver};
+use crate::{
+    config::Config, db::Database, routes::ListQuery, services::steam_service::SteamResolver,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -97,13 +99,18 @@ pub(crate) fn row_to_item(row: BanRow) -> BanItem {
     }
 }
 
-pub async fn list_bans(db: &Database, query: &ListQuery) -> anyhow::Result<crate::routes::PaginatedResponse<BanItem>> {
+pub async fn list_bans(
+    db: &Database,
+    query: &ListQuery,
+) -> anyhow::Result<crate::routes::PaginatedResponse<BanItem>> {
     let mut conditions = Vec::new();
     let mut param_idx = 1u32;
     let search_pattern = query.search_pattern();
 
     if search_pattern.is_some() {
-        conditions.push(format!("(steam_id ILIKE ${param_idx} OR player ILIKE ${param_idx})"));
+        conditions.push(format!(
+            "(steam_id ILIKE ${param_idx} OR player ILIKE ${param_idx})"
+        ));
         param_idx += 1;
     }
     if let Some(ref status) = query.status {
@@ -138,7 +145,12 @@ pub async fn list_bans(db: &Database, query: &ListQuery) -> anyhow::Result<crate
     data_query = data_query.bind(query.page_size()).bind(query.offset());
 
     let total = count_query.fetch_one(&db.pool).await?;
-    let items = data_query.fetch_all(&db.pool).await?.into_iter().map(row_to_item).collect();
+    let items = data_query
+        .fetch_all(&db.pool)
+        .await?
+        .into_iter()
+        .map(row_to_item)
+        .collect();
 
     Ok(crate::routes::PaginatedResponse {
         items,
@@ -148,8 +160,11 @@ pub async fn list_bans(db: &Database, query: &ListQuery) -> anyhow::Result<crate
     })
 }
 
-
-pub async fn create_ban(db: &Database, config: &Config, input: CreateBanInput) -> anyhow::Result<BanItem> {
+pub async fn create_ban(
+    db: &Database,
+    config: &Config,
+    input: CreateBanInput,
+) -> anyhow::Result<BanItem> {
     let steam_id_input = input.steam_id.trim();
     let ban_type = input.ban_type.trim();
     let reason = input.reason.trim();
@@ -158,15 +173,17 @@ pub async fn create_ban(db: &Database, config: &Config, input: CreateBanInput) -
     anyhow::ensure!(matches!(ban_type, "steam" | "ip"), "封禁属性无效");
     anyhow::ensure!(!reason.is_empty(), "封禁理由不能为空");
 
-    let steam_id = SteamResolver::new(config).resolve(steam_id_input).await?.steamid64;
+    let steam_id = SteamResolver::new(config)
+        .resolve(steam_id_input)
+        .await?
+        .steamid64;
 
     // 检查是否已有活跃封禁
-    let existing: Option<(Uuid,)> = sqlx::query_as(
-        r#"SELECT id FROM ban_records WHERE steam_id = $1 AND status = 'active'"#,
-    )
-    .bind(&steam_id)
-    .fetch_optional(&db.pool)
-    .await?;
+    let existing: Option<(Uuid,)> =
+        sqlx::query_as(r#"SELECT id FROM ban_records WHERE steam_id = $1 AND status = 'active'"#)
+            .bind(&steam_id)
+            .fetch_optional(&db.pool)
+            .await?;
     if existing.is_some() {
         anyhow::bail!("该玩家已有活跃封禁记录，请先解封后再重新封禁");
     }
@@ -195,7 +212,12 @@ pub async fn create_ban(db: &Database, config: &Config, input: CreateBanInput) -
     Ok(row_to_item(row))
 }
 
-pub async fn update_ban(db: &Database, config: &Config, id: Uuid, input: UpdateBanInput) -> anyhow::Result<BanItem> {
+pub async fn update_ban(
+    db: &Database,
+    config: &Config,
+    id: Uuid,
+    input: UpdateBanInput,
+) -> anyhow::Result<BanItem> {
     let steam_id_input = input.steam_id.trim();
     let ban_type = input.ban_type.trim();
     let reason = input.reason.trim();
@@ -204,7 +226,10 @@ pub async fn update_ban(db: &Database, config: &Config, id: Uuid, input: UpdateB
     anyhow::ensure!(matches!(ban_type, "steam" | "ip"), "封禁属性无效");
     anyhow::ensure!(!reason.is_empty(), "封禁理由不能为空");
 
-    let steam_id = SteamResolver::new(config).resolve(steam_id_input).await?.steamid64;
+    let steam_id = SteamResolver::new(config)
+        .resolve(steam_id_input)
+        .await?
+        .steamid64;
     let row = sqlx::query_as::<_, BanRow>(
         r#"UPDATE ban_records
            SET player = $2,
@@ -239,16 +264,19 @@ pub async fn delete_ban(db: &Database, id: Uuid) -> anyhow::Result<()> {
 
 pub async fn find_ban(db: &Database, id: Uuid) -> anyhow::Result<BanRecord> {
     sqlx::query_as::<_, BanRecord>(
-        "SELECT player, steam_id, operator_name FROM ban_records WHERE id = $1"
+        "SELECT player, steam_id, operator_name FROM ban_records WHERE id = $1",
     )
-        .bind(id)
-        .fetch_one(&db.pool)
-        .await
-        .map_err(Into::into)
+    .bind(id)
+    .fetch_one(&db.pool)
+    .await
+    .map_err(Into::into)
 }
 
 /// 按 SteamID64 查询该玩家的所有活跃封禁记录（供公开申诉页使用）
-pub async fn find_active_bans_by_steamid(db: &Database, steamid64: &str) -> anyhow::Result<Vec<BanItem>> {
+pub async fn find_active_bans_by_steamid(
+    db: &Database,
+    steamid64: &str,
+) -> anyhow::Result<Vec<BanItem>> {
     let rows = sqlx::query_as::<_, BanRow>(
         &format!("SELECT {BAN_FIELDS} FROM ban_records WHERE steam_id = $1 AND status = 'active' ORDER BY created_at DESC"),
     )

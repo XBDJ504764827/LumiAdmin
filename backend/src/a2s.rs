@@ -22,8 +22,7 @@ pub struct PlayerInfo {
 }
 
 pub fn query_server(address: &str, timeout_secs: u64) -> Result<ServerInfo, String> {
-    let socket = UdpSocket::bind("0.0.0.0:0")
-        .map_err(|e| format!("绑定 UDP 端口失败: {}", e))?;
+    let socket = UdpSocket::bind("0.0.0.0:0").map_err(|e| format!("绑定 UDP 端口失败: {}", e))?;
     socket
         .set_read_timeout(Some(Duration::from_secs(timeout_secs)))
         .map_err(|e| format!("设置超时失败: {}", e))?;
@@ -41,7 +40,13 @@ pub fn query_server(address: &str, timeout_secs: u64) -> Result<ServerInfo, Stri
         .map_err(|e| format!("接收 A2S_INFO 响应失败: {}", e))?;
 
     // 如果服务器返回 challenge (0x41)，需要将 challenge 追加到请求中重发
-    let info_data = if n >= 5 && buf[0] == 0xFF && buf[1] == 0xFF && buf[2] == 0xFF && buf[3] == 0xFF && buf[4] == 0x41 {
+    let info_data = if n >= 5
+        && buf[0] == 0xFF
+        && buf[1] == 0xFF
+        && buf[2] == 0xFF
+        && buf[3] == 0xFF
+        && buf[4] == 0x41
+    {
         let mut challenge_req = A2S_INFO_REQUEST.to_vec();
         challenge_req.extend_from_slice(&buf[5..9]);
         socket
@@ -80,7 +85,13 @@ fn query_players(socket: &UdpSocket) -> Result<Vec<PlayerInfo>, String> {
         .map_err(|e| format!("接收 A2S_PLAYER 响应失败: {}", e))?;
 
     // 可能返回 challenge 响应 (0x41)，需要回发
-    if n > 0 && buf[0] == 0xFF && buf[1] == 0xFF && buf[2] == 0xFF && buf[3] == 0xFF && buf[4] == 0x41 {
+    if n > 0
+        && buf[0] == 0xFF
+        && buf[1] == 0xFF
+        && buf[2] == 0xFF
+        && buf[3] == 0xFF
+        && buf[4] == 0x41
+    {
         let mut challenge_req = vec![0xFF, 0xFF, 0xFF, 0xFF, 0x55];
         challenge_req.extend_from_slice(&buf[5..9]);
         socket
@@ -98,7 +109,10 @@ fn query_players(socket: &UdpSocket) -> Result<Vec<PlayerInfo>, String> {
 /// 解析 A2S_INFO 响应，返回 (name, map, players, max_players, bots)
 fn parse_a2s_info(data: &[u8]) -> Result<(String, String, i32, i32, i32), String> {
     if data.len() < 5 || data[4] != 0x49 {
-        return Err(format!("无效的 A2S_INFO 响应头: {:02X}", data.get(4).unwrap_or(&0)));
+        return Err(format!(
+            "无效的 A2S_INFO 响应头: {:02X}",
+            data.get(4).unwrap_or(&0)
+        ));
     }
 
     let mut pos = 5;
@@ -114,12 +128,21 @@ fn parse_a2s_info(data: &[u8]) -> Result<(String, String, i32, i32, i32), String
     pos += 1;
     let bot_count = *data.get(pos).unwrap_or(&0) as i32;
 
-    Ok((server_name, current_map, player_count, max_players, bot_count))
+    Ok((
+        server_name,
+        current_map,
+        player_count,
+        max_players,
+        bot_count,
+    ))
 }
 
 fn parse_a2s_player(data: &[u8]) -> Result<Vec<PlayerInfo>, String> {
     if data.len() < 5 || data[4] != 0x44 {
-        return Err(format!("无效的 A2S_PLAYER 响应头: {:02X}", data.get(4).unwrap_or(&0)));
+        return Err(format!(
+            "无效的 A2S_PLAYER 响应头: {:02X}",
+            data.get(4).unwrap_or(&0)
+        ));
     }
 
     let mut pos = 5;
@@ -145,7 +168,11 @@ fn parse_a2s_player(data: &[u8]) -> Result<Vec<PlayerInfo>, String> {
             0.0
         };
         pos += 4;
-        players.push(PlayerInfo { name, score, duration });
+        players.push(PlayerInfo {
+            name,
+            score,
+            duration,
+        });
     }
     Ok(players)
 }

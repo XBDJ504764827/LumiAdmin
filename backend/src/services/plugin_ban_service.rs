@@ -11,7 +11,10 @@ pub fn normalize_steam_id(steam_id: &str) -> String {
     let steam_id = steam_id.trim();
 
     // Already SteamID64 (17 digits starting with 7656119)
-    if steam_id.len() == 17 && steam_id.starts_with("7656119") && steam_id.chars().all(|c| c.is_ascii_digit()) {
+    if steam_id.len() == 17
+        && steam_id.starts_with("7656119")
+        && steam_id.chars().all(|c| c.is_ascii_digit())
+    {
         return steam_id.to_string();
     }
 
@@ -33,7 +36,7 @@ pub fn normalize_steam_id(steam_id: &str) -> String {
 
     // Steam3 format: [U:1:xxx]
     if steam_id.starts_with("[U:1:") && steam_id.ends_with(']') {
-        let id_str = &steam_id[5..steam_id.len()-1];
+        let id_str = &steam_id[5..steam_id.len() - 1];
         if let Ok(id) = id_str.parse::<u64>() {
             let steam_id64 = 76561197960265728u64 + id;
             return steam_id64.to_string();
@@ -99,11 +102,14 @@ pub struct ServerAuth {
 }
 
 impl ServerAuth {
-    pub async fn authenticate(db: &Database, port: i32, report_token: &str) -> anyhow::Result<Self> {
+    pub async fn authenticate(
+        db: &Database,
+        port: i32,
+        report_token: &str,
+    ) -> anyhow::Result<Self> {
         authenticate_server(db, port, report_token).await
     }
 }
-
 
 async fn authenticate_server(
     db: &Database,
@@ -122,7 +128,6 @@ async fn authenticate_server(
     .await
     .map_err(|_| anyhow::anyhow!("服务器 token 或端口无效"))
 }
-
 
 fn expires_at(duration_minutes: i32) -> Option<chrono::DateTime<Utc>> {
     if duration_minutes == 0 {
@@ -157,13 +162,13 @@ fn format_expires_at_for_display(rfc3339_time: &str) -> String {
     }
 }
 
-
 pub async fn create_plugin_ban(db: &Database, input: PluginBanInput) -> anyhow::Result<BanItem> {
     let server = authenticate_server(db, input.port, &input.report_token).await?;
     let ban_type = input.ban_type.trim();
     let reason = input.reason.trim();
     let operator_name = input.operator_name.trim();
-    let steam_id = super::normalize_optional_string(input.steam_id.clone()).map(|s| normalize_steam_id(&s));
+    let steam_id =
+        super::normalize_optional_string(input.steam_id.clone()).map(|s| normalize_steam_id(&s));
     let ip_address = super::normalize_optional_string(input.ip_address);
 
     anyhow::ensure!(matches!(ban_type, "steam" | "ip"), "封禁属性无效");
@@ -257,9 +262,7 @@ pub async fn unban_plugin_target(
     if !is_privileged {
         let original_operator = original_row.operator_name.trim();
         if original_operator != operator_name {
-            anyhow::bail!(
-                "您无法解除其他管理员的封禁，请联系相关管理员"
-            );
+            anyhow::bail!("您无法解除其他管理员的封禁，请联系相关管理员");
         }
     }
 
@@ -290,7 +293,10 @@ pub async fn unban_plugin_target(
 }
 
 /// 检查操作员是否具有特权（developer 或 admin）
-pub async fn check_operator_privilege(db: &Database, operator_steamid: Option<&str>) -> anyhow::Result<bool> {
+pub async fn check_operator_privilege(
+    db: &Database,
+    operator_steamid: Option<&str>,
+) -> anyhow::Result<bool> {
     let Some(steamid) = operator_steamid else {
         // 没有 SteamID，视为普通游戏内管理员
         return Ok(false);
@@ -302,12 +308,11 @@ pub async fn check_operator_privilege(db: &Database, operator_steamid: Option<&s
     }
 
     // 查询用户角色
-    let role: Option<(String,)> = sqlx::query_as(
-        r#"SELECT role FROM users WHERE steam_id = $1 LIMIT 1"#,
-    )
-    .bind(&steamid)
-    .fetch_optional(&db.pool)
-    .await?;
+    let role: Option<(String,)> =
+        sqlx::query_as(r#"SELECT role FROM users WHERE steam_id = $1 LIMIT 1"#)
+            .bind(&steamid)
+            .fetch_optional(&db.pool)
+            .await?;
 
     match role {
         Some((role,)) => {
@@ -342,7 +347,10 @@ pub async fn poll_active_bans(
     .fetch_all(&db.pool)
     .await?;
 
-    Ok(rows.into_iter().map(super::ban_service::row_to_item).collect())
+    Ok(rows
+        .into_iter()
+        .map(super::ban_service::row_to_item)
+        .collect())
 }
 
 /// 增量轮询封禁记录的结果
@@ -377,8 +385,9 @@ pub async fn poll_active_bans_incremental(
         Some(c) => {
             // 游标格式：时间戳字符串
             match c.parse::<i64>() {
-                Ok(ts) => Some(chrono::DateTime::from_timestamp(ts, 0)
-                    .unwrap_or_else(chrono::Utc::now)),
+                Ok(ts) => {
+                    Some(chrono::DateTime::from_timestamp(ts, 0).unwrap_or_else(chrono::Utc::now))
+                }
                 Err(_) => None,
             }
         }
@@ -453,14 +462,18 @@ pub async fn poll_active_bans_incremental(
     };
 
     // 计算新的游标（最后一条记录的 created_at 时间戳）
-    let new_cursor = rows.last()
+    let new_cursor = rows
+        .last()
         .map(|row| row.created_at.timestamp().to_string())
         .unwrap_or_else(|| chrono::Utc::now().timestamp().to_string());
 
     let has_more = rows.len() as i32 == limit;
 
     Ok(BanPollIncrementalResult {
-        items: rows.into_iter().map(super::ban_service::row_to_item).collect(),
+        items: rows
+            .into_iter()
+            .map(super::ban_service::row_to_item)
+            .collect(),
         cursor: new_cursor,
         has_more,
         total_count: Some(total_count),
@@ -506,7 +519,16 @@ pub async fn check_plugin_ban(
                 message: decision
                     .reason
                     .as_deref()
-                    .map(|reason| kick_message(reason, decision.expires_at.as_ref().map(|t| t.to_rfc3339()).as_deref()))
+                    .map(|reason| {
+                        kick_message(
+                            reason,
+                            decision
+                                .expires_at
+                                .as_ref()
+                                .map(|t| t.to_rfc3339())
+                                .as_deref(),
+                        )
+                    })
                     .unwrap_or_else(|| "未封禁".to_string()),
             })
         }
@@ -660,6 +682,9 @@ mod tests {
 
     #[test]
     fn normalize_steam_id_handles_whitespace() {
-        assert_eq!(normalize_steam_id("  76561197960265728  "), "76561197960265728");
+        assert_eq!(
+            normalize_steam_id("  76561197960265728  "),
+            "76561197960265728"
+        );
     }
 }

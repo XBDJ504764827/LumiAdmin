@@ -63,8 +63,12 @@ pub struct UpdateExternalServerInput {
     pub poll_interval: i32,
 }
 
-fn default_true() -> bool { true }
-fn default_poll_interval() -> i32 { 30 }
+fn default_true() -> bool {
+    true
+}
+fn default_poll_interval() -> i32 {
+    30
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ExternalServerTestResult {
@@ -88,7 +92,10 @@ pub async fn list_servers(db: &Database) -> anyhow::Result<Vec<ExternalServerWit
     .map_err(Into::into)
 }
 
-pub async fn create_server(db: &Database, input: CreateExternalServerInput) -> anyhow::Result<ExternalServer> {
+pub async fn create_server(
+    db: &Database,
+    input: CreateExternalServerInput,
+) -> anyhow::Result<ExternalServer> {
     let name = input.name.trim();
     let ip = input.ip.trim();
     anyhow::ensure!(!name.is_empty(), "名称不能为空");
@@ -112,13 +119,21 @@ pub async fn create_server(db: &Database, input: CreateExternalServerInput) -> a
     .map_err(Into::into)
 }
 
-pub async fn update_server(db: &Database, id: Uuid, input: UpdateExternalServerInput) -> anyhow::Result<ExternalServer> {
+pub async fn update_server(
+    db: &Database,
+    id: Uuid,
+    input: UpdateExternalServerInput,
+) -> anyhow::Result<ExternalServer> {
     let name = input.name.trim();
     let ip = input.ip.trim();
     anyhow::ensure!(!name.is_empty(), "名称不能为空");
     anyhow::ensure!(!ip.is_empty(), "IP 不能为空");
 
-    let password = input.rcon_password.as_deref().map(|p| p.trim()).filter(|p| !p.is_empty());
+    let password = input
+        .rcon_password
+        .as_deref()
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty());
     let poll_interval = input.poll_interval.clamp(5, 3600);
     sqlx::query_as::<_, ExternalServer>(
         r#"UPDATE external_servers SET name = $2, ip = $3, port = $4, rcon_password = $5, enabled = $6, poll_interval = $7
@@ -131,7 +146,9 @@ pub async fn update_server(db: &Database, id: Uuid, input: UpdateExternalServerI
 
 pub async fn delete_server(db: &Database, id: Uuid) -> anyhow::Result<()> {
     let result = sqlx::query("DELETE FROM external_servers WHERE id = $1")
-        .bind(id).execute(&db.pool).await?;
+        .bind(id)
+        .execute(&db.pool)
+        .await?;
     anyhow::ensure!(result.rows_affected() > 0, "服务器不存在");
     Ok(())
 }
@@ -171,23 +188,21 @@ pub async fn test_server(db: &Database, id: Uuid) -> anyhow::Result<ExternalServ
     // A2S 失败时回退到 RCON
     if let Some(ref pw) = server.rcon_password {
         match crate::rcon::RconConnection::connect(&address, pw, 5).await {
-            Ok(mut conn) => {
-                match conn.execute("status").await {
-                    Ok(output) => {
-                        let status = crate::rcon::parse_status_output(&output);
-                        Ok(ExternalServerTestResult {
-                            ok: true,
-                            message: "RCON 连接测试成功".to_string(),
-                            status: Some(status),
-                        })
-                    }
-                    Err(error) => Ok(ExternalServerTestResult {
-                        ok: false,
-                        message: format!("执行 status 命令失败: {}", error),
-                        status: None,
-                    }),
+            Ok(mut conn) => match conn.execute("status").await {
+                Ok(output) => {
+                    let status = crate::rcon::parse_status_output(&output);
+                    Ok(ExternalServerTestResult {
+                        ok: true,
+                        message: "RCON 连接测试成功".to_string(),
+                        status: Some(status),
+                    })
                 }
-            }
+                Err(error) => Ok(ExternalServerTestResult {
+                    ok: false,
+                    message: format!("执行 status 命令失败: {}", error),
+                    status: None,
+                }),
+            },
             Err(error) => Ok(ExternalServerTestResult {
                 ok: false,
                 message: error,
@@ -210,7 +225,11 @@ pub async fn list_enabled_servers(db: &Database) -> anyhow::Result<Vec<ExternalS
     .fetch_all(&db.pool).await.map_err(Into::into)
 }
 
-pub async fn upsert_status(db: &Database, server_id: Uuid, status: &StatusResult) -> anyhow::Result<()> {
+pub async fn upsert_status(
+    db: &Database,
+    server_id: Uuid,
+    status: &StatusResult,
+) -> anyhow::Result<()> {
     sqlx::query(
         r#"INSERT INTO external_server_status (server_id, server_name, current_map, player_count, max_players, players, queried_at)
            VALUES ($1, $2, $3, $4, $5, $6, now())
@@ -224,7 +243,10 @@ pub async fn upsert_status(db: &Database, server_id: Uuid, status: &StatusResult
     Ok(())
 }
 
-pub async fn get_status_by_ids(db: &Database, ids: &[Uuid]) -> anyhow::Result<Vec<ExternalServerWithStatus>> {
+pub async fn get_status_by_ids(
+    db: &Database,
+    ids: &[Uuid],
+) -> anyhow::Result<Vec<ExternalServerWithStatus>> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -238,7 +260,10 @@ pub async fn get_status_by_ids(db: &Database, ids: &[Uuid]) -> anyhow::Result<Ve
            WHERE es.id = ANY($1)
            ORDER BY es.name ASC"#,
     )
-    .bind(ids).fetch_all(&db.pool).await.map_err(Into::into)
+    .bind(ids)
+    .fetch_all(&db.pool)
+    .await
+    .map_err(Into::into)
 }
 
 pub async fn get_all_with_status(db: &Database) -> anyhow::Result<Vec<ExternalServerWithStatus>> {
@@ -252,11 +277,15 @@ pub async fn get_all_with_status(db: &Database) -> anyhow::Result<Vec<ExternalSe
            WHERE es.enabled = true
            ORDER BY es.name ASC"#,
     )
-    .fetch_all(&db.pool).await.map_err(Into::into)
+    .fetch_all(&db.pool)
+    .await
+    .map_err(Into::into)
 }
 
 pub async fn update_last_queried(db: &Database, server_id: Uuid) -> anyhow::Result<()> {
     sqlx::query("UPDATE external_servers SET last_queried_at = now() WHERE id = $1")
-        .bind(server_id).execute(&db.pool).await?;
+        .bind(server_id)
+        .execute(&db.pool)
+        .await?;
     Ok(())
 }

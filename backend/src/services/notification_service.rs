@@ -106,12 +106,10 @@ pub async fn list_notifications(
     let page_size = page_size.clamp(1, 100);
     let offset = (page - 1) * page_size;
 
-    let total: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM notifications WHERE user_id = $1",
-    )
-    .bind(user_id)
-    .fetch_one(&db.pool)
-    .await?;
+    let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM notifications WHERE user_id = $1")
+        .bind(user_id)
+        .fetch_one(&db.pool)
+        .await?;
 
     let rows: Vec<NotificationRow> = sqlx::query_as(
         r#"SELECT id, user_id, type, title, message, link, read, created_at
@@ -128,12 +126,11 @@ pub async fn list_notifications(
 }
 
 pub async fn get_unread_count(db: &Database, user_id: Uuid) -> anyhow::Result<i64> {
-    let count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM notifications WHERE user_id = $1 AND read = false",
-    )
-    .bind(user_id)
-    .fetch_one(&db.pool)
-    .await?;
+    let count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM notifications WHERE user_id = $1 AND read = false")
+            .bind(user_id)
+            .fetch_one(&db.pool)
+            .await?;
     Ok(count.0)
 }
 
@@ -153,46 +150,17 @@ pub async fn mark_read(
 }
 
 pub async fn mark_all_read(db: &Database, user_id: Uuid) -> anyhow::Result<u64> {
-    let result = sqlx::query(
-        "UPDATE notifications SET read = true WHERE user_id = $1 AND read = false",
-    )
-    .bind(user_id)
-    .execute(&db.pool)
-    .await?;
+    let result =
+        sqlx::query("UPDATE notifications SET read = true WHERE user_id = $1 AND read = false")
+            .bind(user_id)
+            .execute(&db.pool)
+            .await?;
     Ok(result.rows_affected())
 }
 
 // ---------------------------------------------------------------------------
 // Notification creation (with WebSocket push)
 // ---------------------------------------------------------------------------
-
-async fn create_notification(
-    db: &Database,
-    hub: &NotificationHub,
-    user_id: Uuid,
-    notification_type: &str,
-    title: &str,
-    message: &str,
-    link: Option<&str>,
-) -> anyhow::Result<NotificationItem> {
-    let row: NotificationRow = sqlx::query_as(
-        r#"INSERT INTO notifications (id, user_id, type, title, message, link, read, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, false, now())
-           RETURNING id, user_id, type, title, message, link, read, created_at"#,
-    )
-    .bind(Uuid::new_v4())
-    .bind(user_id)
-    .bind(notification_type)
-    .bind(title)
-    .bind(message)
-    .bind(link)
-    .fetch_one(&db.pool)
-    .await?;
-
-    let item = map_row(row);
-    push_to_user(hub, &user_id, &item).await;
-    Ok(item)
-}
 
 pub async fn notify_all_admins(
     db: &Database,
@@ -212,7 +180,7 @@ pub async fn notify_all_admins(
     let user_ids: Vec<Uuid> = admins
         .into_iter()
         .map(|(uid,)| uid)
-        .filter(|uid| !exclude_user_id.map_or(false, |e| e == uid))
+        .filter(|uid| exclude_user_id != Some(uid))
         .collect();
 
     if user_ids.is_empty() {
@@ -325,8 +293,7 @@ pub async fn notify_plugin_ban(
 
 pub fn start_cleanup_loop(db: Database, interval_secs: u64) {
     tokio::spawn(async move {
-        let mut interval =
-            tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
         loop {
             interval.tick().await;
             match sqlx::query(

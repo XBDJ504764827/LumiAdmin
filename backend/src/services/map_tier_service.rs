@@ -40,12 +40,10 @@ impl MapTierSync {
     pub async fn sync_map_tiers(&self, pg: &Database) -> anyhow::Result<usize> {
         let mysql_pool = self.get_pool().await?;
 
-        let rows: Vec<MapTierMysqlRow> = sqlx::query_as(
-            "SELECT map_name, tier FROM map_tiers",
-        )
-        .fetch_all(mysql_pool)
-        .await
-        .map_err(|e| anyhow::anyhow!("MySQL 查询失败: {}", e))?;
+        let rows: Vec<MapTierMysqlRow> = sqlx::query_as("SELECT map_name, tier FROM map_tiers")
+            .fetch_all(mysql_pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("MySQL 查询失败: {}", e))?;
 
         if rows.is_empty() {
             return Ok(0);
@@ -55,7 +53,10 @@ impl MapTierSync {
 
         for chunk in rows.chunks(500) {
             let map_names: Vec<&str> = chunk.iter().map(|r| r.map_name.as_str()).collect();
-            let tiers: Vec<i32> = chunk.iter().map(|r| r.tier.trim().parse().unwrap_or(0)).collect();
+            let tiers: Vec<i32> = chunk
+                .iter()
+                .map(|r| r.tier.trim().parse().unwrap_or(0))
+                .collect();
 
             sqlx::query(
                 r#"INSERT INTO map_tiers (map_name, tier)
@@ -94,16 +95,18 @@ impl MapTierSync {
 }
 
 /// 查询多个地图的等级，返回 map_name -> tier 映射
-pub async fn get_map_tiers(db: &Database, map_names: &[String]) -> anyhow::Result<HashMap<String, i32>> {
+pub async fn get_map_tiers(
+    db: &Database,
+    map_names: &[String],
+) -> anyhow::Result<HashMap<String, i32>> {
     if map_names.is_empty() {
         return Ok(HashMap::new());
     }
-    let rows: Vec<(String, i32)> = sqlx::query_as(
-        "SELECT map_name, tier FROM map_tiers WHERE map_name = ANY($1)",
-    )
-    .bind(map_names)
-    .fetch_all(&db.pool)
-    .await?;
+    let rows: Vec<(String, i32)> =
+        sqlx::query_as("SELECT map_name, tier FROM map_tiers WHERE map_name = ANY($1)")
+            .bind(map_names)
+            .fetch_all(&db.pool)
+            .await?;
 
     Ok(rows.into_iter().collect())
 }

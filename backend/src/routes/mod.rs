@@ -1,17 +1,17 @@
+pub mod access;
 pub mod auth;
-pub mod community;
-pub mod external_server;
 pub mod ban;
 pub mod ban_appeal;
-pub mod whitelist;
-pub mod user;
-pub mod public;
-pub mod access;
-pub mod plugin;
+pub mod community;
+pub mod external_server;
 pub mod misc;
 pub mod notification;
+pub mod plugin;
+pub mod public;
 #[cfg(test)]
 pub mod tests;
+pub mod user;
+pub mod whitelist;
 
 use axum::{
     http::{header, HeaderMap, StatusCode},
@@ -31,7 +31,8 @@ use crate::{
     models::Operator,
     services::{
         access_snapshot_service::SnapshotStore,
-        notification_service::{NotificationHub, create_notification_hub},
+        notification_service::{create_notification_hub, NotificationHub},
+        r2_storage::R2Storage,
         server_config_cache::ServerConfigCache,
         steam_service::SteamResolver,
     },
@@ -52,6 +53,7 @@ pub struct AppCtx {
     pub server_config_cache: Arc<ServerConfigCache>,
     pub steam_resolver: SteamResolver,
     pub notification_hub: NotificationHub,
+    pub r2_storage: Option<R2Storage>,
 }
 
 // ---------------------------------------------------------------------------
@@ -82,8 +84,13 @@ impl ListQuery {
     pub fn search_pattern(&self) -> Option<String> {
         self.search.as_ref().and_then(|s| {
             let trimmed = s.trim().to_string();
-            if trimmed.is_empty() { return None; }
-            Some(format!("%{}%", trimmed.replace('%', "\\%").replace('_', "\\_")))
+            if trimmed.is_empty() {
+                return None;
+            }
+            Some(format!(
+                "%{}%",
+                trimmed.replace('%', "\\%").replace('_', "\\_")
+            ))
         })
     }
 }
@@ -118,92 +125,221 @@ pub fn router(
         .route("/api/dashboard", get(misc::dashboard))
         // -- community --
         .route("/api/community/servers", get(community::community_servers))
-        .route("/api/community/groups", post(community::create_community_group))
-        .route("/api/community/groups/:group_id", delete(community::delete_community_group))
-        .route("/api/community/groups/:group_id/servers", post(community::create_community_server))
-        .route("/api/community/groups/:group_id/access", put(community::update_community_access))
-        .route("/api/community/servers/test-rcon", post(community::test_server_rcon))
+        .route(
+            "/api/community/groups",
+            post(community::create_community_group),
+        )
+        .route(
+            "/api/community/groups/:group_id",
+            delete(community::delete_community_group),
+        )
+        .route(
+            "/api/community/groups/:group_id/servers",
+            post(community::create_community_server),
+        )
+        .route(
+            "/api/community/groups/:group_id/access",
+            put(community::update_community_access),
+        )
+        .route(
+            "/api/community/servers/test-rcon",
+            post(community::test_server_rcon),
+        )
         .route(
             "/api/community/servers/:server_id",
             put(community::update_community_server).delete(community::delete_community_server),
         )
-        .route("/api/community/servers/:server_id/players", get(community::get_online_players))
-        .route("/api/community/servers/:server_id/report-token", get(community::get_server_report_token))
-        .route("/api/community/servers/:server_id/report-token/reset", post(community::reset_server_report_token))
-        .route("/api/community/servers/:server_id/rcon", post(community::execute_rcon))
+        .route(
+            "/api/community/servers/:server_id/players",
+            get(community::get_online_players),
+        )
+        .route(
+            "/api/community/servers/:server_id/report-token",
+            get(community::get_server_report_token),
+        )
+        .route(
+            "/api/community/servers/:server_id/report-token/reset",
+            post(community::reset_server_report_token),
+        )
+        .route(
+            "/api/community/servers/:server_id/rcon",
+            post(community::execute_rcon),
+        )
         // -- plugin --
-        .route("/api/plugin/online-players/report", post(community::report_plugin_online_players))
+        .route(
+            "/api/plugin/online-players/report",
+            post(community::report_plugin_online_players),
+        )
         .route("/api/plugin/bans", post(ban::create_plugin_ban))
         .route("/api/plugin/bans/poll", post(ban::poll_plugin_bans))
-        .route("/api/plugin/bans/poll/incremental", post(ban::poll_plugin_bans_incremental))
+        .route(
+            "/api/plugin/bans/poll/incremental",
+            post(ban::poll_plugin_bans_incremental),
+        )
         .route("/api/plugin/bans/unban", post(ban::unban_plugin_ban))
         .route("/api/plugin/bans/check", post(ban::check_plugin_ban))
-        .route("/api/plugin/access/check", post(access::check_plugin_access))
-        .route("/api/plugin/access/snapshot", post(access::plugin_access_snapshot))
-        .route("/api/plugin/server-status", post(plugin::report_server_status))
-        .route("/api/plugin/offline/sync", post(plugin::sync_offline_operations))
+        .route(
+            "/api/plugin/access/check",
+            post(access::check_plugin_access),
+        )
+        .route(
+            "/api/plugin/access/snapshot",
+            post(access::plugin_access_snapshot),
+        )
+        .route(
+            "/api/plugin/server-status",
+            post(plugin::report_server_status),
+        )
+        .route(
+            "/api/plugin/offline/sync",
+            post(plugin::sync_offline_operations),
+        )
         // -- external servers --
-        .route("/api/external-servers", get(external_server::list_external_servers).post(external_server::create_external_server))
-        .route("/api/external-servers/:id", put(external_server::update_external_server).delete(external_server::delete_external_server))
-        .route("/api/external-servers/:id/test", post(external_server::test_external_server))
+        .route(
+            "/api/external-servers",
+            get(external_server::list_external_servers)
+                .post(external_server::create_external_server),
+        )
+        .route(
+            "/api/external-servers/:id",
+            put(external_server::update_external_server)
+                .delete(external_server::delete_external_server),
+        )
+        .route(
+            "/api/external-servers/:id/test",
+            post(external_server::test_external_server),
+        )
         // -- player api --
         .route("/api/player-api/players", get(plugin::player_api_players))
-        .route("/api/player-api/config", get(plugin::get_player_api_config).put(plugin::update_player_api_config))
+        .route(
+            "/api/player-api/config",
+            get(plugin::get_player_api_config).put(plugin::update_player_api_config),
+        )
         .route("/webhook/:public_path", get(plugin::webhook_public))
         // -- whitelist --
         .route("/api/whitelist", get(whitelist::whitelist))
         .route("/api/whitelist/manual", post(whitelist::create_whitelist))
-        .route("/api/whitelist/:id/approve", post(whitelist::approve_whitelist_request))
-        .route("/api/whitelist/:id/reject", post(whitelist::reject_whitelist_request))
-        .route("/api/whitelist/:id/restore", post(whitelist::restore_whitelist_request))
-        .route("/api/whitelist/:id/revoke", post(whitelist::revoke_whitelist_request))
-        .route("/api/whitelist/:id/refresh-steam-name", post(whitelist::refresh_single_steam_name))
-        .route("/api/whitelist/refresh-steam-names", post(whitelist::refresh_all_steam_names))
+        .route(
+            "/api/whitelist/:id/approve",
+            post(whitelist::approve_whitelist_request),
+        )
+        .route(
+            "/api/whitelist/:id/reject",
+            post(whitelist::reject_whitelist_request),
+        )
+        .route(
+            "/api/whitelist/:id/restore",
+            post(whitelist::restore_whitelist_request),
+        )
+        .route(
+            "/api/whitelist/:id/revoke",
+            post(whitelist::revoke_whitelist_request),
+        )
+        .route(
+            "/api/whitelist/:id/refresh-steam-name",
+            post(whitelist::refresh_single_steam_name),
+        )
+        .route(
+            "/api/whitelist/refresh-steam-names",
+            post(whitelist::refresh_all_steam_names),
+        )
         // -- bans --
         .route("/api/bans", get(ban::bans).post(ban::create_ban))
-        .route("/api/bans/:id", put(ban::update_ban).delete(ban::delete_ban))
+        .route(
+            "/api/bans/:id",
+            put(ban::update_ban).delete(ban::delete_ban),
+        )
         .route("/api/bans/:id/unban", post(ban::unban_ban))
         // -- ban appeals --
         .route("/api/ban-appeals", get(ban_appeal::list_appeals))
-        .route("/api/ban-appeals/:id/approve", post(ban_appeal::approve_appeal))
-        .route("/api/ban-appeals/:id/reject", post(ban_appeal::reject_appeal))
+        .route(
+            "/api/ban-appeals/:id/approve",
+            post(ban_appeal::approve_appeal),
+        )
+        .route(
+            "/api/ban-appeals/:id/reject",
+            post(ban_appeal::reject_appeal),
+        )
+        .route(
+            "/api/ban-appeals/:id/files",
+            get(ban_appeal::list_appeal_files),
+        )
+        .route(
+            "/api/ban-appeals/files/:file_id/url",
+            get(ban_appeal::get_appeal_file_url),
+        )
         // -- audit --
         .route("/api/audit/logs", get(misc::list_audit_logs))
         // -- users --
         .route("/api/users", get(user::users).post(user::create_user))
-        .route("/api/users/:id", put(user::update_user).delete(user::delete_user))
+        .route(
+            "/api/users/:id",
+            put(user::update_user).delete(user::delete_user),
+        )
         .route("/api/users/:id/password", put(user::update_user_password))
-        .route("/api/users/:id/toggle-enabled", post(user::toggle_user_enabled))
-        .route("/api/auth/users/:user_id/sessions", delete(auth::revoke_user_sessions))
+        .route(
+            "/api/users/:id/toggle-enabled",
+            post(user::toggle_user_enabled),
+        )
+        .route(
+            "/api/auth/users/:user_id/sessions",
+            delete(auth::revoke_user_sessions),
+        )
         // -- logs --
         .route("/api/logs", get(misc::logs))
         // -- docs --
         .route("/api/docs/endpoints", get(misc::api_endpoint_docs))
         // -- player access rules --
-        .route("/api/player-access/rules", get(access::player_access_rules).post(access::create_player_access_rule))
-        .route("/api/player-access/rules/:id", put(access::update_player_access_rule).delete(access::delete_player_access_rule))
+        .route(
+            "/api/player-access/rules",
+            get(access::player_access_rules).post(access::create_player_access_rule),
+        )
+        .route(
+            "/api/player-access/rules/:id",
+            put(access::update_player_access_rule).delete(access::delete_player_access_rule),
+        )
         // -- notifications --
         .route("/api/notifications", get(notification::list_notifications))
-        .route("/api/notifications/unread-count", get(notification::unread_count))
+        .route(
+            "/api/notifications/unread-count",
+            get(notification::unread_count),
+        )
         .route("/api/notifications/:id/read", post(notification::mark_read))
-        .route("/api/notifications/read-all", post(notification::mark_all_read))
+        .route(
+            "/api/notifications/read-all",
+            post(notification::mark_all_read),
+        )
         .route("/ws/notifications", get(notification::ws_handler))
         // -- public --
-        .route("/api/public/whitelist", get(public::public_whitelist).post(public::submit_whitelist))
+        .route(
+            "/api/public/whitelist",
+            get(public::public_whitelist).post(public::submit_whitelist),
+        )
         .route("/api/public/bans", get(public::public_bans))
         .route("/api/public/steam/resolve", post(public::resolve_steam))
         .route("/api/public/bans/query", post(public::query_active_bans))
         .route("/api/public/ban-appeals", post(public::submit_ban_appeal))
-        .route("/api/public/global-bans/:steamid64", get(public::get_global_bans))
-        .route("/api/public/global-bans/batch", post(public::get_global_bans_batch))
+        .route(
+            "/api/public/ban-appeals/:id/files",
+            post(public::upload_appeal_files),
+        )
+        .route(
+            "/api/public/global-bans/:steamid64",
+            get(public::get_global_bans),
+        )
+        .route(
+            "/api/public/global-bans/batch",
+            post(public::get_global_bans_batch),
+        )
         .with_state(AppCtx {
-            config,
+            config: config.clone(),
             db,
             access_snapshot,
             global_bans_cache: Arc::new(RwLock::new(HashMap::new())),
             server_config_cache,
             steam_resolver,
             notification_hub: create_notification_hub(),
+            r2_storage: R2Storage::new(&config),
         })
 }
 
@@ -219,14 +355,26 @@ pub(crate) async fn current_operator(
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
-        .ok_or((StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "missing token" }))))?;
+        .ok_or((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "missing token" })),
+        ))?;
 
-    let token = Uuid::parse_str(token)
-        .map_err(|_| (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "invalid token" }))))?;
+    let token = Uuid::parse_str(token).map_err(|_| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "invalid token" })),
+        )
+    })?;
 
     let session = crate::services::auth_service::current_session(&ctx.db, token)
         .await
-        .map_err(|_| (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "unauthorized" }))))?;
+        .map_err(|_| {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({ "error": "unauthorized" })),
+            )
+        })?;
 
     let row: Option<(Uuid, String, String, String, bool)> = sqlx::query_as(
         r#"SELECT id, username, display_name, role, enabled FROM users WHERE id = $1"#,
@@ -234,16 +382,31 @@ pub(crate) async fn current_operator(
     .bind(session.user_id)
     .fetch_optional(&ctx.db.pool)
     .await
-    .map_err(|_| (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "unauthorized" }))))?;
+    .map_err(|_| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "unauthorized" })),
+        )
+    })?;
 
-    let (id, username, display_name, role, enabled) = row
-        .ok_or((StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "unauthorized" }))))?;
+    let (id, username, display_name, role, enabled) = row.ok_or((
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({ "error": "unauthorized" })),
+    ))?;
 
     if !enabled {
-        return Err((StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "账号已禁用" }))));
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "账号已禁用" })),
+        ));
     }
 
-    Ok(Operator { id, username, display_name, role })
+    Ok(Operator {
+        id,
+        username,
+        display_name,
+        role,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -251,7 +414,10 @@ pub(crate) async fn current_operator(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn forbidden() -> (StatusCode, Json<serde_json::Value>) {
-    (StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": "权限不足" })))
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({ "error": "权限不足" })),
+    )
 }
 
 pub(crate) fn invalid_request(error: anyhow::Error) -> (StatusCode, Json<serde_json::Value>) {

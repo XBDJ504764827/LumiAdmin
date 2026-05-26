@@ -15,7 +15,11 @@ pub struct RconConnection {
 
 impl RconConnection {
     pub async fn connect(address: &str, password: &str, timeout_secs: u64) -> Result<Self, String> {
-        let connect_result = timeout(Duration::from_secs(timeout_secs), TcpStream::connect(address)).await;
+        let connect_result = timeout(
+            Duration::from_secs(timeout_secs),
+            TcpStream::connect(address),
+        )
+        .await;
         let mut stream = match connect_result {
             Ok(Ok(stream)) => stream,
             Ok(Err(error)) => return Err(format!("无法连接到服务器 {}: {}", address, error)),
@@ -45,9 +49,14 @@ impl RconConnection {
     }
 
     pub async fn execute(&mut self, command: &str) -> Result<String, String> {
-        send_rcon_packet(&mut self.stream, AUTH_REQUEST_ID, EXEC_COMMAND_PACKET_TYPE, command)
-            .await
-            .map_err(|error| format!("发送 RCON 命令失败: {}", error))?;
+        send_rcon_packet(
+            &mut self.stream,
+            AUTH_REQUEST_ID,
+            EXEC_COMMAND_PACKET_TYPE,
+            command,
+        )
+        .await
+        .map_err(|error| format!("发送 RCON 命令失败: {}", error))?;
 
         let (request_id, packet_type, body) = read_rcon_packet(&mut self.stream)
             .await
@@ -81,7 +90,10 @@ async fn read_rcon_packet(stream: &mut TcpStream) -> std::io::Result<(i32, i32, 
     stream.read_exact(&mut size_bytes).await?;
     let size = i32::from_le_bytes(size_bytes);
     if size < 10 {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "RCON 响应长度无效"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "RCON 响应长度无效",
+        ));
     }
     let mut payload = vec![0_u8; size as usize];
     stream.read_exact(&mut payload).await?;
@@ -89,7 +101,11 @@ async fn read_rcon_packet(stream: &mut TcpStream) -> std::io::Result<(i32, i32, 
     rid.copy_from_slice(&payload[0..4]);
     let mut pt = [0_u8; 4];
     pt.copy_from_slice(&payload[4..8]);
-    Ok((i32::from_le_bytes(rid), i32::from_le_bytes(pt), String::from_utf8_lossy(&payload[8..payload.len() - 2]).into_owned()))
+    Ok((
+        i32::from_le_bytes(rid),
+        i32::from_le_bytes(pt),
+        String::from_utf8_lossy(&payload[8..payload.len() - 2]).into_owned(),
+    ))
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
@@ -155,12 +171,10 @@ pub fn parse_status_output(output: &str) -> StatusResult {
 /// 从 "2 humans, 0 bots (16/0 max)" 格式中提取 (current_humans, max_players)
 fn extract_max_players(value: &str) -> Option<(i32, i32)> {
     use std::sync::LazyLock;
-    static MAX_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-        regex::Regex::new(r"\((\d+)/(\d+)\s*max\)").unwrap()
-    });
-    static HUMAN_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-        regex::Regex::new(r"^(\d+)\s+human").unwrap()
-    });
+    static MAX_RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"\((\d+)/(\d+)\s*max\)").unwrap());
+    static HUMAN_RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"^(\d+)\s+human").unwrap());
 
     let caps = MAX_RE.captures(value)?;
     let max_players: i32 = caps.get(1)?.as_str().parse().ok()?;

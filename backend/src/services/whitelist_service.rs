@@ -80,13 +80,18 @@ struct WhitelistStatusRow {
     source: Option<String>,
 }
 
-pub async fn list_whitelist(db: &Database, query: &ListQuery) -> anyhow::Result<crate::routes::PaginatedResponse<WhitelistItem>> {
+pub async fn list_whitelist(
+    db: &Database,
+    query: &ListQuery,
+) -> anyhow::Result<crate::routes::PaginatedResponse<WhitelistItem>> {
     let mut conditions = Vec::new();
     let mut param_idx = 1u32;
     let search_pattern = query.search_pattern();
 
     if search_pattern.is_some() {
-        conditions.push(format!("(steamid64 ILIKE ${param_idx} OR nickname ILIKE ${param_idx})"));
+        conditions.push(format!(
+            "(steamid64 ILIKE ${param_idx} OR nickname ILIKE ${param_idx})"
+        ));
         param_idx += 1;
     }
     if let Some(ref status) = query.status {
@@ -127,7 +132,12 @@ pub async fn list_whitelist(db: &Database, query: &ListQuery) -> anyhow::Result<
     data_query = data_query.bind(query.page_size()).bind(query.offset());
 
     let total = count_query.fetch_one(&db.pool).await?;
-    let items = data_query.fetch_all(&db.pool).await?.into_iter().map(map_whitelist_row).collect();
+    let items = data_query
+        .fetch_all(&db.pool)
+        .await?
+        .into_iter()
+        .map(map_whitelist_row)
+        .collect();
 
     Ok(crate::routes::PaginatedResponse {
         items,
@@ -152,9 +162,14 @@ pub async fn create_public_whitelist_request(
             "approved" => anyhow::bail!("该玩家白名单已通过，可以正常进入游戏"),
             "rejected" => anyhow::bail!(
                 "该玩家白名单未通过：{}",
-                existing.rejection_reason.unwrap_or_else(|| "未填写拒绝理由".to_string())
+                existing
+                    .rejection_reason
+                    .unwrap_or_else(|| "未填写拒绝理由".to_string())
             ),
-            "revoked" => return reopen_revoked_whitelist(db, existing.id, nickname, &identity, resolver).await,
+            "revoked" => {
+                return reopen_revoked_whitelist(db, existing.id, nickname, &identity, resolver)
+                    .await
+            }
             _ => anyhow::bail!("白名单状态异常，无法重复申请"),
         }
     }
@@ -163,7 +178,9 @@ pub async fn create_public_whitelist_request(
     let steam_persona_name = match tokio::time::timeout(
         std::time::Duration::from_secs(5),
         resolver.fetch_profile(&identity.steamid64),
-    ).await {
+    )
+    .await
+    {
         Ok(Ok(Some(profile))) => Some(profile.persona_name),
         _ => None,
     };
@@ -206,11 +223,27 @@ pub async fn create_manual_whitelist(
 
     let identity = resolver.resolve(&input.steam_input).await?;
     if let Some(existing) = find_by_steamid64(db, &identity.steamid64).await? {
-        anyhow::ensure!(existing.status == "revoked", "该玩家已有白名单记录，无法重复手动添加");
-        return approve_existing_record(db, existing.id, nickname, operator_name, &identity, resolver).await;
+        anyhow::ensure!(
+            existing.status == "revoked",
+            "该玩家已有白名单记录，无法重复手动添加"
+        );
+        return approve_existing_record(
+            db,
+            existing.id,
+            nickname,
+            operator_name,
+            &identity,
+            resolver,
+        )
+        .await;
     }
 
-    let steam_persona_name = resolver.fetch_profile(&identity.steamid64).await.ok().flatten().map(|p| p.persona_name);
+    let steam_persona_name = resolver
+        .fetch_profile(&identity.steamid64)
+        .await
+        .ok()
+        .flatten()
+        .map(|p| p.persona_name);
 
     let row = sqlx::query_as::<_, WhitelistRow>(
         r#"
@@ -239,7 +272,12 @@ pub async fn create_manual_whitelist(
     Ok(map_whitelist_row(row))
 }
 
-pub async fn approve_whitelist(db: &Database, id: Uuid, operator_name: &str, reason: Option<&str>) -> anyhow::Result<WhitelistItem> {
+pub async fn approve_whitelist(
+    db: &Database,
+    id: Uuid,
+    operator_name: &str,
+    reason: Option<&str>,
+) -> anyhow::Result<WhitelistItem> {
     let current = find_by_id(db, id).await?;
     anyhow::ensure!(current.status == "pending", "只有待审核记录可以通过");
 
@@ -309,7 +347,11 @@ pub async fn reject_whitelist(
     Ok(map_whitelist_row(row))
 }
 
-pub async fn restore_whitelist(db: &Database, id: Uuid, operator_name: &str) -> anyhow::Result<WhitelistItem> {
+pub async fn restore_whitelist(
+    db: &Database,
+    id: Uuid,
+    operator_name: &str,
+) -> anyhow::Result<WhitelistItem> {
     let current = find_by_id(db, id).await?;
     anyhow::ensure!(current.status == "rejected", "只有未通过记录可以恢复通过");
 
@@ -340,7 +382,11 @@ pub async fn restore_whitelist(db: &Database, id: Uuid, operator_name: &str) -> 
     Ok(map_whitelist_row(row))
 }
 
-pub async fn revoke_whitelist(db: &Database, id: Uuid, operator_name: &str) -> anyhow::Result<WhitelistItem> {
+pub async fn revoke_whitelist(
+    db: &Database,
+    id: Uuid,
+    operator_name: &str,
+) -> anyhow::Result<WhitelistItem> {
     let current = find_by_id(db, id).await?;
     anyhow::ensure!(current.status == "approved", "只有已通过记录可以删除审核");
 
@@ -372,7 +418,12 @@ async fn reopen_revoked_whitelist(
     identity: &ParsedSteamIdentity,
     resolver: &SteamResolver,
 ) -> anyhow::Result<WhitelistItem> {
-    let steam_persona_name = resolver.fetch_profile(&identity.steamid64).await.ok().flatten().map(|p| p.persona_name);
+    let steam_persona_name = resolver
+        .fetch_profile(&identity.steamid64)
+        .await
+        .ok()
+        .flatten()
+        .map(|p| p.persona_name);
 
     let row = sqlx::query_as::<_, WhitelistRow>(
         r#"
@@ -420,7 +471,12 @@ async fn approve_existing_record(
     identity: &ParsedSteamIdentity,
     resolver: &SteamResolver,
 ) -> anyhow::Result<WhitelistItem> {
-    let steam_persona_name = resolver.fetch_profile(&identity.steamid64).await.ok().flatten().map(|p| p.persona_name);
+    let steam_persona_name = resolver
+        .fetch_profile(&identity.steamid64)
+        .await
+        .ok()
+        .flatten()
+        .map(|p| p.persona_name);
 
     let row = sqlx::query_as::<_, WhitelistRow>(
         r#"
@@ -461,7 +517,10 @@ async fn approve_existing_record(
     Ok(map_whitelist_row(row))
 }
 
-async fn find_by_steamid64(db: &Database, steamid64: &str) -> anyhow::Result<Option<WhitelistStatusRow>> {
+async fn find_by_steamid64(
+    db: &Database,
+    steamid64: &str,
+) -> anyhow::Result<Option<WhitelistStatusRow>> {
     sqlx::query_as::<_, WhitelistStatusRow>(
         r#"
         SELECT id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
@@ -506,7 +565,12 @@ pub async fn update_steam_persona_name(
     resolver: &SteamResolver,
 ) -> anyhow::Result<Option<String>> {
     let record = find_by_id(db, id).await?;
-    let steam_persona_name = match resolver.fetch_profile(&record.steamid64).await.ok().flatten() {
+    let steam_persona_name = match resolver
+        .fetch_profile(&record.steamid64)
+        .await
+        .ok()
+        .flatten()
+    {
         Some(profile) => profile.persona_name,
         None => return Ok(None),
     };
@@ -554,7 +618,10 @@ pub async fn refresh_all_steam_persona_names(
     }
 
     // 批量查询 Steam Profile
-    let steamids: Vec<String> = records.iter().map(|(_, steamid64)| steamid64.clone()).collect();
+    let steamids: Vec<String> = records
+        .iter()
+        .map(|(_, steamid64)| steamid64.clone())
+        .collect();
     let profiles = resolver.fetch_profiles_batch(&steamids).await?;
 
     // 批量更新（每批 500 条）
@@ -622,8 +689,8 @@ fn map_whitelist_row(row: WhitelistRow) -> WhitelistItem {
 #[cfg(test)]
 mod tests {
     use super::{
-        create_manual_whitelist, create_public_whitelist_request, find_by_steamid64, reject_whitelist,
-        restore_whitelist, ManualWhitelistInput, PublicWhitelistRequestInput,
+        create_manual_whitelist, create_public_whitelist_request, find_by_steamid64,
+        reject_whitelist, restore_whitelist, ManualWhitelistInput, PublicWhitelistRequestInput,
     };
     use crate::{config::Config, db::Database, services::steam_service::SteamResolver};
     use chrono::{Duration, Utc};
@@ -636,13 +703,24 @@ mod tests {
     }
 
     async fn create_schema(base_url: &str, schema: &str) {
-        let pool = PgPoolOptions::new().max_connections(1).connect(base_url).await.unwrap();
-        sqlx::query(&format!(r#"CREATE SCHEMA "{schema}""#)).execute(&pool).await.unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(base_url)
+            .await
+            .unwrap();
+        sqlx::query(&format!(r#"CREATE SCHEMA "{schema}""#))
+            .execute(&pool)
+            .await
+            .unwrap();
         pool.close().await;
     }
 
     async fn drop_schema(base_url: &str, schema: &str) {
-        let pool = PgPoolOptions::new().max_connections(1).connect(base_url).await.unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(base_url)
+            .await
+            .unwrap();
         sqlx::query(&format!(r#"DROP SCHEMA IF EXISTS "{schema}" CASCADE"#))
             .execute(&pool)
             .await
@@ -696,7 +774,10 @@ mod tests {
         .bind(format!("STEAM_TEST_{steamid64}"))
         .bind(steamid64)
         .bind(format!("STEAM_TEST_{steamid64}"))
-        .bind(format!("[U:1:{}]", steamid64.parse::<u64>().unwrap() - 76561197960265728))
+        .bind(format!(
+            "[U:1:{}]",
+            steamid64.parse::<u64>().unwrap() - 76561197960265728
+        ))
         .bind(format!("https://steamcommunity.com/profiles/{steamid64}"))
         .bind(nickname)
         .bind(status)
@@ -711,7 +792,15 @@ mod tests {
     #[tokio::test]
     async fn create_whitelist_request_reports_pending_status_for_existing_pending_record() {
         with_test_db(async |db| {
-            insert_whitelist_record(&db, "76561198000000001", "pending", "玩家甲", None, Utc::now()).await;
+            insert_whitelist_record(
+                &db,
+                "76561198000000001",
+                "pending",
+                "玩家甲",
+                None,
+                Utc::now(),
+            )
+            .await;
 
             let error = create_public_whitelist_request(
                 &db,
@@ -733,7 +822,15 @@ mod tests {
     #[tokio::test]
     async fn create_whitelist_request_reports_approved_status_for_existing_approved_record() {
         with_test_db(async |db| {
-            insert_whitelist_record(&db, "76561198000000002", "approved", "玩家乙", None, Utc::now()).await;
+            insert_whitelist_record(
+                &db,
+                "76561198000000002",
+                "approved",
+                "玩家乙",
+                None,
+                Utc::now(),
+            )
+            .await;
 
             let error = create_public_whitelist_request(
                 &db,
@@ -755,7 +852,15 @@ mod tests {
     #[tokio::test]
     async fn create_whitelist_request_reports_rejected_reason_for_existing_rejected_record() {
         with_test_db(async |db| {
-            insert_whitelist_record(&db, "76561198000000003", "rejected", "玩家丙", Some("资料不完整"), Utc::now()).await;
+            insert_whitelist_record(
+                &db,
+                "76561198000000003",
+                "rejected",
+                "玩家丙",
+                Some("资料不完整"),
+                Utc::now(),
+            )
+            .await;
 
             let error = create_public_whitelist_request(
                 &db,
@@ -832,7 +937,15 @@ mod tests {
     #[tokio::test]
     async fn reject_whitelist_requires_reason() {
         with_test_db(async |db| {
-            let id = insert_whitelist_record(&db, "76561198000000011", "pending", "玩家戊", None, Utc::now()).await;
+            let id = insert_whitelist_record(
+                &db,
+                "76561198000000011",
+                "pending",
+                "玩家戊",
+                None,
+                Utc::now(),
+            )
+            .await;
             let error = reject_whitelist(&db, id, "", "Alex").await.unwrap_err();
             assert_eq!(error.to_string(), "请输入拒绝理由");
             Ok(())
@@ -843,7 +956,15 @@ mod tests {
     async fn restore_whitelist_preserves_original_applied_at() {
         with_test_db(async |db| {
             let applied_at = Utc::now() - Duration::days(5);
-            let id = insert_whitelist_record(&db, "76561198000000012", "rejected", "玩家己", Some("资料不完整"), applied_at).await;
+            let id = insert_whitelist_record(
+                &db,
+                "76561198000000012",
+                "rejected",
+                "玩家己",
+                Some("资料不完整"),
+                applied_at,
+            )
+            .await;
 
             let item = restore_whitelist(&db, id, "Alex").await.unwrap();
 
@@ -851,7 +972,10 @@ mod tests {
             let applied_at_from_item = chrono::DateTime::parse_from_rfc3339(&item.applied_at)
                 .unwrap()
                 .with_timezone(&Utc);
-            assert_eq!(applied_at_from_item.timestamp_micros(), applied_at.timestamp_micros());
+            assert_eq!(
+                applied_at_from_item.timestamp_micros(),
+                applied_at.timestamp_micros()
+            );
             assert_eq!(item.approved_by.as_deref(), Some("Alex"));
             Ok(())
         })
@@ -863,10 +987,28 @@ mod tests {
         with_test_db(async |db| {
             let older_applied_at = Utc::now() - Duration::hours(2);
             let newer_applied_at = Utc::now() - Duration::hours(1);
-            let older_id = insert_whitelist_record(&db, "76561198000000021", "pending", "旧待审记录", None, older_applied_at).await;
-            let newer_id = insert_whitelist_record(&db, "76561198000000021", "pending", "新待审记录", None, newer_applied_at).await;
+            let older_id = insert_whitelist_record(
+                &db,
+                "76561198000000021",
+                "pending",
+                "旧待审记录",
+                None,
+                older_applied_at,
+            )
+            .await;
+            let newer_id = insert_whitelist_record(
+                &db,
+                "76561198000000021",
+                "pending",
+                "新待审记录",
+                None,
+                newer_applied_at,
+            )
+            .await;
 
-            let row = find_by_steamid64(&db, "76561198000000021").await?.expect("record should exist");
+            let row = find_by_steamid64(&db, "76561198000000021")
+                .await?
+                .expect("record should exist");
 
             assert_eq!(row.id, newer_id);
             assert_ne!(row.id, older_id);

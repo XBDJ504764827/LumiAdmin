@@ -14,8 +14,8 @@ pub fn start_rcon_poll_loop(db: Database, base_interval_secs: u64) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(base_interval_secs));
         let mut cached_servers: Vec<ExternalServer> = Vec::new();
-        let mut last_cache_refresh = std::time::Instant::now()
-            - Duration::from_secs(CACHE_TTL_SECS + 1); // 首次立即加载
+        let mut last_cache_refresh =
+            std::time::Instant::now() - Duration::from_secs(CACHE_TTL_SECS + 1); // 首次立即加载
 
         loop {
             interval.tick().await;
@@ -48,9 +48,11 @@ async fn poll_once(db: &Database, servers: &[ExternalServer]) -> anyhow::Result<
     let now = Utc::now();
 
     // 先筛选出需要查询的服务器
-    let to_query: Vec<ExternalServer> = servers.iter()
+    let to_query: Vec<ExternalServer> = servers
+        .iter()
         .filter(|server| {
-            let elapsed = server.last_queried_at
+            let elapsed = server
+                .last_queried_at
                 .map(|t| (now - t).num_seconds())
                 .unwrap_or(i64::MAX);
             elapsed >= server.poll_interval as i64

@@ -24,11 +24,41 @@ const icons = {
   apply: icon(<><path d="M4 2v12l4-2 4 2V2z" /></>),
   table: icon(<><path d="M1 4h14M1 8h14M1 12h14" /></>),
   banPublic: icon(<><path d="M8 1v14M1 8h14" transform="rotate(45 8 8)" /></>),
+  // 二级菜单父级图标
+  logFolder: icon(<><path d="M2 3h5l2 2h5a1 1 0 011 1v6a1 1 0 01-1 1H2a1 1 0 01-1-1V4a1 1 0 011-1z" /></>),
+  globe: icon(<><circle cx="8" cy="8" r="6" /><path d="M2 8h12M8 2c1.5 3 1.5 9 0 12" /></>),
 };
 
 export function sidebarSections(role) {
   const canSeeUserManagement = ['developer', 'admin', 'normal'].includes(role);
   const canSeeLogs = ['developer', 'admin'].includes(role);
+
+  const systemItems = canSeeLogs ? [
+    { path: '/player-access', label: '玩家进服设置', icon: icons.playerAccess },
+    { path: '/notifications', label: '通知中心', icon: icons.notification },
+    {
+      label: '日志与审计',
+      icon: icons.logFolder,
+      children: [
+        { path: '/audit', label: '审计日志', icon: icons.audit },
+        { path: '/logs', label: '操作日志', icon: icons.logs },
+      ],
+    },
+    {
+      label: 'API 管理',
+      icon: icons.api,
+      children: [
+        { path: '/docs/api', label: 'API 接口列表', icon: icons.api },
+        { path: '/player-api', label: '玩家信息 API', icon: icons.playerApi },
+      ],
+    },
+    { path: '/external-servers', label: '外部服务器', icon: icons.externalServer },
+  ] : [
+    { path: '/player-access', label: '玩家进服设置', icon: icons.playerAccess },
+    { path: '/notifications', label: '通知中心', icon: icons.notification },
+    { path: '/audit', label: '审计日志', icon: icons.audit },
+    { path: '/external-servers', label: '外部服务器', icon: icons.externalServer },
+  ];
 
   return [
     {
@@ -40,32 +70,25 @@ export function sidebarSections(role) {
         { path: '/ban', label: '封禁管理', icon: icons.ban },
         { path: '/ban-appeal', label: '封禁申诉', icon: icons.banAppeal },
         ...(canSeeUserManagement ? [{ path: '/users', label: '网站用户管理', icon: icons.users }] : []),
-      ].filter((item) => !item.roles || item.roles.includes(role)),
-    },
-    {
-      label: '系统功能',
-      items: canSeeLogs ? [
-        { path: '/player-access', label: '玩家进服设置', icon: icons.playerAccess },
-        { path: '/notifications', label: '通知中心', icon: icons.notification },
-        { path: '/audit', label: '审计日志', icon: icons.audit },
-        { path: '/logs', label: '操作日志', icon: icons.logs },
-        { path: '/docs/api', label: 'API 接口列表', icon: icons.api },
-        { path: '/player-api', label: '玩家信息 API', icon: icons.playerApi },
-        { path: '/external-servers', label: '外部服务器', icon: icons.externalServer },
-      ] : [
-        { path: '/player-access', label: '玩家进服设置', icon: icons.playerAccess },
-        { path: '/notifications', label: '通知中心', icon: icons.notification },
-        { path: '/audit', label: '审计日志', icon: icons.audit },
-        { path: '/external-servers', label: '外部服务器', icon: icons.externalServer },
       ],
     },
     {
-      label: '公共展示页 (Public)',
+      label: '系统功能',
+      items: systemItems,
+    },
+    {
+      label: '公共展示',
       items: [
-        { path: '/public/apply', label: '白名单申请', icon: icons.apply },
-        { path: '/public/whitelist', label: '白名单公示', icon: icons.table },
-        { path: '/public/ban', label: '封禁公示', icon: icons.banPublic },
-        { path: '/public/ban-appeal', label: '封禁申诉', icon: icons.banAppeal },
+        {
+          label: 'Public 公开页面',
+          icon: icons.globe,
+          children: [
+            { path: '/public/apply', label: '白名单申请', icon: icons.apply },
+            { path: '/public/whitelist', label: '白名单公示', icon: icons.table },
+            { path: '/public/ban', label: '封禁公示', icon: icons.banPublic },
+            { path: '/public/ban-appeal', label: '封禁申诉', icon: icons.banAppeal },
+          ],
+        },
       ],
     },
   ].filter((section) => section.items.length > 0);

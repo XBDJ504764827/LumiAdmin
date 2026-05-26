@@ -1,4 +1,9 @@
-use crate::{db::Database, models::{Operator, User}, password::hash_password, routes::ListQuery};
+use crate::{
+    db::Database,
+    models::{Operator, User},
+    password::hash_password,
+    routes::ListQuery,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -41,7 +46,11 @@ pub async fn find_user(db: &Database, id: Uuid) -> anyhow::Result<User> {
     .map_err(Into::into)
 }
 
-pub async fn list_users(db: &Database, actor: &Operator, query: &ListQuery) -> anyhow::Result<crate::routes::PaginatedResponse<UserListItem>> {
+pub async fn list_users(
+    db: &Database,
+    actor: &Operator,
+    query: &ListQuery,
+) -> anyhow::Result<crate::routes::PaginatedResponse<UserListItem>> {
     if actor.role == "normal" {
         let user = find_user(db, actor.id).await?;
         return Ok(crate::routes::PaginatedResponse {
@@ -66,7 +75,9 @@ pub async fn list_users(db: &Database, actor: &Operator, query: &ListQuery) -> a
     let search_pattern = query.search_pattern();
 
     if search_pattern.is_some() {
-        conditions.push(format!("(display_name ILIKE ${param_idx} OR username ILIKE ${param_idx})"));
+        conditions.push(format!(
+            "(display_name ILIKE ${param_idx} OR username ILIKE ${param_idx})"
+        ));
         param_idx += 1;
     }
 
@@ -93,7 +104,10 @@ pub async fn list_users(db: &Database, actor: &Operator, query: &ListQuery) -> a
     data_query = data_query.bind(query.page_size()).bind(query.offset());
 
     let total = count_query.fetch_one(&db.pool).await?;
-    let items = data_query.fetch_all(&db.pool).await?.into_iter()
+    let items = data_query
+        .fetch_all(&db.pool)
+        .await?
+        .into_iter()
         .map(|user| UserListItem {
             id: user.id,
             username: user.username,
@@ -155,7 +169,12 @@ pub async fn create_user(db: &Database, input: CreateUserInput) -> anyhow::Resul
     })
 }
 
-pub async fn update_user(db: &Database, id: Uuid, input: UpdateUserInput, keep_role: bool) -> anyhow::Result<UserListItem> {
+pub async fn update_user(
+    db: &Database,
+    id: Uuid,
+    input: UpdateUserInput,
+    keep_role: bool,
+) -> anyhow::Result<UserListItem> {
     let current = find_user(db, id).await?;
     let username = input.username.trim();
     let steam_id = super::normalize_optional_text(input.steam_id.as_deref());
@@ -164,10 +183,17 @@ pub async fn update_user(db: &Database, id: Uuid, input: UpdateUserInput, keep_r
     let role = if keep_role {
         current.role.clone()
     } else {
-        input.role.as_deref().unwrap_or(current.role.as_str()).to_string()
+        input
+            .role
+            .as_deref()
+            .unwrap_or(current.role.as_str())
+            .to_string()
     };
 
-    anyhow::ensure!(matches!(role.as_str(), "developer" | "admin" | "normal"), "权限等级不合法");
+    anyhow::ensure!(
+        matches!(role.as_str(), "developer" | "admin" | "normal"),
+        "权限等级不合法"
+    );
 
     let row = sqlx::query_as::<_, User>(
         r#"
@@ -221,7 +247,6 @@ pub async fn delete_user(db: &Database, id: Uuid) -> anyhow::Result<()> {
         .await?;
     Ok(())
 }
-
 
 pub async fn toggle_enabled(db: &Database, id: Uuid) -> anyhow::Result<UserListItem> {
     let row = sqlx::query_as::<_, User>(

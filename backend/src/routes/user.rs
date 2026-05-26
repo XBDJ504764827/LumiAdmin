@@ -6,8 +6,10 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::routes::{AppCtx, ListQuery, current_operator, forbidden, invalid_request};
-use crate::services::{log_service, permission_service, rate_limit_service::extract_client_ip, user_service};
+use crate::routes::{current_operator, forbidden, invalid_request, AppCtx, ListQuery};
+use crate::services::{
+    log_service, permission_service, rate_limit_service::extract_client_ip, user_service,
+};
 
 #[derive(Deserialize)]
 pub(crate) struct CreateUserBody {
@@ -31,12 +33,20 @@ pub(crate) struct UpdatePasswordBody {
     pub(crate) password: String,
 }
 
-pub(crate) async fn users(State(ctx): State<AppCtx>, headers: HeaderMap, Query(query): Query<ListQuery>) -> Result<Json<serde_json::Value>, StatusCode> {
-    let actor = current_operator(&ctx, &headers).await.map_err(|_| StatusCode::UNAUTHORIZED)?;
+pub(crate) async fn users(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Query(query): Query<ListQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let actor = current_operator(&ctx, &headers)
+        .await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
     let result = user_service::list_users(&ctx.db, &actor, &query)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(serde_json::json!({ "items": result.items, "total": result.total, "page": result.page, "page_size": result.page_size })))
+    Ok(Json(
+        serde_json::json!({ "items": result.items, "total": result.total, "page": result.page, "page_size": result.page_size }),
+    ))
 }
 
 pub(crate) async fn create_user(
@@ -62,7 +72,18 @@ pub(crate) async fn create_user(
     .await
     .map_err(invalid_request)?;
 
-    if let Err(e) = log_service::create_log(&ctx.db, &actor.display_name, "网站用户管理", "新增管理员", &item.username, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "网站用户管理",
+        "新增管理员",
+        &item.username,
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok((StatusCode::CREATED, Json(serde_json::json!({"item": item}))))
 }
 
@@ -73,12 +94,15 @@ pub(crate) async fn update_user(
     Json(body): Json<UpdateUserBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let actor = current_operator(&ctx, &headers).await?;
-    let target = user_service::find_user(&ctx.db, id).await.map_err(invalid_request)?;
+    let target = user_service::find_user(&ctx.db, id)
+        .await
+        .map_err(invalid_request)?;
     if !permission_service::can_manage_user(&actor, &target) {
         return Err(forbidden());
     }
 
-    let keep_role = actor.role == "normal" || !permission_service::can_change_user_role(&actor, &target);
+    let keep_role =
+        actor.role == "normal" || !permission_service::can_change_user_role(&actor, &target);
     let item = user_service::update_user(
         &ctx.db,
         id,
@@ -93,7 +117,18 @@ pub(crate) async fn update_user(
     .await
     .map_err(invalid_request)?;
 
-    if let Err(e) = log_service::create_log(&ctx.db, &actor.display_name, "网站用户管理", "修改管理员信息", &item.username, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "网站用户管理",
+        "修改管理员信息",
+        &item.username,
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(Json(serde_json::json!({"item": item})))
 }
 
@@ -104,7 +139,9 @@ pub(crate) async fn update_user_password(
     Json(body): Json<UpdatePasswordBody>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
     let actor = current_operator(&ctx, &headers).await?;
-    let target = user_service::find_user(&ctx.db, id).await.map_err(invalid_request)?;
+    let target = user_service::find_user(&ctx.db, id)
+        .await
+        .map_err(invalid_request)?;
     if !permission_service::can_manage_user(&actor, &target) {
         return Err(forbidden());
     }
@@ -112,7 +149,18 @@ pub(crate) async fn update_user_password(
     user_service::update_password(&ctx.db, id, &body.password)
         .await
         .map_err(invalid_request)?;
-    if let Err(e) = log_service::create_log(&ctx.db, &actor.display_name, "网站用户管理", "修改管理员密码", &target.username, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "网站用户管理",
+        "修改管理员密码",
+        &target.username,
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -122,7 +170,9 @@ pub(crate) async fn delete_user(
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
     let actor = current_operator(&ctx, &headers).await?;
-    let target = user_service::find_user(&ctx.db, id).await.map_err(invalid_request)?;
+    let target = user_service::find_user(&ctx.db, id)
+        .await
+        .map_err(invalid_request)?;
     if !permission_service::can_delete_user(&actor, &target) {
         return Err(forbidden());
     }
@@ -130,7 +180,18 @@ pub(crate) async fn delete_user(
     user_service::delete_user(&ctx.db, id)
         .await
         .map_err(invalid_request)?;
-    if let Err(e) = log_service::create_log(&ctx.db, &actor.display_name, "网站用户管理", "删除管理员", &target.username, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "网站用户管理",
+        "删除管理员",
+        &target.username,
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -140,7 +201,9 @@ pub(crate) async fn toggle_user_enabled(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let actor = current_operator(&ctx, &headers).await?;
-    let target = user_service::find_user(&ctx.db, id).await.map_err(invalid_request)?;
+    let target = user_service::find_user(&ctx.db, id)
+        .await
+        .map_err(invalid_request)?;
     if !permission_service::can_toggle_user_enabled(&actor, &target) {
         return Err(forbidden());
     }
@@ -149,7 +212,22 @@ pub(crate) async fn toggle_user_enabled(
         .await
         .map_err(invalid_request)?;
 
-    let action = if item.enabled { "启用账号" } else { "禁用账号" };
-    if let Err(e) = log_service::create_log(&ctx.db, &actor.display_name, "网站用户管理", action, &item.username, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
+    let action = if item.enabled {
+        "启用账号"
+    } else {
+        "禁用账号"
+    };
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "网站用户管理",
+        action,
+        &item.username,
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(Json(serde_json::json!({"item": item})))
 }

@@ -45,7 +45,7 @@ export function BanPage() {
   const [submitting, setSubmitting] = useState(false);
 
   const canManageAll = session?.role === 'developer' || session?.role === 'admin';
-  const canCreate = ['developer', 'admin', 'normal'].includes(session?.role);
+  const canCreate = canManageAll;
 
   const loadItems = useCallback(async () => {
     try {

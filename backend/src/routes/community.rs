@@ -6,7 +6,7 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::routes::{AppCtx, current_operator, forbidden, invalid_request};
+use crate::routes::{current_operator, forbidden, invalid_request, AppCtx};
 use crate::services::{community_service, permission_service};
 
 #[derive(Deserialize)]
@@ -16,10 +16,16 @@ pub(crate) struct RconCommandBody {
 
 pub(crate) async fn community_servers(
     State(ctx): State<AppCtx>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let groups = community_service::list_groups(&ctx.db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let _actor = current_operator(&ctx, &headers).await?;
+
+    let groups = community_service::list_groups(&ctx.db).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "加载社区服务器失败" })),
+        )
+    })?;
     Ok(Json(serde_json::json!({"groups": groups})))
 }
 
@@ -35,7 +41,10 @@ pub(crate) async fn create_community_group(
     let group = community_service::create_group(&ctx.db, body)
         .await
         .map_err(invalid_request)?;
-    Ok((StatusCode::CREATED, Json(serde_json::json!({"group": group}))))
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({"group": group})),
+    ))
 }
 
 pub(crate) async fn create_community_server(
@@ -51,7 +60,10 @@ pub(crate) async fn create_community_server(
     let server = community_service::create_server(&ctx.db, group_id, body)
         .await
         .map_err(invalid_request)?;
-    Ok((StatusCode::CREATED, Json(serde_json::json!({"server": server}))))
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({"server": server})),
+    ))
 }
 
 pub(crate) async fn delete_community_group(
@@ -147,12 +159,17 @@ pub(crate) async fn report_plugin_online_players(
 
 pub(crate) async fn get_online_players(
     State(ctx): State<AppCtx>,
+    headers: HeaderMap,
     Path(server_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let _actor = current_operator(&ctx, &headers).await?;
+
     let result = community_service::list_online_players(&ctx.db, server_id)
         .await
         .map_err(invalid_request)?;
-    Ok(Json(serde_json::json!({"players": result.players, "details": result.details})))
+    Ok(Json(
+        serde_json::json!({"players": result.players, "details": result.details}),
+    ))
 }
 
 pub(crate) async fn get_server_report_token(

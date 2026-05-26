@@ -2,7 +2,10 @@ use crate::{
     config::Config,
     db::Database,
     http_client,
-    services::{access_snapshot_service, player_access_rule_service, plugin_ban_service, server_config_cache},
+    services::{
+        access_snapshot_service, player_access_rule_service, plugin_ban_service,
+        server_config_cache,
+    },
 };
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -139,7 +142,9 @@ async fn check_access_live(
     )
     .await?;
     if !access_allowed {
-        return Ok(reject(access_reason.as_deref().unwrap_or("您被禁止进入该服务器")));
+        return Ok(reject(
+            access_reason.as_deref().unwrap_or("您被禁止进入该服务器"),
+        ));
     }
 
     // 3. 检查服务器访问模式
@@ -172,8 +177,10 @@ async fn check_access_live(
 
     // 两者都开：满足限制即可进，不满足则看白名单
     match load_player_profile(db, config, steam_id64).await? {
-        Some(profile) if profile.rating >= server.effective_min_rating()
-            && profile.steam_level >= server.effective_min_steam_level() => {
+        Some(profile)
+            if profile.rating >= server.effective_min_rating()
+                && profile.steam_level >= server.effective_min_steam_level() =>
+        {
             Ok(allow("已满足服务器进入限制，允许进入服务器。"))
         }
         _ => {

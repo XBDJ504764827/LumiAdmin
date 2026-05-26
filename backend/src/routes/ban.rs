@@ -6,9 +6,12 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::routes::{AppCtx, ListQuery, current_operator, forbidden, invalid_request};
-use crate::services::{audit_service, ban_service, log_service, notification_service, plugin_ban_service, permission_service};
+use crate::routes::{current_operator, forbidden, invalid_request, AppCtx, ListQuery};
 use crate::services::rate_limit_service::extract_client_ip;
+use crate::services::{
+    audit_service, ban_service, log_service, notification_service, permission_service,
+    plugin_ban_service,
+};
 
 #[derive(Deserialize)]
 pub(crate) struct BanBody {
@@ -68,12 +71,20 @@ pub(crate) struct PluginBanCheckBody {
 
 pub(crate) async fn bans(
     State(ctx): State<AppCtx>,
+    headers: HeaderMap,
     Query(query): Query<ListQuery>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let result = ban_service::list_bans(&ctx.db, &query)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(serde_json::json!({ "items": result.items, "total": result.total, "page": result.page, "page_size": result.page_size })))
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let _actor = current_operator(&ctx, &headers).await?;
+
+    let result = ban_service::list_bans(&ctx.db, &query).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "加载封禁列表失败" })),
+        )
+    })?;
+    Ok(Json(
+        serde_json::json!({ "items": result.items, "total": result.total, "page": result.page, "page_size": result.page_size }),
+    ))
 }
 
 pub(crate) async fn create_ban(
@@ -82,6 +93,10 @@ pub(crate) async fn create_ban(
     Json(body): Json<BanBody>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     let actor = current_operator(&ctx, &headers).await?;
+    if !permission_service::can_create_ban(&actor) {
+        return Err(forbidden());
+    }
+
     let operator_name = actor.display_name.clone();
     let item = ban_service::create_ban(
         &ctx.db,
@@ -101,7 +116,18 @@ pub(crate) async fn create_ban(
     let log_target = item.player.as_deref().unwrap_or(&item.steam_id);
     let client_ip = extract_client_ip(&headers);
     let log_ip = item.ip_address.as_deref().unwrap_or(&client_ip);
-    if let Err(e) = log_service::create_log(&ctx.db, &operator_name, "封禁管理", "添加封禁", log_target, log_ip).await { tracing::warn!(%e, "日志写入失败"); }
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &operator_name,
+        "封禁管理",
+        "添加封禁",
+        log_target,
+        log_ip,
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     if let Err(e) = notification_service::notify_ban_create(
         &ctx.db,
         &ctx.notification_hub,
@@ -110,10 +136,15 @@ pub(crate) async fn create_ban(
         item.player.as_deref(),
         &item.steam_id,
         &item.reason,
-    ).await {
+    )
+    .await
+    {
         tracing::warn!(%e, "ban create notification failed");
     }
-    Ok((StatusCode::CREATED, Json(serde_json::json!({ "item": item }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "item": item })),
+    ))
 }
 
 pub(crate) async fn update_ban(
@@ -123,7 +154,9 @@ pub(crate) async fn update_ban(
     Json(body): Json<BanBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let actor = current_operator(&ctx, &headers).await?;
-    let record = ban_service::find_ban(&ctx.db, id).await.map_err(invalid_request)?;
+    let record = ban_service::find_ban(&ctx.db, id)
+        .await
+        .map_err(invalid_request)?;
     if !permission_service::can_unban_record(&actor, &record) {
         return Err(forbidden());
     }
@@ -143,7 +176,18 @@ pub(crate) async fn update_ban(
     .await
     .map_err(invalid_request)?;
     let log_target = item.player.as_deref().unwrap_or(&item.steam_id);
-    if let Err(e) = log_service::create_log(&ctx.db, &actor.display_name, "封禁管理", "编辑封禁", log_target, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "封禁管理",
+        "编辑封禁",
+        log_target,
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(Json(serde_json::json!({ "item": item })))
 }
 
@@ -153,14 +197,29 @@ pub(crate) async fn delete_ban(
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
     let actor = current_operator(&ctx, &headers).await?;
-    let record = ban_service::find_ban(&ctx.db, id).await.map_err(invalid_request)?;
+    let record = ban_service::find_ban(&ctx.db, id)
+        .await
+        .map_err(invalid_request)?;
     if !permission_service::can_unban_record(&actor, &record) {
         return Err(forbidden());
     }
 
-    ban_service::delete_ban(&ctx.db, id).await.map_err(invalid_request)?;
+    ban_service::delete_ban(&ctx.db, id)
+        .await
+        .map_err(invalid_request)?;
     let log_target = record.player.as_deref().unwrap_or(&record.steam_id);
-    if let Err(e) = log_service::create_log(&ctx.db, &actor.display_name, "封禁管理", "删除封禁", log_target, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "封禁管理",
+        "删除封禁",
+        log_target,
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -170,14 +229,29 @@ pub(crate) async fn unban_ban(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let actor = current_operator(&ctx, &headers).await?;
-    let record = ban_service::find_ban(&ctx.db, id).await.map_err(invalid_request)?;
+    let record = ban_service::find_ban(&ctx.db, id)
+        .await
+        .map_err(invalid_request)?;
     if !permission_service::can_unban_record(&actor, &record) {
         return Err(forbidden());
     }
 
-    let item = ban_service::unban(&ctx.db, id, &actor.display_name).await.map_err(invalid_request)?;
+    let item = ban_service::unban(&ctx.db, id, &actor.display_name)
+        .await
+        .map_err(invalid_request)?;
     let log_target = item.player.as_deref().unwrap_or(&item.steam_id);
-    if let Err(e) = log_service::create_log(&ctx.db, &actor.display_name, "封禁管理", "解封", log_target, &extract_client_ip(&headers)).await { tracing::warn!(%e, "日志写入失败"); }
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "封禁管理",
+        "解封",
+        log_target,
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(Json(serde_json::json!({ "item": item })))
 }
 
@@ -209,38 +283,75 @@ pub(crate) async fn create_plugin_ban(
         item.player.as_deref(),
         &item.steam_id,
         &item.reason,
-    ).await {
+    )
+    .await
+    {
         tracing::warn!(%e, "plugin ban notification failed");
     }
 
-    let duration_text = if item.duration_minutes == 0 { "永久".to_string() } else { format!("{}分钟", item.duration_minutes) };
-    let log_target = format!("{} | SteamID: {} | 时长: {} | 理由: {}", item.player.as_deref().unwrap_or("未知玩家"), item.steam_id, duration_text, item.reason);
+    let duration_text = if item.duration_minutes == 0 {
+        "永久".to_string()
+    } else {
+        format!("{}分钟", item.duration_minutes)
+    };
+    let log_target = format!(
+        "{} | SteamID: {} | 时长: {} | 理由: {}",
+        item.player.as_deref().unwrap_or("未知玩家"),
+        item.steam_id,
+        duration_text,
+        item.reason
+    );
     let server_info = item.server_name.as_deref().unwrap_or("未知服务器");
-    if let Err(e) = log_service::create_log(&ctx.db, &item.operator_name, "游戏封禁", &format!("通过 {} 封禁玩家", server_info), &log_target, "").await { tracing::warn!(%e, "插件封禁审计日志写入失败"); }
-    if let Err(e) = audit_service::write_audit_log(&ctx.db, audit_service::AuditLogInput {
-        operation: "ban".to_string(),
-        target: item.steam_id.clone(),
-        target_type: item.ban_type.clone(),
-        player_name: item.player.clone(),
-        reason: Some(item.reason.clone()),
-        duration_minutes: Some(item.duration_minutes),
-        operator_name: item.operator_name.clone(),
-        operator_steamid: None,
-        source: "game_plugin".to_string(),
-        server_id: item.server_id,
-        server_name: item.server_name.clone(),
-        server_port: item.server_port,
-        success: true,
-        message: Some(format!("封禁成功，ID: {}", item.id)),
-        idempotency_key: None,
-    }).await { tracing::warn!(%e, "plugin ban audit log write failed"); }
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &item.operator_name,
+        "游戏封禁",
+        &format!("通过 {} 封禁玩家", server_info),
+        &log_target,
+        "",
+    )
+    .await
+    {
+        tracing::warn!(%e, "插件封禁审计日志写入失败");
+    }
+    if let Err(e) = audit_service::write_audit_log(
+        &ctx.db,
+        audit_service::AuditLogInput {
+            operation: "ban".to_string(),
+            target: item.steam_id.clone(),
+            target_type: item.ban_type.clone(),
+            player_name: item.player.clone(),
+            reason: Some(item.reason.clone()),
+            duration_minutes: Some(item.duration_minutes),
+            operator_name: item.operator_name.clone(),
+            operator_steamid: None,
+            source: "game_plugin".to_string(),
+            server_id: item.server_id,
+            server_name: item.server_name.clone(),
+            server_port: item.server_port,
+            success: true,
+            message: Some(format!("封禁成功，ID: {}", item.id)),
+            idempotency_key: None,
+        },
+    )
+    .await
+    {
+        tracing::warn!(%e, "plugin ban audit log write failed");
+    }
 
     let kick_message = if item.duration_minutes == 0 {
         format!("你已被永久封禁，原因：{}", item.reason)
     } else {
-        format!("你已被封禁，原因：{}，到期时间：{}", item.reason, item.expires_at.as_deref().unwrap_or("未知"))
+        format!(
+            "你已被封禁，原因：{}，到期时间：{}",
+            item.reason,
+            item.expires_at.as_deref().unwrap_or("未知")
+        )
     };
-    Ok((StatusCode::CREATED, Json(serde_json::json!({ "item": item, "kick_message": kick_message }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "item": item, "kick_message": kick_message })),
+    ))
 }
 
 pub(crate) async fn poll_plugin_bans(
@@ -300,26 +411,49 @@ pub(crate) async fn unban_plugin_ban(
     .await
     .map_err(invalid_request)?;
 
-    let log_target = format!("{} | SteamID: {} | 理由: {}", item.player.as_deref().unwrap_or("未知玩家"), item.steam_id, item.removed_reason.as_deref().unwrap_or("未填写"));
+    let log_target = format!(
+        "{} | SteamID: {} | 理由: {}",
+        item.player.as_deref().unwrap_or("未知玩家"),
+        item.steam_id,
+        item.removed_reason.as_deref().unwrap_or("未填写")
+    );
     let unban_operator = item.removed_by.as_deref().unwrap_or("未知管理员");
-    if let Err(e) = log_service::create_log(&ctx.db, unban_operator, "游戏解封", "通过游戏服务器解封玩家", &log_target, "").await { tracing::warn!(%e, "插件解封审计日志写入失败"); }
-    if let Err(e) = audit_service::write_audit_log(&ctx.db, audit_service::AuditLogInput {
-        operation: "unban".to_string(),
-        target: item.steam_id.clone(),
-        target_type: item.ban_type.clone(),
-        player_name: item.player.clone(),
-        reason: item.removed_reason.clone(),
-        duration_minutes: None,
-        operator_name: unban_operator.to_string(),
-        operator_steamid: None,
-        source: "game_plugin".to_string(),
-        server_id: item.server_id,
-        server_name: item.server_name.clone(),
-        server_port: item.server_port,
-        success: true,
-        message: Some(format!("解封成功，ID: {}", item.id)),
-        idempotency_key: None,
-    }).await { tracing::warn!(%e, "plugin unban audit log write failed"); }
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        unban_operator,
+        "游戏解封",
+        "通过游戏服务器解封玩家",
+        &log_target,
+        "",
+    )
+    .await
+    {
+        tracing::warn!(%e, "插件解封审计日志写入失败");
+    }
+    if let Err(e) = audit_service::write_audit_log(
+        &ctx.db,
+        audit_service::AuditLogInput {
+            operation: "unban".to_string(),
+            target: item.steam_id.clone(),
+            target_type: item.ban_type.clone(),
+            player_name: item.player.clone(),
+            reason: item.removed_reason.clone(),
+            duration_minutes: None,
+            operator_name: unban_operator.to_string(),
+            operator_steamid: None,
+            source: "game_plugin".to_string(),
+            server_id: item.server_id,
+            server_name: item.server_name.clone(),
+            server_port: item.server_port,
+            success: true,
+            message: Some(format!("解封成功，ID: {}", item.id)),
+            idempotency_key: None,
+        },
+    )
+    .await
+    {
+        tracing::warn!(%e, "plugin unban audit log write failed");
+    }
 
     Ok(Json(serde_json::json!({ "item": item })))
 }

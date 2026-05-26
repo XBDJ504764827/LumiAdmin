@@ -230,10 +230,24 @@ cargo build --release   # 生产构建 → target/release/manger-backend
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `HTTP_TIMEOUT_SECS` | `30` | 请求超时 |
+| `HTTP_TIMEOUT_SECS` | `300` | 请求超时 |
 | `HTTP_CONNECT_TIMEOUT_SECS` | `5` | 连接超时 |
-| `REQUEST_TIMEOUT_SECS` | `60` | 全局请求超时 |
-| `MAX_REQUEST_BODY_BYTES` | `1048576` | 请求体大小限制（默认 1MB） |
+| `REQUEST_TIMEOUT_SECS` | `300` | 全局请求超时 |
+| `MAX_REQUEST_BODY_BYTES` | `APPEAL_FILE_MAX_SIZE_MB + 10MB` | 请求体大小限制，需高于申诉文件大小上限 |
+
+### 封禁申诉文件上传
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `APPEAL_FILE_MAX_SIZE_MB` | `100` | 单个申诉辅助文件大小上限 |
+| `R2_ENDPOINT` | 空 | Cloudflare R2 S3 API endpoint，例如 `https://<account>.r2.cloudflarestorage.com` |
+| `R2_BUCKET` | 空 | R2 存储桶名称 |
+| `R2_ACCESS_KEY_ID` | 空 | R2 S3 访问密钥 ID |
+| `R2_SECRET_ACCESS_KEY` | 空 | R2 S3 机密访问密钥 |
+| `R2_CUSTOM_DOMAIN` | 空 | 文件公开访问域名，可省略 `https://` |
+| `R2_TOKEN_VALUE` | 空 | 可选，保留给后续 R2 管理 API 使用 |
+
+未配置完整 R2 信息时，封禁申诉本身仍可提交，只有辅助文件上传不可用。
 
 ### 其他
 

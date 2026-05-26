@@ -47,6 +47,76 @@ const STATUS_MAP = {
   rejected: { label: '已驳回', pill: 'pill-offline' },
 };
 
+function fileIcon(category) {
+  if (category === 'video') return '🎬';
+  if (category === 'image') return '🖼';
+  if (category === 'audio') return '🎵';
+  return '📎';
+}
+
+function fileActionLabel(category) {
+  if (category === 'image') return '打开原图';
+  return '下载原文件';
+}
+
+function renderFilePreview(file) {
+  if (!file.url) return null;
+
+  if (file.category === 'video') {
+    return (
+      <video
+        src={file.url}
+        controls
+        preload="metadata"
+        style={{
+          width: '100%',
+          maxHeight: 360,
+          marginTop: 10,
+          borderRadius: 8,
+          background: '#000',
+        }}
+      >
+        当前浏览器不支持播放该视频，请下载原文件查看。
+      </video>
+    );
+  }
+
+  if (file.category === 'audio') {
+    return (
+      <audio
+        src={file.url}
+        controls
+        preload="metadata"
+        style={{ width: '100%', marginTop: 10 }}
+      >
+        当前浏览器不支持播放该音频，请下载原文件查看。
+      </audio>
+    );
+  }
+
+  if (file.category === 'image') {
+    return (
+      <a href={file.url} target="_blank" rel="noopener noreferrer" style={{ display: 'block', marginTop: 10 }}>
+        <img
+          src={file.url}
+          alt={file.file_name}
+          loading="lazy"
+          style={{
+            display: 'block',
+            width: '100%',
+            maxHeight: 360,
+            objectFit: 'contain',
+            borderRadius: 8,
+            background: 'var(--surface1)',
+          }}
+        />
+      </a>
+    );
+  }
+
+  return null;
+}
+
 export function BanAppealPage() {
   const { session } = useAuth();
   const { confirm, dialog } = useConfirmDialog();
@@ -72,6 +142,8 @@ export function BanAppealPage() {
   const [detailItem, setDetailItem] = useState(null);
   const [globalBans, setGlobalBans] = useState([]);
   const [globalBansLoading, setGlobalBansLoading] = useState(false);
+  const [appealFiles, setAppealFiles] = useState([]);
+  const [appealFilesLoading, setAppealFilesLoading] = useState(false);
 
   const canReview = session?.role === 'developer' || session?.role === 'admin';
 
@@ -103,9 +175,22 @@ export function BanAppealPage() {
     setDetailOpen(true);
     setGlobalBans([]);
     setGlobalBansLoading(true);
+    setAppealFiles([]);
+    setAppealFilesLoading(true);
+
     const bans = await fetchGlobalBans(item.steam_id);
     setGlobalBans(bans);
     setGlobalBansLoading(false);
+
+    // 加载申诉文件
+    try {
+      const filesData = await api.listAdminAppealFiles(token, item.id);
+      setAppealFiles(filesData.files ?? []);
+    } catch {
+      setAppealFiles([]);
+    } finally {
+      setAppealFilesLoading(false);
+    }
   }
 
   function openReview(item, mode) {
@@ -357,6 +442,61 @@ export function BanAppealPage() {
                 </div>
               ) : (
                 <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>未查询到全球封禁记录。</div>
+              )}
+            </div>
+
+            {/* 申诉辅助文件 */}
+            <div className="form-group">
+              <label style={{ marginBottom: 4 }}>辅助文件</label>
+              {appealFilesLoading ? (
+                <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>正在加载文件列表...</div>
+              ) : appealFiles.length > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {appealFiles.map((file) => (
+                    <div
+                      key={file.id}
+                      style={{
+                        padding: '10px 14px',
+                        background: 'var(--surface2)',
+                        borderRadius: 10,
+                        fontSize: 13,
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
+                          <span style={{ fontSize: 18, flexShrink: 0 }}>
+                            {fileIcon(file.category)}
+                          </span>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {file.file_name}
+                            </div>
+                            <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                              {(file.file_size / 1024 / 1024).toFixed(1)} MB
+                              {file.content_type ? ` · ${file.content_type}` : ''}
+                            </div>
+                          </div>
+                        </div>
+                        {file.url ? (
+                          <a
+                            href={file.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="action-btn"
+                            style={{ flexShrink: 0, textDecoration: 'none' }}
+                          >
+                            {fileActionLabel(file.category)}
+                          </a>
+                        ) : (
+                          <span style={{ fontSize: 11, color: 'var(--text3)', flexShrink: 0 }}>不可用</span>
+                        )}
+                      </div>
+                      {renderFilePreview(file)}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>该申诉未上传辅助文件。</div>
               )}
             </div>
           </div>

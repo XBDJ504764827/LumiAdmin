@@ -1,14 +1,17 @@
+use crate::routes::{invalid_request, AppCtx, ListQuery};
+use crate::services::{
+    ban_appeal_service, ban_service, log_service, notification_service, public_service, r2_storage,
+    rate_limit_service::extract_client_ip, whitelist_service,
+};
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Multipart, Path, Query, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
+use futures::stream::StreamExt;
 use std::collections::HashMap;
 use std::time::Duration;
-use futures::stream::StreamExt;
 use uuid::Uuid;
-use crate::routes::{AppCtx, ListQuery, invalid_request};
-use crate::services::{whitelist_service, public_service, log_service, notification_service, ban_service, ban_appeal_service, rate_limit_service::extract_client_ip};
 
 #[derive(serde::Deserialize)]
 #[allow(dead_code)]
@@ -50,11 +53,16 @@ pub(crate) struct SubmitAppealBody {
     pub appeal_reason: String,
 }
 
-pub(crate) async fn public_whitelist(State(ctx): State<AppCtx>, Query(query): Query<ListQuery>) -> Result<Json<serde_json::Value>, StatusCode> {
+pub(crate) async fn public_whitelist(
+    State(ctx): State<AppCtx>,
+    Query(query): Query<ListQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
     let result = public_service::list_public_whitelist(&ctx.db, &query)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(serde_json::json!({ "items": result.items, "total": result.total, "page": result.page, "page_size": result.page_size })))
+    Ok(Json(
+        serde_json::json!({ "items": result.items, "total": result.total, "page": result.page, "page_size": result.page_size }),
+    ))
 }
 
 pub(crate) async fn submit_whitelist(
@@ -73,23 +81,41 @@ pub(crate) async fn submit_whitelist(
     )
     .await
     .map_err(invalid_request)?;
-    let _ = log_service::create_log(&ctx.db, "guest", "公共展示页", "提交白名单申请", &item.nickname, &extract_client_ip(&headers)).await;
+    let _ = log_service::create_log(
+        &ctx.db,
+        "guest",
+        "公共展示页",
+        "提交白名单申请",
+        &item.nickname,
+        &extract_client_ip(&headers),
+    )
+    .await;
     if let Err(e) = notification_service::notify_whitelist_apply(
-        &ctx.db, &ctx.notification_hub, &item.nickname, &item.steamid64,
-    ).await {
+        &ctx.db,
+        &ctx.notification_hub,
+        &item.nickname,
+        &item.steamid64,
+    )
+    .await
+    {
         tracing::warn!(%e, "whitelist apply notification failed");
     }
     Ok((StatusCode::CREATED, Json(serde_json::json!({"item": item}))))
 }
 
-pub(crate) async fn public_bans(State(ctx): State<AppCtx>, Query(query): Query<ListQuery>) -> Result<Json<serde_json::Value>, StatusCode> {
+pub(crate) async fn public_bans(
+    State(ctx): State<AppCtx>,
+    Query(query): Query<ListQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
     let result = public_service::list_public_bans(&ctx.db, &query)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let stats = public_service::ban_stats(&ctx.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(serde_json::json!({ "items": result.items, "total": result.total, "page": result.page, "page_size": result.page_size, "stats": stats })))
+    Ok(Json(
+        serde_json::json!({ "items": result.items, "total": result.total, "page": result.page, "page_size": result.page_size, "stats": stats }),
+    ))
 }
 
 pub(crate) async fn resolve_steam(
@@ -113,7 +139,9 @@ pub(crate) async fn resolve_steam(
     let persona_name = match tokio::time::timeout(
         Duration::from_secs(5),
         resolver.fetch_profile(&parsed.steamid64),
-    ).await {
+    )
+    .await
+    {
         Ok(Ok(Some(profile))) => Some(profile.persona_name),
         _ => None,
     };
@@ -133,12 +161,21 @@ pub(crate) async fn query_active_bans(
     Json(body): Json<QueryBansBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let resolver = &ctx.steam_resolver;
-    let parsed = resolver.resolve(&body.steam_input).await
-        .map_err(|e| (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": e.to_string()}))))?;
+    let parsed = resolver.resolve(&body.steam_input).await.map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+    })?;
 
     let bans = ban_service::find_active_bans_by_steamid(&ctx.db, &parsed.steamid64)
         .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "查询失败"}))))?;
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "查询失败"})),
+            )
+        })?;
 
     Ok(Json(serde_json::json!({
         "steamid64": parsed.steamid64,
@@ -161,8 +198,12 @@ pub(crate) async fn get_global_bans(
         }
     }
 
-    let data = fetch_global_bans_from_api(&steamid64).await
-        .map_err(|_| (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "查询失败" }))))?;
+    let data = fetch_global_bans_from_api(&steamid64).await.map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "查询失败" })),
+        )
+    })?;
 
     // 写入缓存
     {
@@ -173,10 +214,18 @@ pub(crate) async fn get_global_bans(
         cache.retain(|_, (_, ts)| now - *ts < chrono::Duration::minutes(30));
         // 硬上限：超出时移除最旧的条目
         if cache.len() > 500 {
-            let mut entries: Vec<_> = cache.keys().cloned().zip(cache.values().map(|(_, ts)| *ts)).collect();
+            let mut entries: Vec<_> = cache
+                .keys()
+                .cloned()
+                .zip(cache.values().map(|(_, ts)| *ts))
+                .collect();
             entries.sort_by_key(|(_, ts)| *ts);
             let to_remove = cache.len() - 400;
-            let keys_to_remove: Vec<_> = entries.into_iter().take(to_remove).map(|(k, _)| k).collect();
+            let keys_to_remove: Vec<_> = entries
+                .into_iter()
+                .take(to_remove)
+                .map(|(k, _)| k)
+                .collect();
             for key in keys_to_remove {
                 cache.remove(&key);
             }
@@ -216,22 +265,20 @@ pub(crate) async fn get_global_bans_batch(
     if !to_fetch.is_empty() {
         let fetch_ids = to_fetch;
         let fetch_ids_for_timeout = fetch_ids.clone();
-        let results_vec = tokio::time::timeout(
-            std::time::Duration::from_secs(15),
-            async {
-                let stream = futures::stream::iter(
-                    fetch_ids.into_iter().map(|id| async move {
-                        let result = fetch_global_bans_from_api(&id).await;
-                        (id, result)
-                    })
-                );
-                stream.buffer_unordered(8).collect::<Vec<_>>().await
-            },
-        )
+        let results_vec = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            let stream = futures::stream::iter(fetch_ids.into_iter().map(|id| async move {
+                let result = fetch_global_bans_from_api(&id).await;
+                (id, result)
+            }));
+            stream.buffer_unordered(8).collect::<Vec<_>>().await
+        })
         .await
         .unwrap_or_else(|_| {
             tracing::warn!("global bans batch query timed out after 15s");
-            fetch_ids_for_timeout.into_iter().map(|s| (s, Err(()))).collect()
+            fetch_ids_for_timeout
+                .into_iter()
+                .map(|s| (s, Err(())))
+                .collect()
         });
 
         // 写入缓存和结果
@@ -251,10 +298,18 @@ pub(crate) async fn get_global_bans_batch(
         let now = chrono::Utc::now();
         cache.retain(|_, (_, ts)| now - *ts < chrono::Duration::minutes(30));
         if cache.len() > 500 {
-            let mut entries: Vec<_> = cache.keys().cloned().zip(cache.values().map(|(_, ts)| *ts)).collect();
+            let mut entries: Vec<_> = cache
+                .keys()
+                .cloned()
+                .zip(cache.values().map(|(_, ts)| *ts))
+                .collect();
             entries.sort_by_key(|(_, ts)| *ts);
             let to_remove = cache.len() - 400;
-            let keys_to_remove: Vec<_> = entries.into_iter().take(to_remove).map(|(k, _)| k).collect();
+            let keys_to_remove: Vec<_> = entries
+                .into_iter()
+                .take(to_remove)
+                .map(|(k, _)| k)
+                .collect();
             for key in keys_to_remove {
                 cache.remove(&key);
             }
@@ -283,7 +338,15 @@ pub(crate) async fn submit_ban_appeal(
     .map_err(invalid_request)?;
 
     let log_target = format!("{} ({})", item.player_name, item.steam_id);
-    let _ = log_service::create_log(&ctx.db, "guest", "公共展示页", "提交封禁申诉", &log_target, &extract_client_ip(&headers)).await;
+    let _ = log_service::create_log(
+        &ctx.db,
+        "guest",
+        "公共展示页",
+        "提交封禁申诉",
+        &log_target,
+        &extract_client_ip(&headers),
+    )
+    .await;
 
     if let Err(e) = notification_service::notify_all_admins(
         &ctx.db,
@@ -293,17 +356,20 @@ pub(crate) async fn submit_ban_appeal(
         "新封禁申诉",
         &format!("玩家 {} 提交了封禁申诉，请尽快审核。", item.player_name),
         Some("/ban-appeal"),
-    ).await {
+    )
+    .await
+    {
         tracing::warn!(%e, "ban appeal notification failed");
     }
 
-    Ok((StatusCode::CREATED, Json(serde_json::json!({ "item": item }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "item": item })),
+    ))
 }
 
 /// 从第三方 API 获取封禁记录
-async fn fetch_global_bans_from_api(
-    steamid64: &str,
-) -> Result<serde_json::Value, ()> {
+async fn fetch_global_bans_from_api(steamid64: &str) -> Result<serde_json::Value, ()> {
     use crate::http_client;
 
     let timeout = std::time::Duration::from_secs(5);
@@ -321,22 +387,198 @@ async fn fetch_global_bans_from_api(
     );
 
     // 先尝试主 API
-    if let Ok(Ok(response)) = tokio::time::timeout(timeout, http_client::http_client().get(&primary_url).send()).await {
+    if let Ok(Ok(response)) =
+        tokio::time::timeout(timeout, http_client::http_client().get(&primary_url).send()).await
+    {
         if response.status().is_success() {
-            if let Ok(Ok(data)) = tokio::time::timeout(timeout, response.json::<serde_json::Value>()).await {
+            if let Ok(Ok(data)) =
+                tokio::time::timeout(timeout, response.json::<serde_json::Value>()).await
+            {
                 return Ok(data);
             }
         }
     }
 
     // 主 API 失败，尝试备用 API
-    if let Ok(Ok(response)) = tokio::time::timeout(timeout, http_client::http_client().get(&fallback_url).send()).await {
+    if let Ok(Ok(response)) = tokio::time::timeout(
+        timeout,
+        http_client::http_client().get(&fallback_url).send(),
+    )
+    .await
+    {
         if response.status().is_success() {
-            if let Ok(Ok(data)) = tokio::time::timeout(timeout, response.json::<serde_json::Value>()).await {
+            if let Ok(Ok(data)) =
+                tokio::time::timeout(timeout, response.json::<serde_json::Value>()).await
+            {
                 return Ok(data);
             }
         }
     }
 
     Err(())
+}
+
+/// 上传申诉辅助文件（录像、图片、录音）到 R2
+pub(crate) async fn upload_appeal_files(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Path(appeal_id): Path<Uuid>,
+    mut multipart: Multipart,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let r2 = ctx.r2_storage.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "文件上传服务未配置"})),
+        )
+    })?;
+
+    // 验证申诉存在且为 pending 状态
+    let appeal_exists: Option<(String, Option<String>)> =
+        sqlx::query_as("SELECT status, upload_token_hash FROM ban_appeals WHERE id = $1")
+            .bind(appeal_id)
+            .fetch_optional(&ctx.db.pool)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "查询申诉失败"})),
+                )
+            })?;
+
+    let (status, upload_token_hash) = appeal_exists.ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "申诉记录不存在"})),
+        )
+    })?;
+
+    let upload_token = headers
+        .get("x-appeal-upload-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    if !ban_appeal_service::verify_upload_token(upload_token_hash.as_deref(), upload_token) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "上传凭证无效，请重新提交申诉"})),
+        ));
+    }
+
+    if status != "pending" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "该申诉已被处理，无法上传文件"})),
+        ));
+    }
+
+    let max_size = ctx.config.appeal_file_max_size_bytes;
+    let mut uploaded: Vec<serde_json::Value> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(e) => {
+                tracing::warn!(%e, "读取 multipart 字段失败");
+                errors.push("读取上传内容失败".to_string());
+                break;
+            }
+        };
+
+        let file_name = match field.file_name() {
+            Some(name) => name.to_string(),
+            None => continue,
+        };
+
+        if !r2_storage::is_allowed_file_type(&file_name) {
+            errors.push(format!("不支持的文件类型: {file_name}"));
+            continue;
+        }
+
+        let content_type = field
+            .content_type()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| r2_storage::guess_content_type(&file_name).to_string());
+
+        let data = match field.bytes().await {
+            Ok(bytes) => bytes.to_vec(),
+            Err(e) => {
+                errors.push(format!("读取文件失败: {file_name} - {e}"));
+                continue;
+            }
+        };
+        let file_size = data.len();
+
+        if file_size > max_size {
+            errors.push(format!(
+                "文件 {} 超出大小限制（最大 {}MB）",
+                file_name,
+                max_size / 1024 / 1024
+            ));
+            continue;
+        }
+
+        if file_size == 0 {
+            errors.push(format!("文件为空: {file_name}"));
+            continue;
+        }
+
+        // 上传到 R2
+        match r2.upload(appeal_id, &file_name, &content_type, data).await {
+            Ok(key) => {
+                let category = r2_storage::file_category(&file_name);
+
+                // 将文件记录写入数据库
+                if let Err(e) = sqlx::query(
+                    r#"INSERT INTO appeal_files (id, appeal_id, file_name, file_size, content_type, storage_key, category)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
+                )
+                .bind(Uuid::new_v4())
+                .bind(appeal_id)
+                .bind(&file_name)
+                .bind(file_size as i64)
+                .bind(&content_type)
+                .bind(&key)
+                .bind(category)
+                .execute(&ctx.db.pool)
+                .await
+                {
+                    tracing::warn!(%e, "写入文件记录失败");
+                    // 文件已上传到 R2，数据库记录失败不影响上传结果
+                }
+
+                uploaded.push(serde_json::json!({
+                    "file_name": file_name,
+                    "file_size": file_size,
+                    "category": category,
+                }));
+            }
+            Err(e) => {
+                tracing::error!(%e, "R2 upload failed for {file_name}");
+                errors.push(format!("上传文件 {file_name} 失败，请稍后重试"));
+            }
+        }
+    }
+
+    if uploaded.is_empty() && errors.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "未选择可上传的文件"})),
+        ));
+    }
+
+    if uploaded.is_empty() && !errors.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "所有文件上传失败",
+                "errors": errors,
+            })),
+        ));
+    }
+
+    Ok(Json(serde_json::json!({
+        "uploaded": uploaded,
+        "errors": if errors.is_empty() { None } else { Some(errors) },
+    })))
 }

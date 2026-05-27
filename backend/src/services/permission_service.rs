@@ -45,6 +45,10 @@ pub fn can_review_ban_appeals(actor: &Operator) -> bool {
     matches!(actor.role.as_str(), "developer" | "admin")
 }
 
+pub fn can_review_player_reports(actor: &Operator) -> bool {
+    matches!(actor.role.as_str(), "developer" | "admin")
+}
+
 pub fn can_review_whitelist(actor: &Operator) -> bool {
     matches!(actor.role.as_str(), "developer" | "admin" | "normal")
 }

@@ -366,7 +366,6 @@ export function BanPage() {
                   <tr key={x.id}>
                     <td>
                       <div style={{ fontWeight: 600 }}>{x.player || '待自动获取'}</div>
-                      <div style={{ color: 'var(--text3)', fontSize: 12 }}>{x.operator_name}</div>
                     </td>
                     <td className="steam-id">{x.steam_id}</td>
                     <td>{x.ban_type === 'ip' ? 'IP 封禁' : 'Steam 账号封禁'}</td>

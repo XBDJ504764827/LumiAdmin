@@ -6,6 +6,7 @@ pub mod community;
 pub mod external_server;
 pub mod misc;
 pub mod notification;
+pub mod player_report;
 pub mod plugin;
 pub mod public;
 #[cfg(test)]
@@ -275,6 +276,16 @@ pub fn router(
             "/api/ban-appeals/files/:file_id/url",
             get(ban_appeal::get_appeal_file_url),
         )
+        // -- player reports --
+        .route("/api/player-reports", get(player_report::list_reports))
+        .route(
+            "/api/player-reports/:id/review",
+            post(player_report::review_report),
+        )
+        .route(
+            "/api/player-reports/:id/files",
+            get(player_report::list_report_files),
+        )
         // -- audit --
         .route("/api/audit/logs", get(misc::list_audit_logs))
         // -- users --
@@ -340,6 +351,14 @@ pub fn router(
         .route(
             "/api/public/ban-appeals/:id/files",
             post(public::upload_appeal_files),
+        )
+        .route(
+            "/api/public/player-reports",
+            post(player_report::submit_player_report),
+        )
+        .route(
+            "/api/public/player-reports/:id/files",
+            post(player_report::upload_player_report_files),
         )
         .route(
             "/api/public/global-bans/:steamid64",

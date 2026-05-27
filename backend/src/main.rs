@@ -124,6 +124,7 @@ async fn main() -> anyhow::Result<()> {
                         header::AUTHORIZATION,
                         header::CONTENT_TYPE,
                         axum::http::HeaderName::from_static("x-appeal-upload-token"),
+                        axum::http::HeaderName::from_static("x-report-upload-token"),
                     ]);
                 if let Some(origin) = cors_origin {
                     if let Ok(parsed) = origin.parse::<axum::http::HeaderValue>() {

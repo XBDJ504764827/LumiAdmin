@@ -13,6 +13,7 @@ const icons = {
   whitelist: icon(<><path d="M2 12L5 8l3 2 3-5 3 3" /><rect x="1" y="1" width="14" height="14" rx="2" /></>),
   ban: icon(<><circle cx="8" cy="8" r="6" /><path d="M5 5L11 11M11 5L5 11" /></>),
   banAppeal: icon(<><path d="M8 1.5C5.5 1.5 3.5 3.5 3 6c0 2.5-1 3.5-2.5 5h15C14 9.5 13 8.5 13 6c-.5-2.5-2.5-4.5-5-4.5z" /><path d="M6 12.5c.5 1 1 1.5 2 1.5s1.5-.5 2-1.5" strokeLinecap="round" /><path d="M3 1.5L13 11.5" strokeLinecap="round" /></>),
+  playerReport: icon(<><path d="M8 1.5l6 2.5v4.5c0 3.5-2.4 5.5-6 6-3.6-.5-6-2.5-6-6V4l6-2.5z" /><path d="M8 5v4" strokeLinecap="round" /><path d="M8 12h.01" strokeLinecap="round" /></>),
   users: icon(<><circle cx="8" cy="5" r="3" /><path d="M2 14c0-3.314 2.686-5 6-5s6 1.686 6 5" /></>),
   playerAccess: icon(<><path d="M11 2v4m0 0h4m-4 0L15 2M5 14v-4m0 0H1m4 0l-4 4M2 8a6 6 0 1 0 12 0A6 6 0 0 0 2 8z" strokeLinecap="round" strokeLinejoin="round" /></>),
   audit: icon(<><path d="M8 2l6 3v5c0 3.5-2.5 6.5-6 8-3.5-1.5-6-4.5-6-8V5l6-3z" /><path d="M6 8l2 2 4-4" strokeLinecap="round" strokeLinejoin="round" /></>),
@@ -32,6 +33,7 @@ const icons = {
 export function sidebarSections(role) {
   const canSeeUserManagement = ['developer', 'admin', 'normal'].includes(role);
   const canSeeLogs = ['developer', 'admin'].includes(role);
+  const canReviewReports = ['developer', 'admin'].includes(role);
 
   const systemItems = canSeeLogs ? [
     { path: '/player-access', label: '玩家进服设置', icon: icons.playerAccess },
@@ -68,7 +70,10 @@ export function sidebarSections(role) {
         { path: '/community', label: '社区组管理', icon: icons.community },
         { path: '/whitelist', label: '白名单管理', icon: icons.whitelist },
         { path: '/ban', label: '封禁管理', icon: icons.ban },
-        { path: '/ban-appeal', label: '封禁申诉', icon: icons.banAppeal },
+        ...(canReviewReports ? [
+          { path: '/ban-appeal', label: '封禁申诉', icon: icons.banAppeal },
+          { path: '/player-reports', label: '玩家举报', icon: icons.playerReport },
+        ] : []),
         ...(canSeeUserManagement ? [{ path: '/users', label: '网站用户管理', icon: icons.users }] : []),
       ],
     },
@@ -87,6 +92,7 @@ export function sidebarSections(role) {
             { path: '/public/whitelist', label: '白名单公示', icon: icons.table },
             { path: '/public/ban', label: '封禁公示', icon: icons.banPublic },
             { path: '/public/ban-appeal', label: '封禁申诉', icon: icons.banAppeal },
+            { path: '/public/player-report', label: '玩家举报', icon: icons.playerReport },
           ],
         },
       ],

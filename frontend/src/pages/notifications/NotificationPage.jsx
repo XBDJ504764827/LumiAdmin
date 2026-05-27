@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useAuth } from '../../state/auth.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
+import { notifyNotificationsUpdated } from '../../hooks/useNotifications.js';
 
 const TYPE_LABELS = {
   whitelist_apply: '白名单申请',
@@ -91,6 +92,7 @@ export function NotificationPage() {
         ...prev,
         items: prev.items.map(n => n.id === id ? { ...n, read: true } : n),
       } : prev);
+      notifyNotificationsUpdated({ action: 'mark_read', id });
     } catch {}
   }
 
@@ -102,6 +104,7 @@ export function NotificationPage() {
         ...prev,
         items: prev.items.map(n => ({ ...n, read: true })),
       } : prev);
+      notifyNotificationsUpdated({ action: 'mark_all_read' });
     } catch {}
   }
 

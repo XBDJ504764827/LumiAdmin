@@ -4,6 +4,12 @@ import { useAuth } from '../state/auth.jsx';
 
 const WS_BASE = (import.meta.env.VITE_WS_BASE ?? '').replace(/^http/, 'ws') ||
   `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
+export const NOTIFICATIONS_UPDATED_EVENT = 'manger:notifications-updated';
+
+export function notifyNotificationsUpdated(detail = {}) {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(NOTIFICATIONS_UPDATED_EVENT, { detail }));
+}
 
 export function useNotifications() {
   const { session } = useAuth();
@@ -41,6 +47,7 @@ export function useNotifications() {
       await api.markNotificationRead(token, id);
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
       setUnreadCount(prev => Math.max(0, prev - 1));
+      notifyNotificationsUpdated({ action: 'mark_read', id });
     } catch {}
   }, [token]);
 
@@ -50,8 +57,34 @@ export function useNotifications() {
       await api.markAllNotificationsRead(token);
       setNotifications(prev => prev.map(n => ({ ...n, read: true })));
       setUnreadCount(0);
+      notifyNotificationsUpdated({ action: 'mark_all_read' });
     } catch {}
   }, [token]);
+
+  useEffect(() => {
+    if (!token) return undefined;
+
+    function handleNotificationsUpdated(event) {
+      const action = event.detail?.action;
+      if (action === 'mark_all_read') {
+        setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+        setUnreadCount(0);
+        return;
+      }
+
+      if (action === 'mark_read') {
+        const id = event.detail?.id;
+        setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+        fetchUnreadCount();
+        return;
+      }
+
+      fetchUnreadCount();
+    }
+
+    window.addEventListener(NOTIFICATIONS_UPDATED_EVENT, handleNotificationsUpdated);
+    return () => window.removeEventListener(NOTIFICATIONS_UPDATED_EVENT, handleNotificationsUpdated);
+  }, [token, fetchUnreadCount]);
 
   useEffect(() => {
     if (!token) return;

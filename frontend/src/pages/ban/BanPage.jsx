@@ -8,6 +8,7 @@ import { BAN_TYPE_OPTIONS, banModalSubmitText, banModalTitle, banRecordAction, b
 import { formatBanDuration, formatBanSource, formatExpiresAt } from './banDisplay.js';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 function formatDateTime(isoString) {
   if (!isoString) return '-';
@@ -52,6 +53,16 @@ function fileCategoryLabel(category) {
   return '文件';
 }
 
+function buildBanFormFromPlayerReport(report) {
+  return {
+    player: report.player ?? '',
+    steam_id: report.steamId ?? '',
+    ban_type: 'steam',
+    ip_address: '',
+    reason: report.reason ? `玩家举报：${report.reason}` : '',
+  };
+}
+
 function uploadBanFilesWithProgress(banId, formData, token, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -91,6 +102,8 @@ export function BanPage() {
   const { session } = useAuth();
   const { confirm, dialog } = useConfirmDialog();
   const { toast, toasts, dismiss: dismissToast } = useToast();
+  const location = useLocation();
+  const navigate = useNavigate();
   const token = session?.token ?? null;
   const [refreshKey, setRefreshKey] = useState(0);
   const [search, setSearch] = useState('');
@@ -108,6 +121,7 @@ export function BanPage() {
   const [savePhase, setSavePhase] = useState('idle');
   const [uploadProgress, setUploadProgress] = useState(0);
   const [selectedFiles, setSelectedFiles] = useState([]);
+  const [reportReviewOnSave, setReportReviewOnSave] = useState(null);
   const [detailItem, setDetailItem] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailFiles, setDetailFiles] = useState([]);
@@ -140,6 +154,25 @@ export function BanPage() {
 
   React.useEffect(() => { loadItems(); }, [loadItems]);
 
+  React.useEffect(() => {
+    const prefill = location.state?.playerReportPrefill;
+    if (!prefill || !canCreate) return;
+
+    setModalMode('create');
+    setEditingBanId(null);
+    setForm(buildBanFormFromPlayerReport(prefill));
+    setError('');
+    setSelectedFiles([]);
+    setUploadProgress(0);
+    setSavePhase('idle');
+    setReportReviewOnSave({
+      reportId: prefill.reportId,
+      player: prefill.player || prefill.steamId,
+    });
+    setOpen(true);
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.state, location.pathname, navigate, canCreate]);
+
   function refresh() {
     setRefreshKey((v) => v + 1);
     loadItems();
@@ -152,6 +185,7 @@ export function BanPage() {
     setForm(emptyBanForm);
     setError('');
     setSelectedFiles([]);
+    setReportReviewOnSave(null);
     setUploadProgress(0);
     setSavePhase('idle');
   }
@@ -162,6 +196,7 @@ export function BanPage() {
     setForm(emptyBanForm);
     setError('');
     setSelectedFiles([]);
+    setReportReviewOnSave(null);
     setOpen(true);
   }
 
@@ -170,6 +205,7 @@ export function BanPage() {
     setEditingBanId(item.id);
     setError('');
     setSelectedFiles([]);
+    setReportReviewOnSave(null);
     try {
       const result = await api.getBan(token, item.id);
       setForm(buildBanFormFromRecord(result.item ?? item));
@@ -185,6 +221,7 @@ export function BanPage() {
     setForm(buildBanFormFromRecord(item));
     setError('');
     setSelectedFiles([]);
+    setReportReviewOnSave(null);
     setOpen(true);
   }
 
@@ -292,6 +329,7 @@ export function BanPage() {
       const payload = buildCreateBanPayload(form);
       let savedItem = null;
       let uploadWarning = '';
+      let reportReviewWarning = '';
       let uploadedFiles = false;
       if (modalMode === 'edit' && editingBanId) {
         const result = await api.updateBan(token, editingBanId, payload);
@@ -299,6 +337,16 @@ export function BanPage() {
       } else {
         const result = await api.createBan(token, payload);
         savedItem = result.item;
+        if (savedItem?.id && reportReviewOnSave?.reportId) {
+          try {
+            await api.reviewPlayerReport(token, reportReviewOnSave.reportId, {
+              status: 'approved',
+              review_note: `已根据玩家举报创建封禁记录：${savedItem.id}`,
+            });
+          } catch (reviewError) {
+            reportReviewWarning = reviewError.message || '玩家举报状态更新失败';
+          }
+        }
         if (savedItem?.id && selectedFiles.length > 0) {
           try {
             setSavePhase('uploading');
@@ -315,11 +363,15 @@ export function BanPage() {
         title: modalMode === 'edit' ? '保存成功' : '添加成功',
         message: modalMode === 'edit'
           ? '封禁记录已更新。'
-          : uploadedFiles
-            ? '新封禁记录已添加，辅助文件已上传。'
-            : uploadWarning
-              ? `新封禁记录已添加，但辅助文件上传失败：${uploadWarning}`
-              : '新封禁记录已添加。',
+          : reportReviewWarning
+            ? `新封禁记录已添加，但玩家举报状态更新失败：${reportReviewWarning}`
+            : uploadedFiles
+              ? '新封禁记录已添加，辅助文件已上传。'
+              : uploadWarning
+                ? `新封禁记录已添加，但辅助文件上传失败：${uploadWarning}`
+                : reportReviewOnSave?.reportId
+                  ? '新封禁记录已添加，玩家举报已标记为已封禁。'
+                  : '新封禁记录已添加。',
       });
     } catch (requestError) {
       setError(requestError.message);

@@ -6,10 +6,11 @@ import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { Modal } from '../../shared/Modal.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
+import { useNavigate } from 'react-router-dom';
 
 const STATUS_MAP = {
   pending: { label: '待审核', pill: 'pill-warning' },
-  approved: { label: '已通过', pill: 'pill-success' },
+  approved: { label: '已封禁', pill: 'pill-success' },
   rejected: { label: '已驳回', pill: 'pill-offline' },
 };
 
@@ -101,6 +102,7 @@ export function PlayerReportPage() {
   const { session } = useAuth();
   const { confirm, dialog } = useConfirmDialog();
   const { toast, toasts, dismiss: dismissToast } = useToast();
+  const navigate = useNavigate();
   const token = session?.token ?? null;
 
   const [search, setSearch] = useState('');
@@ -117,7 +119,7 @@ export function PlayerReportPage() {
 
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewItem, setReviewItem] = useState(null);
-  const [reviewStatus, setReviewStatus] = useState('approved');
+  const [reviewStatus, setReviewStatus] = useState('rejected');
   const [reviewNote, setReviewNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -172,9 +174,22 @@ export function PlayerReportPage() {
     setReviewOpen(true);
   }
 
+  function openBanFromReport(item) {
+    navigate('/ban', {
+      state: {
+        playerReportPrefill: {
+          reportId: item.id,
+          player: item.target_player_name || '',
+          steamId: item.target_steam_id,
+          reason: item.report_reason,
+        },
+      },
+    });
+  }
+
   async function handleReview() {
     if (!reviewItem) return;
-    const action = reviewStatus === 'approved' ? '通过' : '驳回';
+    const action = reviewStatus === 'approved' ? '封禁' : '驳回';
     const confirmed = await confirm({
       title: `${action}玩家举报`,
       message: `确定${action}关于 ${reviewItem.target_player_name || reviewItem.target_steam_id} 的玩家举报吗？`,
@@ -190,7 +205,7 @@ export function PlayerReportPage() {
       setReviewOpen(false);
       setReviewItem(null);
       await loadItems();
-      toast({ title: `${action}成功`, message: `已${action}该玩家举报。` });
+      toast({ title: `${action}成功`, message: reviewStatus === 'approved' ? '已将该举报标记为已封禁。' : '已驳回该玩家举报。' });
     } catch (e) {
       toast({ title: `${action}失败`, message: e.message, tone: 'danger' });
     } finally {
@@ -217,7 +232,7 @@ export function PlayerReportPage() {
         placeholder="搜索 SteamID / 玩家名称..."
         statusOptions={[
           { value: 'pending', label: '待审核' },
-          { value: 'approved', label: '已通过' },
+          { value: 'approved', label: '已封禁' },
           { value: 'rejected', label: '已驳回' },
         ]}
         statusValue={status}
@@ -269,7 +284,7 @@ export function PlayerReportPage() {
                           <button className="action-btn action-btn-accent" onClick={() => openDetail(item)}>详情</button>
                           {canReview && item.status === 'pending' ? (
                             <>
-                              <button className="action-btn action-btn-success" onClick={() => openReview(item, 'approved')}>通过</button>
+                              <button className="action-btn action-btn-danger" onClick={() => openBanFromReport(item)}>封禁</button>
                               <button className="action-btn action-btn-danger" onClick={() => openReview(item, 'rejected')}>驳回</button>
                             </>
                           ) : null}
@@ -293,99 +308,116 @@ export function PlayerReportPage() {
         open={detailOpen}
         title="举报详情"
         onClose={closeDetail}
-        wide
-        footer={<button className="btn btn-outline" onClick={closeDetail}>关闭</button>}
+        extraWide
+        footer={
+          <>
+            <button className="btn btn-outline" onClick={closeDetail}>关闭</button>
+            {canReview && detailItem?.status === 'pending' ? (
+              <>
+                <button className="btn btn-danger" onClick={() => { const item = detailItem; closeDetail(); openBanFromReport(item); }}>封禁</button>
+                <button className="btn btn-outline" onClick={() => { const item = detailItem; closeDetail(); openReview(item, 'rejected'); }}>驳回</button>
+              </>
+            ) : null}
+          </>
+        }
       >
         {detailItem ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div className="ban-detail-section">
-              <div className="ban-detail-title">被举报玩家</div>
-              <div className="ban-detail-grid">
-                <div><span>玩家名称</span><strong>{detailItem.target_player_name || '-'}</strong></div>
-                <div><span>SteamID64</span><strong>{detailItem.target_steam_id}</strong></div>
-                <div><span>联系方式</span><strong>{detailItem.reporter_contact || '-'}</strong></div>
-                <div><span>提交时间</span><strong>{formatDateTime(detailItem.created_at)}</strong></div>
+          <div className="ban-detail">
+            <div className="ban-detail-summary">
+              <div className="ban-detail-avatar">举</div>
+              <div className="ban-detail-heading">
+                <div className="ban-detail-player">{detailItem.target_player_name || '未填写玩家名称'}</div>
+                <div className="ban-detail-meta">
+                  <span className="steam-id">{detailItem.target_steam_id}</span>
+                  <span>{detailItem.reporter_contact || '无联系方式'}</span>
+                  <span>{formatDateTime(detailItem.created_at)}</span>
+                </div>
               </div>
-            </div>
-
-            <div className="ban-detail-section">
-              <div className="ban-detail-title">举报理由</div>
-              <div style={{ color: 'var(--text2)', fontSize: 13, whiteSpace: 'pre-wrap', background: 'var(--surface2)', padding: 10, borderRadius: 8 }}>
-                {detailItem.report_reason}
-              </div>
-            </div>
-
-            <div className="ban-detail-section">
-              <div className="ban-detail-title">处理状态</div>
-              <div>
+              <div className="ban-detail-state">
                 <span className={`status-pill ${STATUS_MAP[detailItem.status]?.pill || ''}`}>
                   {STATUS_MAP[detailItem.status]?.label || detailItem.status}
                 </span>
+                <span>{detailItem.reviewed_at ? formatDateTime(detailItem.reviewed_at) : '尚未处理'}</span>
               </div>
-              {detailItem.reviewed_by ? (
-                <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 6 }}>
-                  由 {detailItem.reviewed_by} 于 {formatDateTime(detailItem.reviewed_at)} 处理
-                </div>
-              ) : null}
-              {detailItem.review_note ? (
-                <div style={{ color: 'var(--text2)', fontSize: 13, marginTop: 8, whiteSpace: 'pre-wrap', background: 'var(--surface2)', padding: 10, borderRadius: 8 }}>
-                  审核备注：{detailItem.review_note}
-                </div>
-              ) : null}
             </div>
 
-            <div className="ban-detail-section">
-              <div className="ban-detail-title">证据文件</div>
+            <section className="ban-detail-panel">
+              <div className="ban-detail-panel-title">基础信息</div>
+              <dl className="ban-detail-grid">
+                <div><dt>玩家名称</dt><dd>{detailItem.target_player_name || '-'}</dd></div>
+                <div><dt>SteamID64</dt><dd className="steam-id">{detailItem.target_steam_id}</dd></div>
+                <div><dt>联系方式</dt><dd>{detailItem.reporter_contact || '-'}</dd></div>
+                <div><dt>提交时间</dt><dd>{formatDateTime(detailItem.created_at)}</dd></div>
+                <div><dt>审核人</dt><dd>{detailItem.reviewed_by || '-'}</dd></div>
+                <div><dt>审核时间</dt><dd>{detailItem.reviewed_at ? formatDateTime(detailItem.reviewed_at) : '-'}</dd></div>
+              </dl>
+            </section>
+
+            <section className="ban-detail-panel">
+              <div className="ban-detail-panel-title">举报理由</div>
+              <div className="ban-detail-text">{detailItem.report_reason}</div>
+              {detailItem.review_note ? (
+                <>
+                  <div className="ban-detail-panel-title ban-detail-subtitle">审核备注</div>
+                  <div className="ban-detail-text">{detailItem.review_note}</div>
+                </>
+              ) : null}
+            </section>
+
+            <section className="ban-detail-panel">
+              <div className="ban-detail-panel-head">
+                <div className="ban-detail-panel-title">证据文件</div>
+                <span>{reportFiles.length} 个文件</span>
+              </div>
               {filesLoading ? (
-                <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>正在加载证据文件...</div>
+                <div className="ban-detail-empty">正在加载证据文件...</div>
               ) : reportFiles.length > 0 ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div className="ban-file-list">
                   {reportFiles.map((file) => (
-                    <div key={file.id} style={{ padding: '10px 14px', background: 'var(--surface2)', borderRadius: 8, fontSize: 13 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                            <span className="status-pill">{fileTypeLabel(file.category)}</span>
-                            <strong style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.file_name}</strong>
-                          </div>
-                          <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>
-                            {formatFileSize(file.file_size)}
-                            {file.content_type ? ` · ${file.content_type}` : ''}
-                          </div>
+                    <div key={file.id} className="ban-file-item">
+                      <div className={`ban-file-type ban-file-type-${file.category}`}>{fileTypeLabel(file.category).slice(0, 1)}</div>
+                      <div className="ban-file-body">
+                        <div className="ban-file-name">{file.file_name}</div>
+                        <div className="ban-file-meta">
+                          <span>{fileTypeLabel(file.category)}</span>
+                          <span>{formatFileSize(file.file_size)}</span>
+                          <span>{file.content_type || '-'}</span>
                         </div>
+                        {renderFilePreview(file)}
+                      </div>
+                      <div className="ban-file-actions">
                         {file.url ? (
-                          <a href={file.url} target="_blank" rel="noopener noreferrer" className="action-btn" style={{ flexShrink: 0, textDecoration: 'none' }}>
+                          <a href={file.url} target="_blank" rel="noopener noreferrer" className="action-btn">
                             {fileActionLabel(file.category)}
                           </a>
                         ) : (
-                          <span style={{ fontSize: 11, color: 'var(--text3)', flexShrink: 0 }}>不可用</span>
+                          <span>不可用</span>
                         )}
                       </div>
-                      {renderFilePreview(file)}
                     </div>
                   ))}
                 </div>
               ) : (
-                <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>该举报未上传证据文件。</div>
+                <div className="ban-detail-empty">该举报未上传证据文件。</div>
               )}
-            </div>
+            </section>
           </div>
         ) : null}
       </Modal>
 
       <Modal
         open={reviewOpen}
-        title={reviewStatus === 'approved' ? '通过玩家举报' : '驳回玩家举报'}
+        title={reviewStatus === 'approved' ? '封禁玩家举报' : '驳回玩家举报'}
         onClose={() => { setReviewOpen(false); setReviewItem(null); }}
         footer={
           <>
             <button className="btn btn-outline" onClick={() => { setReviewOpen(false); setReviewItem(null); }}>取消</button>
             <button
-              className={`btn ${reviewStatus === 'approved' ? 'btn-success' : 'btn-danger'}`}
+              className="btn btn-danger"
               onClick={handleReview}
               disabled={submitting}
             >
-              {submitting ? '处理中...' : reviewStatus === 'approved' ? '确认通过' : '确认驳回'}
+              {submitting ? '处理中...' : reviewStatus === 'approved' ? '确认封禁' : '确认驳回'}
             </button>
           </>
         }
@@ -402,7 +434,7 @@ export function PlayerReportPage() {
                 className="form-control"
                 value={reviewNote}
                 onChange={(e) => setReviewNote(e.target.value)}
-                placeholder={reviewStatus === 'approved' ? '可选，填写通过原因或后续处理记录...' : '可选，填写驳回原因...'}
+                placeholder={reviewStatus === 'approved' ? '可选，填写封禁处理记录...' : '可选，填写驳回原因...'}
                 rows={3}
                 style={{ resize: 'vertical' }}
               />

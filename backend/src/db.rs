@@ -49,6 +49,7 @@ impl Database {
         self.migrate_notifications_schema().await?;
         self.migrate_ban_appeals_schema().await?;
         self.migrate_appeal_files_schema().await?;
+        self.migrate_ban_files_schema().await?;
         self.migrate_adds_missing_constraints_and_indexes().await?;
         Ok(())
     }
@@ -939,6 +940,29 @@ impl Database {
         Ok(())
     }
 
+    async fn migrate_ban_files_schema(&self) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"CREATE TABLE IF NOT EXISTS ban_files (
+              id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+              ban_id UUID NOT NULL REFERENCES ban_records(id) ON DELETE CASCADE,
+              file_name TEXT NOT NULL,
+              file_size BIGINT NOT NULL,
+              content_type TEXT NOT NULL,
+              storage_key TEXT NOT NULL,
+              category TEXT NOT NULL,
+              uploaded_by TEXT NOT NULL,
+              uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )"#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_ban_files_ban_id ON ban_files (ban_id)"#)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn seed(&self, config: &Config) -> anyhow::Result<()> {
         let password_hash = crate::password::hash_password(&config.dev_password)?;
         sqlx::query(
@@ -1015,10 +1039,31 @@ impl Database {
         .execute(&self.pool)
         .await?;
 
+        sqlx::query(
+            r#"CREATE INDEX IF NOT EXISTS idx_whitelist_requests_status_approved_applied
+               ON whitelist_requests (status, approved_at DESC NULLS LAST, applied_at DESC)"#,
+        )
+        .execute(&self.pool)
+        .await?;
+
         // ban_records 复合索引
         sqlx::query(
             r#"CREATE INDEX IF NOT EXISTS idx_ban_records_status_created
                ON ban_records (status, created_at DESC)"#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"CREATE INDEX IF NOT EXISTS idx_servers_status
+               ON servers (status)"#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"CREATE INDEX IF NOT EXISTS idx_users_role_created
+               ON users (role, created_at DESC)"#,
         )
         .execute(&self.pool)
         .await?;

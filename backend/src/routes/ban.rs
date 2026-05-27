@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Multipart, Path, Query, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
@@ -10,7 +10,7 @@ use crate::routes::{current_operator, forbidden, invalid_request, AppCtx, ListQu
 use crate::services::rate_limit_service::extract_client_ip;
 use crate::services::{
     audit_service, ban_service, log_service, notification_service, permission_service,
-    plugin_ban_service,
+    plugin_ban_service, r2_storage,
 };
 
 #[derive(Deserialize)]
@@ -85,6 +85,18 @@ pub(crate) async fn bans(
     Ok(Json(
         serde_json::json!({ "items": result.items, "total": result.total, "page": result.page, "page_size": result.page_size }),
     ))
+}
+
+pub(crate) async fn get_ban(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let _actor = current_operator(&ctx, &headers).await?;
+    let item = ban_service::get_ban(&ctx.db, id)
+        .await
+        .map_err(invalid_request)?;
+    Ok(Json(serde_json::json!({ "item": item })))
 }
 
 pub(crate) async fn create_ban(
@@ -253,6 +265,240 @@ pub(crate) async fn unban_ban(
         tracing::warn!(%e, "日志写入失败");
     }
     Ok(Json(serde_json::json!({ "item": item })))
+}
+
+pub(crate) async fn list_ban_files(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Path(ban_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let _actor = current_operator(&ctx, &headers).await?;
+    ban_service::find_ban(&ctx.db, ban_id)
+        .await
+        .map_err(invalid_request)?;
+
+    #[derive(serde::Serialize, sqlx::FromRow)]
+    struct FileRow {
+        id: Uuid,
+        file_name: String,
+        file_size: i64,
+        content_type: String,
+        storage_key: String,
+        category: String,
+        uploaded_by: String,
+        uploaded_at: chrono::DateTime<chrono::Utc>,
+    }
+
+    let files: Vec<FileRow> = sqlx::query_as(
+        r#"SELECT id, file_name, file_size, content_type, storage_key, category, uploaded_by, uploaded_at
+           FROM ban_files WHERE ban_id = $1 ORDER BY uploaded_at ASC"#,
+    )
+    .bind(ban_id)
+    .fetch_all(&ctx.db.pool)
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "加载封禁文件失败" })),
+        )
+    })?;
+
+    let r2 = ctx.r2_storage.as_ref();
+    let items: Vec<serde_json::Value> = files
+        .into_iter()
+        .map(|f| {
+            let presigned_url = r2.map(|storage| storage.presigned_url(&f.storage_key, 3600));
+            serde_json::json!({
+                "id": f.id,
+                "file_name": f.file_name,
+                "file_size": f.file_size,
+                "content_type": f.content_type,
+                "category": f.category,
+                "uploaded_by": f.uploaded_by,
+                "uploaded_at": f.uploaded_at.to_rfc3339(),
+                "url": presigned_url,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "files": items })))
+}
+
+pub(crate) async fn get_ban_file_url(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Path(file_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let _actor = current_operator(&ctx, &headers).await?;
+
+    let r2 = ctx.r2_storage.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(serde_json::json!({ "error": "文件服务未配置" })),
+    ))?;
+
+    #[derive(sqlx::FromRow)]
+    struct FileRow {
+        storage_key: String,
+        file_name: String,
+        content_type: String,
+    }
+
+    let file: FileRow =
+        sqlx::query_as("SELECT storage_key, file_name, content_type FROM ban_files WHERE id = $1")
+            .bind(file_id)
+            .fetch_optional(&ctx.db.pool)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "查询文件失败" })),
+                )
+            })?
+            .ok_or((
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "文件不存在" })),
+            ))?;
+
+    Ok(Json(serde_json::json!({
+        "url": r2.presigned_url(&file.storage_key, 3600),
+        "file_name": file.file_name,
+        "content_type": file.content_type,
+    })))
+}
+
+pub(crate) async fn upload_ban_files(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Path(ban_id): Path<Uuid>,
+    mut multipart: Multipart,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let actor = current_operator(&ctx, &headers).await?;
+    if !permission_service::can_create_ban(&actor) {
+        return Err(forbidden());
+    }
+
+    ban_service::find_ban(&ctx.db, ban_id)
+        .await
+        .map_err(invalid_request)?;
+
+    let r2 = ctx.r2_storage.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "文件上传服务未配置" })),
+        )
+    })?;
+
+    let max_size = ctx.config.appeal_file_max_size_bytes;
+    let mut uploaded: Vec<serde_json::Value> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(e) => {
+                tracing::warn!(%e, "读取封禁附件 multipart 字段失败");
+                errors.push("读取上传内容失败".to_string());
+                break;
+            }
+        };
+
+        let file_name = match field.file_name() {
+            Some(name) => name.to_string(),
+            None => continue,
+        };
+
+        if !r2_storage::is_allowed_file_type(&file_name) {
+            errors.push(format!("不支持的文件类型: {file_name}"));
+            continue;
+        }
+
+        let content_type = field
+            .content_type()
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| r2_storage::guess_content_type(&file_name).to_string());
+
+        let data = match field.bytes().await {
+            Ok(bytes) => bytes.to_vec(),
+            Err(e) => {
+                errors.push(format!("读取文件失败: {file_name} - {e}"));
+                continue;
+            }
+        };
+        let file_size = data.len();
+
+        if file_size > max_size {
+            errors.push(format!(
+                "文件 {} 超出大小限制（最大 {}MB）",
+                file_name,
+                max_size / 1024 / 1024
+            ));
+            continue;
+        }
+
+        if file_size == 0 {
+            errors.push(format!("文件为空: {file_name}"));
+            continue;
+        }
+
+        match r2
+            .upload_with_prefix("bans", ban_id, &file_name, &content_type, data)
+            .await
+        {
+            Ok(key) => {
+                let category = r2_storage::file_category(&file_name);
+                if let Err(e) = sqlx::query(
+                    r#"INSERT INTO ban_files (id, ban_id, file_name, file_size, content_type, storage_key, category, uploaded_by)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
+                )
+                .bind(Uuid::new_v4())
+                .bind(ban_id)
+                .bind(&file_name)
+                .bind(file_size as i64)
+                .bind(&content_type)
+                .bind(&key)
+                .bind(category)
+                .bind(&actor.display_name)
+                .execute(&ctx.db.pool)
+                .await
+                {
+                    tracing::warn!(%e, "写入封禁附件记录失败");
+                }
+
+                uploaded.push(serde_json::json!({
+                    "file_name": file_name,
+                    "file_size": file_size,
+                    "category": category,
+                }));
+            }
+            Err(e) => {
+                tracing::error!(%e, "ban file R2 upload failed for {file_name}");
+                errors.push(format!("上传文件 {file_name} 失败，请稍后重试"));
+            }
+        }
+    }
+
+    if uploaded.is_empty() && errors.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "未选择可上传的文件" })),
+        ));
+    }
+
+    if uploaded.is_empty() && !errors.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "所有文件上传失败",
+                "errors": errors,
+            })),
+        ));
+    }
+
+    Ok(Json(serde_json::json!({
+        "uploaded": uploaded,
+        "errors": if errors.is_empty() { None } else { Some(errors) },
+    })))
 }
 
 pub(crate) async fn create_plugin_ban(

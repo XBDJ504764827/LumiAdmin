@@ -49,9 +49,23 @@ impl R2Storage {
         content_type: &str,
         data: Vec<u8>,
     ) -> anyhow::Result<String> {
+        self.upload_with_prefix("appeals", appeal_id, file_name, content_type, data)
+            .await
+    }
+
+    /// 上传文件到 R2 指定业务目录，返回存储 key
+    pub async fn upload_with_prefix(
+        &self,
+        prefix: &str,
+        owner_id: Uuid,
+        file_name: &str,
+        content_type: &str,
+        data: Vec<u8>,
+    ) -> anyhow::Result<String> {
         let key = format!(
-            "appeals/{}/{}-{}",
-            appeal_id,
+            "{}/{}/{}-{}",
+            prefix.trim_matches('/'),
+            owner_id,
             Uuid::new_v4(),
             sanitize_filename(file_name)
         );

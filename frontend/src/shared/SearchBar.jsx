@@ -1,8 +1,16 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 export function SearchBar({ value, onChange, placeholder = '搜索...', statusOptions, statusValue, onStatusChange, debounceMs = 400 }) {
   const [local, setLocal] = useState(value ?? '');
   const timerRef = useRef(null);
+
+  useEffect(() => {
+    setLocal(value ?? '');
+  }, [value]);
+
+  useEffect(() => () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+  }, []);
 
   const handleChange = useCallback((e) => {
     const v = e.target.value;

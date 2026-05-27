@@ -247,9 +247,16 @@ pub fn router(
         .route("/api/bans", get(ban::bans).post(ban::create_ban))
         .route(
             "/api/bans/:id",
-            put(ban::update_ban).delete(ban::delete_ban),
+            get(ban::get_ban)
+                .put(ban::update_ban)
+                .delete(ban::delete_ban),
         )
         .route("/api/bans/:id/unban", post(ban::unban_ban))
+        .route(
+            "/api/bans/:id/files",
+            get(ban::list_ban_files).post(ban::upload_ban_files),
+        )
+        .route("/api/bans/files/:file_id/url", get(ban::get_ban_file_url))
         // -- ban appeals --
         .route("/api/ban-appeals", get(ban_appeal::list_appeals))
         .route(
@@ -325,6 +332,10 @@ pub fn router(
         .route(
             "/api/public/ban-appeals/",
             get(public::public_ban_appeals_info).post(public::submit_ban_appeal),
+        )
+        .route(
+            "/api/public/ban-appeals/submit",
+            post(public::submit_ban_appeal),
         )
         .route(
             "/api/public/ban-appeals/:id/files",

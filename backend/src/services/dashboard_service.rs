@@ -1,7 +1,16 @@
 use crate::{auth::session::role_label, db::Database};
 use serde::Serialize;
+#[cfg(not(test))]
+use std::sync::{Mutex, OnceLock};
+#[cfg(not(test))]
+use std::time::{Duration, Instant};
 
-#[derive(Serialize)]
+#[cfg(not(test))]
+const DASHBOARD_CACHE_TTL: Duration = Duration::from_secs(10);
+#[cfg(not(test))]
+static DASHBOARD_CACHE: OnceLock<Mutex<Option<(Instant, DashboardMetrics)>>> = OnceLock::new();
+
+#[derive(Clone, Serialize)]
 pub struct DashboardAdminPreview {
     pub display_name: String,
     pub role: String,
@@ -9,7 +18,7 @@ pub struct DashboardAdminPreview {
     pub status: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct WhitelistStats {
     pub pending: i64,
     pub approved: i64,
@@ -17,7 +26,7 @@ pub struct WhitelistStats {
     pub revoked: i64,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct ServerPerformanceStats {
     pub avg_fps: f32,
     pub avg_cpu_usage: f32,
@@ -26,7 +35,7 @@ pub struct ServerPerformanceStats {
     pub total_max_players: i64,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct DashboardMetrics {
     pub total_servers: i64,
     pub online_servers: i64,
@@ -40,6 +49,34 @@ pub struct DashboardMetrics {
 }
 
 pub async fn get_metrics(db: &Database) -> anyhow::Result<DashboardMetrics> {
+    #[cfg(not(test))]
+    if let Some(metrics) = cached_metrics() {
+        return Ok(metrics);
+    }
+
+    let metrics = get_metrics_uncached(db).await?;
+    #[cfg(not(test))]
+    {
+        let cache = DASHBOARD_CACHE.get_or_init(|| Mutex::new(None));
+        if let Ok(mut guard) = cache.lock() {
+            *guard = Some((Instant::now(), metrics.clone()));
+        }
+    }
+    Ok(metrics)
+}
+
+#[cfg(not(test))]
+fn cached_metrics() -> Option<DashboardMetrics> {
+    let cache = DASHBOARD_CACHE.get_or_init(|| Mutex::new(None));
+    let guard = cache.lock().ok()?;
+    let (created_at, metrics) = guard.as_ref()?;
+    if created_at.elapsed() <= DASHBOARD_CACHE_TTL {
+        return Some(metrics.clone());
+    }
+    None
+}
+
+async fn get_metrics_uncached(db: &Database) -> anyhow::Result<DashboardMetrics> {
     // 查询1: 服务器 + 社区组 + 在线玩家统计（合并为 1 个查询）
     let stats: (i64, i64, i64, i64) = sqlx::query_as(
         r#"SELECT

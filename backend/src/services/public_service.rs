@@ -2,6 +2,15 @@ use crate::db::Database;
 use crate::models::{PublicBanItem, PublicWhitelistItem};
 use crate::routes::ListQuery;
 use serde::Serialize;
+#[cfg(not(test))]
+use std::sync::{Mutex, OnceLock};
+#[cfg(not(test))]
+use std::time::{Duration, Instant};
+
+#[cfg(not(test))]
+const PUBLIC_BAN_STATS_CACHE_TTL: Duration = Duration::from_secs(15);
+#[cfg(not(test))]
+static PUBLIC_BAN_STATS_CACHE: OnceLock<Mutex<Option<(Instant, BanStats)>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BanStats {
@@ -11,6 +20,34 @@ pub struct BanStats {
 }
 
 pub async fn ban_stats(db: &Database) -> anyhow::Result<BanStats> {
+    #[cfg(not(test))]
+    if let Some(stats) = cached_ban_stats() {
+        return Ok(stats);
+    }
+
+    let stats = ban_stats_uncached(db).await?;
+    #[cfg(not(test))]
+    {
+        let cache = PUBLIC_BAN_STATS_CACHE.get_or_init(|| Mutex::new(None));
+        if let Ok(mut guard) = cache.lock() {
+            *guard = Some((Instant::now(), stats.clone()));
+        }
+    }
+    Ok(stats)
+}
+
+#[cfg(not(test))]
+fn cached_ban_stats() -> Option<BanStats> {
+    let cache = PUBLIC_BAN_STATS_CACHE.get_or_init(|| Mutex::new(None));
+    let guard = cache.lock().ok()?;
+    let (created_at, stats) = guard.as_ref()?;
+    if created_at.elapsed() <= PUBLIC_BAN_STATS_CACHE_TTL {
+        return Some(stats.clone());
+    }
+    None
+}
+
+async fn ban_stats_uncached(db: &Database) -> anyhow::Result<BanStats> {
     let row: (i64, i64, i64) = sqlx::query_as(
         r#"SELECT
             COUNT(*) FILTER (WHERE status = 'active' AND duration_minutes > 0 AND (expires_at IS NULL OR expires_at > now())),

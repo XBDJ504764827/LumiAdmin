@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { Modal } from '../../shared/Modal.jsx';
@@ -25,6 +25,68 @@ function formatDateTime(isoString) {
   }
 }
 
+const MAX_FILE_SIZE = 100 * 1024 * 1024;
+const ALLOWED_VIDEO = '.mp4,.avi,.mov,.webm,.mkv';
+const ALLOWED_IMAGE = '.jpg,.jpeg,.png,.gif,.webp,.bmp';
+const ALLOWED_AUDIO = '.mp3,.wav,.ogg,.m4a,.flac';
+const API_BASE = import.meta.env.VITE_API_BASE ?? '';
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function getFileCategory(name) {
+  const lower = name.toLowerCase();
+  if (lower.match(/\.(mp4|avi|mov|webm|mkv)$/)) return 'video';
+  if (lower.match(/\.(jpg|jpeg|png|gif|webp|bmp)$/)) return 'image';
+  if (lower.match(/\.(mp3|wav|ogg|m4a|flac)$/)) return 'audio';
+  return 'other';
+}
+
+function fileCategoryLabel(category) {
+  if (category === 'video') return '录像';
+  if (category === 'image') return '截图';
+  if (category === 'audio') return '录音';
+  return '文件';
+}
+
+function uploadBanFilesWithProgress(banId, formData, token, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API_BASE}/api/bans/${banId}/files`);
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+
+    xhr.upload.addEventListener('progress', (event) => {
+      if (event.lengthComputable && onProgress) {
+        onProgress(Math.round((event.loaded / event.total) * 100));
+      }
+    });
+
+    xhr.addEventListener('load', () => {
+      const payload = (() => {
+        try { return JSON.parse(xhr.responseText); } catch { return {}; }
+      })();
+
+      if (xhr.status >= 200 && xhr.status < 300) {
+        if (onProgress) onProgress(100);
+        resolve(payload);
+        return;
+      }
+
+      const message = payload.error || payload.message || `辅助文件上传失败 (${xhr.status})`;
+      reject(new Error(Array.isArray(payload.errors) ? `${message}：${payload.errors.join('；')}` : message));
+    });
+
+    xhr.addEventListener('error', () => reject(new Error('网络错误，上传中断')));
+    xhr.addEventListener('abort', () => reject(new Error('上传已取消')));
+    xhr.addEventListener('timeout', () => reject(new Error('上传超时，请检查网络后重试')));
+    xhr.timeout = 600_000;
+    xhr.send(formData);
+  });
+}
+
 export function BanPage() {
   const { session } = useAuth();
   const { confirm, dialog } = useConfirmDialog();
@@ -43,6 +105,18 @@ export function BanPage() {
   const [form, setForm] = useState(emptyBanForm);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [savePhase, setSavePhase] = useState('idle');
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [selectedFiles, setSelectedFiles] = useState([]);
+  const [detailItem, setDetailItem] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailFiles, setDetailFiles] = useState([]);
+  const [detailFilesLoading, setDetailFilesLoading] = useState(false);
+  const [detailFilesError, setDetailFilesError] = useState('');
+  const fileIdCounter = useRef(0);
+  const videoRef = useRef(null);
+  const imageRef = useRef(null);
+  const audioRef = useRef(null);
 
   const canManageAll = session?.role === 'developer' || session?.role === 'admin';
   const canCreate = canManageAll;
@@ -71,20 +145,38 @@ export function BanPage() {
     loadItems();
   }
 
+  function resetBanModal() {
+    setOpen(false);
+    setModalMode('create');
+    setEditingBanId(null);
+    setForm(emptyBanForm);
+    setError('');
+    setSelectedFiles([]);
+    setUploadProgress(0);
+    setSavePhase('idle');
+  }
+
   function openCreateModal() {
     setModalMode('create');
     setEditingBanId(null);
     setForm(emptyBanForm);
     setError('');
+    setSelectedFiles([]);
     setOpen(true);
   }
 
-  function openEditModal(item) {
+  async function openEditModal(item) {
     setModalMode('edit');
     setEditingBanId(item.id);
-    setForm(buildBanFormFromRecord(item));
     setError('');
-    setOpen(true);
+    setSelectedFiles([]);
+    try {
+      const result = await api.getBan(token, item.id);
+      setForm(buildBanFormFromRecord(result.item ?? item));
+      setOpen(true);
+    } catch (requestError) {
+      toast({ title: '加载失败', message: requestError.message || '加载封禁详情失败。', tone: 'danger' });
+    }
   }
 
   function openRebanModal(item) {
@@ -92,7 +184,67 @@ export function BanPage() {
     setEditingBanId(null);
     setForm(buildBanFormFromRecord(item));
     setError('');
+    setSelectedFiles([]);
     setOpen(true);
+  }
+
+  function handleFileSelect(files, inputRef) {
+    if (!files || files.length === 0) return;
+
+    const newFiles = [];
+    let firstError = '';
+    for (const file of files) {
+      if (file.size > MAX_FILE_SIZE) {
+        firstError = firstError || `文件 "${file.name}" 超过 100MB 大小限制`;
+        continue;
+      }
+      if (file.size === 0) continue;
+      const category = getFileCategory(file.name);
+      if (category === 'other') {
+        firstError = firstError || `不支持的文件类型: ${file.name}`;
+        continue;
+      }
+      newFiles.push({ id: ++fileIdCounter.current, file, category });
+    }
+
+    if (firstError) setError(firstError);
+    else setError('');
+    setSelectedFiles((prev) => [...prev, ...newFiles]);
+    if (inputRef.current) inputRef.current.value = '';
+  }
+
+  function removeFile(id) {
+    setSelectedFiles((prev) => prev.filter((file) => file.id !== id));
+  }
+
+  async function uploadSelectedFiles(banId) {
+    if (selectedFiles.length === 0) return null;
+    const formData = new FormData();
+    selectedFiles.forEach(({ file }) => {
+      formData.append('files', file, file.name);
+    });
+    return uploadBanFilesWithProgress(banId, formData, token, setUploadProgress);
+  }
+
+  async function openDetailModal(item) {
+    setDetailItem(item);
+    setDetailLoading(true);
+    setDetailFiles([]);
+    setDetailFilesError('');
+    setDetailFilesLoading(true);
+    try {
+      const [detailResult, fileResult] = await Promise.all([
+        api.getBan(token, item.id),
+        api.listBanFiles(token, item.id),
+      ]);
+      setDetailItem(detailResult.item ?? item);
+      setDetailFiles(fileResult.files ?? []);
+    } catch (requestError) {
+      setDetailFilesError(requestError.message || '加载附件失败');
+    } finally {
+      setDetailLoading(false);
+      setDetailFilesLoading(false);
+    }
   }
 
   function canUnban(item) {
@@ -134,23 +286,46 @@ export function BanPage() {
 
     try {
       setSubmitting(true);
+      setSavePhase('saving');
+      setUploadProgress(0);
       setError('');
       const payload = buildCreateBanPayload(form);
+      let savedItem = null;
+      let uploadWarning = '';
+      let uploadedFiles = false;
       if (modalMode === 'edit' && editingBanId) {
-        await api.updateBan(token, editingBanId, payload);
+        const result = await api.updateBan(token, editingBanId, payload);
+        savedItem = result.item;
       } else {
-        await api.createBan(token, payload);
+        const result = await api.createBan(token, payload);
+        savedItem = result.item;
+        if (savedItem?.id && selectedFiles.length > 0) {
+          try {
+            setSavePhase('uploading');
+            await uploadSelectedFiles(savedItem.id);
+            uploadedFiles = true;
+          } catch (uploadError) {
+            uploadWarning = uploadError.message || '辅助文件上传失败';
+          }
+        }
       }
-      setOpen(false);
-      setModalMode('create');
-      setEditingBanId(null);
-      setForm(emptyBanForm);
+      resetBanModal();
       refresh();
-      toast({ title: modalMode === 'edit' ? '保存成功' : '添加成功', message: modalMode === 'edit' ? '封禁记录已更新。' : '新封禁记录已添加。' });
+      toast({
+        title: modalMode === 'edit' ? '保存成功' : '添加成功',
+        message: modalMode === 'edit'
+          ? '封禁记录已更新。'
+          : uploadedFiles
+            ? '新封禁记录已添加，辅助文件已上传。'
+            : uploadWarning
+              ? `新封禁记录已添加，但辅助文件上传失败：${uploadWarning}`
+              : '新封禁记录已添加。',
+      });
     } catch (requestError) {
       setError(requestError.message);
     } finally {
       setSubmitting(false);
+      setSavePhase('idle');
     }
   }
 
@@ -182,28 +357,29 @@ export function BanPage() {
           <div className="table-responsive">
             <table className="data-table">
               <thead>
-                <tr><th>玩家名称</th><th>SteamID64</th><th>封禁属性</th><th>IP 地址</th><th>封禁理由</th><th>时长</th><th>到期时间</th><th>来源</th><th>封禁状态</th><th>封禁时间</th><th>解封时间</th><th>操作人</th><th style={{ textAlign: 'right' }}>操作</th></tr>
+                <tr><th>玩家</th><th>SteamID64</th><th>封禁属性</th><th>封禁理由</th><th>时长 / 到期</th><th>状态</th><th>封禁时间</th><th style={{ textAlign: 'right' }}>操作</th></tr>
               </thead>
               <tbody>
-                {loading ? <tr><td colSpan={13} style={{ textAlign: 'center', color: 'var(--text2)' }}>正在加载封禁数据...</td></tr> : null}
-                {!loading && loadError ? <tr><td colSpan={13} style={{ textAlign: 'center', color: 'var(--danger)' }}>{loadError}</td></tr> : null}
-                {!loading && !loadError && items.length === 0 ? <tr><td colSpan={13} style={{ textAlign: 'center', color: 'var(--text2)' }}>暂无封禁数据</td></tr> : null}
+                {loading ? <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--text2)' }}>正在加载封禁数据...</td></tr> : null}
+                {!loading && loadError ? <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--danger)' }}>{loadError}</td></tr> : null}
                 {!loading && items.map((x) => (
                   <tr key={x.id}>
-                    <td style={{ fontWeight: 600 }}>{x.player || '待自动获取'}</td>
+                    <td>
+                      <div style={{ fontWeight: 600 }}>{x.player || '待自动获取'}</div>
+                      <div style={{ color: 'var(--text3)', fontSize: 12 }}>{x.operator_name}</div>
+                    </td>
                     <td className="steam-id">{x.steam_id}</td>
                     <td>{x.ban_type === 'ip' ? 'IP 封禁' : 'Steam 账号封禁'}</td>
-                    <td className="steam-id">{x.ip_address || '待自动获取'}</td>
-                    <td style={{ color: 'var(--text2)' }}>{x.reason}</td>
-                    <td>{formatBanDuration(x.duration_minutes)}</td>
-                    <td>{formatExpiresAt(x.expires_at)}</td>
-                    <td>{formatBanSource(x.source, x.operator_name)}</td>
+                    <td style={{ color: 'var(--text2)', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={x.reason}>{x.reason}</td>
+                    <td>
+                      <div>{formatBanDuration(x.duration_minutes)}</div>
+                      <div style={{ color: 'var(--text3)', fontSize: 12 }}>{formatExpiresAt(x.expires_at)}</div>
+                    </td>
                     <td><span className={`status-pill ${x.status === 'active' ? 'pill-danger' : 'pill-offline'}`}>{x.status === 'active' ? '生效中' : '已失效'}</span></td>
                     <td style={{ color: 'var(--text3)' }}>{formatDateTime(x.created_at)}</td>
-                    <td style={{ color: 'var(--text3)' }}>{x.removed_at ? formatDateTime(x.removed_at) : '-'}</td>
-                    <td>{x.operator_name}</td>
                     <td style={{ textAlign: 'right' }}>
                       <div className="action-btn-group">
+                        <button className="action-btn" onClick={() => openDetailModal(x)}>详细</button>
                         {canManageAll ? <button className="action-btn action-btn-accent" onClick={() => openEditModal(x)}>编辑</button> : null}
                         {canUnban(x) && banRecordAction(x) === 'unban' ? <button className="action-btn action-btn-success" onClick={() => handleUnban(x)}>解封</button> : null}
                         {canCreate && banRecordAction(x) === 'reban' ? <button className="action-btn action-btn-danger" onClick={() => openRebanModal(x)}>重新封禁</button> : null}
@@ -212,7 +388,7 @@ export function BanPage() {
                     </td>
                   </tr>
                 ))}
-                {!loading && items.length === 0 ? <tr><td colSpan={13} style={{ textAlign: 'center', color: 'var(--text2)' }}>暂无封禁记录</td></tr> : null}
+                {!loading && !loadError && items.length === 0 ? <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--text2)' }}>暂无封禁记录</td></tr> : null}
               </tbody>
             </table>
           </div>
@@ -224,23 +400,140 @@ export function BanPage() {
       <Modal
         open={open}
         title={banModalTitle(modalMode)}
-        onClose={() => {
-          setOpen(false);
-          setModalMode('create');
-          setEditingBanId(null);
-          setForm(emptyBanForm);
-          setError('');
-        }}
-        footer={<><button className="btn btn-outline" onClick={() => { setOpen(false); setModalMode('create'); setEditingBanId(null); setForm(emptyBanForm); setError(''); }}>取消</button><button className="btn btn-danger" onClick={handleSaveBan} disabled={submitting}>{banModalSubmitText(modalMode, submitting)}</button></>}
+        onClose={resetBanModal}
+        wide
+        footer={<><button className="btn btn-outline" onClick={resetBanModal} disabled={submitting}>取消</button><button className="btn btn-danger" onClick={handleSaveBan} disabled={submitting}>{savePhase === 'uploading' ? `正在上传文件 (${uploadProgress}%)...` : banModalSubmitText(modalMode, submitting)}</button></>}
       >
         <div className="form-group"><label>玩家名称</label><input type="text" className="form-control" value={form.player} onChange={(event) => setForm((prev) => ({ ...prev, player: event.target.value }))} placeholder="留空后等待插件自动获取" /></div>
         <div className="form-group"><label>SteamID64 <span style={{ color: 'var(--accent)' }}>*</span></label><input type="text" className="form-control" value={form.steam_id} onChange={(event) => setForm((prev) => ({ ...prev, steam_id: event.target.value }))} placeholder="76561198000000000" /></div>
         <div className="form-group"><label>封禁属性 <span style={{ color: 'var(--accent)' }}>*</span></label><select className="form-control" value={form.ban_type} onChange={(event) => setForm((prev) => ({ ...prev, ban_type: event.target.value }))}><option value="">请选择封禁属性</option>{BAN_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
         <div className="form-group"><label>IP 地址</label><input type="text" className="form-control" value={form.ip_address} onChange={(event) => setForm((prev) => ({ ...prev, ip_address: event.target.value }))} placeholder="留空后等待插件自动获取" /></div>
         <div className="form-group"><label>封禁理由 <span style={{ color: 'var(--accent)' }}>*</span></label><textarea className="form-control" value={form.reason} onChange={(event) => setForm((prev) => ({ ...prev, reason: event.target.value }))} placeholder="请输入封禁理由" rows={3} /></div>
+        {modalMode !== 'edit' ? (
+          <div className="form-section-card" style={{ marginBottom: 16 }}>
+            <div className="form-section-header"><span>辅助文件（选填）</span></div>
+            <div className="form-hint" style={{ marginBottom: 12 }}>可上传录像、截图或录音作为封禁依据，单个文件最大 100MB。</div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+              <button type="button" className="btn btn-outline btn-sm" onClick={() => videoRef.current?.click()} disabled={submitting}>选择录像</button>
+              <input ref={videoRef} type="file" accept={ALLOWED_VIDEO} multiple style={{ display: 'none' }} onChange={(event) => handleFileSelect(event.target.files, videoRef)} />
+              <button type="button" className="btn btn-outline btn-sm" onClick={() => imageRef.current?.click()} disabled={submitting}>选择截图</button>
+              <input ref={imageRef} type="file" accept={ALLOWED_IMAGE} multiple style={{ display: 'none' }} onChange={(event) => handleFileSelect(event.target.files, imageRef)} />
+              <button type="button" className="btn btn-outline btn-sm" onClick={() => audioRef.current?.click()} disabled={submitting}>选择录音</button>
+              <input ref={audioRef} type="file" accept={ALLOWED_AUDIO} multiple style={{ display: 'none' }} onChange={(event) => handleFileSelect(event.target.files, audioRef)} />
+            </div>
+            {selectedFiles.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {savePhase === 'uploading' ? (
+                  <div className="ban-upload-progress">
+                    <div className="ban-upload-progress-head">
+                      <span>正在上传辅助文件</span>
+                      <strong>{uploadProgress}%</strong>
+                    </div>
+                    <div className="ban-upload-progress-track">
+                      <div className="ban-upload-progress-bar" style={{ width: `${uploadProgress}%` }} />
+                    </div>
+                  </div>
+                ) : null}
+                {selectedFiles.map((item) => (
+                  <div key={item.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '8px 10px', background: 'var(--surface2)', borderRadius: 8 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.file.name}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text3)' }}>{fileCategoryLabel(item.category)} · {formatFileSize(item.file.size)}</div>
+                    </div>
+                    <button type="button" className="action-btn" onClick={() => removeFile(item.id)} disabled={submitting}>移除</button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         {form.ban_type === 'steam' ? <div style={{ color: 'var(--text2)', fontSize: 13 }}>账号封禁：该 SteamID64 无法进入游戏服务器。</div> : null}
         {form.ban_type === 'ip' ? <div style={{ color: 'var(--text2)', fontSize: 13 }}>IP 封禁：该玩家下次进服后将自动填写 IP 并且阻止该 IP 的玩家进入服务器。</div> : null}
         {error ? <div style={{ color: 'var(--accent)' }}>{error}</div> : null}
+      </Modal>
+
+      <Modal
+        open={Boolean(detailItem)}
+        title="封禁详细"
+        onClose={() => setDetailItem(null)}
+        extraWide
+        footer={<button className="btn btn-outline" onClick={() => setDetailItem(null)}>关闭</button>}
+      >
+        {detailItem ? (
+          <div className="ban-detail">
+            <div className="ban-detail-summary">
+              <div className="ban-detail-avatar">封</div>
+              <div className="ban-detail-heading">
+                <div className="ban-detail-player">{detailItem.player || '待自动获取玩家名称'}</div>
+                <div className="ban-detail-meta">
+                  <span className="steam-id">{detailItem.steam_id}</span>
+                  <span>{detailItem.ban_type === 'ip' ? 'IP 封禁' : 'Steam 账号封禁'}</span>
+                  <span>{formatBanDuration(detailItem.duration_minutes)}</span>
+                </div>
+              </div>
+              <div className="ban-detail-state">
+                <span className={`status-pill ${detailItem.status === 'active' ? 'pill-danger' : 'pill-offline'}`}>{detailItem.status === 'active' ? '生效中' : '已失效'}</span>
+                <span>{detailLoading ? '正在加载完整信息...' : formatDateTime(detailItem.created_at)}</span>
+              </div>
+            </div>
+
+            <section className="ban-detail-panel">
+              <div className="ban-detail-panel-title">基础信息</div>
+              <dl className="ban-detail-grid">
+                <div><dt>IP 地址</dt><dd className="steam-id">{detailItem.ip_address || '待自动获取'}</dd></div>
+                <div><dt>到期时间</dt><dd>{formatExpiresAt(detailItem.expires_at)}</dd></div>
+                <div><dt>来源</dt><dd>{formatBanSource(detailItem.source, detailItem.operator_name)}</dd></div>
+                <div><dt>操作人</dt><dd>{detailItem.operator_name}</dd></div>
+                <div><dt>解封时间</dt><dd>{detailItem.removed_at ? formatDateTime(detailItem.removed_at) : '-'}</dd></div>
+                <div><dt>解封人</dt><dd>{detailItem.removed_by || '-'}</dd></div>
+              </dl>
+            </section>
+
+            <section className="ban-detail-panel">
+              <div className="ban-detail-panel-title">封禁理由</div>
+              <div className="ban-detail-text">{detailItem.reason}</div>
+              {detailItem.removed_reason ? (
+                <>
+                  <div className="ban-detail-panel-title ban-detail-subtitle">解封原因</div>
+                  <div className="ban-detail-text">{detailItem.removed_reason}</div>
+                </>
+              ) : null}
+            </section>
+
+            <section className="ban-detail-panel">
+              <div className="ban-detail-panel-head">
+                <div className="ban-detail-panel-title">辅助文件</div>
+                <span>{detailFiles.length} 个文件</span>
+              </div>
+              {detailFilesLoading ? <div className="ban-detail-empty">正在加载附件...</div> : null}
+              {!detailFilesLoading && detailFilesError ? <div className="ban-detail-error">{detailFilesError}</div> : null}
+              {!detailFilesLoading && !detailFilesError && detailFiles.length === 0 ? <div className="ban-detail-empty">暂无辅助文件</div> : null}
+              {!detailFilesLoading && detailFiles.length > 0 ? (
+                <div className="ban-file-list">
+                  {detailFiles.map((file) => (
+                    <div key={file.id} className="ban-file-item">
+                      <div className={`ban-file-type ban-file-type-${file.category}`}>{fileCategoryLabel(file.category).slice(0, 1)}</div>
+                      <div className="ban-file-body">
+                        <div className="ban-file-name">{file.file_name}</div>
+                        <div className="ban-file-meta">
+                          <span>{fileCategoryLabel(file.category)}</span>
+                          <span>{formatFileSize(file.file_size)}</span>
+                          <span>{file.uploaded_by || '-'}</span>
+                          <span>{formatDateTime(file.uploaded_at)}</span>
+                        </div>
+                      </div>
+                      {file.url ? (
+                        <a className="action-btn action-btn-accent" href={file.url} target="_blank" rel="noreferrer">打开</a>
+                      ) : (
+                        <span className="ban-file-unavailable">无下载链接</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </section>
+          </div>
+        ) : null}
       </Modal>
       {dialog}
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />

@@ -44,6 +44,22 @@ function getFileCategory(name) {
   return 'other';
 }
 
+function normalizeAppealCreateResponse(result) {
+  const payload = result?.data ?? result ?? {};
+  return {
+    appealId: payload.item?.id ?? payload.appeal_id ?? payload.id,
+    uploadToken: payload.item?.upload_token ?? payload.upload_token,
+  };
+}
+
+function responseSummary(result) {
+  if (!result || typeof result !== 'object') return typeof result;
+  const keys = Object.keys(result);
+  const itemKeys = result.item && typeof result.item === 'object' ? Object.keys(result.item) : [];
+  const dataKeys = result.data && typeof result.data === 'object' ? Object.keys(result.data) : [];
+  return `keys=${keys.join(',') || 'none'} itemKeys=${itemKeys.join(',') || 'none'} dataKeys=${dataKeys.join(',') || 'none'}`;
+}
+
 // 用 XMLHttpRequest 上传以便获取进度
 function uploadWithProgress(url, formData, uploadToken, onProgress) {
   return new Promise((resolve, reject) => {
@@ -191,10 +207,10 @@ export function PublicBanAppealPage() {
         player_name: nickname.trim(),
         appeal_reason: reason.trim(),
       });
-      appealId = result.item?.id;
-      uploadToken = result.item?.upload_token;
+      ({ appealId, uploadToken } = normalizeAppealCreateResponse(result));
       if (!appealId) {
-        throw new Error('服务器未返回申诉编号，请刷新页面后重试。');
+        console.error('Invalid ban appeal create response:', result);
+        throw new Error(`服务器未返回申诉编号，请刷新页面后重试。响应摘要：${responseSummary(result)}`);
       }
     } catch (e) {
       setError(e.message || '提交失败，请稍后重试。');

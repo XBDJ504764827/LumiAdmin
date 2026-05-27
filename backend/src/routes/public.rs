@@ -371,7 +371,12 @@ pub(crate) async fn submit_ban_appeal(
 
     Ok((
         StatusCode::CREATED,
-        Json(serde_json::json!({ "item": item })),
+        Json(serde_json::json!({
+            "id": item.id,
+            "appeal_id": item.id,
+            "upload_token": item.upload_token,
+            "item": item,
+        })),
     ))
 }
 

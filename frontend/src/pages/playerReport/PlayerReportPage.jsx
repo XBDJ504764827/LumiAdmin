@@ -308,7 +308,6 @@ export function PlayerReportPage() {
         open={detailOpen}
         title="举报详情"
         onClose={closeDetail}
-        extraWide
         footer={
           <>
             <button className="btn btn-outline" onClick={closeDetail}>关闭</button>
@@ -322,85 +321,95 @@ export function PlayerReportPage() {
         }
       >
         {detailItem ? (
-          <div className="ban-detail">
-            <div className="ban-detail-summary">
-              <div className="ban-detail-avatar">举</div>
-              <div className="ban-detail-heading">
-                <div className="ban-detail-player">{detailItem.target_player_name || '未填写玩家名称'}</div>
-                <div className="ban-detail-meta">
-                  <span className="steam-id">{detailItem.target_steam_id}</span>
-                  <span>{detailItem.reporter_contact || '无联系方式'}</span>
-                  <span>{formatDateTime(detailItem.created_at)}</span>
-                </div>
-              </div>
-              <div className="ban-detail-state">
-                <span className={`status-pill ${STATUS_MAP[detailItem.status]?.pill || ''}`}>
-                  {STATUS_MAP[detailItem.status]?.label || detailItem.status}
-                </span>
-                <span>{detailItem.reviewed_at ? formatDateTime(detailItem.reviewed_at) : '尚未处理'}</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div className="form-group">
+              <label style={{ marginBottom: 4 }}>玩家信息</label>
+              <div style={{ color: 'var(--text2)', fontSize: 13 }}>
+                <div>名称：{detailItem.target_player_name || '-'}</div>
+                <div>SteamID64：{detailItem.target_steam_id}</div>
+                <div>联系方式：{detailItem.reporter_contact || '-'}</div>
               </div>
             </div>
 
-            <section className="ban-detail-panel">
-              <div className="ban-detail-panel-title">基础信息</div>
-              <dl className="ban-detail-grid">
-                <div><dt>玩家名称</dt><dd>{detailItem.target_player_name || '-'}</dd></div>
-                <div><dt>SteamID64</dt><dd className="steam-id">{detailItem.target_steam_id}</dd></div>
-                <div><dt>联系方式</dt><dd>{detailItem.reporter_contact || '-'}</dd></div>
-                <div><dt>提交时间</dt><dd>{formatDateTime(detailItem.created_at)}</dd></div>
-                <div><dt>审核人</dt><dd>{detailItem.reviewed_by || '-'}</dd></div>
-                <div><dt>审核时间</dt><dd>{detailItem.reviewed_at ? formatDateTime(detailItem.reviewed_at) : '-'}</dd></div>
-              </dl>
-            </section>
-
-            <section className="ban-detail-panel">
-              <div className="ban-detail-panel-title">举报理由</div>
-              <div className="ban-detail-text">{detailItem.report_reason}</div>
-              {detailItem.review_note ? (
-                <>
-                  <div className="ban-detail-panel-title ban-detail-subtitle">审核备注</div>
-                  <div className="ban-detail-text">{detailItem.review_note}</div>
-                </>
-              ) : null}
-            </section>
-
-            <section className="ban-detail-panel">
-              <div className="ban-detail-panel-head">
-                <div className="ban-detail-panel-title">证据文件</div>
-                <span>{reportFiles.length} 个文件</span>
+            <div className="form-group">
+              <label style={{ marginBottom: 4 }}>举报信息</label>
+              <div style={{ color: 'var(--text2)', fontSize: 13 }}>
+                <div>提交时间：{formatDateTime(detailItem.created_at)}</div>
+                <div>证据文件：{reportFiles.length} 个</div>
               </div>
+            </div>
+
+            <div className="form-group">
+              <label style={{ marginBottom: 4 }}>举报理由</label>
+              <div style={{ color: 'var(--text2)', fontSize: 13, whiteSpace: 'pre-wrap', background: 'var(--surface2)', padding: 8, borderRadius: 6 }}>
+                {detailItem.report_reason}
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label style={{ marginBottom: 4 }}>处理状态</label>
+              <div>
+                <span className={`status-pill ${STATUS_MAP[detailItem.status]?.pill || ''}`}>
+                  {STATUS_MAP[detailItem.status]?.label || detailItem.status}
+                </span>
+              </div>
+              {detailItem.reviewed_by ? (
+                <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
+                  由 {detailItem.reviewed_by} 于 {formatDateTime(detailItem.reviewed_at)} 处理
+                </div>
+              ) : null}
+              {detailItem.review_note ? (
+                <div style={{ color: 'var(--text2)', fontSize: 13, marginTop: 4, whiteSpace: 'pre-wrap', background: 'var(--surface2)', padding: 8, borderRadius: 6 }}>
+                  审核备注：{detailItem.review_note}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="form-group">
+              <label style={{ marginBottom: 4 }}>证据文件</label>
               {filesLoading ? (
-                <div className="ban-detail-empty">正在加载证据文件...</div>
+                <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>正在加载证据文件...</div>
               ) : reportFiles.length > 0 ? (
-                <div className="ban-file-list">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {reportFiles.map((file) => (
-                    <div key={file.id} className="ban-file-item">
-                      <div className={`ban-file-type ban-file-type-${file.category}`}>{fileTypeLabel(file.category).slice(0, 1)}</div>
-                      <div className="ban-file-body">
-                        <div className="ban-file-name">{file.file_name}</div>
-                        <div className="ban-file-meta">
-                          <span>{fileTypeLabel(file.category)}</span>
-                          <span>{formatFileSize(file.file_size)}</span>
-                          <span>{file.content_type || '-'}</span>
+                    <div
+                      key={file.id}
+                      style={{
+                        padding: '10px 14px',
+                        background: 'var(--surface2)',
+                        borderRadius: 10,
+                        fontSize: 13,
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
+                          <span className="status-pill">{fileTypeLabel(file.category)}</span>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {file.file_name}
+                            </div>
+                            <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                              {formatFileSize(file.file_size)}
+                              {file.content_type ? ` · ${file.content_type}` : ''}
+                            </div>
+                          </div>
                         </div>
-                        {renderFilePreview(file)}
-                      </div>
-                      <div className="ban-file-actions">
                         {file.url ? (
-                          <a href={file.url} target="_blank" rel="noopener noreferrer" className="action-btn">
+                          <a href={file.url} target="_blank" rel="noopener noreferrer" className="action-btn" style={{ flexShrink: 0, textDecoration: 'none' }}>
                             {fileActionLabel(file.category)}
                           </a>
                         ) : (
-                          <span>不可用</span>
+                          <span style={{ fontSize: 11, color: 'var(--text3)', flexShrink: 0 }}>不可用</span>
                         )}
                       </div>
+                      {renderFilePreview(file)}
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="ban-detail-empty">该举报未上传证据文件。</div>
+                <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>该举报未上传证据文件。</div>
               )}
-            </section>
+            </div>
           </div>
         ) : null}
       </Modal>

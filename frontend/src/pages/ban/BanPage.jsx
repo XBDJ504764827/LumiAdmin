@@ -507,82 +507,97 @@ export function BanPage() {
         open={Boolean(detailItem)}
         title="封禁详细"
         onClose={() => setDetailItem(null)}
-        extraWide
         footer={<button className="btn btn-outline" onClick={() => setDetailItem(null)}>关闭</button>}
       >
         {detailItem ? (
-          <div className="ban-detail">
-            <div className="ban-detail-summary">
-              <div className="ban-detail-avatar">封</div>
-              <div className="ban-detail-heading">
-                <div className="ban-detail-player">{detailItem.player || '待自动获取玩家名称'}</div>
-                <div className="ban-detail-meta">
-                  <span className="steam-id">{detailItem.steam_id}</span>
-                  <span>{detailItem.ban_type === 'ip' ? 'IP 封禁' : 'Steam 账号封禁'}</span>
-                  <span>{formatBanDuration(detailItem.duration_minutes)}</span>
-                </div>
-              </div>
-              <div className="ban-detail-state">
-                <span className={`status-pill ${detailItem.status === 'active' ? 'pill-danger' : 'pill-offline'}`}>{detailItem.status === 'active' ? '生效中' : '已失效'}</span>
-                <span>{detailLoading ? '正在加载完整信息...' : formatDateTime(detailItem.created_at)}</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div className="form-group">
+              <label style={{ marginBottom: 4 }}>玩家信息</label>
+              <div style={{ color: 'var(--text2)', fontSize: 13 }}>
+                <div>名称：{detailItem.player || '待自动获取'}</div>
+                <div>SteamID64：{detailItem.steam_id}</div>
+                <div>IP 地址：{detailItem.ip_address || '待自动获取'}</div>
               </div>
             </div>
 
-            <section className="ban-detail-panel">
-              <div className="ban-detail-panel-title">基础信息</div>
-              <dl className="ban-detail-grid">
-                <div><dt>IP 地址</dt><dd className="steam-id">{detailItem.ip_address || '待自动获取'}</dd></div>
-                <div><dt>到期时间</dt><dd>{formatExpiresAt(detailItem.expires_at)}</dd></div>
-                <div><dt>来源</dt><dd>{formatBanSource(detailItem.source, detailItem.operator_name)}</dd></div>
-                <div><dt>操作人</dt><dd>{detailItem.operator_name}</dd></div>
-                <div><dt>解封时间</dt><dd>{detailItem.removed_at ? formatDateTime(detailItem.removed_at) : '-'}</dd></div>
-                <div><dt>解封人</dt><dd>{detailItem.removed_by || '-'}</dd></div>
-              </dl>
-            </section>
-
-            <section className="ban-detail-panel">
-              <div className="ban-detail-panel-title">封禁理由</div>
-              <div className="ban-detail-text">{detailItem.reason}</div>
-              {detailItem.removed_reason ? (
-                <>
-                  <div className="ban-detail-panel-title ban-detail-subtitle">解封原因</div>
-                  <div className="ban-detail-text">{detailItem.removed_reason}</div>
-                </>
-              ) : null}
-            </section>
-
-            <section className="ban-detail-panel">
-              <div className="ban-detail-panel-head">
-                <div className="ban-detail-panel-title">辅助文件</div>
-                <span>{detailFiles.length} 个文件</span>
+            <div className="form-group">
+              <label style={{ marginBottom: 4 }}>封禁信息</label>
+              <div style={{ color: 'var(--text2)', fontSize: 13 }}>
+                <div>封禁类型：{detailItem.ban_type === 'ip' ? 'IP 封禁' : 'Steam 账号封禁'}</div>
+                <div>封禁时长：{formatBanDuration(detailItem.duration_minutes)}</div>
+                <div>到期时间：{formatExpiresAt(detailItem.expires_at)}</div>
+                <div>来源：{formatBanSource(detailItem.source, detailItem.operator_name)}</div>
+                <div>操作人：{detailItem.operator_name}</div>
+                <div>封禁时间：{detailLoading ? '正在加载完整信息...' : formatDateTime(detailItem.created_at)}</div>
               </div>
-              {detailFilesLoading ? <div className="ban-detail-empty">正在加载附件...</div> : null}
-              {!detailFilesLoading && detailFilesError ? <div className="ban-detail-error">{detailFilesError}</div> : null}
-              {!detailFilesLoading && !detailFilesError && detailFiles.length === 0 ? <div className="ban-detail-empty">暂无辅助文件</div> : null}
+            </div>
+
+            <div className="form-group">
+              <label style={{ marginBottom: 4 }}>封禁理由</label>
+              <div style={{ color: 'var(--text2)', fontSize: 13, whiteSpace: 'pre-wrap', background: 'var(--surface2)', padding: 8, borderRadius: 6 }}>
+                {detailItem.reason}
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label style={{ marginBottom: 4 }}>处理状态</label>
+              <div>
+                <span className={`status-pill ${detailItem.status === 'active' ? 'pill-danger' : 'pill-offline'}`}>{detailItem.status === 'active' ? '生效中' : '已失效'}</span>
+              </div>
+              {detailItem.removed_reason ? (
+                <div style={{ color: 'var(--text2)', fontSize: 13, marginTop: 4, whiteSpace: 'pre-wrap', background: 'var(--surface2)', padding: 8, borderRadius: 6 }}>
+                  解封原因：{detailItem.removed_reason}
+                </div>
+              ) : null}
+              {detailItem.removed_by ? (
+                <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
+                  由 {detailItem.removed_by} 于 {formatDateTime(detailItem.removed_at)} 解封
+                </div>
+              ) : null}
+            </div>
+
+            <div className="form-group">
+              <label style={{ marginBottom: 4 }}>辅助文件</label>
+              {detailFilesLoading ? <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>正在加载附件...</div> : null}
+              {!detailFilesLoading && detailFilesError ? <div style={{ color: 'var(--danger)', fontSize: 13, padding: '8px 0' }}>{detailFilesError}</div> : null}
+              {!detailFilesLoading && !detailFilesError && detailFiles.length === 0 ? <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>暂无辅助文件</div> : null}
               {!detailFilesLoading && detailFiles.length > 0 ? (
-                <div className="ban-file-list">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {detailFiles.map((file) => (
-                    <div key={file.id} className="ban-file-item">
-                      <div className={`ban-file-type ban-file-type-${file.category}`}>{fileCategoryLabel(file.category).slice(0, 1)}</div>
-                      <div className="ban-file-body">
-                        <div className="ban-file-name">{file.file_name}</div>
-                        <div className="ban-file-meta">
-                          <span>{fileCategoryLabel(file.category)}</span>
-                          <span>{formatFileSize(file.file_size)}</span>
-                          <span>{file.uploaded_by || '-'}</span>
-                          <span>{formatDateTime(file.uploaded_at)}</span>
+                    <div
+                      key={file.id}
+                      style={{
+                        padding: '10px 14px',
+                        background: 'var(--surface2)',
+                        borderRadius: 10,
+                        fontSize: 13,
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
+                          <span className="status-pill">{fileCategoryLabel(file.category)}</span>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {file.file_name}
+                            </div>
+                            <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                              {formatFileSize(file.file_size)}
+                              {file.uploaded_by ? ` · ${file.uploaded_by}` : ''}
+                              {file.uploaded_at ? ` · ${formatDateTime(file.uploaded_at)}` : ''}
+                            </div>
+                          </div>
                         </div>
+                        {file.url ? (
+                          <a className="action-btn" href={file.url} target="_blank" rel="noreferrer" style={{ flexShrink: 0, textDecoration: 'none' }}>打开</a>
+                        ) : (
+                          <span style={{ fontSize: 11, color: 'var(--text3)', flexShrink: 0 }}>无下载链接</span>
+                        )}
                       </div>
-                      {file.url ? (
-                        <a className="action-btn action-btn-accent" href={file.url} target="_blank" rel="noreferrer">打开</a>
-                      ) : (
-                        <span className="ban-file-unavailable">无下载链接</span>
-                      )}
                     </div>
                   ))}
                 </div>
               ) : null}
-            </section>
+            </div>
           </div>
         ) : null}
       </Modal>

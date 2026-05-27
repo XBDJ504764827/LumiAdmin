@@ -329,32 +329,24 @@ export function BanPage() {
       const payload = buildCreateBanPayload(form);
       let savedItem = null;
       let uploadWarning = '';
-      let reportReviewWarning = '';
       let uploadedFiles = false;
       if (modalMode === 'edit' && editingBanId) {
         const result = await api.updateBan(token, editingBanId, payload);
         savedItem = result.item;
+      } else if (reportReviewOnSave?.reportId) {
+        const result = await api.banPlayerReport(token, reportReviewOnSave.reportId, payload);
+        savedItem = result.ban;
       } else {
         const result = await api.createBan(token, payload);
         savedItem = result.item;
-        if (savedItem?.id && reportReviewOnSave?.reportId) {
-          try {
-            await api.reviewPlayerReport(token, reportReviewOnSave.reportId, {
-              status: 'approved',
-              review_note: `已根据玩家举报创建封禁记录：${savedItem.id}`,
-            });
-          } catch (reviewError) {
-            reportReviewWarning = reviewError.message || '玩家举报状态更新失败';
-          }
-        }
-        if (savedItem?.id && selectedFiles.length > 0) {
-          try {
-            setSavePhase('uploading');
-            await uploadSelectedFiles(savedItem.id);
-            uploadedFiles = true;
-          } catch (uploadError) {
-            uploadWarning = uploadError.message || '辅助文件上传失败';
-          }
+      }
+      if (modalMode !== 'edit' && savedItem?.id && selectedFiles.length > 0) {
+        try {
+          setSavePhase('uploading');
+          await uploadSelectedFiles(savedItem.id);
+          uploadedFiles = true;
+        } catch (uploadError) {
+          uploadWarning = uploadError.message || '辅助文件上传失败';
         }
       }
       resetBanModal();
@@ -363,9 +355,7 @@ export function BanPage() {
         title: modalMode === 'edit' ? '保存成功' : '添加成功',
         message: modalMode === 'edit'
           ? '封禁记录已更新。'
-          : reportReviewWarning
-            ? `新封禁记录已添加，但玩家举报状态更新失败：${reportReviewWarning}`
-            : uploadedFiles
+          : uploadedFiles
               ? '新封禁记录已添加，辅助文件已上传。'
               : uploadWarning
                 ? `新封禁记录已添加，但辅助文件上传失败：${uploadWarning}`

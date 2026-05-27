@@ -120,6 +120,7 @@ export const api = {
   banAppeals: (token, params = {}) => request(`/api/ban-appeals${buildQueryString(params)}`, { headers: withAuth(token) }),
   playerReports: (token, params = {}) => request(`/api/player-reports${buildQueryString(params)}`, { headers: withAuth(token) }),
   reviewPlayerReport: (token, id, body = {}) => request(`/api/player-reports/${id}/review`, { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
+  banPlayerReport: (token, id, body = {}) => request(`/api/player-reports/${id}/ban`, { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   listPlayerReportFiles: (token, reportId) => request(`/api/player-reports/${reportId}/files`, { headers: withAuth(token) }),
   listAdminAppealFiles: (token, appealId) => request(`/api/ban-appeals/${appealId}/files`, { headers: withAuth(token) }),
   getAppealFileUrl: (token, fileId) => request(`/api/ban-appeals/files/${fileId}/url`, { headers: withAuth(token) }),

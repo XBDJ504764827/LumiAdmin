@@ -26,6 +26,15 @@ pub(crate) struct ReviewPlayerReportBody {
     pub review_note: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub(crate) struct BanPlayerReportBody {
+    pub player: Option<String>,
+    pub steam_id: Option<String>,
+    pub ip_address: Option<String>,
+    pub ban_type: String,
+    pub reason: String,
+}
+
 pub(crate) async fn submit_player_report(
     State(ctx): State<AppCtx>,
     headers: HeaderMap,
@@ -126,6 +135,8 @@ pub(crate) async fn upload_player_report_files(
     }
 
     let max_size = ctx.config.appeal_file_max_size_bytes;
+    let max_files = 10usize;
+    let mut file_count = 0usize;
     let mut uploaded: Vec<serde_json::Value> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
 
@@ -144,6 +155,12 @@ pub(crate) async fn upload_player_report_files(
             Some(name) => name.to_string(),
             None => continue,
         };
+
+        file_count += 1;
+        if file_count > max_files {
+            errors.push(format!("单次最多上传 {max_files} 个文件"));
+            continue;
+        }
 
         if !r2_storage::is_allowed_file_type(&file_name) {
             errors.push(format!("不支持的文件类型: {file_name}"));
@@ -224,6 +241,14 @@ pub(crate) async fn upload_player_report_files(
         ));
     }
 
+    if let Err(e) = sqlx::query("UPDATE player_reports SET upload_token_hash = NULL WHERE id = $1")
+        .bind(report_id)
+        .execute(&ctx.db.pool)
+        .await
+    {
+        tracing::warn!(%e, "清理玩家举报上传凭证失败");
+    }
+
     Ok(Json(serde_json::json!({
         "uploaded": uploaded,
         "errors": if errors.is_empty() { None } else { Some(errors) },
@@ -298,6 +323,70 @@ pub(crate) async fn review_report(
     .await;
 
     Ok(Json(serde_json::json!({ "item": item })))
+}
+
+pub(crate) async fn ban_report(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<BanPlayerReportBody>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+    let actor = current_operator(&ctx, &headers).await?;
+    if !permission_service::can_review_player_reports(&actor) {
+        return Err(forbidden());
+    }
+
+    let result = player_report_service::ban_report(
+        &ctx.db,
+        &ctx.config,
+        id,
+        &actor.display_name,
+        player_report_service::BanPlayerReportInput {
+            player: body.player,
+            steam_id: body.steam_id,
+            ip_address: body.ip_address,
+            ban_type: body.ban_type,
+            reason: body.reason,
+        },
+    )
+    .await
+    .map_err(invalid_request)?;
+
+    let log_target = result.ban.player.as_deref().unwrap_or(&result.ban.steam_id);
+    let client_ip = extract_client_ip(&headers);
+    let log_ip = result.ban.ip_address.as_deref().unwrap_or(&client_ip);
+    let _ = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "玩家举报",
+        "根据举报封禁玩家",
+        log_target,
+        log_ip,
+    )
+    .await;
+
+    if let Err(e) = notification_service::notify_ban_create(
+        &ctx.db,
+        &ctx.notification_hub,
+        &actor.id,
+        &actor.display_name,
+        result.ban.player.as_deref(),
+        &result.ban.steam_id,
+        &result.ban.reason,
+    )
+    .await
+    {
+        tracing::warn!(%e, "player report ban notification failed");
+    }
+
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "ban": result.ban,
+            "report": result.report,
+            "copied_files": result.copied_files,
+        })),
+    ))
 }
 
 pub(crate) async fn list_report_files(

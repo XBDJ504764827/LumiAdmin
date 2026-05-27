@@ -1,5 +1,11 @@
 use crate::{
-    config::Config, db::Database, routes::ListQuery, services::steam_service::SteamResolver,
+    config::Config,
+    db::Database,
+    routes::ListQuery,
+    services::{
+        ban_service::{self, BanItem, BanRow},
+        steam_service::SteamResolver,
+    },
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -47,6 +53,22 @@ pub struct CreatePlayerReportInput {
 pub struct ReviewPlayerReportInput {
     pub status: String,
     pub review_note: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct BanPlayerReportInput {
+    pub player: Option<String>,
+    pub steam_id: Option<String>,
+    pub ip_address: Option<String>,
+    pub ban_type: String,
+    pub reason: String,
+}
+
+#[derive(Serialize)]
+pub struct BanPlayerReportResult {
+    pub ban: BanItem,
+    pub report: PlayerReportItem,
+    pub copied_files: i64,
 }
 
 const REPORT_FIELDS: &str = "id, target_steam_id, target_player_name, reporter_contact, report_reason, status, reviewed_by, review_note, reviewed_at, created_at";
@@ -179,17 +201,133 @@ pub async fn review_report(
     let row = sqlx::query_as::<_, PlayerReportRow>(&format!(
         r#"UPDATE player_reports
            SET status = $2, reviewed_by = $3, review_note = $4, reviewed_at = now()
-           WHERE id = $1
+           WHERE id = $1 AND status = 'pending'
            RETURNING {REPORT_FIELDS}"#
     ))
     .bind(id)
     .bind(status)
     .bind(reviewer_name)
     .bind(super::normalize_optional_string(input.review_note))
-    .fetch_one(&db.pool)
+    .fetch_optional(&db.pool)
     .await?;
 
+    let Some(row) = row else {
+        let existing: Option<(String,)> =
+            sqlx::query_as("SELECT status FROM player_reports WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&db.pool)
+                .await?;
+        if existing.is_some() {
+            anyhow::bail!("该举报已被处理");
+        }
+        anyhow::bail!("记录不存在");
+    };
+
     Ok(row_to_item(row, None))
+}
+
+pub async fn ban_report(
+    db: &Database,
+    config: &Config,
+    report_id: Uuid,
+    reviewer_name: &str,
+    input: BanPlayerReportInput,
+) -> anyhow::Result<BanPlayerReportResult> {
+    let ban_type = input.ban_type.trim();
+    let reason = input.reason.trim();
+    anyhow::ensure!(matches!(ban_type, "steam" | "ip"), "封禁属性无效");
+    anyhow::ensure!(!reason.is_empty(), "封禁理由不能为空");
+    let resolved_input_steam_id = match input
+        .steam_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => Some(SteamResolver::new(config).resolve(value).await?.steamid64),
+        None => None,
+    };
+
+    let mut tx = db.pool.begin().await?;
+
+    let report_row = sqlx::query_as::<_, PlayerReportRow>(&format!(
+        "SELECT {REPORT_FIELDS} FROM player_reports WHERE id = $1 FOR UPDATE"
+    ))
+    .bind(report_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    anyhow::ensure!(report_row.status == "pending", "该举报已被处理");
+
+    let steam_id = resolved_input_steam_id.unwrap_or_else(|| report_row.target_steam_id.clone());
+
+    let existing: Option<(Uuid,)> =
+        sqlx::query_as(r#"SELECT id FROM ban_records WHERE steam_id = $1 AND status = 'active' FOR UPDATE"#)
+            .bind(&steam_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    anyhow::ensure!(
+        existing.is_none(),
+        "该玩家已有活跃封禁记录，请先解封后再重新封禁"
+    );
+
+    let player = super::normalize_optional_string(input.player)
+        .or_else(|| report_row.target_player_name.clone());
+    let row = sqlx::query_as::<_, BanRow>(
+        r#"INSERT INTO ban_records (
+               id, player, steam_id, ip_address, server_name, ban_type,
+               duration_minutes, expires_at, reason, status, operator_name, source,
+               server_id, server_port
+           )
+           VALUES ($1, $2, $3, $4, NULL, $5, 0, NULL, $6, 'active', $7, 'manual', NULL, NULL)
+           RETURNING id, player, steam_id, ip_address, server_name, ban_type,
+                     duration_minutes, expires_at, reason, status, operator_name, source,
+                     server_id, server_port, removed_reason, removed_by, removed_at, created_at"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(player)
+    .bind(&steam_id)
+    .bind(super::normalize_optional_string(input.ip_address))
+    .bind(ban_type)
+    .bind(reason)
+    .bind(reviewer_name)
+    .fetch_one(&mut *tx)
+    .await?;
+    let ban = ban_service::row_to_item(row);
+
+    let copied_files = sqlx::query(
+        r#"INSERT INTO ban_files (
+               id, ban_id, file_name, file_size, content_type, storage_key, category, uploaded_by, uploaded_at
+           )
+           SELECT gen_random_uuid(), $1, file_name, file_size, content_type, storage_key, category, $2, uploaded_at
+           FROM player_report_files
+           WHERE report_id = $3"#,
+    )
+    .bind(ban.id)
+    .bind(reviewer_name)
+    .bind(report_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected() as i64;
+
+    let reviewed_row = sqlx::query_as::<_, PlayerReportRow>(&format!(
+        r#"UPDATE player_reports
+           SET status = 'approved', reviewed_by = $2, review_note = $3, reviewed_at = now(), upload_token_hash = NULL
+           WHERE id = $1 AND status = 'pending'
+           RETURNING {REPORT_FIELDS}"#
+    ))
+    .bind(report_id)
+    .bind(reviewer_name)
+    .bind(format!("已根据玩家举报创建封禁记录：{}", ban.id))
+    .fetch_one(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(BanPlayerReportResult {
+        ban,
+        report: row_to_item(reviewed_row, None),
+        copied_files,
+    })
 }
 
 pub async fn find_upload_token_hash(db: &Database, id: Uuid) -> anyhow::Result<(String, Option<String>)> {

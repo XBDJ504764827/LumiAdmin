@@ -283,6 +283,10 @@ pub fn router(
             post(player_report::review_report),
         )
         .route(
+            "/api/player-reports/:id/ban",
+            post(player_report::ban_report),
+        )
+        .route(
             "/api/player-reports/:id/files",
             get(player_report::list_report_files),
         )

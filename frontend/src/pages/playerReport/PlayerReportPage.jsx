@@ -189,10 +189,9 @@ export function PlayerReportPage() {
 
   async function handleReview() {
     if (!reviewItem) return;
-    const action = reviewStatus === 'approved' ? '封禁' : '驳回';
     const confirmed = await confirm({
-      title: `${action}玩家举报`,
-      message: `确定${action}关于 ${reviewItem.target_player_name || reviewItem.target_steam_id} 的玩家举报吗？`,
+      title: '驳回玩家举报',
+      message: `确定驳回关于 ${reviewItem.target_player_name || reviewItem.target_steam_id} 的玩家举报吗？`,
     });
     if (!confirmed) return;
 
@@ -205,9 +204,9 @@ export function PlayerReportPage() {
       setReviewOpen(false);
       setReviewItem(null);
       await loadItems();
-      toast({ title: `${action}成功`, message: reviewStatus === 'approved' ? '已将该举报标记为已封禁。' : '已驳回该玩家举报。' });
+      toast({ title: '驳回成功', message: '已驳回该玩家举报。' });
     } catch (e) {
-      toast({ title: `${action}失败`, message: e.message, tone: 'danger' });
+      toast({ title: '驳回失败', message: e.message, tone: 'danger' });
     } finally {
       setSubmitting(false);
     }
@@ -416,7 +415,7 @@ export function PlayerReportPage() {
 
       <Modal
         open={reviewOpen}
-        title={reviewStatus === 'approved' ? '封禁玩家举报' : '驳回玩家举报'}
+        title="驳回玩家举报"
         onClose={() => { setReviewOpen(false); setReviewItem(null); }}
         footer={
           <>
@@ -426,7 +425,7 @@ export function PlayerReportPage() {
               onClick={handleReview}
               disabled={submitting}
             >
-              {submitting ? '处理中...' : reviewStatus === 'approved' ? '确认封禁' : '确认驳回'}
+              {submitting ? '处理中...' : '确认驳回'}
             </button>
           </>
         }
@@ -443,7 +442,7 @@ export function PlayerReportPage() {
                 className="form-control"
                 value={reviewNote}
                 onChange={(e) => setReviewNote(e.target.value)}
-                placeholder={reviewStatus === 'approved' ? '可选，填写封禁处理记录...' : '可选，填写驳回原因...'}
+                placeholder="可选，填写驳回原因..."
                 rows={3}
                 style={{ resize: 'vertical' }}
               />

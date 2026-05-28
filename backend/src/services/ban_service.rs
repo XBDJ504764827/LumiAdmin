@@ -104,8 +104,26 @@ pub struct UpdateBanInput {
     pub reason: String,
 }
 
-const BAN_FIELDS: &str = "id, player, steam_id, ip_address, server_name, ban_type, duration_minutes, expires_at, reason, status, operator_name, source, server_id, server_port, removed_reason, removed_by, removed_at, created_at";
-const BAN_LIST_FIELDS: &str = "id, player, steam_id, ip_address, ban_type, duration_minutes, expires_at, reason, status, operator_name, created_at";
+const BAN_DISPLAY_FIELDS: &str = "br.id, br.player, br.steam_id, br.ip_address, br.server_name, br.ban_type, br.duration_minutes, br.expires_at, br.reason, br.status, COALESCE(operator_user.display_name, br.operator_name) AS operator_name, br.source, br.server_id, br.server_port, br.removed_reason, COALESCE(removed_user.display_name, br.removed_by) AS removed_by, br.removed_at, br.created_at";
+const BAN_LIST_DISPLAY_FIELDS: &str = "br.id, br.player, br.steam_id, br.ip_address, br.ban_type, br.duration_minutes, br.expires_at, br.reason, br.status, COALESCE(operator_user.display_name, br.operator_name) AS operator_name, br.created_at";
+const BAN_OPERATOR_DISPLAY_JOIN: &str = r#"LEFT JOIN LATERAL (
+    SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
+    FROM users u
+    WHERE u.username = br.operator_name
+       OR u.display_name = br.operator_name
+       OR NULLIF(u.remark, '') = br.operator_name
+    ORDER BY CASE WHEN u.username = br.operator_name THEN 0 WHEN u.display_name = br.operator_name THEN 1 ELSE 2 END
+    LIMIT 1
+) operator_user ON true"#;
+const BAN_REMOVED_BY_DISPLAY_JOIN: &str = r#"LEFT JOIN LATERAL (
+    SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
+    FROM users u
+    WHERE u.username = br.removed_by
+       OR u.display_name = br.removed_by
+       OR NULLIF(u.remark, '') = br.removed_by
+    ORDER BY CASE WHEN u.username = br.removed_by THEN 0 WHEN u.display_name = br.removed_by THEN 1 ELSE 2 END
+    LIMIT 1
+) removed_user ON true"#;
 
 pub(crate) fn row_to_item(row: BanRow) -> BanItem {
     BanItem {
@@ -174,7 +192,10 @@ pub async fn list_bans(
     };
 
     let count_sql = format!("SELECT COUNT(*) FROM ban_records {where_clause}");
-    let data_sql = format!("SELECT {BAN_LIST_FIELDS} FROM ban_records {where_clause} ORDER BY created_at DESC LIMIT ${param_idx} OFFSET ${}", param_idx + 1);
+    let data_sql = format!(
+        "SELECT {BAN_LIST_DISPLAY_FIELDS} FROM ban_records br {BAN_OPERATOR_DISPLAY_JOIN} {where_clause} ORDER BY br.created_at DESC LIMIT ${param_idx} OFFSET ${}",
+        param_idx + 1
+    );
 
     let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql);
     let mut data_query = sqlx::query_as::<_, BanListRow>(&data_sql);
@@ -209,7 +230,7 @@ pub async fn list_bans(
 
 pub async fn get_ban(db: &Database, id: Uuid) -> anyhow::Result<BanItem> {
     let row = sqlx::query_as::<_, BanRow>(&format!(
-        "SELECT {BAN_FIELDS} FROM ban_records WHERE id = $1"
+        "SELECT {BAN_DISPLAY_FIELDS} FROM ban_records br {BAN_OPERATOR_DISPLAY_JOIN} {BAN_REMOVED_BY_DISPLAY_JOIN} WHERE br.id = $1"
     ))
     .bind(id)
     .fetch_one(&db.pool)
@@ -335,7 +356,7 @@ pub async fn find_active_bans_by_steamid(
     steamid64: &str,
 ) -> anyhow::Result<Vec<BanItem>> {
     let rows = sqlx::query_as::<_, BanRow>(
-        &format!("SELECT {BAN_FIELDS} FROM ban_records WHERE steam_id = $1 AND status = 'active' ORDER BY created_at DESC"),
+        &format!("SELECT {BAN_DISPLAY_FIELDS} FROM ban_records br {BAN_OPERATOR_DISPLAY_JOIN} {BAN_REMOVED_BY_DISPLAY_JOIN} WHERE br.steam_id = $1 AND br.status = 'active' ORDER BY br.created_at DESC"),
     )
     .bind(steamid64)
     .fetch_all(&db.pool)

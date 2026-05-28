@@ -17,9 +17,9 @@ pub mod user;
 pub mod whitelist;
 
 use axum::{
-    http::{header, HeaderMap, StatusCode},
-    routing::{delete, get, post, put},
     Json, Router,
+    http::{HeaderMap, StatusCode, header},
+    routing::{delete, get, post, put},
 };
 use chrono::Utc;
 use serde::Deserialize;
@@ -31,10 +31,10 @@ use uuid::Uuid;
 use crate::{
     config::Config,
     db::Database,
-    models::Operator,
+    models::{Operator, preferred_operator_name},
     services::{
         access_snapshot_service::SnapshotStore,
-        notification_service::{create_notification_hub, NotificationHub},
+        notification_service::{NotificationHub, create_notification_hub},
         r2_storage::R2Storage,
         server_config_cache::ServerConfigCache,
         steam_service::SteamResolver,
@@ -453,20 +453,19 @@ pub(crate) async fn current_operator(
             )
         })?;
 
-    let row: Option<(Uuid, String, String, String, bool)> = sqlx::query_as(
-        r#"SELECT id, username, display_name, role, enabled FROM users WHERE id = $1"#,
-    )
-    .bind(session.user_id)
-    .fetch_optional(&ctx.db.pool)
-    .await
-    .map_err(|_| {
-        (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "unauthorized" })),
-        )
-    })?;
+    let row: Option<(Uuid, String, Option<String>, String, bool)> =
+        sqlx::query_as(r#"SELECT id, username, remark, role, enabled FROM users WHERE id = $1"#)
+            .bind(session.user_id)
+            .fetch_optional(&ctx.db.pool)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(serde_json::json!({ "error": "unauthorized" })),
+                )
+            })?;
 
-    let (id, username, display_name, role, enabled) = row.ok_or((
+    let (id, username, remark, role, enabled) = row.ok_or((
         StatusCode::UNAUTHORIZED,
         Json(serde_json::json!({ "error": "unauthorized" })),
     ))?;
@@ -480,8 +479,8 @@ pub(crate) async fn current_operator(
 
     Ok(Operator {
         id,
+        display_name: preferred_operator_name(&username, remark.as_deref()),
         username,
-        display_name,
         role,
     })
 }

@@ -37,7 +37,6 @@ export function sidebarSections(role) {
 
   const systemItems = canSeeLogs ? [
     { path: '/player-access', label: '玩家进服设置', icon: icons.playerAccess },
-    { path: '/notifications', label: '通知中心', icon: icons.notification },
     {
       label: '日志与审计',
       icon: icons.logFolder,
@@ -58,7 +57,6 @@ export function sidebarSections(role) {
     { path: '/external-servers', label: '外部服务器', icon: icons.externalServer },
   ] : [
     { path: '/player-access', label: '玩家进服设置', icon: icons.playerAccess },
-    { path: '/notifications', label: '通知中心', icon: icons.notification },
     { path: '/audit', label: '审计日志', icon: icons.audit },
     { path: '/external-servers', label: '外部服务器', icon: icons.externalServer },
   ];
@@ -69,11 +67,11 @@ export function sidebarSections(role) {
       items: [
         { path: '/dashboard', label: '仪表盘', icon: icons.grid },
         { path: '/community', label: '社区组管理', icon: icons.community },
-        { path: '/whitelist', label: '白名单管理', icon: icons.whitelist },
+        { path: '/whitelist', label: '白名单管理', icon: icons.whitelist, pendingKey: 'whitelist' },
         { path: '/ban', label: '封禁管理', icon: icons.ban },
         ...(canReviewReports ? [
-          { path: '/ban-appeal', label: '封禁申诉', icon: icons.banAppeal },
-          { path: '/player-reports', label: '玩家举报', icon: icons.playerReport },
+          { path: '/ban-appeal', label: '封禁申诉', icon: icons.banAppeal, pendingKey: 'banAppeal' },
+          { path: '/player-reports', label: '玩家举报', icon: icons.playerReport, pendingKey: 'playerReport' },
         ] : []),
         ...(canSeeUserManagement ? [{ path: '/users', label: '网站用户管理', icon: icons.users }] : []),
       ],

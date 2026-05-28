@@ -1,7 +1,7 @@
 use crate::{
-    auth::session::{build_session, to_view},
+    auth::session::{build_session, role_label, to_view},
     db::Database,
-    models::{SessionResponse, SessionView, User},
+    models::{SessionResponse, SessionView, User, preferred_operator_name},
     password::verify_password,
 };
 use uuid::Uuid;
@@ -49,9 +49,11 @@ pub async fn login(
 }
 
 pub async fn current_session(db: &Database, token: Uuid) -> anyhow::Result<SessionView> {
-    let row = sqlx::query_as::<_, (Uuid, Uuid, String, String, String)>(
-        r#"SELECT token, user_id, role, display_name, role_label
-           FROM sessions WHERE token = $1 AND expires_at > NOW()"#,
+    let row = sqlx::query_as::<_, (Uuid, Uuid, String, String, Option<String>)>(
+        r#"SELECT s.token, s.user_id, u.role, u.username, u.remark
+           FROM sessions s
+           JOIN users u ON u.id = s.user_id
+           WHERE s.token = $1 AND s.expires_at > NOW()"#,
     )
     .bind(token)
     .fetch_one(&db.pool)
@@ -60,9 +62,9 @@ pub async fn current_session(db: &Database, token: Uuid) -> anyhow::Result<Sessi
     Ok(SessionView {
         token: row.0,
         user_id: row.1,
-        display_name: row.3,
-        role: row.2,
-        role_label: row.4,
+        role: row.2.clone(),
+        display_name: preferred_operator_name(&row.3, row.4.as_deref()),
+        role_label: role_label(&row.2).to_string(),
     })
 }
 

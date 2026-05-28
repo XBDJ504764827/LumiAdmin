@@ -110,7 +110,10 @@ pub async fn list_audit_logs(
     }
     if let Some(ref operator_name) = query.operator_name {
         if !operator_name.trim().is_empty() {
-            conditions.push(format!("operator_name ILIKE ${}", param_idx));
+            conditions.push(format!(
+                "(al.operator_name ILIKE ${} OR operator_user.display_name ILIKE ${})",
+                param_idx, param_idx
+            ));
             param_idx += 1;
         }
     }
@@ -137,12 +140,26 @@ pub async fn list_audit_logs(
         format!("WHERE {}", conditions.join(" AND "))
     };
 
-    let count_sql = format!("SELECT COUNT(*) FROM audit_logs {}", where_clause);
+    let operator_join = r#"LEFT JOIN LATERAL (
+        SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
+        FROM users u
+        WHERE u.username = al.operator_name
+           OR u.display_name = al.operator_name
+           OR NULLIF(u.remark, '') = al.operator_name
+        ORDER BY CASE
+            WHEN u.username = al.operator_name THEN 0
+            WHEN u.display_name = al.operator_name THEN 1
+            ELSE 2
+        END
+        LIMIT 1
+    ) operator_user ON true"#;
+
+    let count_sql = format!("SELECT COUNT(*) FROM audit_logs al {operator_join} {where_clause}");
     let data_sql = format!(
         r#"SELECT id, operation, target, target_type, player_name, reason, duration_minutes,
-                  operator_name, operator_steamid, source, server_id, server_name, server_port,
+                  COALESCE(operator_user.display_name, al.operator_name) AS operator_name, operator_steamid, source, server_id, server_name, server_port,
                   success, message, idempotency_key, created_at
-           FROM audit_logs {}
+           FROM audit_logs al {operator_join} {}
            ORDER BY created_at DESC
            LIMIT ${} OFFSET ${}"#,
         where_clause,

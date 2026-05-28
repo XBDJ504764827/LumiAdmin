@@ -92,7 +92,7 @@ async fn get_metrics_uncached(db: &Database) -> anyhow::Result<DashboardMetrics>
 
     // 查询2: 管理员预览
     let admin_rows: Vec<(String, String)> = sqlx::query_as(
-        r#"SELECT display_name, role
+        r#"SELECT COALESCE(NULLIF(remark, ''), username) AS display_name, role
            FROM users
            WHERE role IN ('admin', 'developer', 'normal')
            ORDER BY created_at DESC"#,

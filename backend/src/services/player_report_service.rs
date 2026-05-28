@@ -154,7 +154,20 @@ pub async fn list_reports(
 
     let count_sql = format!("SELECT COUNT(*) FROM player_reports {where_clause}");
     let data_sql = format!(
-        "SELECT {REPORT_FIELDS} FROM player_reports {where_clause} ORDER BY created_at DESC LIMIT ${param_idx} OFFSET ${}",
+        r#"SELECT pr.id, pr.target_steam_id, pr.target_player_name, pr.reporter_contact,
+                  pr.report_reason, pr.status, COALESCE(reviewer_user.display_name, pr.reviewed_by) AS reviewed_by,
+                  pr.review_note, pr.reviewed_at, pr.created_at
+           FROM player_reports pr
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
+             FROM users u
+             WHERE u.username = pr.reviewed_by
+                OR u.display_name = pr.reviewed_by
+                OR NULLIF(u.remark, '') = pr.reviewed_by
+             ORDER BY CASE WHEN u.username = pr.reviewed_by THEN 0 WHEN u.display_name = pr.reviewed_by THEN 1 ELSE 2 END
+             LIMIT 1
+           ) reviewer_user ON true
+           {where_clause} ORDER BY pr.created_at DESC LIMIT ${param_idx} OFFSET ${}"#,
         param_idx + 1
     );
 

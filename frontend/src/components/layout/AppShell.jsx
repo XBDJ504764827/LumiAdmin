@@ -2,7 +2,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../state/auth.jsx';
 import { ThemeToggle } from '../../shared/ThemeToggle.jsx';
-import { NotificationBell } from '../NotificationBell.jsx';
+import { PendingReviewProvider, usePendingReviewData } from '../../hooks/usePendingReviewIndicators.js';
 import { sidebarSections } from './sidebarSections.jsx';
 
 function hasActiveChild(children, pathname) {
@@ -15,6 +15,8 @@ export function AppShell({ children }) {
   const location = useLocation();
   const navigate = useNavigate();
   const sections = useMemo(() => sidebarSections(session?.role ?? 'guest'), [session?.role]);
+  const pendingReviews = usePendingReviewData();
+  const pendingCounts = pendingReviews.counts;
   const avatar = (session?.displayName ?? 'AL').slice(0, 2).toUpperCase();
 
   // 跟踪展开的父级菜单（用 label 作为 key）
@@ -58,6 +60,8 @@ export function AppShell({ children }) {
   // 渲染单个导航项
   function renderNavItem(item, isSubItem = false) {
     const isActive = location.pathname === item.path;
+    const pendingCount = item.pendingKey ? pendingCounts[item.pendingKey] ?? 0 : 0;
+    const hasPending = pendingCount > 0;
     return (
       <button
         key={item.path}
@@ -66,7 +70,16 @@ export function AppShell({ children }) {
         title={collapsed ? item.label : undefined}
       >
         <span className="nav-icon">{item.icon}</span>
-        <span className="nav-text">{item.label}</span>
+        <span className="nav-text-wrap">
+          <span className="nav-text">{item.label}</span>
+          {hasPending ? (
+            <span
+              className="nav-pending-dot"
+              aria-label={`${item.label}有待审核内容`}
+              title={`${item.label}有 ${pendingCount} 条待审核`}
+            />
+          ) : null}
+        </span>
       </button>
     );
   }
@@ -101,7 +114,8 @@ export function AppShell({ children }) {
   }
 
   return (
-    <div className={`app-shell ${collapsed ? 'sidebar-collapsed' : ''}`}>
+    <PendingReviewProvider value={pendingReviews}>
+      <div className={`app-shell ${collapsed ? 'sidebar-collapsed' : ''}`}>
       <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`} id="sidebar">
         <div className="sidebar-logo">
           <div className="logo-mark">
@@ -161,7 +175,6 @@ export function AppShell({ children }) {
             <span className="search-shortcut">⌘ K</span>
           </div>
           <div className="topbar-actions">
-            <NotificationBell />
             <ThemeToggle compact />
             <button className="icon-btn" type="button" onClick={() => navigate('/public/apply')} title="公开页面">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -176,6 +189,7 @@ export function AppShell({ children }) {
         </header>
         {children}
       </div>
-    </div>
+      </div>
+    </PendingReviewProvider>
   );
 }

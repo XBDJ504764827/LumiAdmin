@@ -431,6 +431,22 @@ input[type="checkbox"], input[type="radio"] {
 .nav-group-block { margin-bottom: 8px; }
 .nav-group-block:last-child { margin-bottom: 0; }
 .nav-icon { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.nav-text-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex: 1;
+}
+.nav-pending-dot,
+.tab-pending-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger-dot);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger-dot) 18%, transparent);
+  flex-shrink: 0;
+}
 
 .sidebar-collapsed .nav-item { padding: 9px; justify-content: center; }
 .sidebar-collapsed .nav-item:hover { padding-left: 9px; }
@@ -438,6 +454,20 @@ input[type="checkbox"], input[type="radio"] {
 .sidebar-collapsed .nav-item.active { padding-left: 9px; }
 .sidebar-collapsed .nav-item.active::before { display: none; }
 .sidebar-collapsed .nav-text, .sidebar-collapsed .nav-item span { opacity: 0; width: 0; display: none; }
+.sidebar-collapsed .nav-item .nav-icon {
+  opacity: 1;
+  width: auto;
+  display: inline-flex;
+}
+.sidebar-collapsed .nav-item .nav-pending-dot {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  display: block;
+  opacity: 1;
+  width: 7px;
+  height: 7px;
+}
 
 /* ── 二级菜单（可折叠父级） ── */
 .nav-collapsible-group {
@@ -975,6 +1005,9 @@ input[type="checkbox"], input[type="radio"] {
   border: none;
   background: transparent;
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
 }
 .tab:hover { color: var(--text); }
 .tab.active {
@@ -1330,6 +1363,42 @@ input[type="checkbox"], input[type="radio"] {
 .global-ban-alert-icon { font-size: 24px; color: var(--danger-text); line-height: 1; }
 .global-ban-alert-text { font-size: 13px; color: var(--text); line-height: 1.5; }
 .global-ban-alert-text strong { color: var(--danger-text); }
+.global-ban-risk {
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+}
+.global-ban-risk-danger {
+  background: var(--danger-bg);
+  border-color: var(--danger-text);
+}
+.global-ban-risk-warning {
+  background: var(--warning-bg);
+  border-color: var(--warning-text);
+}
+.global-ban-risk-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.45;
+}
+.global-ban-risk-danger .global-ban-risk-title { color: var(--danger-text); }
+.global-ban-risk-warning .global-ban-risk-title { color: var(--warning-text); }
+.global-ban-risk-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.global-ban-risk-reasons span {
+  font-size: 11px;
+  color: var(--text2);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 8px;
+}
 .global-ban-info { margin-bottom: 16px; font-size: 13px; }
 .global-ban-info code { background: var(--bg); padding: 2px 8px; border-radius: 4px; font-family: var(--mono); font-size: 12px; }
 .global-ban-list { display: flex; flex-direction: column; gap: 12px; max-height: 400px; overflow-y: auto; }

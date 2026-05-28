@@ -1,15 +1,15 @@
-use crate::routes::{invalid_request, AppCtx, ListQuery};
+use crate::routes::{AppCtx, ListQuery, invalid_request};
 use crate::services::{
     ban_appeal_service, ban_service, log_service, notification_service, public_service, r2_storage,
     rate_limit_service::extract_client_ip, whitelist_service,
 };
 use axum::{
+    Json,
     extract::{Multipart, Path, Query, State},
     http::{HeaderMap, StatusCode},
-    Json,
 };
 use futures::stream::StreamExt;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -247,8 +247,15 @@ pub(crate) async fn get_global_bans_batch(
     State(ctx): State<AppCtx>,
     Json(body): Json<GlobalBansBatchBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    // 限制单次最多查询 30 个 ID
-    let steamids: Vec<String> = body.steamids.into_iter().take(30).collect();
+    // 限制单次最多查询 30 个 ID，并去掉空值/重复值，避免浪费外部请求。
+    let mut seen = HashSet::new();
+    let steamids: Vec<String> = body
+        .steamids
+        .into_iter()
+        .map(|steamid| steamid.trim().to_string())
+        .filter(|steamid| !steamid.is_empty() && seen.insert(steamid.clone()))
+        .take(30)
+        .collect();
     let mut results: HashMap<String, serde_json::Value> = HashMap::new();
     let mut to_fetch: Vec<String> = Vec::new();
 
@@ -268,7 +275,7 @@ pub(crate) async fn get_global_bans_batch(
         }
     }
 
-    // 批量请求（限制并发数，最多同时 8 个外部请求）
+    // 批量请求（限制并发数，最多同时 10 个 SteamID 查询）
     if !to_fetch.is_empty() {
         let fetch_ids = to_fetch;
         let fetch_ids_for_timeout = fetch_ids.clone();
@@ -277,7 +284,7 @@ pub(crate) async fn get_global_bans_batch(
                 let result = fetch_global_bans_from_api(&id).await;
                 (id, result)
             }));
-            stream.buffer_unordered(8).collect::<Vec<_>>().await
+            stream.buffer_unordered(10).collect::<Vec<_>>().await
         })
         .await
         .unwrap_or_else(|_| {
@@ -380,11 +387,24 @@ pub(crate) async fn submit_ban_appeal(
     ))
 }
 
-/// 从第三方 API 获取封禁记录
-async fn fetch_global_bans_from_api(steamid64: &str) -> Result<serde_json::Value, ()> {
+async fn fetch_global_bans_json(url: String, timeout: Duration) -> Option<serde_json::Value> {
     use crate::http_client;
 
-    let timeout = std::time::Duration::from_secs(5);
+    tokio::time::timeout(timeout, async {
+        let response = http_client::http_client().get(&url).send().await.ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        response.json::<serde_json::Value>().await.ok()
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// 从第三方 API 获取封禁记录
+async fn fetch_global_bans_from_api(steamid64: &str) -> Result<serde_json::Value, ()> {
+    let timeout = Duration::from_secs(5);
 
     // 主 API（KZTimerGlobal）
     let primary_url = format!(
@@ -398,33 +418,14 @@ async fn fetch_global_bans_from_api(steamid64: &str) -> Result<serde_json::Value
         steamid64
     );
 
-    // 先尝试主 API
-    if let Ok(Ok(response)) =
-        tokio::time::timeout(timeout, http_client::http_client().get(&primary_url).send()).await
-    {
-        if response.status().is_success() {
-            if let Ok(Ok(data)) =
-                tokio::time::timeout(timeout, response.json::<serde_json::Value>()).await
-            {
-                return Ok(data);
-            }
-        }
-    }
+    // 主备接口并发请求，避免主 API 慢或超时时再串行等待备用 API。
+    let (primary, fallback) = tokio::join!(
+        fetch_global_bans_json(primary_url, timeout),
+        fetch_global_bans_json(fallback_url, timeout)
+    );
 
-    // 主 API 失败，尝试备用 API
-    if let Ok(Ok(response)) = tokio::time::timeout(
-        timeout,
-        http_client::http_client().get(&fallback_url).send(),
-    )
-    .await
-    {
-        if response.status().is_success() {
-            if let Ok(Ok(data)) =
-                tokio::time::timeout(timeout, response.json::<serde_json::Value>()).await
-            {
-                return Ok(data);
-            }
-        }
+    if let Some(data) = primary.or(fallback) {
+        return Ok(data);
     }
 
     Err(())

@@ -16,21 +16,35 @@ pub async fn list_logs(
     db: &Database,
     query: &ListQuery,
 ) -> anyhow::Result<crate::routes::PaginatedResponse<LogItem>> {
-    let mut conditions = vec!["COALESCE(u.role, '') <> 'developer'".to_string()];
+    let mut conditions = vec!["COALESCE(operator_user.role, '') <> 'developer'".to_string()];
     let mut param_idx = 1u32;
     let search_pattern = query.search_pattern();
 
     if search_pattern.is_some() {
-        conditions.push(format!("(l.operator_name ILIKE ${param_idx} OR l.module ILIKE ${param_idx} OR l.action ILIKE ${param_idx})"));
+        conditions.push(format!("(l.operator_name ILIKE ${param_idx} OR operator_user.display_name ILIKE ${param_idx} OR l.module ILIKE ${param_idx} OR l.action ILIKE ${param_idx})"));
         param_idx += 1;
     }
 
     let where_clause = format!("WHERE {}", conditions.join(" AND "));
+    let operator_join = r#"LEFT JOIN LATERAL (
+        SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name, u.role
+        FROM users u
+        WHERE u.username = l.operator_name
+           OR u.display_name = l.operator_name
+           OR NULLIF(u.remark, '') = l.operator_name
+        ORDER BY CASE
+            WHEN u.username = l.operator_name THEN 0
+            WHEN u.display_name = l.operator_name THEN 1
+            ELSE 2
+        END
+        LIMIT 1
+    ) operator_user ON true"#;
 
-    let count_sql = format!("SELECT COUNT(*) FROM admin_logs l LEFT JOIN users u ON u.display_name = l.operator_name {where_clause}");
+    let count_sql = format!("SELECT COUNT(*) FROM admin_logs l {operator_join} {where_clause}");
     let data_sql = format!(
-        r#"SELECT l.operator_name, l.module, l.action, l.target_detail, l.ip_address, l.created_at
-           FROM admin_logs l LEFT JOIN users u ON u.display_name = l.operator_name
+        r#"SELECT COALESCE(operator_user.display_name, l.operator_name) AS operator_name,
+                  l.module, l.action, l.target_detail, l.ip_address, l.created_at
+           FROM admin_logs l {operator_join}
            {where_clause} ORDER BY l.created_at DESC LIMIT ${param_idx} OFFSET ${}"#,
         param_idx + 1
     );

@@ -118,7 +118,18 @@ pub async fn create_appeal(
     .await?;
 
     let ban_info: Option<(String, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT reason, ban_type, operator_name, server_name FROM ban_records WHERE id = $1",
+        r#"SELECT br.reason, br.ban_type, COALESCE(operator_user.display_name, br.operator_name) AS operator_name, br.server_name
+           FROM ban_records br
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
+             FROM users u
+             WHERE u.username = br.operator_name
+                OR u.display_name = br.operator_name
+                OR NULLIF(u.remark, '') = br.operator_name
+             ORDER BY CASE WHEN u.username = br.operator_name THEN 0 WHEN u.display_name = br.operator_name THEN 1 ELSE 2 END
+             LIMIT 1
+           ) operator_user ON true
+           WHERE br.id = $1"#,
     )
     .bind(input.ban_id)
     .fetch_optional(&db.pool)
@@ -173,10 +184,28 @@ pub async fn list_appeals(
     let count_sql = format!("SELECT COUNT(*) FROM ban_appeals ba {where_clause}");
     let data_sql = format!(
         r#"SELECT ba.id, ba.ban_id, ba.steam_id, ba.player_name, ba.appeal_reason,
-                  ba.status, ba.reviewed_by, ba.review_note, ba.reviewed_at, ba.created_at,
-                  br.reason AS ban_reason, br.ban_type, br.operator_name AS ban_operator_name, br.server_name AS ban_server_name
+                  ba.status, COALESCE(reviewer_user.display_name, ba.reviewed_by) AS reviewed_by, ba.review_note, ba.reviewed_at, ba.created_at,
+                  br.reason AS ban_reason, br.ban_type, COALESCE(ban_operator_user.display_name, br.operator_name) AS ban_operator_name, br.server_name AS ban_server_name
            FROM ban_appeals ba
            LEFT JOIN ban_records br ON ba.ban_id = br.id
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
+             FROM users u
+             WHERE u.username = ba.reviewed_by
+                OR u.display_name = ba.reviewed_by
+                OR NULLIF(u.remark, '') = ba.reviewed_by
+             ORDER BY CASE WHEN u.username = ba.reviewed_by THEN 0 WHEN u.display_name = ba.reviewed_by THEN 1 ELSE 2 END
+             LIMIT 1
+           ) reviewer_user ON true
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
+             FROM users u
+             WHERE u.username = br.operator_name
+                OR u.display_name = br.operator_name
+                OR NULLIF(u.remark, '') = br.operator_name
+             ORDER BY CASE WHEN u.username = br.operator_name THEN 0 WHEN u.display_name = br.operator_name THEN 1 ELSE 2 END
+             LIMIT 1
+           ) ban_operator_user ON true
            {where_clause}
            ORDER BY ba.created_at DESC
            LIMIT ${param_idx} OFFSET ${}"#,
@@ -263,7 +292,18 @@ pub async fn approve_appeal(
 
     // 返回更新后的记录
     let ban_info: Option<(String, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT reason, ban_type, operator_name, server_name FROM ban_records WHERE id = $1",
+        r#"SELECT br.reason, br.ban_type, COALESCE(operator_user.display_name, br.operator_name) AS operator_name, br.server_name
+           FROM ban_records br
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
+             FROM users u
+             WHERE u.username = br.operator_name
+                OR u.display_name = br.operator_name
+                OR NULLIF(u.remark, '') = br.operator_name
+             ORDER BY CASE WHEN u.username = br.operator_name THEN 0 WHEN u.display_name = br.operator_name THEN 1 ELSE 2 END
+             LIMIT 1
+           ) operator_user ON true
+           WHERE br.id = $1"#,
     )
     .bind(row.ban_id)
     .fetch_optional(&db.pool)
@@ -322,7 +362,18 @@ pub async fn reject_appeal(
     .await?;
 
     let ban_info: Option<(String, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT reason, ban_type, operator_name, server_name FROM ban_records WHERE id = $1",
+        r#"SELECT br.reason, br.ban_type, COALESCE(operator_user.display_name, br.operator_name) AS operator_name, br.server_name
+           FROM ban_records br
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
+             FROM users u
+             WHERE u.username = br.operator_name
+                OR u.display_name = br.operator_name
+                OR NULLIF(u.remark, '') = br.operator_name
+             ORDER BY CASE WHEN u.username = br.operator_name THEN 0 WHEN u.display_name = br.operator_name THEN 1 ELSE 2 END
+             LIMIT 1
+           ) operator_user ON true
+           WHERE br.id = $1"#,
     )
     .bind(row.ban_id)
     .fetch_optional(&db.pool)

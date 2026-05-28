@@ -7,20 +7,41 @@ import { useToast, ToastContainer } from '../../shared/Toast.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
+import { notifyPendingReviewsUpdated, usePendingReviewIndicators } from '../../hooks/usePendingReviewIndicators.js';
+
+const GLOBAL_BANS_SESSION_CACHE = new Map();
 
 // 批量查询全球封禁记录（通过后端代理）
 async function fetchGlobalBansBatch(steamids) {
+  const results = {};
+  const missingSteamIds = [];
+
+  for (const steamid of new Set(steamids.filter(Boolean))) {
+    if (GLOBAL_BANS_SESSION_CACHE.has(steamid)) {
+      results[steamid] = GLOBAL_BANS_SESSION_CACHE.get(steamid);
+    } else {
+      missingSteamIds.push(steamid);
+    }
+  }
+
+  if (missingSteamIds.length === 0) return results;
+
   try {
     const response = await fetch('/api/public/global-bans/batch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ steamids }),
+      body: JSON.stringify({ steamids: missingSteamIds }),
     });
-    if (!response.ok) return {};
+    if (!response.ok) return results;
     const data = await response.json();
-    return data.results || {};
+    const fetchedResults = data.results || {};
+    for (const [steamid, value] of Object.entries(fetchedResults)) {
+      GLOBAL_BANS_SESSION_CACHE.set(steamid, value);
+      results[steamid] = value;
+    }
+    return results;
   } catch {
-    return {};
+    return results;
   }
 }
 
@@ -38,6 +59,7 @@ const emptyManualForm = {
   steam_input: '',
 };
 
+const APPROVE_REVIEW_SECONDS = 5;
 const STATUS_MAP = { pending: 'pending', approved: 'approved', rejected: 'rejected' };
 const PLAYER_LINK_TARGETS = [
   {
@@ -53,10 +75,214 @@ const PLAYER_LINK_TARGETS = [
 ];
 const PLAYER_CONTEXT_MENU_SIZE = { width: 180, height: 112 };
 
+function emptyApproveModal() {
+  return {
+    open: false,
+    item: null,
+    reason: '',
+    error: '',
+    bans: [],
+    secondsRemaining: APPROVE_REVIEW_SECONDS,
+  };
+}
+
+function GlobalBanRecordList({ bans }) {
+  if (!bans.length) {
+    return <div className="global-ban-empty">暂无封禁记录</div>;
+  }
+
+  return (
+    <div className="global-ban-list">
+      {bans.map((ban, index) => (
+        <div key={index} className="global-ban-item">
+          <div className="global-ban-item-header">
+            <span className="global-ban-type">{ban.ban_type || '作弊'}</span>
+            {ban.expires_on ? (
+              <span className="global-ban-temporary">临时</span>
+            ) : (
+              <span className="global-ban-permanent">永久</span>
+            )}
+          </div>
+          <div className="global-ban-item-body">
+            {ban.player_name && (
+              <div className="global-ban-field">
+                <span className="global-ban-label">玩家</span>
+                <span className="global-ban-value">{ban.player_name}</span>
+              </div>
+            )}
+            {ban.notes && (
+              <div className="global-ban-field">
+                <span className="global-ban-label">备注</span>
+                <span className="global-ban-value">{ban.notes}</span>
+              </div>
+            )}
+            {ban.stats && (
+              <div className="global-ban-field">
+                <span className="global-ban-label">统计</span>
+                <span className="global-ban-value global-ban-stats">{ban.stats}</span>
+              </div>
+            )}
+            {ban.created_on && (
+              <div className="global-ban-field">
+                <span className="global-ban-label">封禁时间</span>
+                <span className="global-ban-value">{formatChinaDateTime(ban.created_on)}</span>
+              </div>
+            )}
+            {ban.expires_on && (
+              <div className="global-ban-field">
+                <span className="global-ban-label">到期时间</span>
+                <span className="global-ban-value">{formatChinaDateTime(ban.expires_on)}</span>
+              </div>
+            )}
+            {ban.server_name && (
+              <div className="global-ban-field">
+                <span className="global-ban-label">服务器</span>
+                <span className="global-ban-value">{ban.server_name}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function parseGlobalBanStats(stats) {
+  if (!stats || typeof stats !== 'string') return {};
+  const perfsMatch = stats.match(/Perfs:\s*(\d+)\s*\/\s*(\d+)/i);
+  const averageMatch = stats.match(/Average:\s*(-?\d+(?:\.\d+)?)/i);
+  return {
+    perfs: perfsMatch ? Number(perfsMatch[1]) : null,
+    perfTotal: perfsMatch ? Number(perfsMatch[2]) : null,
+    average: averageMatch ? Number(averageMatch[1]) : null,
+  };
+}
+
+function isPermanentGlobalBan(ban) {
+  if (!ban?.expires_on) return true;
+  const value = String(ban.expires_on);
+  return value.startsWith('9999') || value.startsWith('2099');
+}
+
+function isActiveGlobalBan(ban) {
+  if (!ban?.expires_on || isPermanentGlobalBan(ban)) return true;
+  const expiresAt = new Date(ban.expires_on).getTime();
+  return Number.isFinite(expiresAt) && expiresAt > Date.now();
+}
+
+function inferGlobalBanRisk(bans) {
+  if (!Array.isArray(bans) || bans.length === 0) return null;
+
+  const typeScores = new Map();
+  const reasons = [];
+  let totalScore = 0;
+  let strongestScore = 0;
+  let permanentOrActiveCount = 0;
+  let hackSignalCount = 0;
+  let macroSignalCount = 0;
+  let expiredFiniteCount = 0;
+
+  for (const ban of bans) {
+    const banType = String(ban?.ban_type ?? '').toLowerCase();
+    const notes = String(ban?.notes ?? '').toLowerCase();
+    const { perfs, perfTotal, average } = parseGlobalBanStats(ban?.stats);
+    const hasPermanentOrActive = isActiveGlobalBan(ban);
+    const perfsRatio = perfTotal ? perfs / perfTotal : 0;
+
+    let recordType = banType || 'bhop异常';
+    let recordScore = 0;
+    const recordReasons = [];
+
+    if (banType.includes('hack') || notes.includes("1's or 2's") || notes.includes('1s or 2s')) {
+      recordType = banType || 'bhop_hack';
+      recordScore += 5;
+      hackSignalCount += 1;
+      recordReasons.push(`命中 ${recordType} / 低滚轮模式特征`);
+    }
+
+    if (banType.includes('macro') || notes.includes('high scroll pattern')) {
+      recordType = banType || 'bhop_macro';
+      recordScore += 4;
+      macroSignalCount += 1;
+      recordReasons.push(`命中 ${recordType} / 高滚轮模式特征`);
+    }
+
+    if (average !== null && average <= 3) {
+      recordType = banType || 'bhop_hack';
+      recordScore += 3;
+      hackSignalCount += 1;
+      recordReasons.push(`滚轮平均值 ${average.toFixed(2)} 偏低`);
+    }
+
+    if (average !== null && average >= 14) {
+      recordType = banType || 'bhop_macro';
+      recordScore += 2;
+      macroSignalCount += 1;
+      recordReasons.push(`滚轮平均值 ${average.toFixed(2)} 偏高`);
+    }
+
+    if (perfsRatio >= 0.6) {
+      recordScore += 2;
+      recordReasons.push(`Perfs 命中 ${perfs}/${perfTotal}`);
+    }
+
+    if (hasPermanentOrActive) {
+      recordScore += 3;
+      permanentOrActiveCount += 1;
+      recordReasons.push('封禁永久或仍未到期');
+    } else if (ban?.expires_on) {
+      expiredFiniteCount += 1;
+    }
+
+    if (recordScore > 0) {
+      typeScores.set(recordType, (typeScores.get(recordType) ?? 0) + recordScore);
+      totalScore += recordScore;
+      strongestScore = Math.max(strongestScore, recordScore);
+      reasons.push(...recordReasons.slice(0, 3));
+    }
+  }
+
+  if (bans.length >= 2) {
+    totalScore += 2;
+    reasons.push(`存在 ${bans.length} 条全球封禁记录`);
+  }
+
+  const sortedTypes = [...typeScores.entries()].sort((a, b) => b[1] - a[1]);
+  const label = sortedTypes[0]?.[0] ?? 'bhop异常';
+  const allExpiredFinite = expiredFiniteCount === bans.length;
+  const hasStrongSuspicion = totalScore >= 8 || strongestScore >= 7 || permanentOrActiveCount > 0 || hackSignalCount > 0 || macroSignalCount >= 2;
+
+  if (hasStrongSuspicion) {
+    return {
+      tone: 'danger',
+      label,
+      title: `系统判断该玩家高度疑似 ${label}，请谨慎审核！`,
+      reasons: [...new Set(reasons)].slice(0, 4),
+    };
+  }
+
+  if (allExpiredFinite) {
+    return {
+      tone: 'warning',
+      label: '误封嫌疑',
+      title: '系统判断该玩家全球封禁存在误封嫌疑！',
+      reasons: ['全球封禁均已到期', '未命中明确的永久封禁、hack 或重复宏特征', ...new Set(reasons)].slice(0, 4),
+    };
+  }
+
+  return {
+    tone: 'warning',
+    label: '需要人工复核',
+    title: '系统无法确认该全球封禁风险，请人工复核封禁详情。',
+    reasons: [...new Set(reasons)].slice(0, 4),
+  };
+}
+
 export function WhitelistPage() {
   const { session } = useAuth();
   const { confirm, dialog } = useConfirmDialog();
   const { toast, toasts, dismiss: dismissToast } = useToast();
+  const { counts: pendingCounts } = usePendingReviewIndicators();
   const token = session?.token ?? null;
   function getSavedTab() {
     try { return localStorage.getItem('whitelist_tab') || 'pending'; } catch { return 'pending'; }
@@ -69,7 +295,7 @@ export function WhitelistPage() {
   const [error, setError] = useState('');
   const [manualModalOpen, setManualModalOpen] = useState(false);
   const [rejectModal, setRejectModal] = useState({ open: false, item: null, reason: '', error: '' });
-  const [approveModal, setApproveModal] = useState({ open: false, item: null, reason: '', error: '' });
+  const [approveModal, setApproveModal] = useState(emptyApproveModal);
   const [manualForm, setManualForm] = useState(emptyManualForm);
   const [manualError, setManualError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -111,6 +337,19 @@ export function WhitelistPage() {
   useEffect(() => {
     loadItems();
   }, [loadItems]);
+
+  useEffect(() => {
+    if (!approveModal.open || approveModal.secondsRemaining <= 0) return undefined;
+
+    const timer = window.setTimeout(() => {
+      setApproveModal((prev) => {
+        if (!prev.open || prev.secondsRemaining <= 0) return prev;
+        return { ...prev, secondsRemaining: prev.secondsRemaining - 1 };
+      });
+    }, 1000);
+
+    return () => window.clearTimeout(timer);
+  }, [approveModal.open, approveModal.secondsRemaining]);
 
   useEffect(() => {
     try { localStorage.setItem('whitelist_tab', tab); } catch {}
@@ -191,13 +430,19 @@ export function WhitelistPage() {
     const itemBans = globalBans[item.steamid64];
     const hasGlobalBan = Array.isArray(itemBans) && itemBans.length > 0;
     if (hasGlobalBan) {
-      setApproveModal({ open: true, item, reason: '', error: '' });
+      setApproveModal({
+        ...emptyApproveModal(),
+        open: true,
+        item,
+        bans: itemBans,
+      });
       return;
     }
     try {
       setSubmitting(true);
       await api.approveWhitelist(token, item.id);
       await loadItems();
+      notifyPendingReviewsUpdated({ source: 'whitelist', action: 'approve' });
       toast({ title: '审核通过', message: `${item.nickname} 的白名单申请已通过。` });
     } catch (actionError) {
       toast({ title: '操作失败', message: actionError.message, tone: 'danger' });
@@ -208,6 +453,10 @@ export function WhitelistPage() {
 
   async function handleApproveWithReason() {
     if (!approveModal.item) return;
+    if (approveModal.secondsRemaining > 0) {
+      setApproveModal((prev) => ({ ...prev, error: `请先查看全球封禁详情，${prev.secondsRemaining} 秒后才能确认通过。` }));
+      return;
+    }
     if (!approveModal.reason.trim()) {
       setApproveModal((prev) => ({ ...prev, error: '该玩家有全球封禁记录，请说明通过理由。' }));
       return;
@@ -218,8 +467,9 @@ export function WhitelistPage() {
       await api.approveWhitelist(token, approveModal.item.id, {
         reason: approveModal.reason.trim(),
       });
-      setApproveModal({ open: false, item: null, reason: '', error: '' });
+      setApproveModal(emptyApproveModal());
       await loadItems();
+      notifyPendingReviewsUpdated({ source: 'whitelist', action: 'approve' });
       toast({ title: '审核通过', message: `${approveModal.item.nickname} 的白名单申请已通过。` });
     } catch (actionError) {
       setApproveModal((prev) => ({ ...prev, error: actionError.message }));
@@ -246,6 +496,7 @@ export function WhitelistPage() {
       });
       setRejectModal({ open: false, item: null, reason: '', error: '' });
       await loadItems();
+      notifyPendingReviewsUpdated({ source: 'whitelist', action: 'reject' });
       toast({ title: '已拒绝', message: `已拒绝 ${rejectModal.item.nickname} 的白名单申请。` });
     } catch (actionError) {
       setRejectModal((prev) => ({ ...prev, error: actionError.message }));
@@ -259,6 +510,7 @@ export function WhitelistPage() {
       setSubmitting(true);
       await api.restoreWhitelist(token, item.id);
       await loadItems();
+      notifyPendingReviewsUpdated({ source: 'whitelist', action: 'restore' });
       toast({ title: '恢复成功', message: `${item.nickname} 的白名单已恢复。` });
     } catch (actionError) {
       toast({ title: '操作失败', message: actionError.message, tone: 'danger' });
@@ -278,6 +530,7 @@ export function WhitelistPage() {
       setSubmitting(true);
       await api.revokeWhitelist(token, item.id);
       await loadItems();
+      notifyPendingReviewsUpdated({ source: 'whitelist', action: 'revoke' });
       toast({ title: '删除成功', message: `${item.nickname} 的白名单审核已删除。` });
     } catch (actionError) {
       toast({ title: '操作失败', message: actionError.message, tone: 'danger' });
@@ -306,6 +559,7 @@ export function WhitelistPage() {
       setManualModalOpen(false);
       setManualForm(emptyManualForm);
       await loadItems();
+      notifyPendingReviewsUpdated({ source: 'whitelist', action: 'manual_create' });
       toast({ title: '添加成功', message: `已手动添加 ${manualForm.nickname.trim()} 的白名单。` });
     } catch (actionError) {
       setManualError(actionError.message);
@@ -380,6 +634,8 @@ export function WhitelistPage() {
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
+  const hasPendingWhitelist = (pendingCounts.whitelist ?? 0) > 0;
+  const approveGlobalBanRisk = inferGlobalBanRisk(approveModal.bans);
 
   return (
     <div id="whitelist" className="content-section active">
@@ -396,7 +652,10 @@ export function WhitelistPage() {
       </div>
 
       <div className="tabs">
-        <button className={`tab ${tab === 'pending' ? 'active' : ''}`} onClick={() => switchTab('pending')}>待审核</button>
+        <button className={`tab ${tab === 'pending' ? 'active' : ''}`} onClick={() => switchTab('pending')}>
+          <span>待审核</span>
+          {hasPendingWhitelist ? <span className="tab-pending-dot" title={`有 ${pendingCounts.whitelist} 条待审核白名单`} /> : null}
+        </button>
         <button className={`tab ${tab === 'approved' ? 'active' : ''}`} onClick={() => switchTab('approved')}>已通过</button>
         <button className={`tab ${tab === 'rejected' ? 'active' : ''}`} onClick={() => switchTab('rejected')}>未通过</button>
       </div>
@@ -645,19 +904,44 @@ export function WhitelistPage() {
             <span>通过白名单申请（全球封禁）</span>
           </div>
         }
-        onClose={() => setApproveModal({ open: false, item: null, reason: '', error: '' })}
+        onClose={() => setApproveModal(emptyApproveModal())}
         footer={(
           <>
-            <button className="btn btn-outline" onClick={() => setApproveModal({ open: false, item: null, reason: '', error: '' })}>取消</button>
-            <button className="btn btn-primary" onClick={handleApproveWithReason} disabled={submitting}>确认通过</button>
+            <button className="btn btn-outline" onClick={() => setApproveModal(emptyApproveModal())}>取消</button>
+            <button
+              className="btn btn-primary"
+              onClick={handleApproveWithReason}
+              disabled={submitting || approveModal.secondsRemaining > 0}
+            >
+              {approveModal.secondsRemaining > 0 ? `${approveModal.secondsRemaining} 秒后可通过` : submitting ? '处理中...' : '确认通过'}
+            </button>
           </>
         )}
       >
         <div className="global-ban-alert" style={{ marginBottom: 12 }}>
           <div className="global-ban-alert-icon">⚠</div>
           <div className="global-ban-alert-text">
-            该玩家在全球 KZ 封禁库中有封禁记录，请说明通过理由。
+            该玩家在全球 KZ 封禁库中有 <strong>{approveModal.bans.length}</strong> 条封禁记录。请完整查看下方封禁详情，倒计时结束并填写通过理由后才可正式通过。
           </div>
+        </div>
+        {approveGlobalBanRisk ? (
+          <div className={`global-ban-risk global-ban-risk-${approveGlobalBanRisk.tone}`}>
+            <div className="global-ban-risk-title">{approveGlobalBanRisk.title}</div>
+            {approveGlobalBanRisk.reasons.length > 0 ? (
+              <div className="global-ban-risk-reasons">
+                {approveGlobalBanRisk.reasons.map((reason) => (
+                  <span key={reason}>{reason}</span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        <div className="global-ban-info">
+          <div><strong>玩家:</strong> {approveModal.item?.nickname ?? '-'}</div>
+          <div><strong>SteamID64:</strong> <code>{approveModal.item?.steamid64 ?? '-'}</code></div>
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <GlobalBanRecordList bans={approveModal.bans} />
         </div>
         <div className="form-group"><label>通过理由</label><textarea className="form-control" rows={4} value={approveModal.reason} onChange={(event) => setApproveModal((prev) => ({ ...prev, reason: event.target.value, error: '' }))} placeholder="请说明为什么在有全球封禁记录的情况下仍然通过" /></div>
         {approveModal.error ? <div style={{ color: 'var(--accent)' }}>{approveModal.error}</div> : null}

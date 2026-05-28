@@ -10,6 +10,7 @@ import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { formatChinaDateTime } from '../../shared/time.js';
+import { notifyPendingReviewsUpdated } from '../../hooks/usePendingReviewIndicators.js';
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
 const ALLOWED_VIDEO = '.mp4,.avi,.mov,.webm,.mkv';
@@ -412,6 +413,9 @@ export function BanPage() {
       }
       resetBanModal();
       refresh();
+      if (reportReviewOnSave?.reportId) {
+        notifyPendingReviewsUpdated({ source: 'playerReport', action: 'ban' });
+      }
       toast({
         title: modalMode === 'edit' ? '保存成功' : '添加成功',
         message: modalMode === 'edit'

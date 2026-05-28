@@ -109,10 +109,29 @@ pub async fn list_whitelist(
 
     let count_sql = format!("SELECT COUNT(*) FROM whitelist_requests {where_clause}");
     let data_sql = format!(
-        r#"SELECT id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
-                  applied_at, approved_at, approved_by, approval_reason,
-                  rejected_at, rejected_by, rejection_reason
-           FROM whitelist_requests {where_clause} ORDER BY applied_at DESC LIMIT ${param_idx} OFFSET ${}"#,
+        r#"SELECT wr.id, wr.steamid64, wr.steamid, wr.steamid3, wr.profile_url, wr.nickname, wr.steam_persona_name, wr.status,
+                  wr.applied_at, wr.approved_at, COALESCE(approved_user.display_name, wr.approved_by) AS approved_by, wr.approval_reason,
+                  wr.rejected_at, COALESCE(rejected_user.display_name, wr.rejected_by) AS rejected_by, wr.rejection_reason
+           FROM whitelist_requests wr
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
+             FROM users u
+             WHERE u.username = wr.approved_by
+                OR u.display_name = wr.approved_by
+                OR NULLIF(u.remark, '') = wr.approved_by
+             ORDER BY CASE WHEN u.username = wr.approved_by THEN 0 WHEN u.display_name = wr.approved_by THEN 1 ELSE 2 END
+             LIMIT 1
+           ) approved_user ON true
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
+             FROM users u
+             WHERE u.username = wr.rejected_by
+                OR u.display_name = wr.rejected_by
+                OR NULLIF(u.remark, '') = wr.rejected_by
+             ORDER BY CASE WHEN u.username = wr.rejected_by THEN 0 WHEN u.display_name = wr.rejected_by THEN 1 ELSE 2 END
+             LIMIT 1
+           ) rejected_user ON true
+           {where_clause} ORDER BY wr.applied_at DESC LIMIT ${param_idx} OFFSET ${}"#,
         param_idx + 1
     );
 

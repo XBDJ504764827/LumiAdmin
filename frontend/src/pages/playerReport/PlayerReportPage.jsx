@@ -8,12 +8,19 @@ import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { useNavigate } from 'react-router-dom';
 import { formatChinaDateTime } from '../../shared/time.js';
+import { notifyPendingReviewsUpdated, usePendingReviewIndicators } from '../../hooks/usePendingReviewIndicators.js';
 
 const STATUS_MAP = {
   pending: { label: '待审核', pill: 'pill-warning' },
   approved: { label: '已封禁', pill: 'pill-success' },
   rejected: { label: '已驳回', pill: 'pill-offline' },
 };
+const STATUS_FILTERS = [
+  { value: undefined, label: '全部状态' },
+  { value: 'pending', label: '待审核' },
+  { value: 'approved', label: '已封禁' },
+  { value: 'rejected', label: '已驳回' },
+];
 
 function formatFileSize(bytes) {
   const value = Number(bytes);
@@ -89,6 +96,7 @@ export function PlayerReportPage() {
   const { confirm, dialog } = useConfirmDialog();
   const { toast, toasts, dismiss: dismissToast } = useToast();
   const navigate = useNavigate();
+  const { counts: pendingCounts } = usePendingReviewIndicators();
   const token = session?.token ?? null;
 
   const [search, setSearch] = useState('');
@@ -190,6 +198,7 @@ export function PlayerReportPage() {
       setReviewOpen(false);
       setReviewItem(null);
       await loadItems();
+      notifyPendingReviewsUpdated({ source: 'playerReport', action: reviewStatus });
       toast({ title: '驳回成功', message: '已驳回该玩家举报。' });
     } catch (e) {
       toast({ title: '驳回失败', message: e.message, tone: 'danger' });
@@ -200,6 +209,7 @@ export function PlayerReportPage() {
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
+  const hasPendingReports = (pendingCounts.playerReport ?? 0) > 0;
 
   return (
     <div id="player-report" className="content-section active">
@@ -211,17 +221,25 @@ export function PlayerReportPage() {
         </div>
       </div>
 
+      <div className="tabs">
+        {STATUS_FILTERS.map((filter) => (
+          <button
+            key={filter.value ?? 'all'}
+            className={`tab ${status === filter.value ? 'active' : ''}`}
+            onClick={() => { setStatus(filter.value); setPage(1); }}
+          >
+            <span>{filter.label}</span>
+            {filter.value === 'pending' && hasPendingReports ? (
+              <span className="tab-pending-dot" title={`有 ${pendingCounts.playerReport} 条待审核玩家举报`} />
+            ) : null}
+          </button>
+        ))}
+      </div>
+
       <SearchBar
         value={search}
         onChange={(v) => { setSearch(v); setPage(1); }}
         placeholder="搜索 SteamID / 玩家名称..."
-        statusOptions={[
-          { value: 'pending', label: '待审核' },
-          { value: 'approved', label: '已封禁' },
-          { value: 'rejected', label: '已驳回' },
-        ]}
-        statusValue={status}
-        onStatusChange={(v) => { setStatus(v); setPage(1); }}
       />
 
       <div className="card">

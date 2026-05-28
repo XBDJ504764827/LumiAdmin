@@ -7,6 +7,7 @@ import { Modal } from '../../shared/Modal.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
+import { notifyPendingReviewsUpdated, usePendingReviewIndicators } from '../../hooks/usePendingReviewIndicators.js';
 
 // 解析全球封禁数据
 function parseBanData(data) {
@@ -32,6 +33,12 @@ const STATUS_MAP = {
   approved: { label: '已通过', pill: 'pill-success' },
   rejected: { label: '已驳回', pill: 'pill-offline' },
 };
+const STATUS_FILTERS = [
+  { value: undefined, label: '全部状态' },
+  { value: 'pending', label: '待审核' },
+  { value: 'approved', label: '已通过' },
+  { value: 'rejected', label: '已驳回' },
+];
 
 function fileIcon(category) {
   if (category === 'video') return '🎬';
@@ -107,6 +114,7 @@ export function BanAppealPage() {
   const { session } = useAuth();
   const { confirm, dialog } = useConfirmDialog();
   const { toast, toasts, dismiss: dismissToast } = useToast();
+  const { counts: pendingCounts } = usePendingReviewIndicators();
   const token = session?.token ?? null;
 
   const [search, setSearch] = useState('');
@@ -206,6 +214,7 @@ export function BanAppealPage() {
       setReviewOpen(false);
       setReviewItem(null);
       refresh();
+      notifyPendingReviewsUpdated({ source: 'banAppeal', action: reviewMode });
       toast({
         title: `${action}成功`,
         message: reviewMode === 'approve'
@@ -221,6 +230,7 @@ export function BanAppealPage() {
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
+  const hasPendingAppeals = (pendingCounts.banAppeal ?? 0) > 0;
 
   return (
     <div id="ban-appeal" className="content-section active">
@@ -232,17 +242,25 @@ export function BanAppealPage() {
         </div>
       </div>
 
+      <div className="tabs">
+        {STATUS_FILTERS.map((filter) => (
+          <button
+            key={filter.value ?? 'all'}
+            className={`tab ${status === filter.value ? 'active' : ''}`}
+            onClick={() => { setStatus(filter.value); setPage(1); }}
+          >
+            <span>{filter.label}</span>
+            {filter.value === 'pending' && hasPendingAppeals ? (
+              <span className="tab-pending-dot" title={`有 ${pendingCounts.banAppeal} 条待审核封禁申诉`} />
+            ) : null}
+          </button>
+        ))}
+      </div>
+
       <SearchBar
         value={search}
         onChange={(v) => { setSearch(v); setPage(1); }}
         placeholder="搜索 SteamID / 玩家名称..."
-        statusOptions={[
-          { value: 'pending', label: '待审核' },
-          { value: 'approved', label: '已通过' },
-          { value: 'rejected', label: '已驳回' },
-        ]}
-        statusValue={status}
-        onStatusChange={(v) => { setStatus(v); setPage(1); }}
       />
 
       <div className="card">

@@ -8,7 +8,7 @@ pub fn build_session(user: &User, ttl_hours: i64) -> Session {
         token: Uuid::new_v4(),
         user_id: user.id,
         role: user.role.clone(),
-        display_name: user.display_name.clone(),
+        display_name: user.preferred_operator_name(),
         role_label: role_label(&user.role).to_string(),
         expires_at: now + Duration::hours(ttl_hours),
         created_at: now,

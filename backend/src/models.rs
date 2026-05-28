@@ -15,6 +15,17 @@ pub struct User {
     pub created_at: DateTime<Utc>,
 }
 
+pub fn preferred_operator_name(username: &str, remark: Option<&str>) -> String {
+    let remark = remark.map(str::trim).filter(|value| !value.is_empty());
+    remark.unwrap_or(username.trim()).to_string()
+}
+
+impl User {
+    pub fn preferred_operator_name(&self) -> String {
+        preferred_operator_name(&self.username, self.remark.as_deref())
+    }
+}
+
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct Operator {

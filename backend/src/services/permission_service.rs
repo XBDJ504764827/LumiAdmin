@@ -72,7 +72,9 @@ pub fn can_manage_player_api_config(actor: &Operator) -> bool {
 pub fn can_unban_record(actor: &Operator, record: &BanRecord) -> bool {
     match actor.role.as_str() {
         "developer" | "admin" => true,
-        "normal" => record.operator_name == actor.display_name,
+        "normal" => {
+            record.operator_name == actor.display_name || record.operator_name == actor.username
+        }
         _ => false,
     }
 }

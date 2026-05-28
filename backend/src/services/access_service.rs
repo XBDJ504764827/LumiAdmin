@@ -50,6 +50,7 @@ struct ActiveBanInfo {
 
 #[derive(Debug, Deserialize)]
 struct GokzPlayerResponse {
+    #[allow(dead_code)]
     #[serde(default, alias = "name", alias = "player_name")]
     steam_name: Option<String>,
     rating: Option<f64>,

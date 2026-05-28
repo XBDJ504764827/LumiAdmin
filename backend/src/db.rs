@@ -1401,11 +1401,11 @@ mod tests {
             db.migrate().await?;
 
             sqlx::query(
-                r#"INSERT INTO users (id, username, display_name, password_hash, role)
-                   VALUES ($1, 'admin_preview_admin', 'Admin One', 'pw', 'admin'),
-                          ($2, 'admin_preview_dev', 'Dev One', 'pw', 'developer'),
-                          ($3, 'admin_preview_normal', 'Normal One', 'pw', 'normal'),
-                          ($4, 'admin_preview_guest', 'Guest One', 'pw', 'guest')"#,
+                r#"INSERT INTO users (id, username, display_name, password_hash, role, remark)
+                   VALUES ($1, 'admin_preview_admin', 'Admin One', 'pw', 'admin', 'Admin Remark'),
+                          ($2, 'admin_preview_dev', 'Dev One', 'pw', 'developer', NULL),
+                          ($3, 'admin_preview_normal', 'Normal One', 'pw', 'normal', ''),
+                          ($4, 'admin_preview_guest', 'Guest One', 'pw', 'guest', 'Guest Remark')"#,
             )
             .bind(Uuid::new_v4())
             .bind(Uuid::new_v4())
@@ -1423,7 +1423,14 @@ mod tests {
             preview_names.sort_unstable();
 
             assert_eq!(metrics.admins, 3);
-            assert_eq!(preview_names, vec!["Admin One", "Dev One", "Normal One"]);
+            assert_eq!(
+                preview_names,
+                vec![
+                    "Admin Remark",
+                    "admin_preview_dev",
+                    "admin_preview_normal"
+                ]
+            );
             assert!(metrics
                 .admin_preview
                 .iter()

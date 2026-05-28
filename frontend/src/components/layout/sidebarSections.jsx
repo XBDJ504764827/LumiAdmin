@@ -52,6 +52,7 @@ export function sidebarSections(role) {
       children: [
         { path: '/docs/api', label: 'API 接口列表', icon: icons.api },
         { path: '/player-api', label: '玩家信息 API', icon: icons.playerApi },
+        { path: '/external-ban-api', label: '外部封禁 API', icon: icons.ban },
       ],
     },
     { path: '/external-servers', label: '外部服务器', icon: icons.externalServer },

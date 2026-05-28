@@ -260,11 +260,12 @@ pub async fn ban_report(
 
     let steam_id = resolved_input_steam_id.unwrap_or_else(|| report_row.target_steam_id.clone());
 
-    let existing: Option<(Uuid,)> =
-        sqlx::query_as(r#"SELECT id FROM ban_records WHERE steam_id = $1 AND status = 'active' FOR UPDATE"#)
-            .bind(&steam_id)
-            .fetch_optional(&mut *tx)
-            .await?;
+    let existing: Option<(Uuid,)> = sqlx::query_as(
+        r#"SELECT id FROM ban_records WHERE steam_id = $1 AND status = 'active' FOR UPDATE"#,
+    )
+    .bind(&steam_id)
+    .fetch_optional(&mut *tx)
+    .await?;
     anyhow::ensure!(
         existing.is_none(),
         "该玩家已有活跃封禁记录，请先解封后再重新封禁"
@@ -330,7 +331,10 @@ pub async fn ban_report(
     })
 }
 
-pub async fn find_upload_token_hash(db: &Database, id: Uuid) -> anyhow::Result<(String, Option<String>)> {
+pub async fn find_upload_token_hash(
+    db: &Database,
+    id: Uuid,
+) -> anyhow::Result<(String, Option<String>)> {
     let row = sqlx::query_as("SELECT status, upload_token_hash FROM player_reports WHERE id = $1")
         .bind(id)
         .fetch_one(&db.pool)

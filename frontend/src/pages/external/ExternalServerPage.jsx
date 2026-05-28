@@ -4,6 +4,7 @@ import { useAsync } from '../../shared/useAsync.js';
 import { useAuth } from '../../state/auth.jsx';
 import { useToast, ToastContainer } from '../../shared/Toast.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
+import { formatChinaMonthDayTime } from '../../shared/time.js';
 
 function normalizeServer(item) {
   return {
@@ -134,16 +135,6 @@ export function ExternalServerPage() {
     }
   }
 
-  function formatTime(iso) {
-    if (!iso) return '-';
-    try {
-      const d = new Date(iso);
-      return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-    } catch {
-      return iso;
-    }
-  }
-
   return (
     <div id="external-servers" className="content-section active">
       <div className="breadcrumb">
@@ -205,7 +196,7 @@ export function ExternalServerPage() {
                         </span>
                       </td>
                       <td style={{ fontSize: 13, color: 'var(--text2)' }}>{server.pollInterval}s</td>
-                      <td style={{ fontSize: 12, color: 'var(--text3)' }}>{formatTime(server.lastQueriedAt)}</td>
+                      <td style={{ fontSize: 12, color: 'var(--text3)' }}>{formatChinaMonthDayTime(server.lastQueriedAt)}</td>
                       <td>
                         <div className="action-btn-group">
                           <button className="action-btn action-btn-accent" onClick={() => handleTest(server)} disabled={testing === server.id}>

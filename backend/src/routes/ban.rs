@@ -9,8 +9,8 @@ use uuid::Uuid;
 use crate::routes::{current_operator, forbidden, invalid_request, AppCtx, ListQuery};
 use crate::services::rate_limit_service::extract_client_ip;
 use crate::services::{
-    audit_service, ban_service, log_service, notification_service, permission_service,
-    plugin_ban_service, r2_storage,
+    audit_service, ban_service, external_ban_api_service, log_service, notification_service,
+    permission_service, plugin_ban_service, r2_storage,
 };
 
 #[derive(Deserialize)]
@@ -153,6 +153,7 @@ pub(crate) async fn create_ban(
     {
         tracing::warn!(%e, "ban create notification failed");
     }
+    external_ban_api_service::sync_ban_if_enabled(&ctx.db, &item).await;
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({ "item": item })),
@@ -584,6 +585,7 @@ pub(crate) async fn create_plugin_ban(
     {
         tracing::warn!(%e, "plugin ban audit log write failed");
     }
+    external_ban_api_service::sync_ban_if_enabled(&ctx.db, &item).await;
 
     let kick_message = if item.duration_minutes == 0 {
         format!("你已被永久封禁，原因：{}", item.reason)

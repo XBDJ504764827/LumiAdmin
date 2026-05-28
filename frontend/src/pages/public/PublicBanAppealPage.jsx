@@ -1,6 +1,7 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { PublicPageShell } from './PublicPageShell.jsx';
+import { formatChinaDateTime } from '../../shared/time.js';
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
 const ALLOWED_VIDEO = '.mp4,.avi,.mov,.webm,.mkv';
@@ -13,14 +14,6 @@ function formatDuration(minutes) {
   if (minutes < 60) return `${minutes} 分钟`;
   if (minutes < 1440) return `${Math.floor(minutes / 60)} 小时`;
   return `${Math.floor(minutes / 1440)} 天`;
-}
-
-function formatDateTime(isoString) {
-  if (!isoString) return '-';
-  try {
-    const d = new Date(isoString);
-    return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-  } catch { return isoString; }
 }
 
 function formatFileSize(bytes) {
@@ -375,7 +368,7 @@ export function PublicBanAppealPage() {
                             <strong>封禁原因：</strong>{ban.reason}
                           </div>
                           <div style={{ fontSize: 12, color: 'var(--text3)' }}>
-                            封禁时间：{formatDateTime(ban.created_at)} · 操作人：{ban.operator_name}
+                            封禁时间：{formatChinaDateTime(ban.created_at, { seconds: false })} · 操作人：{ban.operator_name}
                             {ban.source === 'game_plugin' ? ' · 来源：游戏插件' : ''}
                           </div>
                         </div>

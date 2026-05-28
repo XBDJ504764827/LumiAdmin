@@ -3,17 +3,14 @@ import { useAuth } from '../../state/auth.jsx';
 import { api } from '../../lib/api.js';
 import { useAsync } from '../../shared/useAsync.js';
 import { normalizeAdminPreviewRows } from './dashboardData.js';
+import { formatChinaToday, getChinaHour } from '../../shared/time.js';
 
 function formatToday() {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = now.getMonth() + 1;
-  const d = now.getDate();
-  return `${y}年${m}月${d}日`;
+  return formatChinaToday();
 }
 
 function greeting() {
-  const h = new Date().getHours();
+  const h = getChinaHour();
   if (h < 6) return '夜深了';
   if (h < 12) return '早上好';
   if (h < 14) return '中午好';

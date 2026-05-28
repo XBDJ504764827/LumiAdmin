@@ -9,7 +9,8 @@ use uuid::Uuid;
 use crate::routes::{current_operator, forbidden, invalid_request, AppCtx, ListQuery};
 use crate::services::rate_limit_service::extract_client_ip;
 use crate::services::{
-    log_service, notification_service, permission_service, player_report_service, r2_storage,
+    external_ban_api_service, log_service, notification_service, permission_service,
+    player_report_service, r2_storage,
 };
 
 #[derive(Deserialize)]
@@ -74,7 +75,10 @@ pub(crate) async fn submit_player_report(
         None,
         "player_report",
         "新玩家举报",
-        &format!("玩家 {} 收到新的公开举报，请尽快审核。", item.target_steam_id),
+        &format!(
+            "玩家 {} 收到新的公开举报，请尽快审核。",
+            item.target_steam_id
+        ),
         Some("/player-reports"),
     )
     .await
@@ -378,6 +382,7 @@ pub(crate) async fn ban_report(
     {
         tracing::warn!(%e, "player report ban notification failed");
     }
+    external_ban_api_service::sync_ban_if_enabled(&ctx.db, &result.ban).await;
 
     Ok((
         StatusCode::CREATED,

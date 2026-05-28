@@ -3,16 +3,7 @@ import { api } from '../../lib/api.js';
 import { useAuth } from '../../state/auth.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { useToast, ToastContainer } from '../../shared/Toast.jsx';
-
-function formatDate(isoString) {
-  if (!isoString) return '-';
-  try {
-    const d = new Date(isoString);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  } catch {
-    return isoString;
-  }
-}
+import { formatChinaDate } from '../../shared/time.js';
 
 export function PlayerAccessPage() {
   const { session } = useAuth();
@@ -380,7 +371,7 @@ export function PlayerAccessPage() {
                         <div className="steam-id" style={{ fontSize: 11, marginTop: 2 }}>{rule.steamid64}</div>
                       </td>
                       <td style={{ minWidth: 200 }}>{renderAccessTags(rule)}</td>
-                      <td style={{ color: 'var(--text3)' }}>{formatDate(rule.updated_at)}</td>
+                      <td style={{ color: 'var(--text3)' }}>{formatChinaDate(rule.updated_at)}</td>
                       <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                         <div className="action-btn-group">
                           <button className="action-btn action-btn-accent" onClick={() => openEditModal(rule)}>编辑</button>

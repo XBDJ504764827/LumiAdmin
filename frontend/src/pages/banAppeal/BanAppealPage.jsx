@@ -6,21 +6,7 @@ import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { Modal } from '../../shared/Modal.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
-
-function formatDateTime(isoString) {
-  if (!isoString) return '-';
-  try {
-    const date = new Date(isoString);
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
-    const h = String(date.getHours()).padStart(2, '0');
-    const min = String(date.getMinutes()).padStart(2, '0');
-    return `${y}-${m}-${d} ${h}:${min}`;
-  } catch {
-    return isoString;
-  }
-}
+import { formatChinaDateTime } from '../../shared/time.js';
 
 // 解析全球封禁数据
 function parseBanData(data) {
@@ -296,9 +282,9 @@ export function BanAppealPage() {
                         <span title={item.ban_reason}>{item.ban_reason || '-'}</span>
                       </td>
                       <td><span className={`status-pill ${st.pill}`}>{st.label}</span></td>
-                      <td style={{ color: 'var(--text3)' }}>{formatDateTime(item.created_at)}</td>
+                      <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(item.created_at, { seconds: false })}</td>
                       <td>{item.reviewed_by || '-'}</td>
-                      <td style={{ color: 'var(--text3)' }}>{item.reviewed_at ? formatDateTime(item.reviewed_at) : '-'}</td>
+                      <td style={{ color: 'var(--text3)' }}>{item.reviewed_at ? formatChinaDateTime(item.reviewed_at, { seconds: false }) : '-'}</td>
                       <td style={{ textAlign: 'right' }}>
                         <div className="action-btn-group">
                           <button className="action-btn action-btn-accent" onClick={() => openDetail(item)}>详情</button>
@@ -364,7 +350,7 @@ export function BanAppealPage() {
               </div>
               {detailItem.reviewed_by ? (
                 <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
-                  由 {detailItem.reviewed_by} 于 {formatDateTime(detailItem.reviewed_at)} 处理
+                  由 {detailItem.reviewed_by} 于 {formatChinaDateTime(detailItem.reviewed_at, { seconds: false })} 处理
                 </div>
               ) : null}
               {detailItem.review_note ? (
@@ -420,13 +406,13 @@ export function BanAppealPage() {
                           {ban.created_on && (
                             <div className="global-ban-field">
                               <span className="global-ban-label">封禁时间</span>
-                              <span className="global-ban-value">{formatDateTime(ban.created_on)}</span>
+                              <span className="global-ban-value">{formatChinaDateTime(ban.created_on, { seconds: false })}</span>
                             </div>
                           )}
                           {ban.expires_on && (
                             <div className="global-ban-field">
                               <span className="global-ban-label">到期时间</span>
-                              <span className="global-ban-value">{formatDateTime(ban.expires_on)}</span>
+                              <span className="global-ban-value">{formatChinaDateTime(ban.expires_on, { seconds: false })}</span>
                             </div>
                           )}
                           {ban.server_name && (

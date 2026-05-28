@@ -1,3 +1,5 @@
+import { formatChinaDateTime } from '../../shared/time.js';
+
 export function formatBanDuration(minutes) {
   if (!minutes) return '永久';
   if (minutes % 60 === 0) return `${minutes / 60} 小时`;
@@ -13,5 +15,5 @@ export function formatBanSource(source, operatorName) {
 
 export function formatExpiresAt(value) {
   if (!value) return '永不过期';
-  return new Date(value).toLocaleString('zh-CN');
+  return formatChinaDateTime(value);
 }

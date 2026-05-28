@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useNotifications } from '../hooks/useNotifications.js';
+import { formatChinaDate } from '../shared/time.js';
 
 const TYPE_ICONS = {
   whitelist_apply: (
@@ -31,7 +32,7 @@ function timeAgo(dateStr) {
   if (hours < 24) return `${hours} 小时前`;
   const days = Math.floor(hours / 24);
   if (days < 30) return `${days} 天前`;
-  return new Date(dateStr).toLocaleDateString('zh-CN');
+  return formatChinaDate(dateStr);
 }
 
 export function NotificationBell() {

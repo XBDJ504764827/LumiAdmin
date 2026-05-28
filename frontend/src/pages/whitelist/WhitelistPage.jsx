@@ -6,22 +6,7 @@ import { useAuth } from '../../state/auth.jsx';
 import { useToast, ToastContainer } from '../../shared/Toast.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
-
-function formatDateTime(isoString) {
-  if (!isoString) return '-';
-  try {
-    const date = new Date(isoString);
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
-    const h = String(date.getHours()).padStart(2, '0');
-    const min = String(date.getMinutes()).padStart(2, '0');
-    const s = String(date.getSeconds()).padStart(2, '0');
-    return `${y}-${m}-${d} ${h}:${min}:${s}`;
-  } catch {
-    return isoString;
-  }
-}
+import { formatChinaDateTime } from '../../shared/time.js';
 
 // 批量查询全球封禁记录（通过后端代理）
 async function fetchGlobalBansBatch(steamids) {
@@ -54,6 +39,19 @@ const emptyManualForm = {
 };
 
 const STATUS_MAP = { pending: 'pending', approved: 'approved', rejected: 'rejected' };
+const PLAYER_LINK_TARGETS = [
+  {
+    key: 'gokz',
+    label: 'GOKZ.TOP',
+    href: (steamid64) => `https://kzcharm.com/profile/${steamid64}`,
+  },
+  {
+    key: 'kzgo',
+    label: 'KZGO.EU',
+    href: (steamid64) => `https://kzgo.eu/players/${steamid64}`,
+  },
+];
+const PLAYER_CONTEXT_MENU_SIZE = { width: 180, height: 112 };
 
 export function WhitelistPage() {
   const { session } = useAuth();
@@ -81,6 +79,13 @@ export function WhitelistPage() {
   const fetchedSteamIdsRef = useRef(new Set()); // 已查询过的 steamid64
   const [banDetailModal, setBanDetailModal] = useState({ open: false, steamid64: '', bans: [] });
   const [refreshing, setRefreshing] = useState(false); // Steam名称刷新状态
+  const [playerContextMenu, setPlayerContextMenu] = useState({
+    open: false,
+    x: 0,
+    y: 0,
+    steamid64: '',
+    nickname: '',
+  });
 
   const canManualCreate = session?.role === 'developer' || session?.role === 'admin';
   const canReview = ['developer', 'admin', 'normal'].includes(session?.role);
@@ -110,6 +115,27 @@ export function WhitelistPage() {
   useEffect(() => {
     try { localStorage.setItem('whitelist_tab', tab); } catch {}
   }, [tab]);
+
+  useEffect(() => {
+    if (!playerContextMenu.open) return undefined;
+
+    const closeMenu = () => setPlayerContextMenu((prev) => ({ ...prev, open: false }));
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') closeMenu();
+    };
+
+    window.addEventListener('click', closeMenu);
+    window.addEventListener('resize', closeMenu);
+    window.addEventListener('scroll', closeMenu, true);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('click', closeMenu);
+      window.removeEventListener('resize', closeMenu);
+      window.removeEventListener('scroll', closeMenu, true);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [playerContextMenu.open]);
 
   // 批量加载当前页所有玩家的全球封禁记录
   useEffect(() => {
@@ -293,6 +319,34 @@ export function WhitelistPage() {
     setBanDetailModal({ open: true, steamid64, bans });
   }
 
+  function openPlayerContextMenu(event, item) {
+    if (!item.steamid64) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const maxX = window.innerWidth - PLAYER_CONTEXT_MENU_SIZE.width - 8;
+    const maxY = window.innerHeight - PLAYER_CONTEXT_MENU_SIZE.height - 8;
+    setPlayerContextMenu({
+      open: true,
+      x: Math.max(8, Math.min(event.clientX, maxX)),
+      y: Math.max(8, Math.min(event.clientY, maxY)),
+      steamid64: item.steamid64,
+      nickname: item.nickname || item.steamid64,
+    });
+  }
+
+  function handlePendingRowContextMenu(event, item) {
+    if (event.target.closest('[data-player-info="true"], button, a, input, textarea, select')) {
+      return;
+    }
+    openPlayerContextMenu(event, item);
+  }
+
+  function openPlayerLink(target) {
+    if (!playerContextMenu.steamid64) return;
+    window.open(target.href(playerContextMenu.steamid64), '_blank', 'noopener,noreferrer');
+    setPlayerContextMenu((prev) => ({ ...prev, open: false }));
+  }
+
   // 刷新单条记录的Steam名称
   async function handleRefreshSteamName(item) {
     try {
@@ -389,8 +443,12 @@ export function WhitelistPage() {
                     const hasGlobalBan = Array.isArray(itemBans) && itemBans.length > 0;
 
                     return (
-                      <tr key={item.id} className={hasGlobalBan ? 'row-global-ban' : ''}>
-                        <td style={{ fontWeight: 600 }}>
+                      <tr
+                        key={item.id}
+                        className={hasGlobalBan ? 'row-global-ban' : ''}
+                        onContextMenu={(event) => handlePendingRowContextMenu(event, item)}
+                      >
+                        <td style={{ fontWeight: 600 }} data-player-info="true">
 <div className="nickname-cell">{item.nickname}</div>
                           {hasGlobalBan && (
                             <button className="global-ban-btn" onClick={() => openBanDetail(item.steamid64)}>
@@ -400,7 +458,7 @@ export function WhitelistPage() {
                             </button>
                           )}
                         </td>
-                        <td style={{ color: item.steam_persona_name ? 'var(--accent2)' : 'var(--text3)' }}>
+                        <td style={{ color: item.steam_persona_name ? 'var(--accent2)' : 'var(--text3)' }} data-player-info="true">
                             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                               <span>{item.steam_persona_name ?? '-'}</span>
                               {canRefreshSteam ? (
@@ -414,10 +472,10 @@ export function WhitelistPage() {
                               ) : null}
                             </div>
                           </td>
-                        <td className="steam-id">{item.steamid64}</td>
-                        <td className="steam-id">{item.steamid ?? '-'}</td>
-                        <td className="steam-id">{item.steamid3 ?? '-'}</td>
-                        <td style={{ color: 'var(--text3)' }}>{formatDateTime(item.applied_at)}</td>
+                        <td className="steam-id" data-player-info="true">{item.steamid64}</td>
+                        <td className="steam-id" data-player-info="true">{item.steamid ?? '-'}</td>
+                        <td className="steam-id" data-player-info="true">{item.steamid3 ?? '-'}</td>
+                        <td style={{ color: 'var(--text3)' }} data-player-info="true">{formatChinaDateTime(item.applied_at)}</td>
                         <td style={{ textAlign: 'right' }}>
                           {canReview ? <div className="action-btn-group">
                             <button className="action-btn action-btn-success" onClick={() => handleApprove(item)} disabled={submitting}>通过</button>
@@ -459,8 +517,8 @@ export function WhitelistPage() {
                       <td className="steam-id">{item.steamid64}</td>
                       <td className="steam-id">{item.steamid ?? '-'}</td>
                       <td className="steam-id">{item.steamid3 ?? '-'}</td>
-                      <td style={{ color: 'var(--text3)' }}>{formatDateTime(item.applied_at)}</td>
-                      <td style={{ color: 'var(--text3)' }}>{formatDateTime(item.approved_at)}</td>
+                      <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(item.applied_at)}</td>
+                      <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(item.approved_at)}</td>
                       <td>{item.approved_by ?? '-'}</td>
                       <td style={{ color: item.approval_reason ? 'var(--accent2)' : 'var(--text3)', maxWidth: 200, wordBreak: 'break-word' }}>{item.approval_reason ?? '-'}</td>
                       <td style={{ textAlign: 'right' }}>
@@ -502,8 +560,8 @@ export function WhitelistPage() {
                       <td className="steam-id">{item.steamid ?? '-'}</td>
                       <td className="steam-id">{item.steamid3 ?? '-'}</td>
                       <td>{item.rejection_reason ?? '-'}</td>
-                      <td style={{ color: 'var(--text3)' }}>{formatDateTime(item.applied_at)}</td>
-                      <td style={{ color: 'var(--text3)' }}>{formatDateTime(item.rejected_at)}</td>
+                      <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(item.applied_at)}</td>
+                      <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(item.rejected_at)}</td>
                       <td>{item.rejected_by ?? '-'}</td>
                       <td style={{ textAlign: 'right' }}>
                         {canReview ? <button className="action-btn action-btn-success" onClick={() => handleRestore(item)} disabled={submitting}>恢复通过</button> : null}
@@ -519,6 +577,30 @@ export function WhitelistPage() {
       </div>
 
       <Pagination page={page} pageSize={20} total={total} onChange={setPage} />
+
+      {playerContextMenu.open ? (
+        <div
+          className="player-context-menu"
+          style={{ left: playerContextMenu.x, top: playerContextMenu.y }}
+          role="menu"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="player-context-menu-title">{playerContextMenu.nickname}</div>
+          <div className="player-context-menu-id">{playerContextMenu.steamid64}</div>
+          <div className="player-context-menu-separator" />
+          {PLAYER_LINK_TARGETS.map((target) => (
+            <button
+              key={target.key}
+              type="button"
+              className="player-context-menu-item"
+              role="menuitem"
+              onClick={() => openPlayerLink(target)}
+            >
+              {target.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       <Modal
         open={manualModalOpen}
@@ -637,13 +719,13 @@ export function WhitelistPage() {
                     {ban.created_on && (
                       <div className="global-ban-field">
                         <span className="global-ban-label">封禁时间</span>
-                        <span className="global-ban-value">{formatDateTime(ban.created_on)}</span>
+                        <span className="global-ban-value">{formatChinaDateTime(ban.created_on)}</span>
                       </div>
                     )}
                     {ban.expires_on && (
                       <div className="global-ban-field">
                         <span className="global-ban-label">到期时间</span>
-                        <span className="global-ban-value">{formatDateTime(ban.expires_on)}</span>
+                        <span className="global-ban-value">{formatChinaDateTime(ban.expires_on)}</span>
                       </div>
                     )}
                     {ban.server_name && (

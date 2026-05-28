@@ -7,6 +7,7 @@ import { useToast, ToastContainer } from '../../shared/Toast.jsx';
 import { buildCreateUserPayload, buildUpdateUserPayload, validateCreateUserForm } from './userForm.js';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
+import { formatChinaDateTime } from '../../shared/time.js';
 
 const emptyCreateForm = { username: '', password: '', role: 'normal', steam_id: '', remark: '' };
 const emptyEditForm = { id: '', username: '', role: 'normal', steam_id: '', remark: '' };
@@ -278,7 +279,7 @@ export function UsersPage() {
                     <td><span className={`status-pill ${item.enabled ? 'pill-online' : 'pill-offline'}`}>{item.enabled ? '已启用' : '已禁用'}</span></td>
                     <td style={{ color: 'var(--text3)' }}>{item.remark ?? '-'}</td>
                     <td className="steam-id">{item.steam_id ?? '-'}</td>
-                    <td style={{ color: 'var(--text3)' }}>{item.created_at ?? '-'}</td>
+                    <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(item.created_at)}</td>
                     <td style={{ textAlign: 'right' }}>
                       <div className="action-btn-group">
                         {canToggleEnabled(item) ? <button className={`action-btn ${item.enabled ? 'action-btn-danger' : 'action-btn-success'}`} onClick={() => handleToggleEnabled(item)}>{item.enabled ? '禁用' : '启用'}</button> : null}

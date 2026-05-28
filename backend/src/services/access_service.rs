@@ -50,6 +50,8 @@ struct ActiveBanInfo {
 
 #[derive(Debug, Deserialize)]
 struct GokzPlayerResponse {
+    #[serde(default, alias = "name", alias = "player_name")]
+    steam_name: Option<String>,
     rating: Option<f64>,
 }
 
@@ -314,7 +316,7 @@ async fn fetch_player_profile(
         return Ok(None);
     }
 
-    let gokz_url = format!("https://api.gokz.top/api/v1/players/{steam_id64}");
+    let gokz_url = format!("https://api.gokz.top/v1/leaderboards/players/{steam_id64}");
 
     let steam_level = fetch_steam_level(config, steam_id64).await;
 
@@ -517,7 +519,11 @@ mod tests {
 
     #[test]
     fn gokz_player_response_accepts_decimal_rating() {
-        let response: GokzPlayerResponse = serde_json::from_str(r#"{"rating":8.352655}"#).unwrap();
+        let response: GokzPlayerResponse = serde_json::from_str(
+            r#"{"steam_name":"PlayerOne","rating":8.352655}"#,
+        )
+        .unwrap();
+        assert_eq!(response.steam_name.as_deref(), Some("PlayerOne"));
         assert_eq!(response.rating.map(|rating| rating.trunc() as i32), Some(8));
     }
 

@@ -3,21 +3,7 @@ import { useAuth } from '../../state/auth.jsx';
 import { api } from '../../lib/api.js';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
-
-function formatDateTime(isoString) {
-  if (!isoString) return '-';
-  try {
-    const date = new Date(isoString);
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
-    const h = String(date.getHours()).padStart(2, '0');
-    const min = String(date.getMinutes()).padStart(2, '0');
-    return `${y}-${m}-${d} ${h}:${min}`;
-  } catch {
-    return isoString;
-  }
-}
+import { formatChinaDateTime } from '../../shared/time.js';
 
 const MODULE_TONE = {
   '白名单管理': 'pill-online',
@@ -86,7 +72,7 @@ export function LogsPage() {
               <td style={{ fontWeight: 600, color: 'var(--text)' }}>{x.action}</td>
               <td style={{ color: 'var(--text2)' }}>{x.target_detail}</td>
               <td className="steam-id">{x.ip_address}</td>
-              <td style={{ color: 'var(--text3)' }}>{formatDateTime(x.created_at)}</td>
+              <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(x.created_at, { seconds: false })}</td>
             </tr>
           ))}
           {!loading && !error && items.length === 0 ? <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text2)' }}>暂无日志记录</td></tr> : null}

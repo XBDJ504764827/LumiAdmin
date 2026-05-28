@@ -4,6 +4,7 @@ import { api } from '../../lib/api.js';
 import { useAuth } from '../../state/auth.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { notifyNotificationsUpdated } from '../../hooks/useNotifications.js';
+import { formatChinaDateTime } from '../../shared/time.js';
 
 const TYPE_LABELS = {
   whitelist_apply: '白名单申请',
@@ -34,22 +35,6 @@ const TYPE_PILL_CLASS = {
   ban_create: 'pill-accent',
   plugin_ban: 'pill-default',
 };
-
-function formatDateTime(isoString) {
-  if (!isoString) return '-';
-  try {
-    const date = new Date(isoString);
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
-    const h = String(date.getHours()).padStart(2, '0');
-    const min = String(date.getMinutes()).padStart(2, '0');
-    const s = String(date.getSeconds()).padStart(2, '0');
-    return `${y}-${m}-${d} ${h}:${min}:${s}`;
-  } catch {
-    return isoString;
-  }
-}
 
 export function NotificationPage() {
   const { session } = useAuth();
@@ -194,7 +179,7 @@ export function NotificationPage() {
                           {n.read ? '已读' : '未读'}
                         </span>
                       </div>
-                      <span className="notification-page-item-time">{formatDateTime(n.created_at)}</span>
+                      <span className="notification-page-item-time">{formatChinaDateTime(n.created_at)}</span>
                     </div>
                     <div className="notification-page-item-title">{n.title}</div>
                     <div className="notification-page-item-message">{n.message}</div>

@@ -7,27 +7,13 @@ import { Modal } from '../../shared/Modal.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { useNavigate } from 'react-router-dom';
+import { formatChinaDateTime } from '../../shared/time.js';
 
 const STATUS_MAP = {
   pending: { label: '待审核', pill: 'pill-warning' },
   approved: { label: '已封禁', pill: 'pill-success' },
   rejected: { label: '已驳回', pill: 'pill-offline' },
 };
-
-function formatDateTime(isoString) {
-  if (!isoString) return '-';
-  try {
-    const date = new Date(isoString);
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
-    const h = String(date.getHours()).padStart(2, '0');
-    const min = String(date.getMinutes()).padStart(2, '0');
-    return `${y}-${m}-${d} ${h}:${min}`;
-  } catch {
-    return isoString;
-  }
-}
 
 function formatFileSize(bytes) {
   const value = Number(bytes);
@@ -275,9 +261,9 @@ export function PlayerReportPage() {
                         <span title={item.reporter_contact || ''}>{item.reporter_contact || '-'}</span>
                       </td>
                       <td><span className={`status-pill ${st.pill}`}>{st.label}</span></td>
-                      <td style={{ color: 'var(--text3)' }}>{formatDateTime(item.created_at)}</td>
+                      <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(item.created_at, { seconds: false })}</td>
                       <td>{item.reviewed_by || '-'}</td>
-                      <td style={{ color: 'var(--text3)' }}>{item.reviewed_at ? formatDateTime(item.reviewed_at) : '-'}</td>
+                      <td style={{ color: 'var(--text3)' }}>{item.reviewed_at ? formatChinaDateTime(item.reviewed_at, { seconds: false }) : '-'}</td>
                       <td style={{ textAlign: 'right' }}>
                         <div className="action-btn-group">
                           <button className="action-btn action-btn-accent" onClick={() => openDetail(item)}>详情</button>
@@ -333,7 +319,7 @@ export function PlayerReportPage() {
             <div className="form-group">
               <label style={{ marginBottom: 4 }}>举报信息</label>
               <div style={{ color: 'var(--text2)', fontSize: 13 }}>
-                <div>提交时间：{formatDateTime(detailItem.created_at)}</div>
+                <div>提交时间：{formatChinaDateTime(detailItem.created_at, { seconds: false })}</div>
                 <div>证据文件：{reportFiles.length} 个</div>
               </div>
             </div>
@@ -354,7 +340,7 @@ export function PlayerReportPage() {
               </div>
               {detailItem.reviewed_by ? (
                 <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
-                  由 {detailItem.reviewed_by} 于 {formatDateTime(detailItem.reviewed_at)} 处理
+                  由 {detailItem.reviewed_by} 于 {formatChinaDateTime(detailItem.reviewed_at, { seconds: false })} 处理
                 </div>
               ) : null}
               {detailItem.review_note ? (

@@ -9,22 +9,7 @@ import { formatBanDuration, formatBanSource, formatExpiresAt } from './banDispla
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { useLocation, useNavigate } from 'react-router-dom';
-
-function formatDateTime(isoString) {
-  if (!isoString) return '-';
-  try {
-    const date = new Date(isoString);
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
-    const h = String(date.getHours()).padStart(2, '0');
-    const min = String(date.getMinutes()).padStart(2, '0');
-    const s = String(date.getSeconds()).padStart(2, '0');
-    return `${y}-${m}-${d} ${h}:${min}:${s}`;
-  } catch {
-    return isoString;
-  }
-}
+import { formatChinaDateTime } from '../../shared/time.js';
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
 const ALLOWED_VIDEO = '.mp4,.avi,.mov,.webm,.mkv';
@@ -120,6 +105,7 @@ export function BanPage() {
   const [submitting, setSubmitting] = useState(false);
   const [savePhase, setSavePhase] = useState('idle');
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [syncingExternalId, setSyncingExternalId] = useState(null);
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [reportReviewOnSave, setReportReviewOnSave] = useState(null);
   const [detailItem, setDetailItem] = useState(null);
@@ -127,6 +113,12 @@ export function BanPage() {
   const [detailFiles, setDetailFiles] = useState([]);
   const [detailFilesLoading, setDetailFilesLoading] = useState(false);
   const [detailFilesError, setDetailFilesError] = useState('');
+  const [apiModalOpen, setApiModalOpen] = useState(false);
+  const [apiKeys, setApiKeys] = useState([]);
+  const [apiKeysLoading, setApiKeysLoading] = useState(false);
+  const [apiKeyName, setApiKeyName] = useState('');
+  const [apiKeyCreating, setApiKeyCreating] = useState(false);
+  const [newApiToken, setNewApiToken] = useState('');
   const fileIdCounter = useRef(0);
   const videoRef = useRef(null);
   const imageRef = useRef(null);
@@ -225,6 +217,60 @@ export function BanPage() {
     setOpen(true);
   }
 
+  async function loadApiKeys() {
+    try {
+      setApiKeysLoading(true);
+      const result = await api.banApiKeys(token);
+      setApiKeys(result.items ?? []);
+    } catch (requestError) {
+      toast({ title: '加载失败', message: requestError.message || '加载 API Key 失败。', tone: 'danger' });
+    } finally {
+      setApiKeysLoading(false);
+    }
+  }
+
+  function openApiModal() {
+    setApiModalOpen(true);
+    setNewApiToken('');
+    setApiKeyName('');
+    loadApiKeys();
+  }
+
+  async function handleCreateApiKey() {
+    if (!apiKeyName.trim()) {
+      toast({ title: '创建失败', message: '请填写接入方名称。', tone: 'danger' });
+      return;
+    }
+    try {
+      setApiKeyCreating(true);
+      const result = await api.createBanApiKey(token, { name: apiKeyName.trim() });
+      setNewApiToken(result.token);
+      setApiKeyName('');
+      loadApiKeys();
+      toast({ title: '创建成功', message: 'API Key 已生成，请立即保存。' });
+    } catch (requestError) {
+      toast({ title: '创建失败', message: requestError.message, tone: 'danger' });
+    } finally {
+      setApiKeyCreating(false);
+    }
+  }
+
+  async function handleDeleteApiKey(item) {
+    const confirmed = await confirm({
+      title: '删除 API Key',
+      message: `确定删除「${item.name}」吗？外部网站将立即无法继续接入。`,
+      confirmText: '确认删除',
+    });
+    if (!confirmed) return;
+    try {
+      await api.deleteBanApiKey(token, item.id);
+      loadApiKeys();
+      toast({ title: '删除成功' });
+    } catch (requestError) {
+      toast({ title: '删除失败', message: requestError.message, tone: 'danger' });
+    }
+  }
+
   function handleFileSelect(files, inputRef) {
     if (!files || files.length === 0) return;
 
@@ -314,6 +360,21 @@ export function BanPage() {
     }
   }
 
+  async function handleSyncExternalBan(item) {
+    try {
+      setSyncingExternalId(item.id);
+      const result = await api.syncExternalBan(token, item.id);
+      toast({
+        title: '同步成功',
+        message: result.result?.message || `${item.player || item.steam_id} 已同步到外部封禁 API。`,
+      });
+    } catch (requestError) {
+      toast({ title: '同步失败', message: requestError.message, tone: 'danger' });
+    } finally {
+      setSyncingExternalId(null);
+    }
+  }
+
   async function handleSaveBan() {
     const validationError = validateBanForm(form);
     if (validationError) {
@@ -382,7 +443,10 @@ export function BanPage() {
           <div className="page-title">玩家封禁管理</div>
           <div className="page-sub">针对违规玩家进行账号或 IP 级别的封禁限制。</div>
         </div>
-        {canCreate ? <button className="btn btn-danger" onClick={openCreateModal}>手动添加封禁</button> : null}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {canManageAll ? <button className="btn btn-outline" onClick={openApiModal}>API 接入</button> : null}
+          {canCreate ? <button className="btn btn-danger" onClick={openCreateModal}>手动添加封禁</button> : null}
+        </div>
       </div>
 
       <SearchBar
@@ -417,11 +481,16 @@ export function BanPage() {
                       <div style={{ color: 'var(--text3)', fontSize: 12 }}>{formatExpiresAt(x.expires_at)}</div>
                     </td>
                     <td><span className={`status-pill ${x.status === 'active' ? 'pill-danger' : 'pill-offline'}`}>{x.status === 'active' ? '生效中' : '已失效'}</span></td>
-                    <td style={{ color: 'var(--text3)' }}>{formatDateTime(x.created_at)}</td>
+                    <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(x.created_at)}</td>
                     <td style={{ textAlign: 'right' }}>
                       <div className="action-btn-group">
                         <button className="action-btn" onClick={() => openDetailModal(x)}>详细</button>
                         {canManageAll ? <button className="action-btn action-btn-accent" onClick={() => openEditModal(x)}>编辑</button> : null}
+                        {canManageAll && x.status === 'active' ? (
+                          <button className="action-btn" onClick={() => handleSyncExternalBan(x)} disabled={syncingExternalId === x.id}>
+                            {syncingExternalId === x.id ? '同步中' : '同步外部'}
+                          </button>
+                        ) : null}
                         {canUnban(x) && banRecordAction(x) === 'unban' ? <button className="action-btn action-btn-success" onClick={() => handleUnban(x)}>解封</button> : null}
                         {canCreate && banRecordAction(x) === 'reban' ? <button className="action-btn action-btn-danger" onClick={() => openRebanModal(x)}>重新封禁</button> : null}
                         {canManageAll ? <button className="action-btn action-btn-danger" onClick={() => handleDeleteBan(x)}>删除</button> : null}
@@ -437,6 +506,69 @@ export function BanPage() {
       </div>
 
       <Pagination page={page} pageSize={20} total={total} onChange={setPage} />
+
+      {apiModalOpen ? (
+        <div className="modal-overlay active" onClick={() => setApiModalOpen(false)}>
+          <div className="modal" style={{ maxWidth: 780 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>封禁 API 接入</h2>
+              <span style={{ cursor: 'pointer', color: 'var(--text3)', fontSize: 18 }} onClick={() => setApiModalOpen(false)}>&#10005;</span>
+            </div>
+            <div className="modal-body" style={{ display: 'grid', gap: 16 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 10 }}>
+                <input
+                  className="form-control"
+                  value={apiKeyName}
+                  onChange={(e) => setApiKeyName(e.target.value)}
+                  placeholder="接入方名称，例如：合作网站 A"
+                />
+                <button className="btn btn-primary" onClick={handleCreateApiKey} disabled={apiKeyCreating}>
+                  {apiKeyCreating ? '生成中...' : '生成 Key'}
+                </button>
+              </div>
+
+              {newApiToken ? (
+                <div className="card" style={{ margin: 0 }}>
+                  <div className="card-body">
+                    <div style={{ fontWeight: 600, marginBottom: 8 }}>新 API Key 只显示一次</div>
+                    <code style={{ display: 'block', wordBreak: 'break-all', color: 'var(--accent)' }}>{newApiToken}</code>
+                  </div>
+                </div>
+              ) : null}
+
+              <div style={{ display: 'grid', gap: 8, fontSize: 13, color: 'var(--text2)' }}>
+                <div>认证请求头：<code>X-API-Key: {'<API_KEY>'}</code></div>
+                <div>查询封禁：<code>GET /api/integration/bans?page=1&page_size=20</code></div>
+                <div>检查封禁：<code>POST /api/integration/bans/check</code>，Body: <code>{'{"steam_id":"7656119..."}'}</code></div>
+                <div>创建封禁：<code>POST /api/integration/bans</code>，Body: <code>{'{"steam_id":"7656119...","ban_type":"steam","reason":"作弊","duration_minutes":0}'}</code></div>
+              </div>
+
+              <div className="table-responsive">
+                <table className="data-table">
+                  <thead>
+                    <tr><th>名称</th><th>Key 前缀</th><th>最近使用</th><th>创建时间</th><th style={{ textAlign: 'right' }}>操作</th></tr>
+                  </thead>
+                  <tbody>
+                    {apiKeysLoading ? <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text2)' }}>加载中...</td></tr> : null}
+                    {!apiKeysLoading && apiKeys.length === 0 ? <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text2)' }}>暂无 API Key</td></tr> : null}
+                    {apiKeys.map((item) => (
+                      <tr key={item.id}>
+                        <td style={{ fontWeight: 600 }}>{item.name}</td>
+                        <td className="steam-id">{item.token_prefix}...</td>
+                        <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(item.last_used_at)}</td>
+                        <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(item.created_at)}</td>
+                        <td style={{ textAlign: 'right' }}>
+                          <button className="action-btn action-btn-danger" onClick={() => handleDeleteApiKey(item)}>删除</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <Modal
         open={open}
@@ -518,7 +650,7 @@ export function BanPage() {
                 <div>到期时间：{formatExpiresAt(detailItem.expires_at)}</div>
                 <div>来源：{formatBanSource(detailItem.source, detailItem.operator_name)}</div>
                 <div>操作人：{detailItem.operator_name}</div>
-                <div>封禁时间：{detailLoading ? '正在加载完整信息...' : formatDateTime(detailItem.created_at)}</div>
+                <div>封禁时间：{detailLoading ? '正在加载完整信息...' : formatChinaDateTime(detailItem.created_at)}</div>
               </div>
             </div>
 
@@ -541,7 +673,7 @@ export function BanPage() {
               ) : null}
               {detailItem.removed_by ? (
                 <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
-                  由 {detailItem.removed_by} 于 {formatDateTime(detailItem.removed_at)} 解封
+                  由 {detailItem.removed_by} 于 {formatChinaDateTime(detailItem.removed_at)} 解封
                 </div>
               ) : null}
             </div>
@@ -573,7 +705,7 @@ export function BanPage() {
                             <div style={{ fontSize: 11, color: 'var(--text3)' }}>
                               {formatFileSize(file.file_size)}
                               {file.uploaded_by ? ` · ${file.uploaded_by}` : ''}
-                              {file.uploaded_at ? ` · ${formatDateTime(file.uploaded_at)}` : ''}
+                              {file.uploaded_at ? ` · ${formatChinaDateTime(file.uploaded_at)}` : ''}
                             </div>
                           </div>
                         </div>

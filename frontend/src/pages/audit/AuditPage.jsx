@@ -4,6 +4,7 @@ import { useAuth } from '../../state/auth.jsx';
 import { ToastContainer, useToast } from '../../shared/Toast.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
+import { formatChinaDateTime } from '../../shared/time.js';
 
 const OPERATION_LABELS = {
   ban: '封禁',
@@ -18,22 +19,6 @@ const SOURCE_LABELS = {
   offline_sync: '离线同步',
   manual: '手动操作',
 };
-
-function formatDateTime(isoString) {
-  if (!isoString) return '-';
-  try {
-    const date = new Date(isoString);
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
-    const h = String(date.getHours()).padStart(2, '0');
-    const min = String(date.getMinutes()).padStart(2, '0');
-    const s = String(date.getSeconds()).padStart(2, '0');
-    return `${y}-${m}-${d} ${h}:${min}:${s}`;
-  } catch {
-    return isoString;
-  }
-}
 
 export function AuditPage() {
   const { session } = useAuth();
@@ -165,7 +150,7 @@ export function AuditPage() {
                   ) : null}
                   {items.map((item) => (
                     <tr key={item.id}>
-                      <td style={{ color: 'var(--text3)', whiteSpace: 'nowrap' }}>{formatDateTime(item.created_at)}</td>
+                      <td style={{ color: 'var(--text3)', whiteSpace: 'nowrap' }}>{formatChinaDateTime(item.created_at)}</td>
                       <td>
                         <span className={`status-pill ${item.operation === 'ban' ? 'pill-accent' : item.operation === 'unban' ? 'pill-online' : 'pill-default'}`}>
                           {OPERATION_LABELS[item.operation] || item.operation}

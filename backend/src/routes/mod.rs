@@ -1,8 +1,10 @@
 pub mod access;
 pub mod auth;
 pub mod ban;
+pub mod ban_api;
 pub mod ban_appeal;
 pub mod community;
+pub mod external_ban_api;
 pub mod external_server;
 pub mod misc;
 pub mod notification;
@@ -210,6 +212,27 @@ pub fn router(
             "/api/external-servers/:id/test",
             post(external_server::test_external_server),
         )
+        // -- external ban api --
+        .route(
+            "/api/external-ban-api/targets",
+            get(external_ban_api::list_targets).post(external_ban_api::create_target),
+        )
+        .route(
+            "/api/external-ban-api/targets/:id",
+            put(external_ban_api::update_target).delete(external_ban_api::delete_target),
+        )
+        .route(
+            "/api/external-ban-api/targets/:id/test",
+            post(external_ban_api::test_target),
+        )
+        .route(
+            "/api/bans/:id/sync-external",
+            post(external_ban_api::sync_ban),
+        )
+        .route(
+            "/api/bans/:ban_id/sync-external/:target_id",
+            post(external_ban_api::sync_ban_to_target),
+        )
         // -- player api --
         .route("/api/player-api/players", get(plugin::player_api_players))
         .route(
@@ -258,6 +281,19 @@ pub fn router(
             get(ban::list_ban_files).post(ban::upload_ban_files),
         )
         .route("/api/bans/files/:file_id/url", get(ban::get_ban_file_url))
+        .route(
+            "/api/ban-api/keys",
+            get(ban_api::list_keys).post(ban_api::create_key),
+        )
+        .route("/api/ban-api/keys/:id", delete(ban_api::delete_key))
+        .route(
+            "/api/integration/bans",
+            get(ban_api::integration_bans).post(ban_api::create_integration_ban),
+        )
+        .route(
+            "/api/integration/bans/check",
+            post(ban_api::check_integration_ban),
+        )
         // -- ban appeals --
         .route("/api/ban-appeals", get(ban_appeal::list_appeals))
         .route(

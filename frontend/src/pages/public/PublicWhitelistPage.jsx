@@ -3,6 +3,7 @@ import { api } from '../../lib/api.js';
 import { PublicPageShell } from './PublicPageShell.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
+import { formatChinaDateTime } from '../../shared/time.js';
 
 export function PublicWhitelistPage() {
   const [search, setSearch] = useState('');
@@ -74,10 +75,10 @@ export function PublicWhitelistPage() {
                 <tr key={item.id}>
                   <td style={{ fontWeight: 600 }}>{item.nickname}</td>
                   <td className="steam-id">{item.steamid64}</td>
-                  <td style={{ color: 'var(--text3)' }}>{item.applied_at}</td>
+                  <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(item.applied_at, { seconds: false })}</td>
                   <td>
                     {item.approved_at
-                      ? <span style={{ color: 'var(--teal)' }}>{item.approved_at}</span>
+                      ? <span style={{ color: 'var(--teal)' }}>{formatChinaDateTime(item.approved_at, { seconds: false })}</span>
                       : <span style={{ color: 'var(--text3)' }}>-</span>}
                   </td>
                 </tr>

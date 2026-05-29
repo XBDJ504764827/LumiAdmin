@@ -106,11 +106,11 @@ pub async fn report_server_status(
         SET status = 'online',
             last_reported_at = now(),
             max_players = GREATEST(max_players, $2),
-            players = (
+            players = COALESCE((
                 SELECT ARRAY_AGG(name ORDER BY name)
                 FROM server_online_players
                 WHERE server_id = $1
-            )
+            ), ARRAY[]::TEXT[])
         WHERE id = $1
         "#,
     )

@@ -1290,8 +1290,136 @@ SteamID64: {steam_id}
         .execute(&self.pool)
         .await?;
 
+        let query_perf_indexes = [
+            r#"CREATE INDEX IF NOT EXISTS idx_notifications_user_created
+               ON notifications (user_id, created_at DESC)"#,
+            r#"CREATE INDEX IF NOT EXISTS idx_ban_appeals_status_created
+               ON ban_appeals (status, created_at DESC)"#,
+            r#"CREATE INDEX IF NOT EXISTS idx_audit_logs_source_created
+               ON audit_logs (source, created_at DESC)"#,
+            r#"CREATE INDEX IF NOT EXISTS idx_audit_logs_success_created
+               ON audit_logs (success, created_at DESC)"#,
+            r#"CREATE INDEX IF NOT EXISTS idx_player_reports_created
+               ON player_reports (created_at DESC)"#,
+        ];
+        for sql in query_perf_indexes {
+            sqlx::query(sql).execute(&self.pool).await?;
+        }
+
+        if let Some(trgm_schema) = self.pg_trgm_schema().await {
+            let trgm_ops = format!("{}.gin_trgm_ops", quote_ident(&trgm_schema));
+            let trigram_indexes = [
+                format!(
+                    r#"CREATE INDEX IF NOT EXISTS idx_ban_records_steam_id_trgm
+                       ON ban_records USING gin (steam_id {trgm_ops})"#
+                ),
+                format!(
+                    r#"CREATE INDEX IF NOT EXISTS idx_ban_records_player_trgm
+                       ON ban_records USING gin (player {trgm_ops}) WHERE player IS NOT NULL"#
+                ),
+                format!(
+                    r#"CREATE INDEX IF NOT EXISTS idx_whitelist_requests_steamid64_trgm
+                       ON whitelist_requests USING gin (steamid64 {trgm_ops})"#
+                ),
+                format!(
+                    r#"CREATE INDEX IF NOT EXISTS idx_whitelist_requests_nickname_trgm
+                       ON whitelist_requests USING gin (nickname {trgm_ops})"#
+                ),
+                format!(
+                    r#"CREATE INDEX IF NOT EXISTS idx_player_reports_target_steam_id_trgm
+                       ON player_reports USING gin (target_steam_id {trgm_ops})"#
+                ),
+                format!(
+                    r#"CREATE INDEX IF NOT EXISTS idx_player_reports_target_player_name_trgm
+                       ON player_reports USING gin (target_player_name {trgm_ops}) WHERE target_player_name IS NOT NULL"#
+                ),
+                format!(
+                    r#"CREATE INDEX IF NOT EXISTS idx_ban_appeals_steam_id_trgm
+                       ON ban_appeals USING gin (steam_id {trgm_ops})"#
+                ),
+                format!(
+                    r#"CREATE INDEX IF NOT EXISTS idx_ban_appeals_player_name_trgm
+                       ON ban_appeals USING gin (player_name {trgm_ops})"#
+                ),
+                format!(
+                    r#"CREATE INDEX IF NOT EXISTS idx_users_username_trgm
+                       ON users USING gin (username {trgm_ops})"#
+                ),
+                format!(
+                    r#"CREATE INDEX IF NOT EXISTS idx_users_display_name_trgm
+                       ON users USING gin (display_name {trgm_ops})"#
+                ),
+                format!(
+                    r#"CREATE INDEX IF NOT EXISTS idx_users_remark_trgm
+                       ON users USING gin (remark {trgm_ops}) WHERE remark IS NOT NULL"#
+                ),
+                format!(
+                    r#"CREATE INDEX IF NOT EXISTS idx_admin_logs_operator_name_trgm
+                       ON admin_logs USING gin (operator_name {trgm_ops})"#
+                ),
+                format!(
+                    r#"CREATE INDEX IF NOT EXISTS idx_admin_logs_module_trgm
+                       ON admin_logs USING gin (module {trgm_ops})"#
+                ),
+                format!(
+                    r#"CREATE INDEX IF NOT EXISTS idx_admin_logs_action_trgm
+                       ON admin_logs USING gin (action {trgm_ops})"#
+                ),
+                format!(
+                    r#"CREATE INDEX IF NOT EXISTS idx_audit_logs_operator_name_trgm
+                       ON audit_logs USING gin (operator_name {trgm_ops})"#
+                ),
+                format!(
+                    r#"CREATE INDEX IF NOT EXISTS idx_audit_logs_target_trgm
+                       ON audit_logs USING gin (target {trgm_ops})"#
+                ),
+                format!(
+                    r#"CREATE INDEX IF NOT EXISTS idx_audit_logs_player_name_trgm
+                       ON audit_logs USING gin (player_name {trgm_ops}) WHERE player_name IS NOT NULL"#
+                ),
+            ];
+            for sql in trigram_indexes {
+                sqlx::query(&sql).execute(&self.pool).await?;
+            }
+        }
+
         Ok(())
     }
+
+    async fn pg_trgm_schema(&self) -> Option<String> {
+        if let Err(error) = sqlx::query("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+            .execute(&self.pool)
+            .await
+        {
+            tracing::warn!(
+                error = %error,
+                "pg_trgm extension could not be created; checking whether it already exists"
+            );
+        }
+
+        match sqlx::query_scalar::<_, String>(
+            r#"SELECT n.nspname
+               FROM pg_extension e
+               JOIN pg_namespace n ON n.oid = e.extnamespace
+               WHERE e.extname = 'pg_trgm'"#,
+        )
+        .fetch_one(&self.pool)
+        .await
+        {
+            Ok(schema) => Some(schema),
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "failed to check pg_trgm extension; skipping trigram search indexes"
+                );
+                None
+            }
+        }
+    }
+}
+
+fn quote_ident(identifier: &str) -> String {
+    format!(r#""{}""#, identifier.replace('"', r#""""#))
 }
 
 #[cfg(test)]

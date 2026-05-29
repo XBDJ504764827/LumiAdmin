@@ -1063,6 +1063,50 @@ async fn plugin_report_updates_online_players_when_token_and_port_match() {
 }
 
 #[tokio::test]
+async fn plugin_status_report_keeps_empty_players_when_no_online_rows() {
+    with_test_app(async |db, config| {
+        let (_, server_id) = insert_community_with_server(&db, "状态上报空玩家").await;
+        let app = test_app(config, db.clone());
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/plugin/server-status")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "report_token": "plugin-token",
+                    "port": 25575,
+                    "fps": 128.0,
+                    "cpu_usage": 25.0,
+                    "tickrate": 128.0,
+                    "players_count": 0,
+                    "max_players": 16,
+                    "current_map": "kz_empty"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let server: (String, Vec<String>, Option<chrono::DateTime<chrono::Utc>>, i32) =
+            sqlx::query_as(
+                r#"SELECT status, players, last_reported_at, max_players FROM servers WHERE id = $1"#,
+            )
+            .bind(server_id)
+            .fetch_one(&db.pool)
+            .await?;
+        assert_eq!(server.0, "online");
+        assert!(server.1.is_empty());
+        assert!(server.2.is_some());
+        assert_eq!(server.3, 16);
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn plugin_report_accepts_legacy_payload_with_steam2_id() {
     with_test_app(async |db, config| {
             let (_, server_id) = insert_community_with_server(&db, "旧插件上报").await;

@@ -37,6 +37,24 @@ pub(crate) async fn dashboard(
     Ok(Json(serde_json::json!({"data": data})))
 }
 
+pub(crate) async fn review_counts(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let actor = current_operator(&ctx, &headers).await?;
+    let include_reports = matches!(actor.role.as_str(), "admin" | "developer");
+
+    let counts = dashboard_service::get_review_counts(&ctx.db, include_reports)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "加载待审核数量失败" })),
+            )
+        })?;
+    Ok(Json(serde_json::json!(counts)))
+}
+
 pub(crate) async fn logs(
     State(ctx): State<AppCtx>,
     headers: HeaderMap,

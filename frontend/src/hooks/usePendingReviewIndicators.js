@@ -24,15 +24,6 @@ export function notifyPendingReviewsUpdated(detail = {}) {
   window.dispatchEvent(new CustomEvent(PENDING_REVIEWS_UPDATED_EVENT, { detail }));
 }
 
-async function readTotal(request) {
-  try {
-    const result = await request();
-    return Number(result?.total ?? 0);
-  } catch {
-    return 0;
-  }
-}
-
 export function usePendingReviewData() {
   const { session } = useAuth();
   const token = session?.token ?? null;
@@ -53,20 +44,18 @@ export function usePendingReviewData() {
     }
 
     setLoading(true);
-    const [whitelist, banAppeal, playerReport] = await Promise.all([
-      canReviewWhitelist
-        ? readTotal(() => api.whitelist(token, { page: 1, page_size: 1, status: 'pending' }))
-        : Promise.resolve(0),
-      canReviewReports
-        ? readTotal(() => api.banAppeals(token, { page: 1, page_size: 1, status: 'pending' }))
-        : Promise.resolve(0),
-      canReviewReports
-        ? readTotal(() => api.playerReports(token, { page: 1, page_size: 1, status: 'pending' }))
-        : Promise.resolve(0),
-    ]);
-
-    setCounts({ whitelist, banAppeal, playerReport });
-    setLoading(false);
+    try {
+      const result = await api.reviewCounts(token);
+      setCounts({
+        whitelist: canReviewWhitelist ? Number(result?.whitelist ?? 0) : 0,
+        banAppeal: canReviewReports ? Number(result?.ban_appeal ?? 0) : 0,
+        playerReport: canReviewReports ? Number(result?.player_report ?? 0) : 0,
+      });
+    } catch {
+      setCounts(EMPTY_COUNTS);
+    } finally {
+      setLoading(false);
+    }
   }, [token, canReviewWhitelist, canReviewReports]);
 
   useEffect(() => {

@@ -48,6 +48,45 @@ pub struct DashboardMetrics {
     pub server_performance: ServerPerformanceStats,
 }
 
+#[derive(Clone, Serialize)]
+pub struct ReviewCounts {
+    pub whitelist: i64,
+    pub ban_appeal: i64,
+    pub player_report: i64,
+}
+
+pub async fn get_review_counts(
+    db: &Database,
+    include_reports: bool,
+) -> anyhow::Result<ReviewCounts> {
+    if include_reports {
+        let counts: (i64, i64, i64) = sqlx::query_as(
+            r#"SELECT
+                (SELECT COUNT(*) FROM whitelist_requests WHERE status = 'pending') AS whitelist,
+                (SELECT COUNT(*) FROM ban_appeals WHERE status = 'pending') AS ban_appeal,
+                (SELECT COUNT(*) FROM player_reports WHERE status = 'pending') AS player_report"#,
+        )
+        .fetch_one(&db.pool)
+        .await?;
+
+        return Ok(ReviewCounts {
+            whitelist: counts.0,
+            ban_appeal: counts.1,
+            player_report: counts.2,
+        });
+    }
+
+    let whitelist: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM whitelist_requests WHERE status = 'pending'")
+            .fetch_one(&db.pool)
+            .await?;
+    Ok(ReviewCounts {
+        whitelist,
+        ban_appeal: 0,
+        player_report: 0,
+    })
+}
+
 pub async fn get_metrics(db: &Database) -> anyhow::Result<DashboardMetrics> {
     #[cfg(not(test))]
     if let Some(metrics) = cached_metrics() {

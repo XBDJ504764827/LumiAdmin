@@ -55,6 +55,7 @@ export const api = {
   logoutAllDevices: (currentToken) => request('/api/auth/logout-all', { method: 'POST', body: JSON.stringify({ current_token: currentToken }) }),
   me: (token) => request('/api/auth/me', { headers: withAuth(token) }),
   dashboard: (token) => request('/api/dashboard', { headers: withAuth(token) }),
+  reviewCounts: (token) => request('/api/review-counts', { headers: withAuth(token) }),
   servers: (token) => request('/api/community/servers', { headers: withAuth(token) }),
   createCommunityGroup: (token, body) => request('/api/community/groups', { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   deleteCommunityGroup: (token, groupId) => request(`/api/community/groups/${groupId}`, { method: 'DELETE', headers: withAuth(token) }),

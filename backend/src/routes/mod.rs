@@ -126,6 +126,7 @@ pub fn router(
         .route("/api/auth/me", get(auth::me))
         // -- dashboard --
         .route("/api/dashboard", get(misc::dashboard))
+        .route("/api/review-counts", get(misc::review_counts))
         // -- community --
         .route("/api/community/servers", get(community::community_servers))
         .route(

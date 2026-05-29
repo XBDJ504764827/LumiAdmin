@@ -1290,6 +1290,14 @@ SteamID64: {steam_id}
         .execute(&self.pool)
         .await?;
 
+        #[cfg(not(test))]
+        self.migrate_query_performance_indexes().await?;
+
+        Ok(())
+    }
+
+    #[cfg(not(test))]
+    async fn migrate_query_performance_indexes(&self) -> anyhow::Result<()> {
         let query_perf_indexes = [
             r#"CREATE INDEX IF NOT EXISTS idx_notifications_user_created
                ON notifications (user_id, created_at DESC)"#,
@@ -1386,6 +1394,7 @@ SteamID64: {steam_id}
         Ok(())
     }
 
+    #[cfg(not(test))]
     async fn pg_trgm_schema(&self) -> Option<String> {
         if let Err(error) = sqlx::query("CREATE EXTENSION IF NOT EXISTS pg_trgm")
             .execute(&self.pool)
@@ -1418,6 +1427,7 @@ SteamID64: {steam_id}
     }
 }
 
+#[cfg(not(test))]
 fn quote_ident(identifier: &str) -> String {
     format!(r#""{}""#, identifier.replace('"', r#""""#))
 }

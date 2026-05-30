@@ -47,7 +47,8 @@ pub(crate) async fn whitelist(
 
     let result = whitelist_service::list_whitelist(&ctx.db, &query)
         .await
-        .map_err(|_| {
+        .map_err(|e| {
+            tracing::error!(error = %e, "加载白名单列表失败");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": "加载白名单列表失败" })),

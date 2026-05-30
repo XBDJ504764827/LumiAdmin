@@ -113,7 +113,8 @@ pub(crate) async fn upload_player_report_files(
     let (status, upload_token_hash) =
         player_report_service::find_upload_token_hash(&ctx.db, report_id)
             .await
-            .map_err(|_| {
+            .map_err(|e| {
+                tracing::error!(error = %e, report_id = %report_id, "查询举报上传凭证失败");
                 (
                     StatusCode::NOT_FOUND,
                     Json(serde_json::json!({ "error": "举报记录不存在" })),
@@ -271,7 +272,8 @@ pub(crate) async fn list_reports(
 
     let result = player_report_service::list_reports(&ctx.db, &query)
         .await
-        .map_err(|_| {
+        .map_err(|e| {
+            tracing::error!(error = %e, "加载举报列表失败");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": "加载举报列表失败" })),
@@ -422,7 +424,8 @@ pub(crate) async fn list_report_files(
     .bind(report_id)
     .fetch_all(&ctx.db.pool)
     .await
-    .map_err(|_| {
+    .map_err(|e| {
+        tracing::error!(error = %e, "加载举报文件失败");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "加载举报文件失败" })),

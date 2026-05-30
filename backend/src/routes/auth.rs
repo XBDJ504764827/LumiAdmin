@@ -63,16 +63,25 @@ pub(crate) async fn me(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or(StatusCode::UNAUTHORIZED)?;
-    let token = Uuid::parse_str(token).map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let token = Uuid::parse_str(token).map_err(|e| {
+        tracing::warn!(error = %e, "token parse failed");
+        StatusCode::UNAUTHORIZED
+    })?;
     let session = auth_service::current_session(&ctx.db, token)
         .await
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+        .map_err(|e| {
+            tracing::warn!(error = %e, "session lookup failed");
+            StatusCode::UNAUTHORIZED
+        })?;
 
     let enabled: (bool,) = sqlx::query_as("SELECT enabled FROM users WHERE id = $1")
         .bind(session.user_id)
         .fetch_optional(&ctx.db.pool)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(|e| {
+            tracing::error!(error = %e, "查询用户启用状态失败");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
         .ok_or(StatusCode::UNAUTHORIZED)?;
     if !enabled.0 {
         return Err(StatusCode::UNAUTHORIZED);
@@ -92,18 +101,27 @@ pub(crate) async fn logout_all_devices(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or(StatusCode::UNAUTHORIZED)?;
-    let token = Uuid::parse_str(token_str).map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let token = Uuid::parse_str(token_str).map_err(|e| {
+        tracing::warn!(error = %e, "token parse failed");
+        StatusCode::UNAUTHORIZED
+    })?;
     if body.current_token != token {
         return Err(StatusCode::UNAUTHORIZED);
     }
 
     let session = auth_service::current_session(&ctx.db, token)
         .await
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+        .map_err(|e| {
+            tracing::warn!(error = %e, "session lookup failed");
+            StatusCode::UNAUTHORIZED
+        })?;
 
     let count = auth_service::logout_all_for_user(&ctx.db, session.user_id, Some(token))
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| {
+            tracing::error!(error = %e, "登出所有设备失败");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     Ok(Json(serde_json::json!({ "revoked_count": count })))
 }
@@ -121,7 +139,8 @@ pub(crate) async fn revoke_user_sessions(
 
     let count = auth_service::logout_all_for_user(&ctx.db, user_id, None)
         .await
-        .map_err(|_| {
+        .map_err(|e| {
+            tracing::error!(error = %e, user_id = %user_id, "强制登出用户失败");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "操作失败"})),

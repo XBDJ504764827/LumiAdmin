@@ -33,7 +33,8 @@ pub(crate) async fn list_notifications(
     let (items, total) =
         notification_service::list_notifications(&ctx.db, actor.id, page, page_size)
             .await
-            .map_err(|_| {
+            .map_err(|e| {
+                tracing::error!(error = %e, "查询通知列表失败");
                 (
                     axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({"error": "查询失败"})),
@@ -56,7 +57,8 @@ pub(crate) async fn unread_count(
 
     let count = notification_service::get_unread_count(&ctx.db, actor.id)
         .await
-        .map_err(|_| {
+        .map_err(|e| {
+            tracing::error!(error = %e, "查询未读数量失败");
             (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "查询失败"})),
@@ -75,7 +77,8 @@ pub(crate) async fn mark_read(
 
     notification_service::mark_read(&ctx.db, id, actor.id)
         .await
-        .map_err(|_| {
+        .map_err(|e| {
+            tracing::error!(error = %e, "标记通知已读失败");
             (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "操作失败"})),
@@ -93,7 +96,8 @@ pub(crate) async fn mark_all_read(
 
     let count = notification_service::mark_all_read(&ctx.db, actor.id)
         .await
-        .map_err(|_| {
+        .map_err(|e| {
+            tracing::error!(error = %e, "标记全部已读失败");
             (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "操作失败"})),

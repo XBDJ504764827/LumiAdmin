@@ -16,7 +16,8 @@ pub(crate) async fn list_external_servers(
     let _actor = current_operator(&ctx, &headers).await?;
     let items = external_server_service::list_servers(&ctx.db)
         .await
-        .map_err(|_| {
+        .map_err(|e| {
+            tracing::error!(error = %e, "查询外部服务器失败");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error":"查询外部服务器失败"})),

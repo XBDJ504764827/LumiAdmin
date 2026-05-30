@@ -20,7 +20,8 @@ pub(crate) async fn community_servers(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let _actor = current_operator(&ctx, &headers).await?;
 
-    let groups = community_service::list_groups(&ctx.db).await.map_err(|_| {
+    let groups = community_service::list_groups(&ctx.db).await.map_err(|e| {
+        tracing::error!(error = %e, "加载社区服务器失败");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "加载社区服务器失败" })),
@@ -60,6 +61,8 @@ pub(crate) async fn create_community_server(
     let server = community_service::create_server(&ctx.db, group_id, body)
         .await
         .map_err(invalid_request)?;
+    // 新服务器创建后刷新缓存
+    ctx.server_config_cache.invalidate_all().await;
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({"server": server})),
@@ -78,6 +81,8 @@ pub(crate) async fn delete_community_group(
     community_service::delete_group(&ctx.db, group_id)
         .await
         .map_err(invalid_request)?;
+    // 删除社区组后刷新全部缓存（因为组下所有服务器都被删除）
+    ctx.server_config_cache.invalidate_all().await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -94,6 +99,8 @@ pub(crate) async fn update_community_access(
     let group = community_service::update_community_access(&ctx.db, group_id, body)
         .await
         .map_err(invalid_request)?;
+    // 社区访问设置更新后刷新全部缓存（影响组下所有服务器的 effective_* 计算）
+    ctx.server_config_cache.invalidate_all().await;
     Ok(Json(serde_json::json!({"group": group})))
 }
 
@@ -125,6 +132,8 @@ pub(crate) async fn update_community_server(
     let server = community_service::update_server(&ctx.db, server_id, body)
         .await
         .map_err(invalid_request)?;
+    // 服务器配置更新后失效缓存
+    ctx.server_config_cache.invalidate(server_id).await;
     Ok(Json(serde_json::json!({"server": server})))
 }
 
@@ -140,6 +149,8 @@ pub(crate) async fn delete_community_server(
     community_service::delete_server(&ctx.db, server_id)
         .await
         .map_err(invalid_request)?;
+    // 服务器删除后失效缓存
+    ctx.server_config_cache.invalidate(server_id).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -201,6 +212,8 @@ pub(crate) async fn reset_server_report_token(
     let token = community_service::reset_report_token(&ctx.db, server_id)
         .await
         .map_err(invalid_request)?;
+    // report_token 更新后失效缓存
+    ctx.server_config_cache.invalidate(server_id).await;
     Ok(Json(serde_json::json!({ "token": token })))
 }
 

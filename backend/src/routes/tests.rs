@@ -37,34 +37,15 @@ fn test_app(config: Config, db: Database) -> Router {
 }
 
 fn schema_url(base_url: &str, schema: &str) -> String {
-    let separator = if base_url.contains('?') { '&' } else { '?' };
-    format!("{base_url}{separator}options=-csearch_path%3D{schema}")
+    crate::test_util::schema_url(base_url, schema)
 }
 
 async fn create_schema(base_url: &str, schema: &str) {
-    let pool = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(base_url)
-        .await
-        .unwrap();
-    sqlx::query(&format!(r#"CREATE SCHEMA "{schema}""#))
-        .execute(&pool)
-        .await
-        .unwrap();
-    pool.close().await;
+    crate::test_util::create_schema(base_url, schema).await;
 }
 
 async fn drop_schema(base_url: &str, schema: &str) {
-    let pool = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(base_url)
-        .await
-        .unwrap();
-    sqlx::query(&format!(r#"DROP SCHEMA IF EXISTS "{schema}" CASCADE"#))
-        .execute(&pool)
-        .await
-        .unwrap();
-    pool.close().await;
+    crate::test_util::drop_schema(base_url, schema).await;
 }
 
 async fn with_test_app(test: impl AsyncFnOnce(Database, Config) -> anyhow::Result<()>) {

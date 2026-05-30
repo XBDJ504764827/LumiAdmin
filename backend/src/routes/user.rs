@@ -40,10 +40,16 @@ pub(crate) async fn users(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let actor = current_operator(&ctx, &headers)
         .await
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+        .map_err(|(status, _json)| {
+            tracing::warn!("获取当前操作员失败: {}", status.as_u16());
+            StatusCode::UNAUTHORIZED
+        })?;
     let result = user_service::list_users(&ctx.db, &actor, &query)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| {
+            tracing::error!(error = %e, "加载用户列表失败");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     Ok(Json(
         serde_json::json!({ "items": result.items, "total": result.total, "page": result.page, "page_size": result.page_size }),
     ))

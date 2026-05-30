@@ -124,7 +124,8 @@ pub(crate) async fn player_api_players(
     let _actor = current_operator(&ctx, &headers).await?;
     let items = player_api_service::list_players(&ctx.db)
         .await
-        .map_err(|_| {
+        .map_err(|e| {
+            tracing::error!(error = %e, "查询玩家信息失败");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error":"查询玩家信息失败"})),
@@ -142,7 +143,8 @@ pub(crate) async fn get_player_api_config(
         return Err(forbidden());
     }
 
-    let config = player_api_service::get_config(&ctx.db).await.map_err(|_| {
+    let config = player_api_service::get_config(&ctx.db).await.map_err(|e| {
+        tracing::error!(error = %e, "读取玩家 API 配置失败");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error":"读取玩家 API 配置失败"})),

@@ -71,6 +71,13 @@ pub(crate) struct BanRow {
 }
 
 #[derive(sqlx::FromRow)]
+struct BanListRowWithTotal {
+    #[sqlx(flatten)]
+    pub base: BanListRow,
+    pub total_count: i64,
+}
+
+#[derive(sqlx::FromRow)]
 struct BanListRow {
     pub id: Uuid,
     pub player: Option<String>,
@@ -106,24 +113,8 @@ pub struct UpdateBanInput {
 
 const BAN_DISPLAY_FIELDS: &str = "br.id, br.player, br.steam_id, br.ip_address, br.server_name, br.ban_type, br.duration_minutes, br.expires_at, br.reason, br.status, COALESCE(operator_user.display_name, br.operator_name) AS operator_name, br.source, br.server_id, br.server_port, br.removed_reason, COALESCE(removed_user.display_name, br.removed_by) AS removed_by, br.removed_at, br.created_at";
 const BAN_LIST_DISPLAY_FIELDS: &str = "br.id, br.player, br.steam_id, br.ip_address, br.ban_type, br.duration_minutes, br.expires_at, br.reason, br.status, COALESCE(operator_user.display_name, br.operator_name) AS operator_name, br.created_at";
-const BAN_OPERATOR_DISPLAY_JOIN: &str = r#"LEFT JOIN LATERAL (
-    SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
-    FROM users u
-    WHERE u.username = br.operator_name
-       OR u.display_name = br.operator_name
-       OR NULLIF(u.remark, '') = br.operator_name
-    ORDER BY CASE WHEN u.username = br.operator_name THEN 0 WHEN u.display_name = br.operator_name THEN 1 ELSE 2 END
-    LIMIT 1
-) operator_user ON true"#;
-const BAN_REMOVED_BY_DISPLAY_JOIN: &str = r#"LEFT JOIN LATERAL (
-    SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
-    FROM users u
-    WHERE u.username = br.removed_by
-       OR u.display_name = br.removed_by
-       OR NULLIF(u.remark, '') = br.removed_by
-    ORDER BY CASE WHEN u.username = br.removed_by THEN 0 WHEN u.display_name = br.removed_by THEN 1 ELSE 2 END
-    LIMIT 1
-) removed_user ON true"#;
+// 使用共享的 SQL 片段
+use crate::sql_fragments::{OPERATOR_DISPLAY_JOIN as BAN_OPERATOR_DISPLAY_JOIN, REMOVED_BY_DISPLAY_JOIN as BAN_REMOVED_BY_DISPLAY_JOIN};
 
 pub(crate) fn row_to_item(row: BanRow) -> BanItem {
     BanItem {
@@ -191,33 +182,30 @@ pub async fn list_bans(
         format!("WHERE {}", conditions.join(" AND "))
     };
 
-    let count_sql = format!("SELECT COUNT(*) FROM ban_records {where_clause}");
+    // 使用 COUNT(*) OVER() 窗口函数一次性获取总数和数据
     let data_sql = format!(
-        "SELECT {BAN_LIST_DISPLAY_FIELDS} FROM ban_records br {BAN_OPERATOR_DISPLAY_JOIN} {where_clause} ORDER BY br.created_at DESC LIMIT ${param_idx} OFFSET ${}",
+        "SELECT {BAN_LIST_DISPLAY_FIELDS}, COUNT(*) OVER() as total_count FROM ban_records br {BAN_OPERATOR_DISPLAY_JOIN} {where_clause} ORDER BY br.created_at DESC LIMIT ${param_idx} OFFSET ${}",
         param_idx + 1
     );
 
-    let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql);
-    let mut data_query = sqlx::query_as::<_, BanListRow>(&data_sql);
+    let mut data_query = sqlx::query_as::<_, BanListRowWithTotal>(&data_sql);
 
     if let Some(ref pattern) = search_pattern {
-        count_query = count_query.bind(pattern);
         data_query = data_query.bind(pattern);
     }
     if let Some(ref status) = query.status {
         if !status.trim().is_empty() {
-            count_query = count_query.bind(status.trim());
             data_query = data_query.bind(status.trim());
         }
     }
     data_query = data_query.bind(query.page_size()).bind(query.offset());
 
-    let total = count_query.fetch_one(&db.pool).await?;
-    let items = data_query
-        .fetch_all(&db.pool)
-        .await?
+    let rows: Vec<BanListRowWithTotal> = data_query.fetch_all(&db.pool).await?;
+
+    let total: i64 = rows.first().map(|r| r.total_count).unwrap_or(0);
+    let items = rows
         .into_iter()
-        .map(list_row_to_item)
+        .map(|row_with_total| list_row_to_item(row_with_total.base))
         .collect();
 
     Ok(crate::routes::PaginatedResponse {

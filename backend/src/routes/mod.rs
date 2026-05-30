@@ -438,7 +438,8 @@ pub(crate) async fn current_operator(
             Json(serde_json::json!({ "error": "missing token" })),
         ))?;
 
-    let token = Uuid::parse_str(token).map_err(|_| {
+    let token = Uuid::parse_str(token).map_err(|e| {
+        tracing::warn!(error = %e, "token parse failed");
         (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "invalid token" })),
@@ -447,7 +448,8 @@ pub(crate) async fn current_operator(
 
     let session = crate::services::auth_service::current_session(&ctx.db, token)
         .await
-        .map_err(|_| {
+        .map_err(|e| {
+            tracing::warn!(error = %e, "session lookup failed");
             (
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({ "error": "unauthorized" })),
@@ -459,7 +461,8 @@ pub(crate) async fn current_operator(
             .bind(session.user_id)
             .fetch_optional(&ctx.db.pool)
             .await
-            .map_err(|_| {
+            .map_err(|e| {
+                tracing::error!(error = %e, "查询用户信息失败");
                 (
                     StatusCode::UNAUTHORIZED,
                     Json(serde_json::json!({ "error": "unauthorized" })),
@@ -498,41 +501,57 @@ pub(crate) fn forbidden() -> (StatusCode, Json<serde_json::Value>) {
 }
 
 pub(crate) fn invalid_request(error: anyhow::Error) -> (StatusCode, Json<serde_json::Value>) {
-    let error_msg = error.to_string();
-    let friendly_msg = translate_db_error(&error_msg);
+    let friendly_msg = translate_db_error(&error);
     (
         StatusCode::BAD_REQUEST,
         Json(serde_json::json!({ "error": friendly_msg })),
     )
 }
 
-pub(crate) fn translate_db_error(msg: &str) -> String {
-    if msg.contains("duplicate key value violates unique constraint") {
-        if msg.contains("users_username_key") || msg.contains("username") {
-            return "该用户名已存在，请更换其他用户名".to_string();
+/// 使用 sqlx::DatabaseError trait 进行类型安全的错误匹配
+pub(crate) fn translate_db_error(error: &anyhow::Error) -> String {
+    // 尝试提取 sqlx::Error
+    if let Some(sqlx_err) = error.downcast_ref::<sqlx::Error>() {
+        match sqlx_err {
+            sqlx::Error::RowNotFound => return "记录不存在".to_string(),
+            sqlx::Error::Database(db_err) => {
+                // 使用 constraint() 和 message() 进行匹配
+                let constraint = db_err.constraint().unwrap_or("");
+                let message = db_err.message();
+
+                if message.contains("duplicate key") || message.contains("unique constraint") {
+                    if constraint.contains("users_username_key") || constraint.contains("username") {
+                        return "该用户名已存在，请更换其他用户名".to_string();
+                    }
+                    if constraint.contains("steam_id") || constraint.contains("steamid64") {
+                        return "该 SteamID 已存在".to_string();
+                    }
+                    if constraint.contains("report_token") {
+                        return "服务器令牌已存在".to_string();
+                    }
+                    return "该记录已存在，无法重复创建".to_string();
+                }
+                if message.contains("foreign key") {
+                    return "关联数据不存在".to_string();
+                }
+                if message.contains("check constraint") {
+                    return "数据格式不符合要求".to_string();
+                }
+                if message.contains("not-null constraint") || message.contains("null value") {
+                    return "必填字段不能为空".to_string();
+                }
+            }
+            _ => {}
         }
-        if msg.contains("steam_id") || msg.contains("steamid64") {
-            return "该 SteamID 已存在".to_string();
-        }
-        if msg.contains("report_token") {
-            return "服务器令牌已存在".to_string();
-        }
-        return "该记录已存在，无法重复创建".to_string();
     }
-    if msg.contains("violates foreign key constraint") {
-        return "关联数据不存在".to_string();
-    }
-    if msg.contains("violates check constraint") {
-        return "数据格式不符合要求".to_string();
-    }
-    if msg.contains("violates not-null constraint") {
-        return "必填字段不能为空".to_string();
-    }
-    if msg.contains("no rows returned") || msg.contains("not found") {
+
+    // 回退到字符串匹配（兼容非 sqlx 错误）
+    let msg = error.to_string();
+    if msg.contains("not found") || msg.contains("不存在") {
         return "记录不存在".to_string();
     }
 
-    msg.to_string()
+    msg
 }
 
 pub(crate) fn invalid_request_status(error: anyhow::Error) -> StatusCode {

@@ -10,6 +10,9 @@ mod rcon;
 mod request_log_middleware;
 mod routes;
 mod services;
+mod sql_fragments;
+#[cfg(test)]
+mod test_util;
 
 use axum::{
     extract::DefaultBodyLimit,

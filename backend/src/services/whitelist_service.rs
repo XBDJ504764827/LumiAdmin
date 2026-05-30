@@ -39,6 +39,13 @@ pub struct ManualWhitelistInput {
 }
 
 #[derive(sqlx::FromRow)]
+struct WhitelistRowWithTotal {
+    #[sqlx(flatten)]
+    pub base: WhitelistRow,
+    pub total_count: i64,
+}
+
+#[derive(sqlx::FromRow)]
 struct WhitelistRow {
     id: Uuid,
     steamid64: String,
@@ -107,11 +114,12 @@ pub async fn list_whitelist(
         format!("WHERE {}", conditions.join(" AND "))
     };
 
-    let count_sql = format!("SELECT COUNT(*) FROM whitelist_requests {where_clause}");
+    // 使用 COUNT(*) OVER() 窗口函数一次性获取总数和数据
     let data_sql = format!(
         r#"SELECT wr.id, wr.steamid64, wr.steamid, wr.steamid3, wr.profile_url, wr.nickname, wr.steam_persona_name, wr.status,
                   wr.applied_at, wr.approved_at, COALESCE(approved_user.display_name, wr.approved_by) AS approved_by, wr.approval_reason,
-                  wr.rejected_at, COALESCE(rejected_user.display_name, wr.rejected_by) AS rejected_by, wr.rejection_reason
+                  wr.rejected_at, COALESCE(rejected_user.display_name, wr.rejected_by) AS rejected_by, wr.rejection_reason,
+                  COUNT(*) OVER() as total_count
            FROM whitelist_requests wr
            LEFT JOIN LATERAL (
              SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
@@ -135,27 +143,24 @@ pub async fn list_whitelist(
         param_idx + 1
     );
 
-    let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql);
-    let mut data_query = sqlx::query_as::<_, WhitelistRow>(&data_sql);
+    let mut data_query = sqlx::query_as::<_, WhitelistRowWithTotal>(&data_sql);
 
     if let Some(ref pattern) = search_pattern {
-        count_query = count_query.bind(pattern);
         data_query = data_query.bind(pattern);
     }
     if let Some(ref status) = query.status {
         if !status.trim().is_empty() {
-            count_query = count_query.bind(status.trim());
             data_query = data_query.bind(status.trim());
         }
     }
     data_query = data_query.bind(query.page_size()).bind(query.offset());
 
-    let total = count_query.fetch_one(&db.pool).await?;
-    let items = data_query
-        .fetch_all(&db.pool)
-        .await?
+    let rows: Vec<WhitelistRowWithTotal> = data_query.fetch_all(&db.pool).await?;
+
+    let total: i64 = rows.first().map(|r| r.total_count).unwrap_or(0);
+    let items = rows
         .into_iter()
-        .map(map_whitelist_row)
+        .map(|row_with_total| map_whitelist_row(row_with_total.base))
         .collect();
 
     Ok(crate::routes::PaginatedResponse {
@@ -717,34 +722,15 @@ mod tests {
     use uuid::Uuid;
 
     fn schema_url(base_url: &str, schema: &str) -> String {
-        let separator = if base_url.contains('?') { '&' } else { '?' };
-        format!("{base_url}{separator}options=-csearch_path%3D{schema}")
+        crate::test_util::schema_url(base_url, schema)
     }
 
     async fn create_schema(base_url: &str, schema: &str) {
-        let pool = PgPoolOptions::new()
-            .max_connections(1)
-            .connect(base_url)
-            .await
-            .unwrap();
-        sqlx::query(&format!(r#"CREATE SCHEMA "{schema}""#))
-            .execute(&pool)
-            .await
-            .unwrap();
-        pool.close().await;
+        crate::test_util::create_schema(base_url, schema).await;
     }
 
     async fn drop_schema(base_url: &str, schema: &str) {
-        let pool = PgPoolOptions::new()
-            .max_connections(1)
-            .connect(base_url)
-            .await
-            .unwrap();
-        sqlx::query(&format!(r#"DROP SCHEMA IF EXISTS "{schema}" CASCADE"#))
-            .execute(&pool)
-            .await
-            .unwrap();
-        pool.close().await;
+        crate::test_util::drop_schema(base_url, schema).await;
     }
 
     async fn with_test_db(test: impl AsyncFnOnce(Database) -> anyhow::Result<()>) {

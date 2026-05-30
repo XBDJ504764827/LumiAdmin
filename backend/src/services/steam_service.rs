@@ -31,6 +31,7 @@ fn re_vanity_url() -> &'static Regex {
         .get_or_init(|| Regex::new(r"^https?://steamcommunity\.com/id/([^/?#]+)/?$").unwrap())
 }
 const CACHE_TTL_SECS: u64 = 300; // 5分钟缓存
+const CACHE_MAX_SIZE: usize = 10000; // 最大缓存条目数
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParsedSteamIdentity {
@@ -47,19 +48,46 @@ pub struct SteamProfile {
 
 struct CacheEntry<T> {
     value: T,
+    created_at: Instant,
     expires_at: Instant,
 }
 
 impl<T> CacheEntry<T> {
     fn new(value: T, ttl_secs: u64) -> Self {
+        let now = Instant::now();
         Self {
             value,
-            expires_at: Instant::now() + Duration::from_secs(ttl_secs),
+            created_at: now,
+            expires_at: now + Duration::from_secs(ttl_secs),
         }
     }
 
     fn is_valid(&self) -> bool {
         Instant::now() < self.expires_at
+    }
+}
+
+/// 从缓存中驱逐最旧的条目，保持缓存大小在限制内
+fn evict_oldest_if_needed<T>(cache: &mut HashMap<String, CacheEntry<T>>, max_size: usize) {
+    if cache.len() <= max_size {
+        return;
+    }
+
+    // 需要删除的条目数
+    let to_remove = cache.len() - max_size;
+
+    // 收集所有条目的创建时间和键
+    let mut entries: Vec<(String, Instant)> = cache
+        .iter()
+        .map(|(k, v)| (k.clone(), v.created_at))
+        .collect();
+
+    // 按创建时间排序（最旧的在前）
+    entries.sort_by(|a, b| a.1.cmp(&b.1));
+
+    // 删除最旧的条目
+    for (key, _) in entries.into_iter().take(to_remove) {
+        cache.remove(&key);
     }
 }
 
@@ -200,6 +228,7 @@ impl SteamResolver {
                             steamid64.to_string(),
                             CacheEntry::new(profile.clone(), CACHE_TTL_SECS),
                         );
+                        evict_oldest_if_needed(&mut cache, CACHE_MAX_SIZE);
                     }
                     return Ok(profile);
                 }
@@ -217,6 +246,7 @@ impl SteamResolver {
         {
             let mut cache = self.profile_cache.write().await;
             cache.insert(steamid64.to_string(), CacheEntry::new(None, 60)); // 失败缓存1分钟
+            evict_oldest_if_needed(&mut cache, CACHE_MAX_SIZE);
         }
 
         last_error.map_or(Ok(None), Err)
@@ -328,6 +358,7 @@ impl SteamResolver {
                             result.insert(steamid.clone(), p);
                         }
                     }
+                    evict_oldest_if_needed(&mut cache, CACHE_MAX_SIZE);
                 }
                 Err(e) => {
                     // 批量失败时，缓存空值避免频繁重试
@@ -335,6 +366,7 @@ impl SteamResolver {
                     for steamid in chunk {
                         cache.insert(steamid.clone(), CacheEntry::new(None, 60));
                     }
+                    evict_oldest_if_needed(&mut cache, CACHE_MAX_SIZE);
                     tracing::warn!("批量查询Steam Profile失败: {}", e);
                 }
             }

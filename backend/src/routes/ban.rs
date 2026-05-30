@@ -76,7 +76,8 @@ pub(crate) async fn bans(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let _actor = current_operator(&ctx, &headers).await?;
 
-    let result = ban_service::list_bans(&ctx.db, &query).await.map_err(|_| {
+    let result = ban_service::list_bans(&ctx.db, &query).await.map_err(|e| {
+        tracing::error!(error = %e, "加载封禁列表失败");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "加载封禁列表失败" })),
@@ -297,7 +298,8 @@ pub(crate) async fn list_ban_files(
     .bind(ban_id)
     .fetch_all(&ctx.db.pool)
     .await
-    .map_err(|_| {
+    .map_err(|e| {
+        tracing::error!(error = %e, "查询封禁文件失败");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "加载封禁文件失败" })),
@@ -349,7 +351,8 @@ pub(crate) async fn get_ban_file_url(
             .bind(file_id)
             .fetch_optional(&ctx.db.pool)
             .await
-            .map_err(|_| {
+            .map_err(|e| {
+                tracing::error!(error = %e, "查询文件失败");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({ "error": "查询文件失败" })),

@@ -1,17 +1,32 @@
 import React, { useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useNavigate } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from './state/auth.jsx';
 import { ThemeProvider } from './state/theme.jsx';
 import { AppShell } from './components/layout/AppShell.jsx';
 import { publicRoutes, protectedRoutes } from './routes/routeConfig.jsx';
 
+// 创建 React Query 客户端，配置默认选项
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 5 * 60 * 1000, // 5分钟内数据视为新鲜
+      gcTime: 10 * 60 * 1000, // 10分钟后清理缓存
+      refetchOnWindowFocus: false, // 窗口聚焦时不自动刷新
+      retry: 1, // 失败时只重试一次
+    },
+  },
+});
+
 export default function App() {
   return (
-    <ThemeProvider>
-      <AuthProvider>
-        <AppRoutes />
-      </AuthProvider>
-    </ThemeProvider>
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider>
+        <AuthProvider>
+          <AppRoutes />
+        </AuthProvider>
+      </ThemeProvider>
+    </QueryClientProvider>
   );
 }
 

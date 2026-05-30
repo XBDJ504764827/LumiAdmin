@@ -22,7 +22,8 @@ pub(crate) async fn list_appeals(
 
     let result = ban_appeal_service::list_appeals(&ctx.db, &query)
         .await
-        .map_err(|_| {
+        .map_err(|e| {
+            tracing::error!(error = %e, "加载申诉列表失败");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": "加载申诉列表失败" })),
@@ -133,7 +134,8 @@ pub(crate) async fn list_appeal_files(
     .bind(appeal_id)
     .fetch_all(&ctx.db.pool)
     .await
-    .map_err(|_| {
+    .map_err(|e| {
+        tracing::error!(error = %e, "加载申诉文件失败");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "加载申诉文件失败" })),
@@ -190,7 +192,8 @@ pub(crate) async fn get_appeal_file_url(
     .bind(file_id)
     .fetch_optional(&ctx.db.pool)
     .await
-    .map_err(|_| {
+    .map_err(|e| {
+        tracing::error!(error = %e, "查询申诉文件失败");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "查询文件失败" })),

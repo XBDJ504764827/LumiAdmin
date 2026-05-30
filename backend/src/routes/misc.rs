@@ -28,7 +28,8 @@ pub(crate) async fn dashboard(
         return Err(forbidden());
     }
 
-    let data = dashboard_service::get_metrics(&ctx.db).await.map_err(|_| {
+    let data = dashboard_service::get_metrics(&ctx.db).await.map_err(|e| {
+        tracing::error!(error = %e, "加载仪表盘失败");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "加载仪表盘失败" })),
@@ -46,7 +47,8 @@ pub(crate) async fn review_counts(
 
     let counts = dashboard_service::get_review_counts(&ctx.db, include_reports)
         .await
-        .map_err(|_| {
+        .map_err(|e| {
+            tracing::error!(error = %e, "加载待审核数量失败");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": "加载待审核数量失败" })),
@@ -65,7 +67,8 @@ pub(crate) async fn logs(
         return Err(forbidden());
     }
 
-    let result = log_service::list_logs(&ctx.db, &query).await.map_err(|_| {
+    let result = log_service::list_logs(&ctx.db, &query).await.map_err(|e| {
+        tracing::error!(error = %e, "加载日志失败");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "加载日志失败" })),

@@ -59,7 +59,10 @@ pub(crate) async fn public_whitelist(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let result = public_service::list_public_whitelist(&ctx.db, &query)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| {
+            tracing::error!(error = %e, "加载公开白名单列表失败");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     Ok(Json(
         serde_json::json!({ "items": result.items, "total": result.total, "page": result.page, "page_size": result.page_size }),
     ))
@@ -109,10 +112,16 @@ pub(crate) async fn public_bans(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let result = public_service::list_public_bans(&ctx.db, &query)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| {
+            tracing::error!(error = %e, "加载公开封禁列表失败");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     let stats = public_service::ban_stats(&ctx.db)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| {
+            tracing::error!(error = %e, "加载封禁统计失败");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     Ok(Json(
         serde_json::json!({ "items": result.items, "total": result.total, "page": result.page, "page_size": result.page_size, "stats": stats }),
     ))
@@ -177,7 +186,8 @@ pub(crate) async fn query_active_bans(
 
     let bans = ban_service::find_active_bans_by_steamid(&ctx.db, &parsed.steamid64)
         .await
-        .map_err(|_| {
+        .map_err(|e| {
+            tracing::error!(error = %e, "查询活跃封禁失败");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "查询失败"})),
@@ -205,7 +215,8 @@ pub(crate) async fn get_global_bans(
         }
     }
 
-    let data = fetch_global_bans_from_api(&steamid64).await.map_err(|_| {
+let data = fetch_global_bans_from_api(&steamid64).await.map_err(|e| {
+        tracing::error!(error = ?e, steamid64 = %steamid64, "查询全球封禁失败");
         (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": "查询失败" })),

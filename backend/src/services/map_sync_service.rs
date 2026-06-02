@@ -332,11 +332,16 @@ async fn check_and_enqueue(
                 continue;
             }
             for source in sources {
-                let source = ensure_remote_meta(&source).await?;
-                let reason = if force {
-                    Some("手动指定更新".to_string())
+                let local_exists = local_file_exists(db, agent.id, &source.file_name).await?;
+                let (source, reason) = if force {
+                    let source = ensure_remote_meta(&source).await?;
+                    (source, Some("手动指定更新".to_string()))
+                } else if !local_exists {
+                    (source, Some("目标缺失".to_string()))
                 } else {
-                    stale_reason(db, agent.id, &source).await?
+                    let source = ensure_remote_meta(&source).await?;
+                    let reason = stale_reason(db, agent.id, &source).await?;
+                    (source, reason)
                 };
                 if let Some(reason) = reason {
                     if !has_active_task(db, agent.id, &source.file_name).await? {
@@ -612,6 +617,17 @@ async fn has_active_task(db: &Database, agent_id: Uuid, file_name: &str) -> anyh
     Ok(exists.is_some())
 }
 
+async fn local_file_exists(db: &Database, agent_id: Uuid, file_name: &str) -> anyhow::Result<bool> {
+    let exists: Option<(String,)> = sqlx::query_as(
+        "SELECT file_name FROM map_sync_agent_maps WHERE agent_id = $1 AND file_name = $2 LIMIT 1",
+    )
+    .bind(agent_id)
+    .bind(file_name)
+    .fetch_optional(&db.pool)
+    .await?;
+    Ok(exists.is_some())
+}
+
 async fn create_task(
     db: &Database,
     agent_id: Uuid,
@@ -818,12 +834,30 @@ async fn load_remote_maps(source_urls: &[String]) -> anyhow::Result<HashMap<Stri
 }
 
 async fn ensure_remote_meta(source: &RemoteFile) -> anyhow::Result<RemoteFile> {
-    let response = http_client().head(&source.url).send().await?;
-    anyhow::ensure!(
-        response.status().is_success(),
-        "远程文件返回状态 {}",
-        response.status()
-    );
+    let response = match http_client()
+        .head(&source.url)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => response,
+        Ok(response) => {
+            tracing::warn!(
+                url = %source.url,
+                status = %response.status(),
+                "远程地图文件 HEAD 返回非成功状态，降级为无元信息比较"
+            );
+            return Ok(source.clone());
+        }
+        Err(error) => {
+            tracing::warn!(
+                url = %source.url,
+                %error,
+                "远程地图文件 HEAD 请求失败，降级为无元信息比较"
+            );
+            return Ok(source.clone());
+        }
+    };
     let size = response
         .headers()
         .get(reqwest::header::CONTENT_LENGTH)

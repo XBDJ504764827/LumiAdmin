@@ -12,6 +12,7 @@ pub mod docs_service;
 pub mod external_ban_api_service;
 pub mod external_server_service;
 pub mod log_service;
+pub mod map_sync_service;
 pub mod map_tier_service;
 pub mod notification_service;
 pub mod offline_sync_service;

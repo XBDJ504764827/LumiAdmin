@@ -63,6 +63,11 @@ async fn main() -> anyhow::Result<()> {
         db.clone(),
         config.rcon_poll_scan_interval_secs,
     );
+    // 启动地图同步定时检测
+    services::map_sync_service::start_map_sync_loop(
+        db.clone(),
+        config.map_sync_scan_interval_secs,
+    );
     // 启动过期服务器状态清理，每 30 秒执行一次
     services::community_service::start_stale_cleanup_loop(db.clone());
     // 启动通知清理，每 24 小时清理 30 天前的已读通知
@@ -128,6 +133,7 @@ async fn main() -> anyhow::Result<()> {
                         header::CONTENT_TYPE,
                         axum::http::HeaderName::from_static("x-appeal-upload-token"),
                         axum::http::HeaderName::from_static("x-report-upload-token"),
+                        axum::http::HeaderName::from_static("x-map-agent-token"),
                     ]);
                 if let Some(origin) = cors_origin {
                     if let Ok(parsed) = origin.parse::<axum::http::HeaderValue>() {

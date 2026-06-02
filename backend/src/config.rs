@@ -29,6 +29,7 @@ pub struct Config {
     pub steam_name_refresh_interval_secs: u64,
     pub session_cleanup_interval_secs: u64,
     pub rcon_poll_scan_interval_secs: u64,
+    pub map_sync_scan_interval_secs: u64,
     pub map_tier_sync_interval_secs: u64,
     pub server_config_cache_ttl_secs: u64,
     pub server_config_cache_refresh_interval_secs: u64,
@@ -132,6 +133,7 @@ impl Config {
             steam_name_refresh_interval_secs: env_u64("STEAM_NAME_REFRESH_INTERVAL_SECS", 6 * 3600),
             session_cleanup_interval_secs: env_u64("SESSION_CLEANUP_INTERVAL_SECS", 600),
             rcon_poll_scan_interval_secs: env_u64("RCON_POLL_SCAN_INTERVAL_SECS", 5),
+            map_sync_scan_interval_secs: env_u64("MAP_SYNC_SCAN_INTERVAL_SECS", 60),
             map_tier_sync_interval_secs: env_u64("MAP_TIER_SYNC_INTERVAL_SECS", 6 * 3600),
             server_config_cache_ttl_secs: env_u64("SERVER_CONFIG_CACHE_TTL_SECS", 300),
             server_config_cache_refresh_interval_secs: env_u64(

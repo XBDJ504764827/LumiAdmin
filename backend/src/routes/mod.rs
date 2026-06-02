@@ -6,6 +6,7 @@ pub mod ban_appeal;
 pub mod community;
 pub mod external_ban_api;
 pub mod external_server;
+pub mod map_sync;
 pub mod misc;
 pub mod notification;
 pub mod player_report;
@@ -127,6 +128,34 @@ pub fn router(
         // -- dashboard --
         .route("/api/dashboard", get(misc::dashboard))
         .route("/api/review-counts", get(misc::review_counts))
+        // -- map sync --
+        .route(
+            "/api/map-sync/config",
+            get(map_sync::get_map_sync_overview).put(map_sync::update_map_sync_config),
+        )
+        .route("/api/map-sync/agents", post(map_sync::create_map_sync_agent))
+        .route(
+            "/api/map-sync/agents/:id",
+            delete(map_sync::delete_map_sync_agent),
+        )
+        .route(
+            "/api/map-sync/agents/:id/reset-token",
+            post(map_sync::reset_map_sync_agent_token),
+        )
+        .route("/api/map-sync/check", post(map_sync::check_all_maps))
+        .route(
+            "/api/map-sync/maps/:map_name/sync",
+            post(map_sync::sync_single_map),
+        )
+        .route(
+            "/api/map-sync/agent/inventory",
+            post(map_sync::agent_inventory),
+        )
+        .route("/api/map-sync/agent/tasks", get(map_sync::agent_tasks))
+        .route(
+            "/api/map-sync/agent/tasks/:task_id/report",
+            post(map_sync::agent_task_report),
+        )
         // -- community --
         .route("/api/community/servers", get(community::community_servers))
         .route(

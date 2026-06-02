@@ -1014,6 +1014,7 @@ SteamID64: {steam_id}
                 'https://files.femboykz.com/fastdl/csgo/maps/',
                 'https://download.axekz.com/csgo/maps/'
               ]::TEXT[],
+              map_pool_url TEXT NOT NULL DEFAULT 'https://kztimerglobal.com/api/v1.0/maps?is_validated=true&limit=999',
               check_interval_secs INTEGER NOT NULL DEFAULT 3600,
               last_checked_at TIMESTAMPTZ,
               last_status TEXT,
@@ -1032,6 +1033,7 @@ SteamID64: {steam_id}
                 'https://files.femboykz.com/fastdl/csgo/maps/',
                 'https://download.axekz.com/csgo/maps/'
               ]::TEXT[]"#,
+            r#"ALTER TABLE map_sync_config ADD COLUMN IF NOT EXISTS map_pool_url TEXT NOT NULL DEFAULT 'https://kztimerglobal.com/api/v1.0/maps?is_validated=true&limit=999'"#,
             r#"ALTER TABLE map_sync_config ADD COLUMN IF NOT EXISTS check_interval_secs INTEGER NOT NULL DEFAULT 3600"#,
             r#"ALTER TABLE map_sync_config ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ"#,
             r#"ALTER TABLE map_sync_config ADD COLUMN IF NOT EXISTS last_status TEXT"#,
@@ -1328,6 +1330,19 @@ SteamID64: {steam_id}
                 "migrated plaintext passwords to argon2 hashes"
             );
         }
+
+        sqlx::query(
+            r#"UPDATE map_sync_config
+               SET map_pool_url = $1
+               WHERE id = true
+                 AND (
+                   btrim(map_pool_url) = ''
+                   OR map_pool_url = 'https://kztimerglobal.com/api/v1.0/maps?is_validated=true&limit=999'
+                 )"#,
+        )
+        .bind(&config.map_sync_map_pool_url)
+        .execute(&self.pool)
+        .await?;
 
         Ok(())
     }

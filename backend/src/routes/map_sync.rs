@@ -15,6 +15,8 @@ pub(crate) struct UpdateConfigBody {
     #[serde(default = "default_true")]
     pub auto_update: bool,
     pub source_urls: Vec<String>,
+    #[serde(default = "default_map_pool_url")]
+    pub map_pool_url: String,
     #[serde(default = "default_interval")]
     pub check_interval_secs: i32,
 }
@@ -38,6 +40,10 @@ fn default_true() -> bool {
 
 fn default_interval() -> i32 {
     3600
+}
+
+fn default_map_pool_url() -> String {
+    "https://kztimerglobal.com/api/v1.0/maps?is_validated=true&limit=999".to_string()
 }
 
 pub(crate) async fn get_map_sync_overview(
@@ -67,6 +73,7 @@ pub(crate) async fn update_map_sync_config(
             enabled: body.enabled,
             auto_update: body.auto_update,
             source_urls: body.source_urls,
+            map_pool_url: body.map_pool_url,
             check_interval_secs: body.check_interval_secs,
         },
     )

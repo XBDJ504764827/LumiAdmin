@@ -15,6 +15,7 @@ const defaultForm = {
   enabled: false,
   autoUpdate: true,
   sourceUrls: defaultSources.join('\n'),
+  mapPoolUrl: 'https://kztimerglobal.com/api/v1.0/maps?is_validated=true&limit=999',
   checkIntervalSecs: 3600,
 };
 
@@ -68,6 +69,7 @@ export function MapSyncPage() {
   const config = overview?.config;
   const agents = overview?.agents ?? [];
   const recentTasks = overview?.recent_tasks ?? [];
+  const mapPoolNames = overview?.map_pool_names ?? [];
 
   useEffect(() => {
     if (!config) return;
@@ -75,6 +77,7 @@ export function MapSyncPage() {
       enabled: config.enabled,
       autoUpdate: config.auto_update,
       sourceUrls: (config.source_urls?.length ? config.source_urls : defaultSources).join('\n'),
+      mapPoolUrl: config.map_pool_url || defaultForm.mapPoolUrl,
       checkIntervalSecs: config.check_interval_secs ?? 3600,
     });
   }, [config]);
@@ -91,6 +94,7 @@ export function MapSyncPage() {
         enabled: form.enabled,
         auto_update: form.autoUpdate,
         source_urls: linesToArray(form.sourceUrls),
+        map_pool_url: form.mapPoolUrl,
         check_interval_secs: Number(form.checkIntervalSecs) || 3600,
       });
       toast({ title: '配置已保存' });
@@ -236,6 +240,14 @@ export function MapSyncPage() {
               />
             </div>
             <div className="form-group">
+              <label>GOKZ 地图池 API</label>
+              <input
+                className="form-control"
+                value={form.mapPoolUrl}
+                onChange={(event) => setForm((prev) => ({ ...prev, mapPoolUrl: event.target.value }))}
+              />
+            </div>
+            <div className="form-group">
               <label>检测间隔（秒）</label>
               <input
                 className="form-control"
@@ -294,6 +306,24 @@ export function MapSyncPage() {
               {singleSyncing ? '创建中...' : '更新'}
             </button>
           </div>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
+        <div className="card-header">
+          <div>
+            <h3>GOKZ 地图池</h3>
+            <p>当前缓存地图 {mapPoolNames.length} 张，maplist.txt 和 mapcycle.txt 会按此列表同步。</p>
+          </div>
+        </div>
+        <div className="card-body">
+          <textarea
+            className="form-control"
+            rows={8}
+            readOnly
+            value={mapPoolNames.join('\n')}
+            placeholder="执行一次检测后显示 GOKZ 地图池"
+          />
         </div>
       </div>
 

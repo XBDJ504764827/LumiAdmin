@@ -15,6 +15,7 @@ pub struct MapSyncConfig {
     pub enabled: bool,
     pub auto_update: bool,
     pub source_urls: Vec<String>,
+    pub map_pool_url: String,
     pub check_interval_secs: i32,
     pub last_checked_at: Option<DateTime<Utc>>,
     pub last_status: Option<String>,
@@ -57,6 +58,7 @@ pub struct MapSyncOverview {
     pub config: MapSyncConfig,
     pub agents: Vec<MapSyncAgent>,
     pub recent_tasks: Vec<MapSyncTask>,
+    pub map_pool_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -65,6 +67,7 @@ pub struct UpdateMapSyncConfigInput {
     #[serde(default = "default_true")]
     pub auto_update: bool,
     pub source_urls: Vec<String>,
+    pub map_pool_url: String,
     #[serde(default = "default_interval")]
     pub check_interval_secs: i32,
 }
@@ -120,6 +123,12 @@ struct RemoteFile {
     last_modified: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct KzMapItem {
+    name: String,
+    difficulty: Option<i32>,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -133,13 +142,14 @@ pub async fn overview(db: &Database) -> anyhow::Result<MapSyncOverview> {
         config: get_config(db).await?,
         agents: list_agents(db).await?,
         recent_tasks: list_recent_tasks(db).await?,
+        map_pool_names: cached_remote_map_names(db).await?,
     })
 }
 
 pub async fn get_config(db: &Database) -> anyhow::Result<MapSyncConfig> {
     ensure_config_row(db).await?;
     sqlx::query_as::<_, MapSyncConfig>(
-        r#"SELECT enabled, auto_update, source_urls, check_interval_secs,
+        r#"SELECT enabled, auto_update, source_urls, map_pool_url, check_interval_secs,
                   last_checked_at, last_status, last_error, updated_at
            FROM map_sync_config
            WHERE id = true"#,
@@ -154,25 +164,29 @@ pub async fn update_config(
     input: UpdateMapSyncConfigInput,
 ) -> anyhow::Result<MapSyncConfig> {
     let source_urls = normalize_urls(input.source_urls);
+    let map_pool_url = input.map_pool_url.trim();
     anyhow::ensure!(!source_urls.is_empty(), "至少需要配置一个地图下载源");
+    anyhow::ensure!(!map_pool_url.is_empty(), "地图池 API URL 不能为空");
 
     sqlx::query_as::<_, MapSyncConfig>(
         r#"INSERT INTO map_sync_config (
-             id, enabled, auto_update, source_urls, check_interval_secs, updated_at
+             id, enabled, auto_update, source_urls, map_pool_url, check_interval_secs, updated_at
            )
-           VALUES (true, $1, $2, $3, $4, now())
+           VALUES (true, $1, $2, $3, $4, $5, now())
            ON CONFLICT (id) DO UPDATE SET
              enabled = EXCLUDED.enabled,
              auto_update = EXCLUDED.auto_update,
              source_urls = EXCLUDED.source_urls,
+             map_pool_url = EXCLUDED.map_pool_url,
              check_interval_secs = EXCLUDED.check_interval_secs,
              updated_at = now()
-           RETURNING enabled, auto_update, source_urls, check_interval_secs,
+           RETURNING enabled, auto_update, source_urls, map_pool_url, check_interval_secs,
                      last_checked_at, last_status, last_error, updated_at"#,
     )
     .bind(input.enabled)
     .bind(input.auto_update)
     .bind(&source_urls)
+    .bind(map_pool_url)
     .bind(input.check_interval_secs.clamp(60, 86_400))
     .fetch_one(&db.pool)
     .await
@@ -292,13 +306,15 @@ async fn check_and_enqueue(
     anyhow::ensure!(!agents.is_empty(), "请先创建至少一个地图同步代理");
 
     let remote_maps = load_remote_maps(&config.source_urls).await?;
-    persist_remote_map_cache(db, &remote_maps).await?;
+    let desired_map_names = load_map_pool_names(&config.map_pool_url).await?;
+    persist_remote_map_cache(db, &desired_map_names, &remote_maps).await?;
     let mut map_names = if let Some(map_name) = selected_map {
         vec![map_name]
     } else {
-        remote_maps.keys().cloned().collect::<Vec<_>>()
+        desired_map_names
     };
     map_names.sort();
+    let maps_found = map_names.len();
 
     let mut tasks_created = 0usize;
     let mut skipped_files = 0usize;
@@ -337,7 +353,7 @@ async fn check_and_enqueue(
     }
 
     Ok(MapSyncCheckResult {
-        maps_found: remote_maps.len(),
+        maps_found,
         agents_checked: agents.len(),
         tasks_created,
         skipped_files,
@@ -632,6 +648,7 @@ async fn cached_remote_map_names(db: &Database) -> anyhow::Result<Vec<String>> {
 
 async fn persist_remote_map_cache(
     db: &Database,
+    desired_map_names: &[String],
     remote_maps: &HashMap<String, RemoteMapSet>,
 ) -> anyhow::Result<()> {
     let mut tx = db.pool.begin().await?;
@@ -639,18 +656,23 @@ async fn persist_remote_map_cache(
         .execute(&mut *tx)
         .await?;
 
-    for chunk in remote_maps.iter().collect::<Vec<_>>().chunks(500) {
+    for chunk in desired_map_names.chunks(500) {
         let map_names = chunk
             .iter()
-            .map(|(map_name, _)| map_name.as_str())
+            .map(|map_name| map_name.as_str())
             .collect::<Vec<_>>();
         let has_bsp = chunk
             .iter()
-            .map(|(_, files)| files.raw.is_some())
+            .map(|map_name| remote_maps.get(map_name).and_then(|files| files.raw.as_ref()).is_some())
             .collect::<Vec<_>>();
         let has_bsp_bz2 = chunk
             .iter()
-            .map(|(_, files)| files.compressed.is_some())
+            .map(|map_name| {
+                remote_maps
+                    .get(map_name)
+                    .and_then(|files| files.compressed.as_ref())
+                    .is_some()
+            })
             .collect::<Vec<_>>();
         sqlx::query(
             r#"INSERT INTO map_sync_remote_maps (map_name, has_bsp, has_bsp_bz2)
@@ -667,6 +689,29 @@ async fn persist_remote_map_cache(
 
     tx.commit().await?;
     Ok(())
+}
+
+async fn load_map_pool_names(map_pool_url: &str) -> anyhow::Result<Vec<String>> {
+    let response = http_client()
+        .get(map_pool_url)
+        .timeout(std::time::Duration::from_secs(20))
+        .send()
+        .await?;
+    anyhow::ensure!(
+        response.status().is_success(),
+        "地图池 API 返回状态 {}",
+        response.status()
+    );
+    let rows: Vec<KzMapItem> = response.json().await?;
+    let mut names = rows
+        .into_iter()
+        .filter(|item| item.difficulty.unwrap_or(0) >= 1 && item.difficulty.unwrap_or(0) <= 7)
+        .filter_map(|item| normalize_map_name(&item.name))
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    anyhow::ensure!(!names.is_empty(), "地图池 API 未返回可用地图");
+    Ok(names)
 }
 
 async fn persist_check_result(

@@ -153,6 +153,10 @@ pub fn router(
         )
         .route("/api/map-sync/agent/tasks", get(map_sync::agent_tasks))
         .route(
+            "/api/map-sync/agent/map-pool",
+            get(map_sync::agent_map_pool),
+        )
+        .route(
             "/api/map-sync/agent/tasks/:task_id/report",
             post(map_sync::agent_task_report),
         )

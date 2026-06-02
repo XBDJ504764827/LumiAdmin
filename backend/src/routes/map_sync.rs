@@ -181,6 +181,17 @@ pub(crate) async fn agent_tasks(
     Ok(Json(serde_json::json!({ "tasks": tasks })))
 }
 
+pub(crate) async fn agent_map_pool(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let agent = agent_from_headers(&ctx, &headers).await?;
+    let map_names = map_sync_service::agent_map_pool(&ctx.db, &agent)
+        .await
+        .map_err(invalid_request)?;
+    Ok(Json(serde_json::json!({ "map_names": map_names })))
+}
+
 pub(crate) async fn agent_task_report(
     State(ctx): State<AppCtx>,
     headers: HeaderMap,

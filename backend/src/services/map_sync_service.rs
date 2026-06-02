@@ -452,6 +452,15 @@ pub async fn claim_agent_tasks(
     .map_err(Into::into)
 }
 
+pub async fn agent_map_pool(db: &Database, _agent: &MapSyncAgent) -> anyhow::Result<Vec<String>> {
+    let config = get_config(db).await?;
+    let remote_maps = load_remote_maps(&config.source_urls).await?;
+    let mut map_names = remote_maps.keys().cloned().collect::<Vec<_>>();
+    map_names.sort();
+    map_names.dedup();
+    Ok(map_names)
+}
+
 pub async fn report_task_result(
     db: &Database,
     agent: &MapSyncAgent,

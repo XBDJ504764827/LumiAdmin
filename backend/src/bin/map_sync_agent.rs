@@ -13,6 +13,9 @@ struct Config {
     base_url: String,
     token: String,
     map_dir: PathBuf,
+    maplist_path: Option<PathBuf>,
+    mapcycle_path: Option<PathBuf>,
+    sync_map_pool_files: bool,
     interval_secs: u64,
     limit: usize,
     once: bool,
@@ -33,6 +36,11 @@ struct InventoryMap {
 #[derive(Debug, Deserialize)]
 struct TasksResponse {
     tasks: Vec<MapTask>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MapPoolResponse {
+    map_names: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -82,6 +90,9 @@ impl Config {
         let base_url = env::var("MAP_SYNC_AGENT_BASE_URL").ok();
         let token = env::var("MAP_SYNC_AGENT_TOKEN").ok();
         let map_dir = env::var("MAP_SYNC_AGENT_MAP_DIR").ok();
+        let maplist_path = optional_path("MAP_SYNC_AGENT_MAPLIST_PATH");
+        let mapcycle_path = optional_path("MAP_SYNC_AGENT_MAPCYCLE_PATH");
+        let sync_map_pool_files = env_bool("MAP_SYNC_AGENT_SYNC_MAP_POOL_FILES", true);
         let interval_secs = env::var("MAP_SYNC_AGENT_POLL_INTERVAL_SECS")
             .ok()
             .and_then(|value| value.parse().ok())
@@ -106,6 +117,9 @@ impl Config {
             base_url: base_url.trim_end_matches('/').to_string(),
             token,
             map_dir,
+            maplist_path,
+            mapcycle_path,
+            sync_map_pool_files,
             interval_secs,
             limit: limit.clamp(1, 50),
             once,
@@ -119,7 +133,7 @@ fn reject_cli_args() -> Result<()> {
         return Ok(());
     }
     anyhow::bail!(
-        "map_sync_agent 不再使用命令行参数，请在 .env 中配置 MAP_SYNC_AGENT_BASE_URL、MAP_SYNC_AGENT_TOKEN、MAP_SYNC_AGENT_MAP_DIR 等变量"
+        "map_sync_agent 不再使用命令行参数，请在 .env 中配置 MAP_SYNC_AGENT_BASE_URL、MAP_SYNC_AGENT_TOKEN、MAP_SYNC_AGENT_MAP_DIR、MAP_SYNC_AGENT_MAPLIST_PATH、MAP_SYNC_AGENT_MAPCYCLE_PATH 等变量"
     )
 }
 
@@ -176,6 +190,12 @@ async fn run_once(client: &reqwest::Client, config: &Config) -> Result<usize> {
                 eprintln!("failed {}: {error:#}", task.file_name);
             }
         }
+    }
+
+    if config.sync_map_pool_files {
+        update_map_pool_files(client, config)
+            .await
+            .context("更新 maplist.txt/mapcycle.txt 失败")?;
     }
 
     Ok(count)
@@ -246,6 +266,37 @@ async fn report_task(
     Ok(())
 }
 
+async fn update_map_pool_files(client: &reqwest::Client, config: &Config) -> Result<()> {
+    if config.maplist_path.is_none() && config.mapcycle_path.is_none() {
+        return Ok(());
+    }
+
+    let response: MapPoolResponse = get_json(client, config, "/api/map-sync/agent/map-pool")
+        .await
+        .context("读取地图池失败")?;
+    let mut map_names = response
+        .map_names
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() && !value.contains('/') && !value.contains('\\'))
+        .collect::<Vec<_>>();
+    map_names.sort();
+    map_names.dedup();
+    let content = if map_names.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", map_names.join("\n"))
+    };
+
+    if let Some(path) = &config.maplist_path {
+        write_if_changed(path, &content)?;
+    }
+    if let Some(path) = &config.mapcycle_path {
+        write_if_changed(path, &content)?;
+    }
+    Ok(())
+}
+
 async fn get_json<T: for<'de> Deserialize<'de>>(
     client: &reqwest::Client,
     config: &Config,
@@ -306,9 +357,38 @@ fn required(value: Option<String>, name: &str) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("缺少 {name}"))
 }
 
+fn optional_path(key: &str) -> Option<PathBuf> {
+    env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
 fn env_bool(key: &str, default: bool) -> bool {
     env::var(key)
         .ok()
         .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
         .unwrap_or(default)
+}
+
+fn write_if_changed(path: &Path, content: &str) -> Result<()> {
+    if let Ok(existing) = fs::read_to_string(path) {
+        if existing == content {
+            return Ok(());
+        }
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_file_name(format!(
+        "{}.tmp",
+        path.file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("map_pool")
+    ));
+    fs::write(&tmp, content)?;
+    fs::rename(&tmp, path)?;
+    println!("updated {}", path.display());
+    Ok(())
 }

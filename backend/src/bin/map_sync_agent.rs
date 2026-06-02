@@ -90,8 +90,8 @@ impl Config {
         let base_url = env::var("MAP_SYNC_AGENT_BASE_URL").ok();
         let token = env::var("MAP_SYNC_AGENT_TOKEN").ok();
         let map_dir = env::var("MAP_SYNC_AGENT_MAP_DIR").ok();
-        let maplist_path = optional_path("MAP_SYNC_AGENT_MAPLIST_PATH");
-        let mapcycle_path = optional_path("MAP_SYNC_AGENT_MAPCYCLE_PATH");
+        let maplist_path = optional_path("MAP_SYNC_AGENT_MAPLIST_PATH")?;
+        let mapcycle_path = optional_path("MAP_SYNC_AGENT_MAPCYCLE_PATH")?;
         let sync_map_pool_files = env_bool("MAP_SYNC_AGENT_SYNC_MAP_POOL_FILES", true);
         let interval_secs = env::var("MAP_SYNC_AGENT_POLL_INTERVAL_SECS")
             .ok()
@@ -105,7 +105,7 @@ impl Config {
 
         let base_url = required(base_url, "MAP_SYNC_AGENT_BASE_URL")?;
         let token = required(token, "MAP_SYNC_AGENT_TOKEN")?;
-        let map_dir = PathBuf::from(required(map_dir, "MAP_SYNC_AGENT_MAP_DIR")?);
+        let map_dir = expand_path(&required(map_dir, "MAP_SYNC_AGENT_MAP_DIR")?)?;
         anyhow::ensure!(map_dir.exists(), "地图目录不存在: {}", map_dir.display());
         anyhow::ensure!(
             map_dir.is_dir(),
@@ -193,9 +193,10 @@ async fn run_once(client: &reqwest::Client, config: &Config) -> Result<usize> {
     }
 
     if config.sync_map_pool_files {
-        update_map_pool_files(client, config)
-            .await
-            .context("更新 maplist.txt/mapcycle.txt 失败")?;
+        match update_map_pool_files(client, config).await {
+            Ok(()) => {}
+            Err(error) => eprintln!("map pool update failed: {error:#}"),
+        }
     }
 
     Ok(count)
@@ -282,11 +283,11 @@ async fn update_map_pool_files(client: &reqwest::Client, config: &Config) -> Res
         .collect::<Vec<_>>();
     map_names.sort();
     map_names.dedup();
-    let content = if map_names.is_empty() {
-        String::new()
-    } else {
-        format!("{}\n", map_names.join("\n"))
-    };
+    if map_names.is_empty() {
+        println!("map pool cache is empty, skipped maplist/mapcycle update");
+        return Ok(());
+    }
+    let content = format!("{}\n", map_names.join("\n"));
 
     if let Some(path) = &config.maplist_path {
         write_if_changed(path, &content)?;
@@ -357,12 +358,13 @@ fn required(value: Option<String>, name: &str) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("缺少 {name}"))
 }
 
-fn optional_path(key: &str) -> Option<PathBuf> {
+fn optional_path(key: &str) -> Result<Option<PathBuf>> {
     env::var(key)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
+        .map(|value| expand_path(&value))
+        .transpose()
 }
 
 fn env_bool(key: &str, default: bool) -> bool {
@@ -370,6 +372,23 @@ fn env_bool(key: &str, default: bool) -> bool {
         .ok()
         .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
         .unwrap_or(default)
+}
+
+fn expand_path(value: &str) -> Result<PathBuf> {
+    let trimmed = value.trim();
+    if trimmed == "~" {
+        return home_dir();
+    }
+    if let Some(rest) = trimmed.strip_prefix("~/") {
+        return Ok(home_dir()?.join(rest));
+    }
+    Ok(PathBuf::from(trimmed))
+}
+
+fn home_dir() -> Result<PathBuf> {
+    env::var("HOME")
+        .map(PathBuf::from)
+        .context("无法展开 ~：HOME 环境变量不存在")
 }
 
 fn write_if_changed(path: &Path, content: &str) -> Result<()> {

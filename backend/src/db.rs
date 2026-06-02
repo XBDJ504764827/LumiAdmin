@@ -1083,6 +1083,17 @@ SteamID64: {steam_id}
         .await?;
 
         sqlx::query(
+            r#"CREATE TABLE IF NOT EXISTS map_sync_remote_maps (
+              map_name TEXT PRIMARY KEY,
+              has_bsp BOOLEAN NOT NULL DEFAULT false,
+              has_bsp_bz2 BOOLEAN NOT NULL DEFAULT false,
+              updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )"#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
             r#"CREATE TABLE IF NOT EXISTS map_sync_tasks (
               id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
               agent_id UUID NOT NULL REFERENCES map_sync_agents(id) ON DELETE CASCADE,

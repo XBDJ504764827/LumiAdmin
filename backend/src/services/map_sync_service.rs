@@ -292,6 +292,7 @@ async fn check_and_enqueue(
     anyhow::ensure!(!agents.is_empty(), "请先创建至少一个地图同步代理");
 
     let remote_maps = load_remote_maps(&config.source_urls).await?;
+    persist_remote_map_cache(db, &remote_maps).await?;
     let mut map_names = if let Some(map_name) = selected_map {
         vec![map_name]
     } else {
@@ -453,12 +454,7 @@ pub async fn claim_agent_tasks(
 }
 
 pub async fn agent_map_pool(db: &Database, _agent: &MapSyncAgent) -> anyhow::Result<Vec<String>> {
-    let config = get_config(db).await?;
-    let remote_maps = load_remote_maps(&config.source_urls).await?;
-    let mut map_names = remote_maps.keys().cloned().collect::<Vec<_>>();
-    map_names.sort();
-    map_names.dedup();
-    Ok(map_names)
+    cached_remote_map_names(db).await
 }
 
 pub async fn report_task_result(
@@ -625,6 +621,54 @@ async fn create_task(
     Ok(())
 }
 
+async fn cached_remote_map_names(db: &Database) -> anyhow::Result<Vec<String>> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT map_name FROM map_sync_remote_maps ORDER BY map_name ASC",
+    )
+    .fetch_all(&db.pool)
+    .await?;
+    Ok(rows.into_iter().map(|row| row.0).collect())
+}
+
+async fn persist_remote_map_cache(
+    db: &Database,
+    remote_maps: &HashMap<String, RemoteMapSet>,
+) -> anyhow::Result<()> {
+    let mut tx = db.pool.begin().await?;
+    sqlx::query("DELETE FROM map_sync_remote_maps")
+        .execute(&mut *tx)
+        .await?;
+
+    for chunk in remote_maps.iter().collect::<Vec<_>>().chunks(500) {
+        let map_names = chunk
+            .iter()
+            .map(|(map_name, _)| map_name.as_str())
+            .collect::<Vec<_>>();
+        let has_bsp = chunk
+            .iter()
+            .map(|(_, files)| files.raw.is_some())
+            .collect::<Vec<_>>();
+        let has_bsp_bz2 = chunk
+            .iter()
+            .map(|(_, files)| files.compressed.is_some())
+            .collect::<Vec<_>>();
+        sqlx::query(
+            r#"INSERT INTO map_sync_remote_maps (map_name, has_bsp, has_bsp_bz2)
+               SELECT u.map_name, u.has_bsp, u.has_bsp_bz2
+               FROM UNNEST($1::TEXT[], $2::BOOLEAN[], $3::BOOLEAN[])
+                    AS u(map_name, has_bsp, has_bsp_bz2)"#,
+        )
+        .bind(&map_names)
+        .bind(&has_bsp)
+        .bind(&has_bsp_bz2)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
 async fn persist_check_result(
     db: &Database,
     result: &anyhow::Result<MapSyncCheckResult>,
@@ -668,7 +712,12 @@ async fn load_remote_maps(source_urls: &[String]) -> anyhow::Result<HashMap<Stri
 
     for source_url in source_urls {
         let base_url = normalize_source_url(source_url);
-        let response = match http_client().get(&base_url).send().await {
+        let response = match http_client()
+            .get(&base_url)
+            .timeout(std::time::Duration::from_secs(20))
+            .send()
+            .await
+        {
             Ok(response) => response,
             Err(error) => {
                 tracing::warn!(url = %base_url, %error, "地图源目录请求失败");

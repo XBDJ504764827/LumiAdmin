@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { useAuth } from '../../state/auth.jsx';
 import { api } from '../../lib/api.js';
-import { useAsync } from '../../shared/useAsync.js';
+import { useApiQuery } from '../../shared/useApiQuery.js';
 import { normalizeAdminPreviewRows } from './dashboardData.js';
 import { formatChinaToday, getChinaHour } from '../../shared/time.js';
 
@@ -55,22 +55,18 @@ function cpuColor(cpu) {
 export function DashboardPage() {
   const { session } = useAuth();
   const token = session?.token ?? null;
-  const [refreshKey, setRefreshKey] = useState(0);
-  const metrics = useAsync(() => api.dashboard(token), [token, refreshKey]);
-  const publicWhitelist = useAsync(() => api.publicWhitelist(), [refreshKey]);
-
-  useEffect(() => {
-    const interval = setInterval(() => setRefreshKey((k) => k + 1), 30_000);
-    return () => clearInterval(interval);
-  }, []);
-
-  useEffect(() => {
-    function onVisible() {
-      if (!document.hidden) setRefreshKey((k) => k + 1);
-    }
-    document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
-  }, []);
+  
+  const metrics = useApiQuery(
+    ['dashboard'],
+    (token) => api.dashboard(token),
+    { refetchInterval: 30_000 } // 每30秒自动刷新
+  );
+  
+  const publicWhitelist = useApiQuery(
+    ['publicWhitelist'],
+    () => api.publicWhitelist(),
+    { enabled: true }
+  );
 
   if (metrics.error) {
     return (
@@ -85,7 +81,7 @@ export function DashboardPage() {
         <div className="card">
           <div className="card-body" style={{ textAlign: 'center', padding: 40 }}>
             <div style={{ color: 'var(--accent)', marginBottom: 16 }}>{metrics.error.message || '加载数据失败'}</div>
-            <button className="btn btn-outline" onClick={() => setRefreshKey((k) => k + 1)}>重新加载</button>
+            <button className="btn btn-outline" onClick={() => metrics.refetch()}>重新加载</button>
           </div>
         </div>
       </div>

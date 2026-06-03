@@ -1,4 +1,4 @@
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Config {
     pub database_url: String,
     pub bind_addr: String,
@@ -32,6 +32,9 @@ pub struct Config {
     pub map_sync_scan_interval_secs: u64,
     pub map_sync_map_pool_url: String,
     pub map_tier_sync_interval_secs: u64,
+    // 服务器状态历史清理
+    pub status_history_cleanup_interval_secs: u64,
+    pub status_history_retention_secs: u64,
     pub server_config_cache_ttl_secs: u64,
     pub server_config_cache_refresh_interval_secs: u64,
     // Cloudflare R2 存储配置
@@ -64,66 +67,59 @@ impl Config {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
 
-        let appeal_file_max_size_bytes = std::env::var("APPEAL_FILE_MAX_SIZE_MB")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(100)
-            * 1024
-            * 1024;
+        let appeal_file_max_size_bytes = match std::env::var("APPEAL_FILE_MAX_SIZE_MB") {
+            Ok(val) => match val.parse::<usize>() {
+                Ok(mb) => mb.max(1) * 1024 * 1024,
+                Err(_) => {
+                    tracing::warn!(value = %val, "APPEAL_FILE_MAX_SIZE_MB 解析失败，使用默认值 100MB");
+                    100 * 1024 * 1024
+                }
+            },
+            Err(_) => 100 * 1024 * 1024,
+        };
 
         let max_request_body_bytes = std::env::var("MAX_REQUEST_BODY_BYTES")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(appeal_file_max_size_bytes + 10 * 1024 * 1024);
 
-        Self {
-            database_url: std::env::var("DATABASE_URL").expect("DATABASE_URL is required"),
-            bind_addr: std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:3001".into()),
-            session_ttl_hours: std::env::var("SESSION_TTL_HOURS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(24),
-            dev_username: std::env::var("DEV_USERNAME").unwrap_or_else(|_| "dev".into()),
-            dev_password: std::env::var("DEV_PASSWORD").unwrap_or_else(|_| {
+        let is_production = std::env::var("APP_ENV")
+            .map(|v| v.to_lowercase() == "production")
+            .unwrap_or(false);
+
+        let dev_password = match std::env::var("DEV_PASSWORD") {
+            Ok(v) if !v.is_empty() => v,
+            _ if is_production => {
+                tracing::error!("生产环境必须设置 DEV_PASSWORD 环境变量");
+                std::process::exit(1);
+            }
+            _ => {
                 tracing::warn!("DEV_PASSWORD 未设置，使用不安全的默认密码，请在生产环境中配置");
                 "dev123".into()
-            }),
+            }
+        };
+
+        let mut config = Self {
+            database_url: std::env::var("DATABASE_URL").expect("DATABASE_URL is required"),
+            bind_addr: std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:3001".into()),
+            session_ttl_hours: env_u64("SESSION_TTL_HOURS", 24) as i64,
+            dev_username: std::env::var("DEV_USERNAME").unwrap_or_else(|_| "dev".into()),
+            dev_password,
             steam_api_key,
             steam_web_key,
             steamchina_profile_key,
             steamchina_level_key,
             max_request_body_bytes,
             // 数据库连接池配置
-            db_max_connections: std::env::var("DB_MAX_CONNECTIONS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(20),
-            db_min_connections: std::env::var("DB_MIN_CONNECTIONS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(2),
-            db_acquire_timeout_secs: std::env::var("DB_ACQUIRE_TIMEOUT_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(10),
-            db_idle_timeout_secs: std::env::var("DB_IDLE_TIMEOUT_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(600),
+            db_max_connections: env_u32_clamped("DB_MAX_CONNECTIONS", 20, 1, 100),
+            db_min_connections: env_u32_clamped("DB_MIN_CONNECTIONS", 2, 0, 50),
+            db_acquire_timeout_secs: env_u64("DB_ACQUIRE_TIMEOUT_SECS", 10),
+            db_idle_timeout_secs: env_u64("DB_IDLE_TIMEOUT_SECS", 600),
             // HTTP 客户端配置
-            http_timeout_secs: std::env::var("HTTP_TIMEOUT_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(300),
-            http_connect_timeout_secs: std::env::var("HTTP_CONNECT_TIMEOUT_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(5),
+            http_timeout_secs: env_u64("HTTP_TIMEOUT_SECS", 300),
+            http_connect_timeout_secs: env_u64("HTTP_CONNECT_TIMEOUT_SECS", 5),
             // 请求超时
-            request_timeout_secs: std::env::var("REQUEST_TIMEOUT_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(300),
+            request_timeout_secs: env_u64("REQUEST_TIMEOUT_SECS", 300),
             // CORS 允许的来源
             cors_origin: std::env::var("CORS_ORIGIN").ok().filter(|v| !v.is_empty()),
             mysql_database_url: std::env::var("MYSQL_DATABASE_URL")
@@ -139,6 +135,9 @@ impl Config {
                 "https://kztimerglobal.com/api/v1.0/maps?is_validated=true&limit=999".to_string()
             }),
             map_tier_sync_interval_secs: env_u64("MAP_TIER_SYNC_INTERVAL_SECS", 6 * 3600),
+            // 服务器状态历史清理：每小时清理一次，保留 1 小时数据
+            status_history_cleanup_interval_secs: env_u64("STATUS_HISTORY_CLEANUP_INTERVAL_SECS", 3600),
+            status_history_retention_secs: env_u64("STATUS_HISTORY_RETENTION_SECS", 3600),
             server_config_cache_ttl_secs: env_u64("SERVER_CONFIG_CACHE_TTL_SECS", 300),
             server_config_cache_refresh_interval_secs: env_u64(
                 "SERVER_CONFIG_CACHE_REFRESH_INTERVAL_SECS",
@@ -157,13 +156,99 @@ impl Config {
                 .ok()
                 .filter(|v| !v.is_empty()),
             appeal_file_max_size_bytes,
+        };
+
+        // 跨字段校验
+        if config.db_min_connections > config.db_max_connections {
+            tracing::warn!(
+                min = config.db_min_connections,
+                max = config.db_max_connections,
+                "DB_MIN_CONNECTIONS 大于 DB_MAX_CONNECTIONS，已自动修正为 DB_MAX_CONNECTIONS"
+            );
+            config.db_min_connections = config.db_max_connections;
         }
+
+        if config.db_acquire_timeout_secs == 0 {
+            tracing::warn!("DB_ACQUIRE_TIMEOUT_SECS 为 0，已自动修正为 10");
+            config.db_acquire_timeout_secs = 10;
+        }
+
+        if config.http_connect_timeout_secs > config.http_timeout_secs {
+            tracing::warn!(
+                connect = config.http_connect_timeout_secs,
+                timeout = config.http_timeout_secs,
+                "HTTP_CONNECT_TIMEOUT_SECS 大于 HTTP_TIMEOUT_SECS，已自动修正"
+            );
+            config.http_connect_timeout_secs = config.http_timeout_secs;
+        }
+
+        // R2 凭据完整性检查
+        let r2_count = [
+            config.r2_endpoint.is_some(),
+            config.r2_bucket.is_some(),
+            config.r2_access_key_id.is_some(),
+            config.r2_secret_access_key.is_some(),
+        ]
+        .iter()
+        .filter(|&&v| v)
+        .count();
+        if r2_count > 0 && r2_count < 4 {
+            tracing::warn!(filled = r2_count, total = 4, "R2 存储配置不完整，部分字段已填写但缺少其他字段，R2 功能将不可用");
+        }
+
+        // 启动配置日志（隐藏敏感字段）
+        tracing::info!(
+            bind_addr = %config.bind_addr,
+            db_max_connections = config.db_max_connections,
+            db_min_connections = config.db_min_connections,
+            session_ttl_hours = config.session_ttl_hours,
+            request_timeout_secs = config.request_timeout_secs,
+            is_production = is_production,
+            r2_enabled = config.r2_endpoint.is_some(),
+            "应用配置已加载"
+        );
+
+        config
     }
 }
 
 fn env_u64(key: &str, default: u64) -> u64 {
-    std::env::var(key)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
+    match std::env::var(key) {
+        Ok(val) => match val.parse::<u64>() {
+            Ok(n) => n,
+            Err(_) => {
+                tracing::warn!(key = key, value = %val, default = default, "环境变量解析失败，使用默认值");
+                default
+            }
+        },
+        Err(_) => default,
+    }
+}
+
+/// 带范围校验的 u64 环境变量读取
+fn env_u64_clamped(key: &str, default: u64, min: u64, max: u64) -> u64 {
+    let val = env_u64(key, default);
+    if val < min || val > max {
+        tracing::warn!(key = key, value = val, min = min, max = max, "环境变量超出范围，已自动修正");
+    }
+    val.clamp(min, max)
+}
+
+/// 带范围校验的 u32 环境变量读取
+fn env_u32_clamped(key: &str, default: u32, min: u32, max: u32) -> u32 {
+    match std::env::var(key) {
+        Ok(val) => match val.parse::<u32>() {
+            Ok(n) => {
+                if n < min || n > max {
+                    tracing::warn!(key = key, value = n, min = min, max = max, "环境变量超出范围，已自动修正");
+                }
+                n.clamp(min, max)
+            }
+            Err(_) => {
+                tracing::warn!(key = key, value = %val, default = default, "环境变量解析失败，使用默认值");
+                default
+            }
+        },
+        Err(_) => default,
+    }
 }

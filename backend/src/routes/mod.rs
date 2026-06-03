@@ -20,6 +20,7 @@ pub mod whitelist;
 use axum::{
     Json, Router,
     http::{HeaderMap, StatusCode, header},
+    response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
 use chrono::Utc;
@@ -588,11 +589,66 @@ pub(crate) fn translate_db_error(error: &anyhow::Error) -> String {
 }
 
 pub(crate) fn invalid_request_status(error: anyhow::Error) -> StatusCode {
-    let _ = error;
+    tracing::warn!(error = %error, "无效请求");
     StatusCode::BAD_REQUEST
 }
 
 pub(crate) fn internal_error(error: anyhow::Error) -> StatusCode {
-    let _ = error;
+    tracing::error!(error = %error, "内部服务器错误");
     StatusCode::INTERNAL_SERVER_ERROR
+}
+
+// ---------------------------------------------------------------------------
+// 统一错误类型
+// ---------------------------------------------------------------------------
+
+/// 应用统一错误类型，所有路由 handler 应使用此类型返回错误。
+/// 自动实现 `IntoResponse`，保证所有错误响应均为 `{"error": "..."}` JSON 格式。
+pub(crate) enum AppError {
+    /// 401 未授权
+    Unauthorized(String),
+    /// 403 禁止访问
+    Forbidden,
+    /// 404 资源不存在
+    NotFound(String),
+    /// 400 请求无效（含数据库错误翻译）
+    BadRequest(String),
+    /// 500 内部服务器错误
+    Internal(String),
+}
+
+impl AppError {
+    /// 构造 403 权限不足错误
+    pub(crate) fn forbidden() -> Self {
+        Self::Forbidden
+    }
+
+    /// 从 `anyhow::Error` 构造 400 错误，自动翻译数据库错误
+    pub(crate) fn bad_request(error: anyhow::Error) -> Self {
+        Self::BadRequest(translate_db_error(&error))
+    }
+
+    /// 从 `anyhow::Error` 构造 500 错误
+    pub(crate) fn internal(error: anyhow::Error) -> Self {
+        tracing::error!(error = %error, "内部服务器错误");
+        Self::Internal(error.to_string())
+    }
+
+    /// 构造 404 错误
+    pub(crate) fn not_found(msg: impl Into<String>) -> Self {
+        Self::NotFound(msg.into())
+    }
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let (status, message) = match self {
+            Self::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
+            Self::Forbidden => (StatusCode::FORBIDDEN, "权限不足".to_string()),
+            Self::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            Self::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+        };
+        (status, Json(serde_json::json!({ "error": message }))).into_response()
+    }
 }

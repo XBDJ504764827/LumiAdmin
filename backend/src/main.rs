@@ -72,6 +72,12 @@ async fn main() -> anyhow::Result<()> {
     services::community_service::start_stale_cleanup_loop(db.clone());
     // 启动通知清理，每 24 小时清理 30 天前的已读通知
     services::notification_service::start_cleanup_loop(db.clone(), 86400);
+    // 启动服务器状态历史清理
+    services::server_status_service::start_status_history_cleanup_loop(
+        db.clone(),
+        config.status_history_cleanup_interval_secs,
+        config.status_history_retention_secs as i64,
+    );
 
     // 启动地图等级同步（如果配置了 MySQL），启动时同步一次，之后每 6 小时同步一次
     if let Some(ref mysql_url) = config.mysql_database_url {

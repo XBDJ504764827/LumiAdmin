@@ -230,7 +230,7 @@ pub async fn delete_agent(db: &Database, id: Uuid) -> anyhow::Result<()> {
 pub async fn reset_agent_token(db: &Database, id: Uuid) -> anyhow::Result<MapSyncAgent> {
     sqlx::query_as::<_, MapSyncAgent>(
         r#"UPDATE map_sync_agents
-           SET token = md5(random()::TEXT || clock_timestamp()::TEXT)
+           SET token = gen_random_uuid()::TEXT
            WHERE id = $1
            RETURNING id, name, target_type, token, enabled, last_seen_at, last_inventory_at, created_at"#,
     )

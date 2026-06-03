@@ -8,7 +8,6 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
-use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::routes::AppCtx;
@@ -110,31 +109,44 @@ pub(crate) async fn mark_all_read(
 pub(crate) async fn ws_handler(
     State(ctx): State<AppCtx>,
     client_upgrade: WebSocketUpgrade,
-    Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let token_str = params.get("token").cloned().unwrap_or_default();
-    let token = Uuid::parse_str(&token_str).ok();
     let db = ctx.db.clone();
     let hub = ctx.notification_hub.clone();
 
-    client_upgrade.on_upgrade(move |socket| handle_ws(socket, token, db, hub))
+    client_upgrade.on_upgrade(move |socket| handle_ws(socket, db, hub))
 }
 
 async fn handle_ws(
     socket: WebSocket,
-    token: Option<Uuid>,
     db: crate::db::Database,
     hub: notification_service::NotificationHub,
 ) {
+    let (mut sender, mut receiver) = socket.split();
+
+    // 从第一条消息获取 token 进行认证
+    let token = match receiver.next().await {
+        Some(Ok(Message::Text(text))) => {
+            match serde_json::from_str::<serde_json::Value>(&text) {
+                Ok(msg) if msg.get("type").and_then(|t| t.as_str()) == Some("auth") => {
+                    msg.get("token")
+                        .and_then(|t| t.as_str())
+                        .and_then(|s| Uuid::parse_str(s).ok())
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+
     let Some(token) = token else {
-        let _ = socket.close().await;
+        let _ = sender.close().await;
         return;
     };
 
     let user_id = match crate::services::auth_service::current_session(&db, token).await {
         Ok(session) => session.user_id,
         Err(_) => {
-            let _ = socket.close().await;
+            let _ = sender.close().await;
             return;
         }
     };
@@ -147,11 +159,10 @@ async fn handle_ws(
         .flatten();
 
     let Some((true,)) = row else {
-        let _ = socket.close().await;
+        let _ = sender.close().await;
         return;
     };
 
-    let (mut sender, mut receiver) = socket.split();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
 
     notification_service::register_connection(&hub, user_id, tx.clone()).await;

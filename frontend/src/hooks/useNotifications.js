@@ -94,11 +94,12 @@ export function useNotifications() {
 
     function connect() {
       if (!alive) return;
-      const ws = new WebSocket(`${WS_BASE}/ws/notifications?token=${token}`);
+      const ws = new WebSocket(`${WS_BASE}/ws/notifications`);
       wsRef.current = ws;
 
       ws.onopen = () => {
         reconnectAttempts.current = 0;
+        ws.send(JSON.stringify({ type: 'auth', token }));
       };
 
       ws.onmessage = (event) => {

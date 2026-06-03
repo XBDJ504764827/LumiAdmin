@@ -23,6 +23,7 @@ const PublicWhitelistPage = lazy(() => import('../pages/public/PublicWhitelistPa
 const PublicBanPage = lazy(() => import('../pages/public/PublicBanPage.jsx').then(m => ({ default: m.PublicBanPage })));
 const PublicBanAppealPage = lazy(() => import('../pages/public/PublicBanAppealPage.jsx').then(m => ({ default: m.PublicBanAppealPage })));
 const PublicPlayerReportPage = lazy(() => import('../pages/public/PublicPlayerReportPage.jsx').then(m => ({ default: m.PublicPlayerReportPage })));
+const NotFoundPage = lazy(() => import('../pages/notFound/NotFoundPage.jsx').then(m => ({ default: m.NotFoundPage })));
 
 function Lazy({ children }) {
   return <Suspense fallback={<PageSkeleton />}>{children}</Suspense>;

@@ -1,9 +1,10 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { Modal } from '../../shared/Modal.jsx';
 import { useAuth } from '../../state/auth.jsx';
 import { useToast, ToastContainer } from '../../shared/Toast.jsx';
+import { useApiQuery, useApiMutation } from '../../shared/useApiQuery.js';
 import { buildCreateUserPayload, buildUpdateUserPayload, validateCreateUserForm } from './userForm.js';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
@@ -36,9 +37,6 @@ export function UsersPage() {
   const token = session?.token ?? null;
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
@@ -52,23 +50,47 @@ export function UsersPage() {
   const isNormal = session?.role === 'normal';
   const canCreate = isDeveloper || isAdmin;
 
-  const loadItems = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const params = { page, page_size: 20 };
-      if (search) params.search = search;
-      const result = await api.users(token, params);
-      setData(result);
-    } catch (err) {
-      setError(err);
-      setData(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [token, page, search]);
+  // 使用 React Query 获取用户列表
+  const { data, isLoading, error, refetch } = useApiQuery(
+    ['users', { page, search }],
+    (token) => api.users(token, { page, page_size: 20, ...(search ? { search } : {}) })
+  );
 
-  useEffect(() => { loadItems(); }, [loadItems]);
+  // 创建用户变更
+  const createUserMutation = useApiMutation(
+    ({ token, ...body }) => api.createUser(token, body),
+    { invalidateQueries: ['users'] }
+  );
+
+  // 更新用户变更
+  const updateUserMutation = useApiMutation(
+    ({ token, id, ...body }) => api.updateUser(token, id, body),
+    { invalidateQueries: ['users'] }
+  );
+
+  // 删除用户变更
+  const deleteUserMutation = useApiMutation(
+    ({ token, id }) => api.deleteUser(token, id),
+    { invalidateQueries: ['users'] }
+  );
+
+  // 更新密码变更
+  const updatePasswordMutation = useApiMutation(
+    ({ token, id, ...body }) => api.updateUserPassword(token, id, body),
+    { invalidateQueries: ['users'] }
+  );
+
+  // 切换启用状态变更
+  const toggleEnabledMutation = useApiMutation(
+    ({ token, id, enabled }) => api.toggleUserEnabled(token, id, { enabled }),
+    { invalidateQueries: ['users'] }
+  );
+
+  // 撤销会话变更
+  const revokeSessionsMutation = useApiMutation(
+    ({ token, id }) => api.revokeUserSessions(token, id),
+    { invalidateQueries: ['users'] }
+  );
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
@@ -131,10 +153,9 @@ export function UsersPage() {
 
     try {
       setSubmitting(true);
-      await api.createUser(token, buildCreateUserPayload(createForm));
+      await createUserMutation.mutateAsync(buildCreateUserPayload(createForm));
       setCreateOpen(false);
       setCreateForm(emptyCreateForm);
-      loadItems();
       toast({ title: '创建成功', message: `管理员 ${createForm.username} 已创建。` });
     } catch (actionError) {
       toast({ title: '创建失败', message: actionError.message, tone: 'danger' });
@@ -151,9 +172,11 @@ export function UsersPage() {
 
     try {
       setSubmitting(true);
-      await api.updateUser(token, editForm.id, buildUpdateUserPayload(editForm, canChangeRole(editForm)));
+      await updateUserMutation.mutateAsync({ 
+        id: editForm.id, 
+        ...buildUpdateUserPayload(editForm, canChangeRole(editForm)) 
+      });
       setEditOpen(false);
-      loadItems();
       toast({ title: '保存成功', message: `管理员 ${editForm.username} 信息已更新。` });
     } catch (actionError) {
       toast({ title: '保存失败', message: actionError.message, tone: 'danger' });
@@ -174,7 +197,10 @@ export function UsersPage() {
 
     try {
       setSubmitting(true);
-      await api.updateUserPassword(token, passwordForm.id, { password: passwordForm.password.trim() });
+      await updatePasswordMutation.mutateAsync({ 
+        id: passwordForm.id, 
+        password: passwordForm.password.trim() 
+      });
       setPasswordOpen(false);
       toast({ title: '修改成功', message: `${passwordForm.username} 的密码已更新。` });
     } catch (actionError) {
@@ -192,8 +218,7 @@ export function UsersPage() {
     if (!confirmed) return;
 
     try {
-      await api.deleteUser(token, item.id);
-      loadItems();
+      await deleteUserMutation.mutateAsync({ id: item.id });
       toast({ title: '删除成功', message: `管理员 ${item.username} 已删除。` });
     } catch (actionError) {
       toast({ title: '删除失败', message: actionError.message, tone: 'danger' });
@@ -209,8 +234,7 @@ export function UsersPage() {
     if (!confirmed) return;
 
     try {
-      await api.toggleUserEnabled(token, item.id);
-      loadItems();
+      await toggleEnabledMutation.mutateAsync({ id: item.id, enabled: !item.enabled });
       toast({ title: `${action}成功`, message: `管理员 ${item.username} 已${action}。` });
     } catch (actionError) {
       toast({ title: `${action}失败`, message: actionError.message, tone: 'danger' });
@@ -225,8 +249,7 @@ export function UsersPage() {
     if (!confirmed) return;
 
     try {
-      const result = await api.revokeUserSessions(token, item.id);
-      loadItems();
+      const result = await revokeSessionsMutation.mutateAsync({ id: item.id });
       toast({ title: '登出成功', message: `已强制登出 ${item.username} 的 ${result.revoked_count} 个会话。` });
     } catch (actionError) {
       toast({ title: '登出失败', message: actionError.message, tone: 'danger' });
@@ -258,16 +281,16 @@ export function UsersPage() {
                 <tr><th>用户名</th><th>权限</th><th>状态</th><th>备注</th><th>steamid</th><th>创建时间</th><th style={{ textAlign: 'right' }}>操作</th></tr>
               </thead>
               <tbody>
-                {loading ? (
+                {isLoading ? (
                   <tr><td colSpan={7} style={{ color: 'var(--text2)' }}>正在加载用户列表...</td></tr>
                 ) : null}
-                {!loading && error ? (
+                {!isLoading && error ? (
                   <tr><td colSpan={7} style={{ color: 'var(--accent)' }}>{error.message}</td></tr>
                 ) : null}
-                {!loading && !error && items.length === 0 ? (
+                {!isLoading && !error && items.length === 0 ? (
                   <tr><td colSpan={7} style={{ color: 'var(--text2)' }}>暂无管理员账号。</td></tr>
                 ) : null}
-                {!loading && !error && items.map((item) => (
+                {!isLoading && !error && items.map((item) => (
                   <tr key={item.id}>
                     <td>
                       <div className="user-cell">

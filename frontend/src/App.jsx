@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from './state/auth.jsx';
 import { ThemeProvider } from './state/theme.jsx';
 import { AppShell } from './components/layout/AppShell.jsx';
 import { publicRoutes, protectedRoutes } from './routes/routeConfig.jsx';
+import { NotFoundPage } from './pages/notFound/NotFoundPage.jsx';
 
 // 创建 React Query 客户端，配置默认选项
 const queryClient = new QueryClient({
@@ -188,7 +189,7 @@ function AppRoutes() {
               {protectedRoutes.map((route) => (
                 <Route key={route.path} path={route.path} element={<GuardedRoute route={route} session={session} />} />
               ))}
-              <Route path="*" element={<Navigate to="/dashboard" replace />} />
+              <Route path="*" element={<NotFoundPage />} />
             </Routes>
           </AppShell>
         ) : (<LoginScreen />)}

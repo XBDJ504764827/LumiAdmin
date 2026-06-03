@@ -122,6 +122,46 @@ pub async fn report_server_status(
     Ok(ServerStatusReportResult { server_id })
 }
 
+/// 清理过期的服务器状态历史记录
+/// 只保留最近 `retention_secs` 秒的数据，删除更早的记录
+pub async fn cleanup_old_status_history(
+    db: &Database,
+    retention_secs: i64,
+) -> anyhow::Result<u64> {
+    let result = sqlx::query(
+        r#"DELETE FROM server_status_history WHERE reported_at < now() - make_interval(secs => $1)"#,
+    )
+    .bind(retention_secs)
+    .execute(&db.pool)
+    .await?;
+
+    Ok(result.rows_affected())
+}
+
+/// 启动服务器状态历史清理循环
+/// `interval_secs` 为清理执行间隔（秒），`retention_secs` 为数据保留时长（秒）
+pub fn start_status_history_cleanup_loop(
+    db: Database,
+    interval_secs: u64,
+    retention_secs: i64,
+) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+        // 首次 tick 立即触发，等待一个周期后再开始
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            match cleanup_old_status_history(&db, retention_secs).await {
+                Ok(0) => {}
+                Ok(count) => {
+                    tracing::info!(count, retention_secs, "清理过期服务器状态历史")
+                }
+                Err(e) => tracing::warn!(%e, "清理服务器状态历史失败"),
+            }
+        }
+    });
+}
+
 #[allow(dead_code)]
 pub async fn get_latest_status(db: &Database) -> anyhow::Result<Vec<ServerStatusItem>> {
     let rows = sqlx::query_as::<_, ServerStatusRow>(

@@ -106,7 +106,7 @@ impl Database {
               ip TEXT NOT NULL,
               port INTEGER NOT NULL,
               rcon_password TEXT NOT NULL,
-              report_token TEXT UNIQUE NOT NULL DEFAULT md5(random()::TEXT || clock_timestamp()::TEXT),
+              report_token TEXT UNIQUE NOT NULL DEFAULT gen_random_uuid(),
               note TEXT,
               status TEXT NOT NULL DEFAULT 'untested',
               players TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
@@ -249,7 +249,7 @@ impl Database {
         }
 
         // report_token 填充 + 唯一约束
-        sqlx::query(r#"UPDATE servers SET report_token = md5(random()::TEXT || clock_timestamp()::TEXT) WHERE report_token IS NULL OR btrim(report_token) = ''"#)
+        sqlx::query(r#"UPDATE servers SET report_token = gen_random_uuid()::TEXT WHERE report_token IS NULL OR btrim(report_token) = ''"#)
             .execute(&self.pool).await?;
         sqlx::query(r#"ALTER TABLE servers ALTER COLUMN report_token SET NOT NULL"#)
             .execute(&self.pool)
@@ -652,6 +652,9 @@ impl Database {
         .execute(&self.pool)
         .await?;
         sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_server_status_history_server_id ON server_status_history (server_id, reported_at DESC)"#)
+            .execute(&self.pool).await?;
+        // 为清理查询添加独立索引（按时间排序，加速 DELETE ... WHERE reported_at < ...）
+        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_server_status_history_reported_at ON server_status_history (reported_at)"#)
             .execute(&self.pool).await?;
 
         // 玩家进服权限规则
@@ -1057,7 +1060,7 @@ SteamID64: {steam_id}
               id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
               name TEXT NOT NULL,
               target_type TEXT NOT NULL,
-              token TEXT UNIQUE NOT NULL DEFAULT md5(random()::TEXT || clock_timestamp()::TEXT),
+              token TEXT UNIQUE NOT NULL DEFAULT gen_random_uuid(),
               enabled BOOLEAN NOT NULL DEFAULT true,
               last_seen_at TIMESTAMPTZ,
               last_inventory_at TIMESTAMPTZ,
@@ -1067,7 +1070,7 @@ SteamID64: {steam_id}
         )
         .execute(&self.pool)
         .await?;
-        sqlx::query(r#"ALTER TABLE map_sync_agents ALTER COLUMN token SET DEFAULT md5(random()::TEXT || clock_timestamp()::TEXT)"#)
+        sqlx::query(r#"ALTER TABLE map_sync_agents ALTER COLUMN token SET DEFAULT gen_random_uuid()"#)
             .execute(&self.pool).await?;
 
         sqlx::query(

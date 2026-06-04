@@ -61,6 +61,41 @@ test('online reporter gates verbose ban diagnostics behind debug logging', () =>
   assert.match(source, /DebugLog\("CommandBan:/);
 });
 
+test('online reporter reconstructs split SteamID2 ban targets before reading duration', () => {
+  const source = read(onlineSourcePath);
+
+  assert.match(source, /bool ReadSteamId2CommandTarget\(int firstArg, int args, char\[] steamId2, int maxLen, int &nextArg\)/);
+  assert.match(source, /Format\(normalizedSteamId2, sizeof\(normalizedSteamId2\), "STEAM_%s:%s:%s", universe, yPart, zPart\)/);
+  assert.match(source, /if \(!ReadSteamId2CommandTarget\(1, args, targetArg, sizeof\(targetArg\), argIdx\)\)/);
+  assert.match(source, /if \(argIdx > args\)[\s\S]*?用法: sm_ban <#userid\|name\|steamid2> <minutes\|0> \[reason\]/);
+  assert.match(source, /AppendCommandReason\(argIdx, args, reason, sizeof\(reason\)\)/);
+  assert.match(source, /if \(!ReadSteamId2CommandTarget\(2, args, steamId, sizeof\(steamId\), reasonStart\)\)/);
+});
+
+test('online reporter normalizes plugin steam bans to SteamID64 before sync', () => {
+  const source = read(onlineSourcePath);
+
+  assert.match(source, /bool ConvertSteam2ToSteamId64\(const char\[] steamId2, char\[] steamId64, int maxLen\)/);
+  assert.match(source, /DecimalMultiplyByTwoAndAddSmall\(zPart, y, accountId, sizeof\(accountId\)\)/);
+  assert.match(source, /DecimalAddStrings\("76561197960265728", accountId, steamId64, maxLen\)/);
+  assert.match(source, /bool NormalizePluginSteamId\(const char\[] input, char\[] steamId64, int maxLen\)/);
+  assert.match(source, /if \(!NormalizePluginSteamId\(steamId, normalizedSteamId, sizeof\(normalizedSteamId\)\)\)/);
+  assert.match(source, /BuildPluginBanPayload\(payload, sizeof\(payload\), token, currentPort, banType, normalizedSteamId, ipAddress, player, duration, reason, adminName\)/);
+  assert.match(source, /strcopy\(targetId, sizeof\(targetId\), normalizedSteamId\)/);
+  assert.match(source, /if \(!ConvertSteam2ToSteamId64\(targetArg, steamId64, sizeof\(steamId64\)\)\)/);
+});
+
+test('online reporter requires SteamID64 for game unban steam targets', () => {
+  const source = read(onlineSourcePath);
+
+  assert.match(source, /bool IsIpAddressTarget\(const char\[] target\)/);
+  assert.match(source, /GetCmdArg\(1, target, sizeof\(target\)\)/);
+  assert.match(source, /if \(!IsSteamId64String\(target\) && !IsIpAddressTarget\(target\)\)/);
+  assert.match(source, /游戏内解封玩家请使用 SteamID64/);
+  assert.doesNotMatch(source, /ReadSteamId2CommandTarget\(1, args, target, sizeof\(target\)/);
+  assert.doesNotMatch(source, /NormalizePluginSteamId\(target, target/);
+});
+
 test('online reporter uses unified plugin API endpoints', () => {
   const source = read(onlineSourcePath);
 

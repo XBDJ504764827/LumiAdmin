@@ -81,31 +81,8 @@ async fn poll_once(db: &Database, servers: &[ExternalServer]) -> anyhow::Result<
                     }
                 }
                 Err(a2s_err) => {
-                    tracing::debug!(server = %server.name, %a2s_err, "A2S query failed");
-
-                    if let Some(ref pw) = server.rcon_password {
-                        match crate::rcon::RconConnection::connect(&address, pw, 5).await {
-                            Ok(mut conn) => {
-                                match conn.execute("status").await {
-                                    Ok(output) => {
-                                        tracing::debug!(server = %server.name, "RCON poll success");
-                                        crate::rcon::parse_status_output(&output)
-                                    }
-                                    Err(error) => {
-                                        tracing::warn!(server = %server.name, %error, "RCON status command failed");
-                                        return;
-                                    }
-                                }
-                            }
-                            Err(error) => {
-                                tracing::warn!(server = %server.name, %error, "RCON connect failed");
-                                return;
-                            }
-                        }
-                    } else {
-                        tracing::warn!(server = %server.name, %a2s_err, "A2S failed, no RCON password configured");
-                        return;
-                    }
+                    tracing::warn!(server = %server.name, %a2s_err, "A2S query failed; skipping RCON status fallback");
+                    return;
                 }
             };
 

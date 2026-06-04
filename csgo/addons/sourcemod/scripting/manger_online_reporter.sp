@@ -982,15 +982,372 @@ void AppendCommandReason(int startArg, int args, char[] reason, int maxLen)
     }
 }
 
+bool IsDecimalString(const char[] value)
+{
+    int len = strlen(value);
+    if (len == 0)
+    {
+        return false;
+    }
+
+    for (int i = 0; i < len; i++)
+    {
+        if (value[i] < '0' || value[i] > '9')
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool IsSteamId64String(const char[] steamId)
+{
+    return strlen(steamId) == 17 && StrContains(steamId, "7656119") == 0 && IsDecimalString(steamId);
+}
+
+bool IsIpAddressTarget(const char[] target)
+{
+    int len = strlen(target);
+    bool hasDot = false;
+    bool hasDigit = false;
+
+    for (int i = 0; i < len; i++)
+    {
+        if (target[i] >= '0' && target[i] <= '9')
+        {
+            hasDigit = true;
+            continue;
+        }
+
+        if (target[i] == '.')
+        {
+            hasDot = true;
+            continue;
+        }
+
+        return false;
+    }
+
+    return hasDot && hasDigit;
+}
+
+bool AppendCharToString(char[] value, int maxLen, int ch)
+{
+    int len = strlen(value);
+    if (len >= maxLen - 1)
+    {
+        return false;
+    }
+
+    value[len] = ch;
+    value[len + 1] = '\0';
+    return true;
+}
+
+void CopyStringRange(const char[] source, int start, int endExclusive, char[] dest, int maxLen)
+{
+    int destIdx = 0;
+    for (int i = start; i < endExclusive && destIdx < maxLen - 1; i++)
+    {
+        dest[destIdx] = source[i];
+        destIdx++;
+    }
+    dest[destIdx] = '\0';
+}
+
+void DecimalAddStrings(const char[] left, const char[] right, char[] output, int maxLen)
+{
+    char reversed[64];
+    int reversedLen = 0;
+    int i = strlen(left) - 1;
+    int j = strlen(right) - 1;
+    int carry = 0;
+
+    while ((i >= 0 || j >= 0 || carry > 0) && reversedLen < sizeof(reversed) - 1)
+    {
+        int sum = carry;
+        if (i >= 0)
+        {
+            sum += left[i] - '0';
+            i--;
+        }
+        if (j >= 0)
+        {
+            sum += right[j] - '0';
+            j--;
+        }
+
+        reversed[reversedLen] = (sum % 10) + '0';
+        reversedLen++;
+        carry = sum / 10;
+    }
+
+    int outIdx = 0;
+    for (int k = reversedLen - 1; k >= 0 && outIdx < maxLen - 1; k--)
+    {
+        output[outIdx] = reversed[k];
+        outIdx++;
+    }
+    output[outIdx] = '\0';
+}
+
+void DecimalMultiplyByTwoAndAddSmall(const char[] decimal, int addValue, char[] output, int maxLen)
+{
+    char reversed[64];
+    int reversedLen = 0;
+    int carry = addValue;
+
+    for (int i = strlen(decimal) - 1; i >= 0 && reversedLen < sizeof(reversed) - 1; i--)
+    {
+        int value = (decimal[i] - '0') * 2 + carry;
+        reversed[reversedLen] = (value % 10) + '0';
+        reversedLen++;
+        carry = value / 10;
+    }
+
+    while (carry > 0 && reversedLen < sizeof(reversed) - 1)
+    {
+        reversed[reversedLen] = (carry % 10) + '0';
+        reversedLen++;
+        carry /= 10;
+    }
+
+    int outIdx = 0;
+    for (int k = reversedLen - 1; k >= 0 && outIdx < maxLen - 1; k--)
+    {
+        output[outIdx] = reversed[k];
+        outIdx++;
+    }
+    output[outIdx] = '\0';
+}
+
+bool ConvertSteam2ToSteamId64(const char[] steamId2, char[] steamId64, int maxLen)
+{
+    if (StrContains(steamId2, "STEAM_", false) != 0)
+    {
+        return false;
+    }
+
+    int firstColon = FindCharInString(steamId2, ':');
+    if (firstColon == -1)
+    {
+        return false;
+    }
+
+    int secondColon = -1;
+    int len = strlen(steamId2);
+    for (int i = firstColon + 1; i < len; i++)
+    {
+        if (steamId2[i] == ':')
+        {
+            secondColon = i;
+            break;
+        }
+    }
+    if (secondColon == -1)
+    {
+        return false;
+    }
+
+    char universe[8];
+    char yPart[4];
+    char zPart[32];
+    CopyStringRange(steamId2, 6, firstColon, universe, sizeof(universe));
+    CopyStringRange(steamId2, firstColon + 1, secondColon, yPart, sizeof(yPart));
+    CopyStringRange(steamId2, secondColon + 1, len, zPart, sizeof(zPart));
+
+    if (!IsDecimalString(universe) || !IsDecimalString(yPart) || !IsDecimalString(zPart))
+    {
+        return false;
+    }
+
+    int y = StringToInt(yPart);
+    if (y < 0 || y > 1)
+    {
+        return false;
+    }
+
+    char accountId[32];
+    DecimalMultiplyByTwoAndAddSmall(zPart, y, accountId, sizeof(accountId));
+    DecimalAddStrings("76561197960265728", accountId, steamId64, maxLen);
+    return IsSteamId64String(steamId64);
+}
+
+bool ConvertSteam3ToSteamId64(const char[] steamId3, char[] steamId64, int maxLen)
+{
+    int len = strlen(steamId3);
+    if (len <= 6 || StrContains(steamId3, "[U:1:") != 0 || steamId3[len - 1] != ']')
+    {
+        return false;
+    }
+
+    char accountId[32];
+    CopyStringRange(steamId3, 5, len - 1, accountId, sizeof(accountId));
+    if (!IsDecimalString(accountId))
+    {
+        return false;
+    }
+
+    DecimalAddStrings("76561197960265728", accountId, steamId64, maxLen);
+    return IsSteamId64String(steamId64);
+}
+
+bool NormalizePluginSteamId(const char[] input, char[] steamId64, int maxLen)
+{
+    char value[128];
+    strcopy(value, sizeof(value), input);
+    TrimString(value);
+
+    if (IsSteamId64String(value))
+    {
+        strcopy(steamId64, maxLen, value);
+        return true;
+    }
+
+    if (ConvertSteam2ToSteamId64(value, steamId64, maxLen))
+    {
+        return true;
+    }
+
+    if (ConvertSteam3ToSteamId64(value, steamId64, maxLen))
+    {
+        return true;
+    }
+
+    return false;
+}
+
+bool SteamId2SegmentHasValue(int segment, const char[] universe, const char[] yPart, const char[] zPart)
+{
+    if (segment == 0)
+    {
+        return universe[0] != '\0';
+    }
+    if (segment == 1)
+    {
+        return yPart[0] != '\0';
+    }
+    return zPart[0] != '\0';
+}
+
+bool AppendSteamId2SegmentDigit(int segment, int digit, char[] universe, int universeMaxLen, char[] yPart, int yMaxLen, char[] zPart, int zMaxLen)
+{
+    if (segment == 0)
+    {
+        return AppendCharToString(universe, universeMaxLen, digit);
+    }
+    if (segment == 1)
+    {
+        return AppendCharToString(yPart, yMaxLen, digit);
+    }
+    if (segment == 2)
+    {
+        return AppendCharToString(zPart, zMaxLen, digit);
+    }
+    return false;
+}
+
+bool ReadSteamId2CommandTarget(int firstArg, int args, char[] steamId2, int maxLen, int &nextArg)
+{
+    char part[64];
+    GetCmdArg(firstArg, part, sizeof(part));
+    if (StrContains(part, "STEAM_", false) != 0)
+    {
+        return false;
+    }
+
+    char universe[8] = "";
+    char yPart[4] = "";
+    char zPart[32] = "";
+    int segment = 0;
+
+    for (int arg = firstArg; arg <= args; arg++)
+    {
+        GetCmdArg(arg, part, sizeof(part));
+        int start = 0;
+        if (arg == firstArg)
+        {
+            start = 6;
+        }
+        else if (part[0] != ':' && segment < 2 && SteamId2SegmentHasValue(segment, universe, yPart, zPart))
+        {
+            segment++;
+        }
+
+        int len = strlen(part);
+        for (int i = start; i < len; i++)
+        {
+            if (part[i] == ':')
+            {
+                if (segment >= 2)
+                {
+                    return false;
+                }
+                segment++;
+                continue;
+            }
+
+            if (part[i] < '0' || part[i] > '9')
+            {
+                return false;
+            }
+
+            if (!AppendSteamId2SegmentDigit(segment, part[i], universe, sizeof(universe), yPart, sizeof(yPart), zPart, sizeof(zPart)))
+            {
+                return false;
+            }
+        }
+
+        if (universe[0] != '\0' && yPart[0] != '\0' && zPart[0] != '\0')
+        {
+            char normalizedSteamId2[64];
+            Format(normalizedSteamId2, sizeof(normalizedSteamId2), "STEAM_%s:%s:%s", universe, yPart, zPart);
+            char steamId64[64];
+            if (!ConvertSteam2ToSteamId64(normalizedSteamId2, steamId64, sizeof(steamId64)))
+            {
+                return false;
+            }
+
+            strcopy(steamId2, maxLen, normalizedSteamId2);
+            nextArg = arg + 1;
+            return true;
+        }
+    }
+
+    return false;
+}
+
 bool SubmitPluginBan(int client, int target, const char[] banType, const char[] steamId, const char[] ipAddress, const char[] player, int duration, const char[] reason)
 {
     char token[256];
     char banUrl[512];
     char adminName[128];
     char adminSteamid[64];
+    char normalizedSteamId[64];
 
-    GetClientName(client, adminName, sizeof(adminName));
-    GetClientAuthId(client, AuthId_SteamID64, adminSteamid, sizeof(adminSteamid), true);
+    if (StrEqual(banType, "steam"))
+    {
+        if (!NormalizePluginSteamId(steamId, normalizedSteamId, sizeof(normalizedSteamId)))
+        {
+            ReplyToCommand(client, "[Manger] SteamID 无效，无法封禁：%s", steamId);
+            return false;
+        }
+    }
+    else
+    {
+        strcopy(normalizedSteamId, sizeof(normalizedSteamId), steamId);
+    }
+
+    if (client == 0)
+    {
+        strcopy(adminName, sizeof(adminName), "CONSOLE");
+        adminSteamid[0] = '\0';
+    }
+    else
+    {
+        GetClientName(client, adminName, sizeof(adminName));
+        GetClientAuthId(client, AuthId_SteamID64, adminSteamid, sizeof(adminSteamid), true);
+    }
 
     int currentPort = 0;
     if (!GetCurrentServerPort(currentPort))
@@ -1002,7 +1359,7 @@ bool SubmitPluginBan(int client, int target, const char[] banType, const char[] 
     if (ResolvePluginApiConfig(banUrl, sizeof(banUrl), "/bans", token, sizeof(token)))
     {
         char payload[MAX_BAN_PAYLOAD];
-        BuildPluginBanPayload(payload, sizeof(payload), token, currentPort, banType, steamId, ipAddress, player, duration, reason, adminName);
+        BuildPluginBanPayload(payload, sizeof(payload), token, currentPort, banType, normalizedSteamId, ipAddress, player, duration, reason, adminName);
         PostJsonPayload(banUrl, payload, OnPluginBanResponse);
     }
     else
@@ -1015,7 +1372,7 @@ bool SubmitPluginBan(int client, int target, const char[] banType, const char[] 
     char targetId[64];
     if (StrEqual(banType, "steam"))
     {
-        strcopy(targetId, sizeof(targetId), steamId);
+        strcopy(targetId, sizeof(targetId), normalizedSteamId);
     }
     else
     {
@@ -1084,8 +1441,8 @@ public Action CommandBan(int client, int args)
         return Plugin_Handled;
     }
 
-    // CS:GO 聊天命令可能将 STEAM_X:Y:Z 中的冒号拆分为独立参数
-    // 因此手动重建参数：先拼回完整的 SteamID，再解析时长和理由
+    // CS:GO 聊天命令可能将 STEAM_X:Y:Z 中的冒号拆分为独立参数。
+    // 先按 SteamID2 语义重建目标，再读取时长，避免把 X/Y/Z 误分到时长和理由。
     char targetArg[128] = "";
     char timeArg[32] = "";
     int argIdx = 1;
@@ -1093,29 +1450,29 @@ public Action CommandBan(int client, int args)
     // 第一步：提取目标（SteamID 或玩家名/#userid）
     {
         char part[64];
-        GetCmdArg(argIdx, part, sizeof(part));
-        strcopy(targetArg, sizeof(targetArg), part);
-        argIdx++;
-
-        // 如果目标以 STEAM_ 开头，但冒号被拆分了，需要重建完整 SteamID
-        if (StrContains(targetArg, "STEAM_") == 0)
+        GetCmdArg(1, part, sizeof(part));
+        if (StrContains(part, "STEAM_", false) == 0)
         {
-            // SteamID 格式为 STEAM_X:Y:Z，需要 3 个非冒号段
-            int steamSegments = 1;
-            while (steamSegments < 3 && argIdx <= args)
+            if (!ReadSteamId2CommandTarget(1, args, targetArg, sizeof(targetArg), argIdx))
             {
-                GetCmdArg(argIdx, part, sizeof(part));
-                StrCat(targetArg, sizeof(targetArg), part);
-                if (!StrEqual(part, ":"))
-                {
-                    steamSegments++;
-                }
-                argIdx++;
+                ReplyToCommand(client, "[Manger] SteamID 格式无效，应为 STEAM_X:Y:Z。");
+                return Plugin_Handled;
             }
+        }
+        else
+        {
+            strcopy(targetArg, sizeof(targetArg), part);
+            argIdx = 2;
         }
     }
 
     // 第二步：提取封禁时长
+    if (argIdx > args)
+    {
+        ReplyToCommand(client, "用法: sm_ban <#userid|name|steamid2> <minutes|0> [reason]");
+        return Plugin_Handled;
+    }
+
     if (argIdx <= args)
     {
         GetCmdArg(argIdx, timeArg, sizeof(timeArg));
@@ -1136,7 +1493,7 @@ public Action CommandBan(int client, int args)
     DebugLog("CommandBan: targetArg=\"%s\" timeArg=\"%s\" duration=%d reason=\"%s\" args=%d", targetArg, timeArg, duration, reason, args);
 
     // SteamID2 格式 (STEAM_X:Y:Z)：搜索在线玩家或直接提交封禁
-    if (StrContains(targetArg, "STEAM_") == 0)
+    if (StrContains(targetArg, "STEAM_", false) == 0)
     {
         int target = FindClientBySteamId2(targetArg);
         if (target > 0 && IsClientInGame(target))
@@ -1147,22 +1504,42 @@ public Action CommandBan(int client, int args)
             GetClientAuthId(target, AuthId_SteamID64, steamId64, sizeof(steamId64), true);
             GetClientIP(target, ipAddress, sizeof(ipAddress), true);
             GetClientName(target, player, sizeof(player));
-            SubmitPluginBan(client, target, "steam", steamId64, ipAddress, player, duration, reason);
-            ReplyToCommand(client, "[Manger] 封禁已生效。");
+            if (SubmitPluginBan(client, target, "steam", steamId64, ipAddress, player, duration, reason))
+            {
+                ReplyToCommand(client, "[Manger] 封禁已生效。");
+            }
         }
         else
         {
-            SubmitPluginBan(client, 0, "steam", targetArg, "", "", duration, reason);
-            ReplyToCommand(client, "[Manger] 玩家不在线，封禁记录已上传。");
+            char steamId64[64];
+            if (!ConvertSteam2ToSteamId64(targetArg, steamId64, sizeof(steamId64)))
+            {
+                ReplyToCommand(client, "[Manger] SteamID 格式无效，应为 STEAM_X:Y:Z。");
+                return Plugin_Handled;
+            }
+
+            if (SubmitPluginBan(client, 0, "steam", steamId64, "", "", duration, reason))
+            {
+                ReplyToCommand(client, "[Manger] 玩家不在线，封禁记录已上传。");
+            }
         }
         return Plugin_Handled;
     }
 
     // RCON 通过 SteamID64 执行，网站已创建封禁记录
-    bool isSteamId64 = (strlen(targetArg) == 17 && targetArg[0] == '7');
+    bool isSteamId64 = IsSteamId64String(targetArg);
     if (client == 0 && isSteamId64)
     {
         ReplyToCommand(client, "[Manger] 封禁记录已创建，玩家将在下次轮询时被踢出。");
+        return Plugin_Handled;
+    }
+
+    if (isSteamId64)
+    {
+        if (SubmitPluginBan(client, 0, "steam", targetArg, "", "", duration, reason))
+        {
+            ReplyToCommand(client, "[Manger] 玩家不在线，封禁记录已上传。");
+        }
         return Plugin_Handled;
     }
 
@@ -1235,9 +1612,24 @@ public Action CommandAddBan(int client, int args)
     }
 
     char timeArg[32];
-    char steamId[64];
+    char steamId[128];
     GetCmdArg(1, timeArg, sizeof(timeArg));
-    GetCmdArg(2, steamId, sizeof(steamId));
+
+    int reasonStart = 3;
+    char part[64];
+    GetCmdArg(2, part, sizeof(part));
+    if (StrContains(part, "STEAM_", false) == 0)
+    {
+        if (!ReadSteamId2CommandTarget(2, args, steamId, sizeof(steamId), reasonStart))
+        {
+            ReplyToCommand(client, "[Manger] SteamID 格式无效，应为 STEAM_X:Y:Z。");
+            return Plugin_Handled;
+        }
+    }
+    else
+    {
+        strcopy(steamId, sizeof(steamId), part);
+    }
 
     int duration = StringToInt(timeArg);
     if (duration < 0)
@@ -1247,7 +1639,7 @@ public Action CommandAddBan(int client, int args)
     }
 
     char reason[256];
-    AppendCommandReason(3, args, reason, sizeof(reason));
+    AppendCommandReason(reasonStart, args, reason, sizeof(reason));
     SubmitPluginBan(client, 0, "steam", steamId, "", "", duration, reason);
     return Plugin_Handled;
 }
@@ -1268,31 +1660,13 @@ public Action CommandUnban(int client, int args)
     char adminSteamid[64];
     char payload[MAX_BAN_PAYLOAD];
 
-    // 重建可能被冒号拆分的 SteamID
+    GetCmdArg(1, target, sizeof(target));
+    if (!IsSteamId64String(target) && !IsIpAddressTarget(target))
     {
-        char part[64];
-        GetCmdArg(1, part, sizeof(part));
-        strcopy(target, sizeof(target), part);
-        if (StrContains(target, "STEAM_") == 0)
-        {
-            int seg = 1;
-            int idx = 2;
-            while (seg < 3 && idx <= args)
-            {
-                GetCmdArg(idx, part, sizeof(part));
-                StrCat(target, sizeof(target), part);
-                if (!StrEqual(part, ":"))
-                    seg++;
-                idx++;
-            }
-            // reason 从 idx 开始
-            AppendCommandReason(idx, args, reason, sizeof(reason));
-        }
-        else
-        {
-            AppendCommandReason(2, args, reason, sizeof(reason));
-        }
+        ReplyToCommand(client, "[Manger] 游戏内解封玩家请使用 SteamID64。");
+        return Plugin_Handled;
     }
+    AppendCommandReason(2, args, reason, sizeof(reason));
 
     // 处理服务器控制台（client=0）的情况
     if (client == 0)
@@ -1328,7 +1702,7 @@ public Action CommandUnban(int client, int args)
 
     // 同时写入离线队列作为备份
     char targetType[16];
-    if (strlen(target) == 17 && target[0] == '7')
+    if (IsSteamId64String(target))
     {
         strcopy(targetType, sizeof(targetType), "steam");
     }

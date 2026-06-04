@@ -204,7 +204,7 @@ export function DashboardPage() {
               <div className="card-sub">当前所有网站管理员</div>
             </div>
           </div>
-          <div className="card-body" style={{ padding: 0 }}>
+          <div className="card-body" className="p-0">
             <div className="table-responsive">
               <table className="data-table">
                 <thead>
@@ -261,7 +261,7 @@ export function DashboardPage() {
             <div className="card-sub">最近通过的申请</div>
           </div>
         </div>
-        <div className="card-body" style={{ padding: 0 }}>
+        <div className="card-body" className="p-0">
           <div className="table-responsive">
             <table className="data-table">
               <thead>
@@ -270,10 +270,10 @@ export function DashboardPage() {
               <tbody>
                 {(publicWhitelist.data?.items ?? []).map((x) => (
                   <tr key={`${x.nickname}-${x.steam_id64}`}>
-                    <td style={{ fontWeight: 600 }}>{x.nickname}</td>
+                    <td className="fw-600">{x.nickname}</td>
                     <td className="steam-id">{x.steam_id64}</td>
                     <td><span className="status-pill pill-online">已通过</span></td>
-                    <td style={{ color: 'var(--text3)' }}>{x.submitted_at}</td>
+                    <td className="text-muted-light">{x.submitted_at}</td>
                   </tr>
                 ))}
               </tbody>

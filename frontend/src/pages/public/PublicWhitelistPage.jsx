@@ -73,13 +73,13 @@ export function PublicWhitelistPage() {
             <tbody>
               {items.map((item) => (
                 <tr key={item.id}>
-                  <td style={{ fontWeight: 600 }}>{item.nickname}</td>
+                  <td className="fw-600">{item.nickname}</td>
                   <td className="steam-id">{item.steamid64}</td>
-                  <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(item.applied_at, { seconds: false })}</td>
+                  <td className="text-muted-light">{formatChinaDateTime(item.applied_at, { seconds: false })}</td>
                   <td>
                     {item.approved_at
                       ? <span style={{ color: 'var(--teal)' }}>{formatChinaDateTime(item.approved_at, { seconds: false })}</span>
-                      : <span style={{ color: 'var(--text3)' }}>-</span>}
+                      : <span className="text-muted-light">-</span>}
                   </td>
                 </tr>
               ))}
@@ -112,7 +112,7 @@ export function PublicWhitelistPage() {
         </div>
       )}
 
-      <div style={{ marginBottom: 16 }}>
+      <div className="mb-16">
         <SearchBar
           value={search}
           onChange={(v) => { setSearch(v); setPage(1); }}

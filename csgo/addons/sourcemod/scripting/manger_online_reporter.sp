@@ -12,6 +12,7 @@ native int EdgeSync_GetPendingCount();
 #define DEFAULT_REPORT_INTERVAL "5.0"
 #define DEFAULT_ACCESS_SNAPSHOT_INTERVAL "300.0"
 #define DEFAULT_STATUS_REPORT_INTERVAL "30.0"
+#define DEFAULT_DEBUG_LOG "0"
 #define ACCESS_SNAPSHOT_DB "manger_access_snapshot"
 #define MAX_REPORT_PAYLOAD 8192
 #define MAX_BAN_PAYLOAD 2048
@@ -23,6 +24,7 @@ ConVar g_ApiBaseUrl;
 ConVar g_ReportInterval;
 ConVar g_AccessSnapshotInterval;
 ConVar g_StatusReportInterval;
+ConVar g_DebugLog;
 Handle g_ReportTimer = null;
 Handle g_BanPollTimer = null;
 Handle g_AccessSnapshotTimer = null;
@@ -55,15 +57,21 @@ public Plugin myinfo =
 public void OnPluginStart()
 {
     PrintToServer("[Manger] Plugin v20260525 loaded - SteamID2 matching with universe-agnostic comparison");
-    g_ApiBaseUrl = CreateConVar("manger_api_base_url", DEFAULT_API_BASE_URL, "Manger plugin API base URL.");
+    g_ApiBaseUrl = FindConVar("manger_api_base_url");
+    if (g_ApiBaseUrl == null)
+    {
+        g_ApiBaseUrl = CreateConVar("manger_api_base_url", DEFAULT_API_BASE_URL, "Manger plugin API base URL.");
+    }
     g_ReportInterval = CreateConVar("manger_report_interval", DEFAULT_REPORT_INTERVAL, "Online player report interval in seconds.", _, true, 5.0);
     g_AccessSnapshotInterval = CreateConVar("manger_access_snapshot_interval", DEFAULT_ACCESS_SNAPSHOT_INTERVAL, "Access snapshot refresh interval in seconds.", _, true, 30.0);
     g_StatusReportInterval = CreateConVar("manger_status_report_interval", DEFAULT_STATUS_REPORT_INTERVAL, "Server status report interval in seconds.", _, true, 10.0);
+    g_DebugLog = CreateConVar("manger_debug_log", DEFAULT_DEBUG_LOG, "Enable verbose Manger plugin debug logs.", _, true, 0.0, true, 1.0);
 
     HookConVarChange(g_ApiBaseUrl, OnPluginConfigChanged);
     HookConVarChange(g_ReportInterval, OnPluginConfigChanged);
     HookConVarChange(g_AccessSnapshotInterval, OnPluginConfigChanged);
     HookConVarChange(g_StatusReportInterval, OnStatusReportIntervalChanged);
+    HookConVarChange(g_DebugLog, OnPluginConfigChanged);
 
     RegAdminCmd("sm_ban", CommandBan, ADMFLAG_BAN, "sm_ban <#userid|name> <minutes|0> [reason]");
     RegAdminCmd("sm_banip", CommandBanIp, ADMFLAG_BAN, "sm_banip <ip|#userid|name> <minutes|0> [reason]");
@@ -104,6 +112,14 @@ public void OnMapStart()
     StartBanPollTimer();
     StartAccessSnapshotTimer();
     StartStatusReportTimer();
+}
+
+public void OnMapEnd()
+{
+    StopReportTimer();
+    StopBanPollTimer();
+    StopAccessSnapshotTimer();
+    StopStatusReportTimer();
 }
 
 public void OnPluginConfigChanged(ConVar convar, const char[] oldValue, const char[] newValue)
@@ -226,6 +242,18 @@ void ApplyConfigConVarValue(const char[] name, const char[] value)
     if (StrEqual(name, "manger_access_snapshot_interval"))
     {
         g_AccessSnapshotInterval.SetString(value);
+        return;
+    }
+
+    if (StrEqual(name, "manger_status_report_interval"))
+    {
+        g_StatusReportInterval.SetString(value);
+        return;
+    }
+
+    if (StrEqual(name, "manger_debug_log"))
+    {
+        g_DebugLog.SetString(value);
     }
 }
 
@@ -266,6 +294,16 @@ void LoadReporterConfig()
         if (ParseConfigValueLine(line, "manger_access_snapshot_interval", value, sizeof(value)))
         {
             ApplyConfigConVarValue("manger_access_snapshot_interval", value);
+            continue;
+        }
+        if (ParseConfigValueLine(line, "manger_status_report_interval", value, sizeof(value)))
+        {
+            ApplyConfigConVarValue("manger_status_report_interval", value);
+            continue;
+        }
+        if (ParseConfigValueLine(line, "manger_debug_log", value, sizeof(value)))
+        {
+            ApplyConfigConVarValue("manger_debug_log", value);
         }
     }
 
@@ -333,10 +371,10 @@ void RegisterServerTokenMapping(int port, const char[] token)
 
 public void OnPluginEnd()
 {
-    g_ReportTimer = null;
-    g_BanPollTimer = null;
-    g_AccessSnapshotTimer = null;
-    g_StatusReportTimer = null;
+    StopReportTimer();
+    StopBanPollTimer();
+    StopAccessSnapshotTimer();
+    StopStatusReportTimer();
 
     if (g_AccessSnapshotDb != null)
     {
@@ -382,15 +420,15 @@ void StartAccessSnapshotTimer()
 
 void StopAccessSnapshotTimer()
 {
-    g_AccessSnapshotTimer = null;
+    if (g_AccessSnapshotTimer != null)
+    {
+        delete g_AccessSnapshotTimer;
+        g_AccessSnapshotTimer = null;
+    }
 }
 
 public Action Timer_RefreshAccessSnapshot(Handle timer)
 {
-    if (g_AccessSnapshotTimer == timer)
-    {
-        g_AccessSnapshotTimer = null;
-    }
     RefreshAccessSnapshot();
     return Plugin_Continue;
 }
@@ -556,7 +594,6 @@ void SaveAccessSnapshot(JSONObject item)
     SaveSnapshotAccessProfiles(profiles);
 
     SQL_FastQuery(g_AccessSnapshotDb, "COMMIT");
-    LogMessage("Manger access snapshot refreshed: %s", version);
 }
 
 void InsertMetadata(const char[] key, const char[] value)
@@ -672,7 +709,11 @@ void StartReportTimer()
 
 void StopReportTimer()
 {
-    g_ReportTimer = null;
+    if (g_ReportTimer != null)
+    {
+        delete g_ReportTimer;
+        g_ReportTimer = null;
+    }
 }
 
 void StartBanPollTimer()
@@ -685,16 +726,15 @@ void StartBanPollTimer()
 
 void StopBanPollTimer()
 {
-    g_BanPollTimer = null;
+    if (g_BanPollTimer != null)
+    {
+        delete g_BanPollTimer;
+        g_BanPollTimer = null;
+    }
 }
 
 public Action Timer_PollBans(Handle timer)
 {
-    if (g_BanPollTimer == timer)
-    {
-        g_BanPollTimer = null;
-    }
-
     char token[256];
     char url[512];
     int currentPort = 0;
@@ -882,11 +922,6 @@ bool GetCurrentReportToken(char[] token, int maxLen)
 
 public Action Timer_ReportOnlinePlayers(Handle timer)
 {
-    if (g_ReportTimer == timer)
-    {
-        g_ReportTimer = null;
-    }
-
     char reportUrl[512];
     char reportToken[256];
     if (!ResolvePluginApiConfig(reportUrl, sizeof(reportUrl), "/online-players/report", reportToken, sizeof(reportToken)))
@@ -899,6 +934,18 @@ public Action Timer_ReportOnlinePlayers(Handle timer)
     PostJsonPayload(reportUrl, payload, OnReportResponse);
 
     return Plugin_Continue;
+}
+
+void DebugLog(const char[] format, any ...)
+{
+    if (g_DebugLog == null || !g_DebugLog.BoolValue)
+    {
+        return;
+    }
+
+    char message[512];
+    VFormat(message, sizeof(message), format, 2);
+    PrintToServer("[Manger Debug] %s", message);
 }
 
 public void OnReportResponse(HTTPResponse response, any value, const char[] error)
@@ -991,11 +1038,11 @@ int FindClientBySteamId2(const char[] steamId2)
     int firstColon = FindCharInString(steamId2, ':');
     if (firstColon == -1)
     {
-        PrintToServer("[Manger Ban Debug] FindClientBySteamId2: input=\"%s\" has no colon, returning -1", steamId2);
+        DebugLog("FindClientBySteamId2: input=\"%s\" has no colon, returning -1", steamId2);
         return -1;
     }
     strcopy(inputYz, sizeof(inputYz), steamId2[firstColon + 1]);
-    PrintToServer("[Manger Ban Debug] FindClientBySteamId2: input=\"%s\" -> inputYz=\"%s\"", steamId2, inputYz);
+    DebugLog("FindClientBySteamId2: input=\"%s\" -> inputYz=\"%s\"", steamId2, inputYz);
 
     for (int i = 1; i <= MaxClients; i++)
     {
@@ -1010,16 +1057,16 @@ int FindClientBySteamId2(const char[] steamId2)
             int clientFirstColon = FindCharInString(clientSteamId2, ':');
             if (clientFirstColon != -1)
             {
-                PrintToServer("[Manger Ban Debug] FindClientBySteamId2: client[%d] steam=\"%s\" yz=\"%s\" vs inputYz=\"%s\"", i, clientSteamId2, clientSteamId2[clientFirstColon + 1], inputYz);
+                DebugLog("FindClientBySteamId2: client[%d] steam=\"%s\" yz=\"%s\" vs inputYz=\"%s\"", i, clientSteamId2, clientSteamId2[clientFirstColon + 1], inputYz);
                 if (StrEqual(clientSteamId2[clientFirstColon + 1], inputYz, false))
                 {
-                    PrintToServer("[Manger Ban Debug] FindClientBySteamId2: MATCH found at client index %d", i);
+                    DebugLog("FindClientBySteamId2: MATCH found at client index %d", i);
                     return i;
                 }
             }
         }
     }
-    PrintToServer("[Manger Ban Debug] FindClientBySteamId2: no match found for input=\"%s\"", steamId2);
+    DebugLog("FindClientBySteamId2: no match found for input=\"%s\"", steamId2);
     return -1;
 }
 
@@ -1086,8 +1133,7 @@ public Action CommandBan(int client, int args)
     char reason[256];
     AppendCommandReason(argIdx, args, reason, sizeof(reason));
 
-    // 诊断日志
-    PrintToServer("[Manger Ban Debug] targetArg=\"%s\" timeArg=\"%s\" duration=%d reason=\"%s\" args=%d", targetArg, timeArg, duration, reason, args);
+    DebugLog("CommandBan: targetArg=\"%s\" timeArg=\"%s\" duration=%d reason=\"%s\" args=%d", targetArg, timeArg, duration, reason, args);
 
     // SteamID2 格式 (STEAM_X:Y:Z)：搜索在线玩家或直接提交封禁
     if (StrContains(targetArg, "STEAM_") == 0)
@@ -1968,16 +2014,15 @@ void StartStatusReportTimer()
 
 void StopStatusReportTimer()
 {
-    g_StatusReportTimer = null;
+    if (g_StatusReportTimer != null)
+    {
+        delete g_StatusReportTimer;
+        g_StatusReportTimer = null;
+    }
 }
 
 public Action Timer_ReportServerStatus(Handle timer)
 {
-    if (g_StatusReportTimer == timer)
-    {
-        g_StatusReportTimer = null;
-    }
-
     CollectServerStats();
     ReportServerStatus();
     return Plugin_Continue;

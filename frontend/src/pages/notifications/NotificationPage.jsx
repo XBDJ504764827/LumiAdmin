@@ -129,7 +129,7 @@ export function NotificationPage() {
             <div className="card-sub">共 {total} 条通知</div>
           </div>
         </div>
-        <div className="card-body" style={{ padding: 0 }}>
+        <div className="card-body" className="p-0">
           <div className="filter-bar">
             <select
               className="filter-select"
@@ -152,7 +152,7 @@ export function NotificationPage() {
             </select>
           </div>
 
-          {loading ? <div style={{ padding: 20 }}>正在加载通知...</div> : null}
+          {loading ? <div className="p-20">正在加载通知...</div> : null}
           {!loading && error ? <div style={{ padding: 20, color: 'var(--accent)' }}>{error}</div> : null}
           {!loading && !error ? (
             <div className="notification-page-list">

@@ -104,7 +104,7 @@ export function ManualCreateModal({ open, onClose, form, setForm, error, onSubmi
           placeholder="SteamID64 / SteamID / Steam 个人主页链接"
         />
       </div>
-      {error ? <div style={{ color: 'var(--accent)' }}>{error}</div> : null}
+      {error ? <div className="text-accent">{error}</div> : null}
     </Modal>
   );
 }
@@ -136,7 +136,7 @@ export function RejectModal({ open, onClose, reason, setReason, error, onSubmit,
           placeholder="请输入拒绝理由"
         />
       </div>
-      {error ? <div style={{ color: 'var(--accent)' }}>{error}</div> : null}
+      {error ? <div className="text-accent">{error}</div> : null}
     </Modal>
   );
 }
@@ -169,7 +169,7 @@ export function ApproveModal({ open, onClose, item, bans, risk, reason, setReaso
         </>
       }
     >
-      <div className="global-ban-alert" style={{ marginBottom: 12 }}>
+      <div className="global-ban-alert" className="mb-12">
         <div className="global-ban-alert-icon">⚠</div>
         <div className="global-ban-alert-text">
           该玩家在全球 KZ 封禁库中有 <strong>{bans.length}</strong> 条封禁记录。请完整查看下方封禁详情，倒计时结束并填写通过理由后才可正式通过。
@@ -191,7 +191,7 @@ export function ApproveModal({ open, onClose, item, bans, risk, reason, setReaso
         <div><strong>玩家:</strong> {item?.nickname ?? '-'}</div>
         <div><strong>SteamID64:</strong> <code>{item?.steamid64 ?? '-'}</code></div>
       </div>
-      <div style={{ marginBottom: 16 }}>
+      <div className="mb-16">
         <GlobalBanRecordList bans={bans} />
       </div>
       <div className="form-group">
@@ -204,7 +204,7 @@ export function ApproveModal({ open, onClose, item, bans, risk, reason, setReaso
           placeholder="请说明为什么在有全球封禁记录的情况下仍然通过"
         />
       </div>
-      {error ? <div style={{ color: 'var(--accent)' }}>{error}</div> : null}
+      {error ? <div className="text-accent">{error}</div> : null}
     </Modal>
   );
 }

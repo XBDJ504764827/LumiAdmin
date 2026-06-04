@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { Modal } from '../../shared/Modal.jsx';
+import { StatusPill } from '../../shared/StatusPill.jsx';
 import {
   buildDeleteGroupConfirmMessage,
   buildDeleteGroupFailureMessage,
@@ -23,6 +24,7 @@ import {
   buildAccessSummary,
 } from './communityAccess.js';
 import { onlinePlayerKey, buildKickCommand, buildBanCommand, BAN_DURATION_OPTIONS, BAN_REASON_OPTIONS } from './onlinePlayers.js';
+import { OnlinePlayerCard, ToggleSwitch, FormSectionCard, ServerRconFeedback } from './CommunityComponents.jsx';
 import { COMMAND_CATEGORIES } from '../rcon/RconPage.jsx';
 import { useAuth } from '../../state/auth.jsx';
 import { useToast, ToastContainer } from '../../shared/Toast.jsx';
@@ -38,56 +40,6 @@ const emptyServerForm = {
   max_players: '0',
   ...emptyAccessConfig,
 };
-
-function ToggleSwitch({ checked, onChange, disabled = false }) {
-  return (
-    <label className="toggle-switch">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} disabled={disabled} />
-      <span className="toggle-slider" />
-    </label>
-  );
-}
-
-function FormSectionCard({ icon, title, children }) {
-  return (
-    <div className="form-section-card">
-      <div className="form-section-header">
-        {icon}
-        <span>{title}</span>
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function ServerRconFeedback({ feedback }) {
-  if (feedback.testing) {
-    return (
-      <div className="alert alert-info">
-        <span className="alert-icon">⟳</span>
-        <div className="alert-content"><div className="alert-text">正在测试 RCON 连接...</div></div>
-      </div>
-    );
-  }
-  if (!feedback.tested || !feedback.message) return null;
-
-  const alertClass = feedback.ok ? 'alert-success' : 'alert-error';
-  const iconText = feedback.ok ? '✓' : '✕';
-  const titleText = feedback.ok ? '连接成功' : '连接失败';
-
-  return (
-    <div className={`alert ${alertClass}`}>
-      <span className="alert-icon">{iconText}</span>
-      <div className="alert-content">
-        <div className="alert-title">{titleText}</div>
-        <div className="alert-text">
-          {feedback.message}
-          {feedback.ok && feedback.players.length > 0 ? ` — 检测到 ${feedback.players.length} 名在线玩家` : ''}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 export function CommunityPage() {
   const { session } = useAuth();
@@ -477,7 +429,7 @@ export function CommunityPage() {
           icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>}
           title="访问限制"
         >
-          <div className="form-hint" style={{ marginBottom: 12 }}>
+          <div className="form-hint" className="mb-12">
             设置社区统一的访问限制。所有未开启「自定义设置」的服务器将自动使用此配置。
           </div>
           <div className="toggle-row">
@@ -498,7 +450,7 @@ export function CommunityPage() {
             />
           </div>
           {(communityAccessForm.min_rating !== '0' || communityAccessForm.min_steam_level !== '0') ? (
-            <div className="form-row" style={{ marginTop: 8 }}>
+            <div className="form-row" className="mt-8">
               <div className="form-group">
                 <label>最低进入 Rating</label>
                 <input type="number" min="0" className="form-control" placeholder="0" value={communityAccessForm.min_rating} onChange={(e) => setCommunityAccessForm((prev) => ({ ...prev, min_rating: e.target.value }))} />
@@ -544,7 +496,7 @@ export function CommunityPage() {
               <label>服务器 IP</label>
               <input type="text" className="form-control" placeholder="例如：192.168.1.100" value={serverForm.ip} onChange={(e) => handleServerFieldChange('ip', e.target.value)} />
             </div>
-            <div className="form-group" style={{ flex: 1 }}>
+            <div className="form-group" className="flex-1">
               <label>端口</label>
               <input type="number" className="form-control" placeholder="27015" value={serverForm.port} onChange={(e) => handleServerFieldChange('port', e.target.value)} />
             </div>
@@ -590,7 +542,7 @@ export function CommunityPage() {
                 <ToggleSwitch checked={serverForm.access_restriction_enabled} onChange={(v) => handleServerFieldChange('access_restriction_enabled', v)} />
               </div>
               {serverForm.access_restriction_enabled ? (
-                <div className="form-row" style={{ marginTop: 8 }}>
+                <div className="form-row" className="mt-8">
                   <div className="form-group">
                     <label>最低进入 Rating</label>
                     <input type="number" min="0" className="form-control" placeholder="0" value={serverForm.min_rating} onChange={(e) => handleServerFieldChange('min_rating', e.target.value)} />
@@ -681,11 +633,11 @@ export function CommunityPage() {
       ) : null}
 
       {error ? (
-        <div className="card"><div className="card-body" style={{ color: 'var(--accent)' }}>{error.message}</div></div>
+        <div className="card"><div className="card-body" className="text-accent">{error.message}</div></div>
       ) : null}
 
       {!loading && !error && groups.length === 0 ? (
-        <div className="card"><div className="card-body" style={{ color: 'var(--text2)' }}>暂无社区组。</div></div>
+        <div className="card"><div className="card-body" className="text-muted">暂无社区组。</div></div>
       ) : null}
 
       {groups.map((group) => (
@@ -710,7 +662,7 @@ export function CommunityPage() {
               </div>
             ) : null}
           </div>
-          <div className="card-body" style={{ padding: 0 }}>
+          <div className="card-body" className="p-0">
             <div className="table-responsive">
               <table className="data-table">
                 <thead>
@@ -721,7 +673,7 @@ export function CommunityPage() {
                     <th>状态</th>
                     <th>访问限制</th>
                     <th>当前人数</th>
-                    <th style={{ textAlign: 'right' }}>操作</th>
+                    <th className="text-right">操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -734,7 +686,7 @@ export function CommunityPage() {
                       const maxPlayers = server.max_players ?? 0;
                       return (
                         <tr key={server.id}>
-                          <td style={{ fontWeight: 600 }}>{server.name}</td>
+                          <td className="fw-600">{server.name}</td>
                           <td className="steam-id">{server.ip}:{server.port}</td>
                           <td>{renderTokenCell(server)}</td>
                           <td>
@@ -744,9 +696,9 @@ export function CommunityPage() {
                           </td>
                           <td style={{ fontSize: 12, color: 'var(--text3)' }}>{buildAccessSummary(server, group)}</td>
                           <td>
-                            {isOnline ? `${playerCount} / ${maxPlayers}` : <span style={{ color: 'var(--text3)' }}>0 / 0</span>}
+                            {isOnline ? `${playerCount} / ${maxPlayers}` : <span className="text-muted-light">0 / 0</span>}
                           </td>
-                          <td style={{ textAlign: 'right' }}>{renderServerActions(server)}</td>
+                          <td className="text-right">{renderServerActions(server)}</td>
                         </tr>
                       );
                     })
@@ -771,7 +723,7 @@ export function CommunityPage() {
         )}
       >
         <div className="form-group"><label>社区名称</label><input type="text" className="form-control" placeholder="社区名称" value={groupForm.name} onChange={(e) => setGroupForm({ name: e.target.value })} /></div>
-        {groupError ? <div style={{ color: 'var(--accent)' }}>{groupError}</div> : null}
+        {groupError ? <div className="text-accent">{groupError}</div> : null}
       </Modal>
 
       {/* 社区访问限制设置弹窗 */}
@@ -838,66 +790,54 @@ export function CommunityPage() {
         footer={<button className="btn btn-primary" onClick={() => setRconModal({ open: false, serverId: null, serverName: '', executing: '', customCommand: '' })}>关闭</button>}
       >
         {COMMAND_CATEGORIES.map((cat) => (
-          <div key={cat.name} style={{ marginBottom: 20 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-              <span style={{ color: 'var(--accent)' }}>{cat.icon}</span>
-              <span style={{ fontWeight: 600, fontSize: 14 }}>{cat.name}</span>
+          <div key={cat.name} className="mb-20">
+            <div className="flex items-center gap-8 mb-12">
+              <span className="text-accent">{cat.icon}</span>
+              <span className="fw-600 fs-14">{cat.name}</span>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
               {cat.commands.map((cmd) => (
                 <button
                   key={cmd.command}
-                  className="rcon-cmd-card"
+                  className={`rcon-cmd-btn ${cmd.danger ? 'rcon-cmd-btn--danger' : ''}`}
                   disabled={!!rconModal.executing}
                   onClick={() => handleRconExecute(cmd.command)}
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 4,
-                    padding: '12px 14px',
-                    borderRadius: 8,
-                    border: `1px solid ${cmd.danger ? 'var(--danger-border, rgba(220,38,38,0.3))' : 'var(--border)'}`,
-                    background: cmd.danger ? 'var(--danger-surface, rgba(220,38,38,0.06))' : 'var(--surface2)',
-                    cursor: rconModal.executing ? 'not-allowed' : 'pointer',
-                    textAlign: 'left',
-                    transition: 'background 0.15s',
-                  }}
                 >
-                  <span style={{ fontWeight: 600, fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span className="rcon-cmd-name">
                     {cmd.name}
-                    {cmd.danger ? <span style={{ fontSize: 10, color: 'var(--danger-text, #dc2626)', fontWeight: 400 }}>⚠ 高影响</span> : null}
-                    {rconModal.executing === cmd.command ? <span style={{ fontSize: 11, color: 'var(--text3)' }}>执行中...</span> : null}
+                    {cmd.danger ? <span className="rcon-cmd-badge">⚠ 高影响</span> : null}
+                    {rconModal.executing === cmd.command ? <span className="text-muted-light fs-11">执行中...</span> : null}
                   </span>
-                  <span style={{ fontSize: 12, color: 'var(--text3)', lineHeight: 1.4 }}>{cmd.desc}</span>
+                  <span className="rcon-cmd-desc">{cmd.desc}</span>
                 </button>
               ))}
             </div>
           </div>
         ))}
-        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-            <span style={{ color: 'var(--accent)' }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="20" height="20">
+        <div className="border-top" style={{ paddingTop: 16 }}>
+          <div className="flex items-center gap-8 mb-12">
+            <span className="text-accent">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="20" height="20" aria-hidden="true">
                 <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
               </svg>
             </span>
-            <span style={{ fontWeight: 600, fontSize: 14 }}>自定义命令</span>
+            <span className="fw-600 fs-14">自定义命令</span>
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div className="flex gap-8">
             <input
               type="text"
-              className="form-control"
+              className="form-control w-full"
               value={rconModal.customCommand}
               onChange={(e) => setRconModal((prev) => ({ ...prev, customCommand: e.target.value }))}
               placeholder={'输入 RCON 命令，如 sm_kick "玩家名"'}
               disabled={!!rconModal.executing}
               onKeyDown={(e) => { if (e.key === 'Enter' && rconModal.customCommand.trim()) handleRconCustomExecute(); }}
+              aria-label="自定义 RCON 命令"
             />
             <button
-              className="btn btn-primary"
+              className="btn btn-primary flex-shrink-0"
               disabled={!rconModal.customCommand.trim() || !!rconModal.executing}
               onClick={handleRconCustomExecute}
-              style={{ flexShrink: 0 }}
             >
               {rconModal.executing && rconModal.executing === rconModal.customCommand.trim() ? '执行中...' : '执行'}
             </button>
@@ -910,65 +850,3 @@ export function CommunityPage() {
   );
 }
 
-function OnlinePlayerCard({ player, canOperate, onKick, onBan }) {
-  const [showKickForm, setShowKickForm] = React.useState(false);
-  const [kickReason, setKickReason] = React.useState('');
-  const [showBanForm, setShowBanForm] = React.useState(false);
-  const [banDuration, setBanDuration] = React.useState(0);
-  const [banReason, setBanReason] = React.useState(BAN_REASON_OPTIONS[0]);
-
-  const initial = (player.name || '?')[0].toUpperCase();
-
-  function handleKick() {
-    if (!kickReason.trim()) return;
-    onKick(kickReason.trim());
-    setShowKickForm(false);
-    setKickReason('');
-  }
-
-  function handleBan() {
-    onBan(banDuration, banReason);
-    setShowBanForm(false);
-  }
-
-  return (
-    <div className="online-player-card">
-      <div className="online-player-row">
-        <div className="online-player-info">
-          <div className="online-player-avatar">{initial}</div>
-          <div className="online-player-detail">
-            <span className="online-player-name">{player.name}</span>
-            <div className="online-player-meta">
-              <span className="online-player-tag">{player.steam_id64}</span>
-              <span className="online-player-tag">{player.ip}</span>
-              <span className="online-player-tag online-player-tag-tag-ping">{player.ping}ms</span>
-            </div>
-          </div>
-        </div>
-        {canOperate ? (
-          <div className="online-player-actions">
-            <button className="btn btn-outline btn-sm" onClick={() => setShowKickForm(!showKickForm)}>{showKickForm ? '取消' : '踢出'}</button>
-            <button className="btn btn-outline btn-sm" style={{ color: 'var(--accent)' }} onClick={() => setShowBanForm(!showBanForm)}>{showBanForm ? '取消' : '封禁'}</button>
-          </div>
-        ) : null}
-      </div>
-      {showKickForm ? (
-        <div className="online-player-action-form">
-          <div className="action-form-input-row">
-            <input type="text" className="action-form-input" placeholder="请输入踢出理由" value={kickReason} onChange={(e) => setKickReason(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') handleKick(); }} autoFocus />
-            <button className="btn btn-danger btn-sm" onClick={handleKick} disabled={!kickReason.trim()}>确认踢出</button>
-          </div>
-        </div>
-      ) : null}
-      {showBanForm ? (
-        <div className="online-player-ban-form">
-          <div className="ban-form-row">
-            <div className="ban-form-field"><label>时长</label><select value={banDuration} onChange={(e) => setBanDuration(Number(e.target.value))}>{BAN_DURATION_OPTIONS.map((opt) => (<option key={opt.value} value={opt.value}>{opt.label}</option>))}</select></div>
-            <div className="ban-form-field"><label>理由</label><select value={banReason} onChange={(e) => setBanReason(e.target.value)}>{BAN_REASON_OPTIONS.map((reason) => (<option key={reason} value={reason}>{reason}</option>))}</select></div>
-            <button className="btn btn-danger btn-sm" onClick={handleBan}>确认封禁</button>
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}

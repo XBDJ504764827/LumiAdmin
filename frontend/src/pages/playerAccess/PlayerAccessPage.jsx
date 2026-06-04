@@ -275,7 +275,7 @@ export function PlayerAccessPage() {
     const allowed = [...(rule.allowed_communities ?? []), ...(rule.allowed_servers ?? [])];
     const blocked = [...(rule.blocked_communities ?? []), ...(rule.blocked_servers ?? [])];
     if (allowed.length === 0 && blocked.length === 0) {
-      return <span style={{ color: 'var(--text3)' }}>默认全服通行</span>;
+      return <span className="text-muted-light">默认全服通行</span>;
     }
     return (
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
@@ -345,7 +345,7 @@ export function PlayerAccessPage() {
             <div className="card-sub">此处仅展示被单独配置了允许/禁止进服规则的玩家，其余白名单玩家默认全服通行。</div>
           </div>
         </div>
-        <div className="card-body" style={{ padding: 0 }}>
+        <div className="card-body" className="p-0">
           {loading ? (
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>加载中...</div>
           ) : error ? (
@@ -360,18 +360,18 @@ export function PlayerAccessPage() {
                     <th>玩家</th>
                     <th>进服规则</th>
                     <th>最后修改</th>
-                    <th style={{ textAlign: 'right' }}>操作</th>
+                    <th className="text-right">操作</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rules.map((rule) => (
                     <tr key={rule.id}>
                       <td>
-                        <div style={{ fontWeight: 600 }}>{rule.nickname}</div>
+                        <div className="fw-600">{rule.nickname}</div>
                         <div className="steam-id" style={{ fontSize: 11, marginTop: 2 }}>{rule.steamid64}</div>
                       </td>
                       <td style={{ minWidth: 200 }}>{renderAccessTags(rule)}</td>
-                      <td style={{ color: 'var(--text3)' }}>{formatChinaDate(rule.updated_at)}</td>
+                      <td className="text-muted-light">{formatChinaDate(rule.updated_at)}</td>
                       <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                         <div className="action-btn-group">
                           <button className="action-btn action-btn-accent" onClick={() => openEditModal(rule)}>编辑</button>
@@ -400,7 +400,7 @@ export function PlayerAccessPage() {
 
             <div className="modal-body">
               {/* ── 选择玩家 ── */}
-              <div style={{ marginBottom: 16 }}>
+              <div className="mb-16">
                 <label style={{ display: 'block', fontSize: 12.5, fontWeight: 500, marginBottom: 6 }}>选择玩家</label>
                 {selectedPlayer ? (
                   <div style={{
@@ -458,8 +458,8 @@ export function PlayerAccessPage() {
                               onMouseEnter={(e) => e.currentTarget.style.background = 'var(--surface2)'}
                               onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                             >
-                              <span style={{ fontWeight: 500 }}>{player.nickname}</span>
-                              <span className="steam-id" style={{ fontSize: 11 }}>{player.steamid64}</span>
+                              <span className="fw-500">{player.nickname}</span>
+                              <span className="steam-id" className="fs-11">{player.steamid64}</span>
                             </div>
                           ))
                         )}
@@ -478,7 +478,7 @@ export function PlayerAccessPage() {
               </div>
 
               {/* ── 进服规则树 ── */}
-              <div style={{ marginBottom: 16 }}>
+              <div className="mb-16">
                 <label style={{ display: 'block', fontSize: 12.5, fontWeight: 500, marginBottom: 8 }}>进服规则</label>
                 {groups.length === 0 ? (
                   <div style={{ padding: 16, textAlign: 'center', color: 'var(--text3)', fontSize: 13, background: 'var(--surface2)', borderRadius: 'var(--r-md)' }}>

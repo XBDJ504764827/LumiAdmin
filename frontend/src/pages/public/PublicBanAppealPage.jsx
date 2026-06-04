@@ -295,7 +295,7 @@ export function PublicBanAppealPage() {
           <div className="public-card-body">
             {/* Steam 标识符 */}
             <div className="form-group">
-              <label>Steam 标识符 <span style={{ color: 'var(--accent)' }}>*</span></label>
+              <label>Steam 标识符 <span className="text-accent">*</span></label>
               <input
                 type="text" className="form-control"
                 value={steamInput}
@@ -315,7 +315,7 @@ export function PublicBanAppealPage() {
 
             {/* 游戏昵称 */}
             <div className="form-group">
-              <label>游戏昵称 <span style={{ color: 'var(--accent)' }}>*</span></label>
+              <label>游戏昵称 <span className="text-accent">*</span></label>
               <input
                 type="text" className="form-control"
                 value={nickname}
@@ -335,7 +335,7 @@ export function PublicBanAppealPage() {
 
             {bans !== null && !loadingBans && (
               <div className="form-group">
-                <label>选择要申诉的封禁记录 <span style={{ color: 'var(--accent)' }}>*</span></label>
+                <label>选择要申诉的封禁记录 <span className="text-accent">*</span></label>
                 {bans.length === 0 ? (
                   <div style={{ padding: 14, color: 'var(--text3)', fontSize: 13, background: 'var(--surface2)', borderRadius: 8, textAlign: 'center' }}>
                     未找到该 SteamID 的活跃封禁记录，无需申诉。
@@ -356,7 +356,7 @@ export function PublicBanAppealPage() {
                         />
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                            <span className="status-pill pill-accent" style={{ fontSize: 11 }}>
+                            <span className="status-pill pill-accent" className="fs-11">
                               {ban.ban_type === 'steam' ? 'Steam 封禁' : 'IP 封禁'}
                             </span>
                             <span style={{ fontSize: 12, color: 'var(--text3)' }}>
@@ -382,7 +382,7 @@ export function PublicBanAppealPage() {
             {/* 申诉理由 */}
             {bans !== null && bans.length > 0 && (
               <div className="form-group">
-                <label>申诉理由 <span style={{ color: 'var(--accent)' }}>*</span></label>
+                <label>申诉理由 <span className="text-accent">*</span></label>
                 <textarea className="form-control"
                   value={reason}
                   onChange={(e) => setReason(e.target.value)}
@@ -397,7 +397,7 @@ export function PublicBanAppealPage() {
 
             {/* 辅助文件上传 */}
             {bans !== null && bans.length > 0 && (
-              <div className="form-section-card" style={{ marginBottom: 16 }}>
+              <div className="form-section-card" className="mb-16">
                 <div className="form-section-header">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="16" height="16">
                     <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
@@ -412,7 +412,7 @@ export function PublicBanAppealPage() {
                   <button type="button" className="btn btn-outline btn-sm"
                     onClick={() => videoRef.current?.click()}
                     disabled={isSubmitting()}
-                    style={{ fontSize: 12 }}
+                    className="fs-12"
                   >
                     🎬 选择录像
                   </button>
@@ -423,7 +423,7 @@ export function PublicBanAppealPage() {
                   <button type="button" className="btn btn-outline btn-sm"
                     onClick={() => imageRef.current?.click()}
                     disabled={isSubmitting()}
-                    style={{ fontSize: 12 }}
+                    className="fs-12"
                   >
                     🖼 选择图片
                   </button>
@@ -434,7 +434,7 @@ export function PublicBanAppealPage() {
                   <button type="button" className="btn btn-outline btn-sm"
                     onClick={() => audioRef.current?.click()}
                     disabled={isSubmitting()}
-                    style={{ fontSize: 12 }}
+                    className="fs-12"
                   >
                     🎵 选择录音
                   </button>
@@ -449,7 +449,7 @@ export function PublicBanAppealPage() {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                     {/* 总进度条（上传中显示） */}
                     {phase === 'uploading' && (
-                      <div style={{ marginBottom: 4 }}>
+                      <div className="mb-4">
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4, color: 'var(--text2)' }}>
                           <span>正在上传文件...</span>
                           <span style={{ fontWeight: 600, color: 'var(--accent)' }}>{uploadProgress}%</span>

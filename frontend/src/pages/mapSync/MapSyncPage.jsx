@@ -309,7 +309,7 @@ export function MapSyncPage() {
         </div>
       </div>
 
-      <div className="card" style={{ marginTop: 16 }}>
+      <div className="card" className="mt-16">
         <div className="card-header">
           <div>
             <h3>GOKZ 地图池</h3>
@@ -327,7 +327,7 @@ export function MapSyncPage() {
         </div>
       </div>
 
-      <div className="card" style={{ marginTop: 16 }}>
+      <div className="card" className="mt-16">
         <div className="card-header">
           <div>
             <h3>远端代理</h3>
@@ -372,7 +372,7 @@ export function MapSyncPage() {
                 {!overviewState.loading && agents.length === 0 && <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text3)' }}>暂无代理。</td></tr>}
                 {agents.map((agent) => (
                   <tr key={agent.id}>
-                    <td style={{ fontWeight: 600 }}>{agent.name}</td>
+                    <td className="fw-600">{agent.name}</td>
                     <td>{targetTypeLabel(agent.target_type)}</td>
                     <td className="steam-id" style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis' }}>{agent.token}</td>
                     <td>{formatChinaMonthDayTime(agent.last_seen_at)}</td>
@@ -391,14 +391,14 @@ export function MapSyncPage() {
         </div>
       </div>
 
-      <div className="card" style={{ marginTop: 16 }}>
+      <div className="card" className="mt-16">
         <div className="card-header">
           <div>
             <h3>最近任务</h3>
             <p>当前待执行任务 {pendingCount} 个。</p>
           </div>
         </div>
-        <div className="card-body" style={{ padding: 0 }}>
+        <div className="card-body" className="p-0">
           <div className="table-responsive">
             <table className="data-table">
               <thead>

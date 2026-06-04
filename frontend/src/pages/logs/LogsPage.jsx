@@ -61,18 +61,18 @@ export function LogsPage() {
         placeholder="搜索操作人 / 模块 / 动作..."
       />
 
-      <div className="card"><div className="card-body" style={{ padding: 0 }}>
+      <div className="card"><div className="card-body" className="p-0">
         <div className="table-responsive"><table className="data-table"><thead><tr><th>操作人</th><th>模块</th><th>操作动作</th><th>目标详情</th><th>操作IP</th><th>操作时间</th></tr></thead><tbody>
           {loading ? <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text2)' }}>正在加载日志...</td></tr> : null}
           {error ? <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--accent)' }}>{error}</td></tr> : null}
           {!loading && !error && items.map((x) => (
             <tr key={`${x.operator_name}-${x.created_at}`}>
-              <td style={{ fontWeight: 500 }}>{x.operator_name}</td>
+              <td className="fw-500">{x.operator_name}</td>
               <td><span className={`status-pill ${modulePillClass(x.module)}`}>{x.module}</span></td>
               <td style={{ fontWeight: 600, color: 'var(--text)' }}>{x.action}</td>
-              <td style={{ color: 'var(--text2)' }}>{x.target_detail}</td>
+              <td className="text-muted">{x.target_detail}</td>
               <td className="steam-id">{x.ip_address}</td>
-              <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(x.created_at, { seconds: false })}</td>
+              <td className="text-muted-light">{formatChinaDateTime(x.created_at, { seconds: false })}</td>
             </tr>
           ))}
           {!loading && !error && items.length === 0 ? <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text2)' }}>暂无日志记录</td></tr> : null}

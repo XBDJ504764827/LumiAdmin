@@ -463,11 +463,11 @@ export function BanPage() {
       />
 
       <div className="card">
-        <div className="card-body" style={{ padding: 0 }}>
+        <div className="card-body" className="p-0">
           <div className="table-responsive">
             <table className="data-table">
               <thead>
-                <tr><th>玩家</th><th>SteamID64</th><th>封禁属性</th><th>封禁理由</th><th>时长 / 到期</th><th>状态</th><th>封禁时间</th><th style={{ textAlign: 'right' }}>操作</th></tr>
+                <tr><th>玩家</th><th>SteamID64</th><th>封禁属性</th><th>封禁理由</th><th>时长 / 到期</th><th>状态</th><th>封禁时间</th><th className="text-right">操作</th></tr>
               </thead>
               <tbody>
                 {loading ? <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--text2)' }}>正在加载封禁数据...</td></tr> : null}
@@ -475,7 +475,7 @@ export function BanPage() {
                 {!loading && items.map((x) => (
                   <tr key={x.id}>
                     <td>
-                      <div style={{ fontWeight: 600 }}>{x.player || '待自动获取'}</div>
+                      <div className="fw-600">{x.player || '待自动获取'}</div>
                     </td>
                     <td className="steam-id">{x.steam_id}</td>
                     <td>{x.ban_type === 'ip' ? 'IP 封禁' : 'Steam 账号封禁'}</td>
@@ -485,8 +485,8 @@ export function BanPage() {
                       <div style={{ color: 'var(--text3)', fontSize: 12 }}>{formatExpiresAt(x.expires_at)}</div>
                     </td>
                     <td><span className={`status-pill ${x.status === 'active' ? 'pill-danger' : 'pill-offline'}`}>{x.status === 'active' ? '生效中' : '已失效'}</span></td>
-                    <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(x.created_at)}</td>
-                    <td style={{ textAlign: 'right' }}>
+                    <td className="text-muted-light">{formatChinaDateTime(x.created_at)}</td>
+                    <td className="text-right">
                       <div className="action-btn-group">
                         <button className="action-btn" onClick={() => openDetailModal(x)}>详细</button>
                         {canManageAll ? <button className="action-btn action-btn-accent" onClick={() => openEditModal(x)}>编辑</button> : null}
@@ -550,18 +550,18 @@ export function BanPage() {
               <div className="table-responsive">
                 <table className="data-table">
                   <thead>
-                    <tr><th>名称</th><th>Key 前缀</th><th>最近使用</th><th>创建时间</th><th style={{ textAlign: 'right' }}>操作</th></tr>
+                    <tr><th>名称</th><th>Key 前缀</th><th>最近使用</th><th>创建时间</th><th className="text-right">操作</th></tr>
                   </thead>
                   <tbody>
                     {apiKeysLoading ? <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text2)' }}>加载中...</td></tr> : null}
                     {!apiKeysLoading && apiKeys.length === 0 ? <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text2)' }}>暂无 API Key</td></tr> : null}
                     {apiKeys.map((item) => (
                       <tr key={item.id}>
-                        <td style={{ fontWeight: 600 }}>{item.name}</td>
+                        <td className="fw-600">{item.name}</td>
                         <td className="steam-id">{item.token_prefix}...</td>
-                        <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(item.last_used_at)}</td>
-                        <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(item.created_at)}</td>
-                        <td style={{ textAlign: 'right' }}>
+                        <td className="text-muted-light">{formatChinaDateTime(item.last_used_at)}</td>
+                        <td className="text-muted-light">{formatChinaDateTime(item.created_at)}</td>
+                        <td className="text-right">
                           <button className="action-btn action-btn-danger" onClick={() => handleDeleteApiKey(item)}>删除</button>
                         </td>
                       </tr>
@@ -582,14 +582,14 @@ export function BanPage() {
         footer={<><button className="btn btn-outline" onClick={resetBanModal} disabled={submitting}>取消</button><button className="btn btn-danger" onClick={handleSaveBan} disabled={submitting}>{savePhase === 'uploading' ? `正在上传文件 (${uploadProgress}%)...` : banModalSubmitText(modalMode, submitting)}</button></>}
       >
         <div className="form-group"><label>玩家名称</label><input type="text" className="form-control" value={form.player} onChange={(event) => setForm((prev) => ({ ...prev, player: event.target.value }))} placeholder="留空后等待插件自动获取" /></div>
-        <div className="form-group"><label>SteamID64 <span style={{ color: 'var(--accent)' }}>*</span></label><input type="text" className="form-control" value={form.steam_id} onChange={(event) => setForm((prev) => ({ ...prev, steam_id: event.target.value }))} placeholder="76561198000000000" /></div>
-        <div className="form-group"><label>封禁属性 <span style={{ color: 'var(--accent)' }}>*</span></label><select className="form-control" value={form.ban_type} onChange={(event) => setForm((prev) => ({ ...prev, ban_type: event.target.value }))}><option value="">请选择封禁属性</option>{BAN_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
+        <div className="form-group"><label>SteamID64 <span className="text-accent">*</span></label><input type="text" className="form-control" value={form.steam_id} onChange={(event) => setForm((prev) => ({ ...prev, steam_id: event.target.value }))} placeholder="76561198000000000" /></div>
+        <div className="form-group"><label>封禁属性 <span className="text-accent">*</span></label><select className="form-control" value={form.ban_type} onChange={(event) => setForm((prev) => ({ ...prev, ban_type: event.target.value }))}><option value="">请选择封禁属性</option>{BAN_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
         <div className="form-group"><label>IP 地址</label><input type="text" className="form-control" value={form.ip_address} onChange={(event) => setForm((prev) => ({ ...prev, ip_address: event.target.value }))} placeholder="留空后等待插件自动获取" /></div>
-        <div className="form-group"><label>封禁理由 <span style={{ color: 'var(--accent)' }}>*</span></label><textarea className="form-control" value={form.reason} onChange={(event) => setForm((prev) => ({ ...prev, reason: event.target.value }))} placeholder="请输入封禁理由" rows={3} /></div>
+        <div className="form-group"><label>封禁理由 <span className="text-accent">*</span></label><textarea className="form-control" value={form.reason} onChange={(event) => setForm((prev) => ({ ...prev, reason: event.target.value }))} placeholder="请输入封禁理由" rows={3} /></div>
         {modalMode !== 'edit' ? (
-          <div className="form-section-card" style={{ marginBottom: 16 }}>
+          <div className="form-section-card" className="mb-16">
             <div className="form-section-header"><span>辅助文件（选填）</span></div>
-            <div className="form-hint" style={{ marginBottom: 12 }}>可上传录像、截图或录音作为封禁依据，单个文件最大 100MB。</div>
+            <div className="form-hint" className="mb-12">可上传录像、截图或录音作为封禁依据，单个文件最大 100MB。</div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
               <button type="button" className="btn btn-outline btn-sm" onClick={() => videoRef.current?.click()} disabled={submitting}>选择录像</button>
               <input ref={videoRef} type="file" accept={ALLOWED_VIDEO} multiple style={{ display: 'none' }} onChange={(event) => handleFileSelect(event.target.files, videoRef)} />
@@ -626,7 +626,7 @@ export function BanPage() {
         ) : null}
         {form.ban_type === 'steam' ? <div style={{ color: 'var(--text2)', fontSize: 13 }}>账号封禁：该 SteamID64 无法进入游戏服务器。</div> : null}
         {form.ban_type === 'ip' ? <div style={{ color: 'var(--text2)', fontSize: 13 }}>IP 封禁：该玩家下次进服后将自动填写 IP 并且阻止该 IP 的玩家进入服务器。</div> : null}
-        {error ? <div style={{ color: 'var(--accent)' }}>{error}</div> : null}
+        {error ? <div className="text-accent">{error}</div> : null}
       </Modal>
 
       <Modal
@@ -638,7 +638,7 @@ export function BanPage() {
         {detailItem ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div className="form-group">
-              <label style={{ marginBottom: 4 }}>玩家信息</label>
+              <label className="mb-4">玩家信息</label>
               <div style={{ color: 'var(--text2)', fontSize: 13 }}>
                 <div>名称：{detailItem.player || '待自动获取'}</div>
                 <div>SteamID64：{detailItem.steam_id}</div>
@@ -647,7 +647,7 @@ export function BanPage() {
             </div>
 
             <div className="form-group">
-              <label style={{ marginBottom: 4 }}>封禁信息</label>
+              <label className="mb-4">封禁信息</label>
               <div style={{ color: 'var(--text2)', fontSize: 13 }}>
                 <div>封禁类型：{detailItem.ban_type === 'ip' ? 'IP 封禁' : 'Steam 账号封禁'}</div>
                 <div>封禁时长：{formatBanDuration(detailItem.duration_minutes)}</div>
@@ -659,14 +659,14 @@ export function BanPage() {
             </div>
 
             <div className="form-group">
-              <label style={{ marginBottom: 4 }}>封禁理由</label>
+              <label className="mb-4">封禁理由</label>
               <div style={{ color: 'var(--text2)', fontSize: 13, whiteSpace: 'pre-wrap', background: 'var(--surface2)', padding: 8, borderRadius: 6 }}>
                 {detailItem.reason}
               </div>
             </div>
 
             <div className="form-group">
-              <label style={{ marginBottom: 4 }}>处理状态</label>
+              <label className="mb-4">处理状态</label>
               <div>
                 <span className={`status-pill ${detailItem.status === 'active' ? 'pill-danger' : 'pill-offline'}`}>{detailItem.status === 'active' ? '生效中' : '已失效'}</span>
               </div>
@@ -683,7 +683,7 @@ export function BanPage() {
             </div>
 
             <div className="form-group">
-              <label style={{ marginBottom: 4 }}>辅助文件</label>
+              <label className="mb-4">辅助文件</label>
               {detailFilesLoading ? <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>正在加载附件...</div> : null}
               {!detailFilesLoading && detailFilesError ? <div style={{ color: 'var(--danger)', fontSize: 13, padding: '8px 0' }}>{detailFilesError}</div> : null}
               {!detailFilesLoading && !detailFilesError && detailFiles.length === 0 ? <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>暂无辅助文件</div> : null}

@@ -123,11 +123,11 @@ export function RconPage() {
         </div>
         <div className="card-body">
           {loading ? (
-            <div style={{ color: 'var(--text3)' }}>正在加载服务器列表...</div>
+            <div className="text-muted-light">正在加载服务器列表...</div>
           ) : loadError ? (
             <div style={{ color: 'var(--danger)' }}>{loadError}</div>
           ) : allServers.length === 0 ? (
-            <div style={{ color: 'var(--text3)' }}>暂无可用服务器，请先在社区组管理中添加服务器。</div>
+            <div className="text-muted-light">暂无可用服务器，请先在社区组管理中添加服务器。</div>
           ) : (
             <select
               className="form-control"
@@ -152,17 +152,17 @@ export function RconPage() {
 
       {/* 命令目录 */}
       {COMMAND_CATEGORIES.map((cat) => (
-        <div className="card" key={cat.name} style={{ marginTop: 16 }}>
+        <div className="card" key={cat.name} className="mt-16">
           <div className="card-header">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ color: 'var(--accent)' }}>{cat.icon}</span>
+              <span className="text-accent">{cat.icon}</span>
               <div>
                 <div className="card-title">{cat.name}</div>
                 <div className="card-sub">共 {cat.commands.length} 个命令</div>
               </div>
             </div>
           </div>
-          <div className="card-body" style={{ padding: 0 }}>
+          <div className="card-body" className="p-0">
             <div className="table-responsive">
               <table className="data-table">
                 <thead>
@@ -170,19 +170,19 @@ export function RconPage() {
                     <th>命令名称</th>
                     <th>说明</th>
                     <th>RCON 指令</th>
-                    <th style={{ textAlign: 'right' }}>操作</th>
+                    <th className="text-right">操作</th>
                   </tr>
                 </thead>
                 <tbody>
                   {cat.commands.map((cmd) => (
                     <tr key={cmd.command}>
-                      <td style={{ fontWeight: 600 }}>
+                      <td className="fw-600">
                         {cmd.name}
                         {cmd.danger ? <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--danger-text)' }}>⚠ 高影响</span> : null}
                       </td>
                       <td style={{ color: 'var(--text2)', fontSize: 13 }}>{cmd.desc}</td>
                       <td><code style={{ fontSize: 12, background: 'var(--surface2)', padding: '2px 6px', borderRadius: 4 }}>{cmd.command}</code></td>
-                      <td style={{ textAlign: 'right' }}>
+                      <td className="text-right">
                         <button
                           className="action-btn action-btn-accent"
                           disabled={!selectedServerId || !!executing}
@@ -201,10 +201,10 @@ export function RconPage() {
       ))}
 
       {/* 自定义命令 */}
-      <div className="card" style={{ marginTop: 16 }}>
+      <div className="card" className="mt-16">
         <div className="card-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ color: 'var(--accent)' }}>
+            <span className="text-accent">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="20" height="20">
                 <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
               </svg>
@@ -230,7 +230,7 @@ export function RconPage() {
               className="btn btn-primary"
               disabled={!selectedServerId || !customCommand.trim() || !!executing}
               onClick={handleCustomExecute}
-              style={{ flexShrink: 0 }}
+              className="flex-shrink-0"
             >
               {executing === customCommand.trim() ? '执行中...' : '执行'}
             </button>

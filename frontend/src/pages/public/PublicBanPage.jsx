@@ -95,9 +95,9 @@ export function PublicBanPage() {
             <tbody>
               {items.map((x) => (
                 <tr key={x.id}>
-                  <td style={{ fontWeight: 600 }}>{x.player}</td>
+                  <td className="fw-600">{x.player}</td>
                   <td className="steam-id">{x.steam_id}</td>
-                  <td style={{ color: 'var(--text2)' }}>{x.server_name ?? '未记录'}</td>
+                  <td className="text-muted">{x.server_name ?? '未记录'}</td>
                   <td><span className={`status-pill ${banStatusPill(x)}`}>{banStatusLabel(x)}</span></td>
                   <td style={{ color: formatExpiry(x) === 'expired' ? 'var(--text3)' : 'var(--text2)', fontWeight: 500 }}>{x.reason}</td>
                 </tr>
@@ -133,7 +133,7 @@ export function PublicBanPage() {
             <span className="public-stat-label">永久封禁</span>
           </div>
           <div className="public-stat">
-            <span className="public-stat-value" style={{ color: 'var(--text3)' }}>{data.stats?.expired ?? 0}</span>
+            <span className="public-stat-value" className="text-muted-light">{data.stats?.expired ?? 0}</span>
             <span className="public-stat-label">已过期</span>
           </div>
           <div className="public-stat">
@@ -143,7 +143,7 @@ export function PublicBanPage() {
         </div>
       )}
 
-      <div style={{ marginBottom: 16 }}>
+      <div className="mb-16">
         <SearchBar
           value={search}
           onChange={(v) => { setSearch(v); setPage(1); }}

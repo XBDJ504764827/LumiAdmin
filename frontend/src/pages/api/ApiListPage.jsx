@@ -36,7 +36,7 @@ export function ApiListPage() {
       </div>
 
       <div className="card">
-        <div className="card-body" style={{ padding: 0 }}>
+        <div className="card-body" className="p-0">
           <div className="table-responsive">
             <table className="data-table">
               <thead>
@@ -55,10 +55,10 @@ export function ApiListPage() {
                 {!loading && !error && endpointRows.map((row) => (
                   <tr key={`${row.method}-${row.endpoint}`}>
                     <td><span className={`status-pill ${toneClass[row.tone] || 'pill-info'}`}>{row.module}</span></td>
-                    <td style={{ fontWeight: 500 }}>{row.name}</td>
+                    <td className="fw-500">{row.name}</td>
                     <td><span className={`method-badge ${methodClass[row.method]}`}>{row.method}</span></td>
                     <td className="steam-id">{row.endpoint}</td>
-                    <td style={{ color: 'var(--text2)' }}>{row.description}</td>
+                    <td className="text-muted">{row.description}</td>
                   </tr>
                 ))}
               </tbody>

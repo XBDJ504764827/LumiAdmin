@@ -47,7 +47,7 @@ export function PublicPageShell({ children }) {
                 <path d="M2 12L6 8L10 12L14 8" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.6" />
               </svg>
             </div>
-            <span className="public-brand-text">Lumi<span style={{ color: 'var(--accent)' }}>Admin</span></span>
+            <span className="public-brand-text">Lumi<span className="text-accent">Admin</span></span>
           </div>
           <nav className="public-nav-links">
             {navItems.map((item) => (

@@ -6,14 +6,16 @@ import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { Modal } from '../../shared/Modal.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
+import { StatusPill } from '../../shared/StatusPill.jsx';
+import { FilePreview, FileItem, fileTypeLabel, fileActionLabel, formatFileSize } from '../../shared/FilePreview.jsx';
 import { useNavigate } from 'react-router-dom';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { notifyPendingReviewsUpdated, usePendingReviewIndicators } from '../../hooks/usePendingReviewIndicators.js';
 
 const STATUS_MAP = {
-  pending: { label: '待审核', pill: 'pill-warning' },
-  approved: { label: '已封禁', pill: 'pill-success' },
-  rejected: { label: '已驳回', pill: 'pill-offline' },
+  pending: { label: '待审核', pill: 'warning' },
+  approved: { label: '已封禁', pill: 'success' },
+  rejected: { label: '已驳回', pill: 'offline' },
 };
 const STATUS_FILTERS = [
   { value: undefined, label: '全部状态' },
@@ -21,75 +23,6 @@ const STATUS_FILTERS = [
   { value: 'approved', label: '已封禁' },
   { value: 'rejected', label: '已驳回' },
 ];
-
-function formatFileSize(bytes) {
-  const value = Number(bytes);
-  if (!Number.isFinite(value)) return '-';
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function fileTypeLabel(category) {
-  if (category === 'video') return '录像';
-  if (category === 'image') return '图片';
-  if (category === 'audio') return '录音';
-  return '文件';
-}
-
-function fileActionLabel(category) {
-  if (category === 'image') return '打开原图';
-  if (category === 'video') return '播放录像';
-  if (category === 'audio') return '播放录音';
-  return '下载文件';
-}
-
-function renderFilePreview(file) {
-  if (!file.url) return null;
-
-  if (file.category === 'video') {
-    return (
-      <video
-        src={file.url}
-        controls
-        preload="metadata"
-        style={{ width: '100%', maxHeight: 360, marginTop: 10, borderRadius: 8, background: '#000' }}
-      >
-        当前浏览器不支持播放该视频，请下载原文件查看。
-      </video>
-    );
-  }
-
-  if (file.category === 'audio') {
-    return (
-      <audio src={file.url} controls preload="metadata" style={{ width: '100%', marginTop: 10 }}>
-        当前浏览器不支持播放该音频，请下载原文件查看。
-      </audio>
-    );
-  }
-
-  if (file.category === 'image') {
-    return (
-      <a href={file.url} target="_blank" rel="noopener noreferrer" style={{ display: 'block', marginTop: 10 }}>
-        <img
-          src={file.url}
-          alt={file.file_name}
-          loading="lazy"
-          style={{
-            display: 'block',
-            width: '100%',
-            maxHeight: 360,
-            objectFit: 'contain',
-            borderRadius: 8,
-            background: 'var(--surface1)',
-          }}
-        />
-      </a>
-    );
-  }
-
-  return null;
-}
 
 export function PlayerReportPage() {
   const { session } = useAuth();
@@ -240,49 +173,50 @@ export function PlayerReportPage() {
         value={search}
         onChange={(v) => { setSearch(v); setPage(1); }}
         placeholder="搜索 SteamID / 玩家名称..."
+        aria-label="搜索玩家举报"
       />
 
       <div className="card">
-        <div className="card-body" style={{ padding: 0 }}>
+        <div className="card-body p-0">
           <div className="table-responsive">
-            <table className="data-table">
+            <table className="data-table" role="table" aria-label="玩家举报列表">
               <thead>
                 <tr>
-                  <th>被举报玩家</th>
-                  <th>SteamID64</th>
-                  <th>举报理由</th>
-                  <th>联系方式</th>
-                  <th>状态</th>
-                  <th>提交时间</th>
-                  <th>审核人</th>
-                  <th>审核时间</th>
-                  <th style={{ textAlign: 'right' }}>操作</th>
+                  <th scope="col">被举报玩家</th>
+                  <th scope="col">SteamID64</th>
+                  <th scope="col">举报理由</th>
+                  <th scope="col">联系方式</th>
+                  <th scope="col">状态</th>
+                  <th scope="col">提交时间</th>
+                  <th scope="col">审核人</th>
+                  <th scope="col">审核时间</th>
+                  <th scope="col" className="text-right">操作</th>
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan={9} style={{ textAlign: 'center', color: 'var(--text2)' }}>正在加载玩家举报...</td></tr>
+                  <tr><td colSpan={9} className="text-center text-muted">正在加载玩家举报...</td></tr>
                 ) : null}
                 {!loading && loadError ? (
-                  <tr><td colSpan={9} style={{ textAlign: 'center', color: 'var(--danger)' }}>{loadError}</td></tr>
+                  <tr><td colSpan={9} className="text-center text-danger">{loadError}</td></tr>
                 ) : null}
                 {!loading && items.map((item) => {
                   const st = STATUS_MAP[item.status] || { label: item.status, pill: '' };
                   return (
                     <tr key={item.id}>
-                      <td style={{ fontWeight: 600 }}>{item.target_player_name || '-'}</td>
+                      <td className="fw-600">{item.target_player_name || '-'}</td>
                       <td className="steam-id">{item.target_steam_id}</td>
-                      <td style={{ color: 'var(--text2)', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <td className="text-muted text-ellipsis" style={{ maxWidth: 240 }}>
                         <span title={item.report_reason}>{item.report_reason}</span>
                       </td>
-                      <td style={{ color: 'var(--text2)', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <td className="text-muted text-ellipsis" style={{ maxWidth: 160 }}>
                         <span title={item.reporter_contact || ''}>{item.reporter_contact || '-'}</span>
                       </td>
-                      <td><span className={`status-pill ${st.pill}`}>{st.label}</span></td>
-                      <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(item.created_at, { seconds: false })}</td>
+                      <td><StatusPill kind={st.pill}>{st.label}</StatusPill></td>
+                      <td className="text-muted-light">{formatChinaDateTime(item.created_at, { seconds: false })}</td>
                       <td>{item.reviewed_by || '-'}</td>
-                      <td style={{ color: 'var(--text3)' }}>{item.reviewed_at ? formatChinaDateTime(item.reviewed_at, { seconds: false }) : '-'}</td>
-                      <td style={{ textAlign: 'right' }}>
+                      <td className="text-muted-light">{item.reviewed_at ? formatChinaDateTime(item.reviewed_at, { seconds: false }) : '-'}</td>
+                      <td className="text-right">
                         <div className="action-btn-group">
                           <button className="action-btn action-btn-accent" onClick={() => openDetail(item)}>详情</button>
                           {canReview && item.status === 'pending' ? (
@@ -297,7 +231,7 @@ export function PlayerReportPage() {
                   );
                 })}
                 {!loading && items.length === 0 ? (
-                  <tr><td colSpan={9} style={{ textAlign: 'center', color: 'var(--text2)' }}>暂无玩家举报</td></tr>
+                  <tr><td colSpan={9} className="text-center text-muted">暂无玩家举报</td></tr>
                 ) : null}
               </tbody>
             </table>
@@ -307,6 +241,7 @@ export function PlayerReportPage() {
 
       <Pagination page={page} pageSize={20} total={total} onChange={setPage} />
 
+      {/* 详情弹窗 */}
       <Modal
         open={detailOpen}
         title="举报详情"
@@ -324,99 +259,79 @@ export function PlayerReportPage() {
         }
       >
         {detailItem ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div className="form-group">
-              <label style={{ marginBottom: 4 }}>玩家信息</label>
-              <div style={{ color: 'var(--text2)', fontSize: 13 }}>
+          <div className="flex-col gap-12">
+            <div className="detail-field">
+              <div className="detail-field-label">玩家信息</div>
+              <div className="detail-field-value">
                 <div>名称：{detailItem.target_player_name || '-'}</div>
                 <div>SteamID64：{detailItem.target_steam_id}</div>
                 <div>联系方式：{detailItem.reporter_contact || '-'}</div>
               </div>
             </div>
 
-            <div className="form-group">
-              <label style={{ marginBottom: 4 }}>举报信息</label>
-              <div style={{ color: 'var(--text2)', fontSize: 13 }}>
+            <div className="detail-field">
+              <div className="detail-field-label">举报信息</div>
+              <div className="detail-field-value">
                 <div>提交时间：{formatChinaDateTime(detailItem.created_at, { seconds: false })}</div>
                 <div>证据文件：{reportFiles.length} 个</div>
               </div>
             </div>
 
-            <div className="form-group">
-              <label style={{ marginBottom: 4 }}>举报理由</label>
-              <div style={{ color: 'var(--text2)', fontSize: 13, whiteSpace: 'pre-wrap', background: 'var(--surface2)', padding: 8, borderRadius: 6 }}>
-                {detailItem.report_reason}
-              </div>
+            <div className="detail-field">
+              <div className="detail-field-label">举报理由</div>
+              <div className="detail-field-value-block">{detailItem.report_reason}</div>
             </div>
 
-            <div className="form-group">
-              <label style={{ marginBottom: 4 }}>处理状态</label>
+            <div className="detail-field">
+              <div className="detail-field-label">处理状态</div>
               <div>
-                <span className={`status-pill ${STATUS_MAP[detailItem.status]?.pill || ''}`}>
+                <StatusPill kind={STATUS_MAP[detailItem.status]?.pill || ''}>
                   {STATUS_MAP[detailItem.status]?.label || detailItem.status}
-                </span>
+                </StatusPill>
               </div>
               {detailItem.reviewed_by ? (
-                <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
+                <div className="text-muted-light fs-12 mt-4">
                   由 {detailItem.reviewed_by} 于 {formatChinaDateTime(detailItem.reviewed_at, { seconds: false })} 处理
                 </div>
               ) : null}
               {detailItem.review_note ? (
-                <div style={{ color: 'var(--text2)', fontSize: 13, marginTop: 4, whiteSpace: 'pre-wrap', background: 'var(--surface2)', padding: 8, borderRadius: 6 }}>
-                  审核备注：{detailItem.review_note}
-                </div>
+                <div className="review-note">审核备注：{detailItem.review_note}</div>
               ) : null}
             </div>
 
-            <div className="form-group">
-              <label style={{ marginBottom: 4 }}>证据文件</label>
+            <div className="detail-field">
+              <label className="detail-field-label">证据文件</label>
               {filesLoading ? (
-                <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>正在加载证据文件...</div>
+                <div className="text-muted-light fs-13 p-8">正在加载证据文件...</div>
               ) : reportFiles.length > 0 ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div className="flex-col gap-10">
                   {reportFiles.map((file) => (
-                    <div
-                      key={file.id}
-                      style={{
-                        padding: '10px 14px',
-                        background: 'var(--surface2)',
-                        borderRadius: 10,
-                        fontSize: 13,
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
-                          <span className="status-pill">{fileTypeLabel(file.category)}</span>
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {file.file_name}
-                            </div>
-                            <div style={{ fontSize: 11, color: 'var(--text3)' }}>
-                              {formatFileSize(file.file_size)}
-                              {file.content_type ? ` · ${file.content_type}` : ''}
-                            </div>
-                          </div>
-                        </div>
-                        {file.url ? (
-                          <a href={file.url} target="_blank" rel="noopener noreferrer" className="action-btn" style={{ flexShrink: 0, textDecoration: 'none' }}>
-                            {fileActionLabel(file.category)}
-                          </a>
-                        ) : (
-                          <span style={{ fontSize: 11, color: 'var(--text3)', flexShrink: 0 }}>不可用</span>
-                        )}
-                      </div>
-                      {renderFilePreview(file)}
-                    </div>
+                    <FileItem key={file.id} file={file}>
+                      {file.url ? (
+                        <a
+                          href={file.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="action-btn flex-shrink-0"
+                          aria-label={`${fileActionLabel(file.category)} ${file.file_name}`}
+                        >
+                          {fileActionLabel(file.category)}
+                        </a>
+                      ) : (
+                        <span className="text-muted-light fs-11 flex-shrink-0">不可用</span>
+                      )}
+                    </FileItem>
                   ))}
                 </div>
               ) : (
-                <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>该举报未上传证据文件。</div>
+                <div className="text-muted-light fs-13 p-8">该举报未上传证据文件。</div>
               )}
             </div>
           </div>
         ) : null}
       </Modal>
 
+      {/* 驳回弹窗 */}
       <Modal
         open={reviewOpen}
         title="驳回玩家举报"
@@ -435,14 +350,15 @@ export function PlayerReportPage() {
         }
       >
         {reviewItem ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ color: 'var(--text2)', fontSize: 13 }}>
+          <div className="flex-col gap-12">
+            <div className="text-muted fs-13">
               <div><strong>玩家：</strong>{reviewItem.target_player_name || '-'}（{reviewItem.target_steam_id}）</div>
               <div><strong>举报理由：</strong>{reviewItem.report_reason}</div>
             </div>
             <div className="form-group">
-              <label>审核备注</label>
+              <label htmlFor="report-review-note">审核备注</label>
               <textarea
+                id="report-review-note"
                 className="form-control"
                 value={reviewNote}
                 onChange={(e) => setReviewNote(e.target.value)}

@@ -11,17 +11,20 @@
 #include <adt_array>
 #include <ripext>
 
+#define DEFAULT_API_BASE_URL "http://127.0.0.1:8080/api/plugin"
 #define EDGE_SYNC_DB "manger_edge_sync"
 #define MAX_SYNC_PAYLOAD 8192
 #define MAX_IDEMPOTENCY_KEY 64
+#define MAX_SERVER_TOKEN 256
 
 Database g_EdgeSyncDb = null;
 Handle g_SyncTimer = null;
 ConVar g_ApiBaseUrl;
 ConVar g_SyncInterval;
-char g_ServerReportToken[256];
+char g_ServerReportToken[MAX_SERVER_TOKEN];
 int g_ServerPort = 0;
 bool g_IsOnline = true;
+bool g_SyncInFlight = false;
 int g_PendingCount = 0;
 int g_LastSyncTime = 0;
 
@@ -36,6 +39,11 @@ public Plugin myinfo =
 
 public void OnPluginStart()
 {
+    g_ApiBaseUrl = FindConVar("manger_api_base_url");
+    if (g_ApiBaseUrl == null)
+    {
+        g_ApiBaseUrl = CreateConVar("manger_api_base_url", DEFAULT_API_BASE_URL, "Manger plugin API base URL.");
+    }
     g_SyncInterval = CreateConVar("manger_edge_sync_interval", "30.0", "Offline queue sync interval in seconds.", _, true, 10.0);
     HookConVarChange(g_SyncInterval, OnSyncIntervalChanged);
 
@@ -43,6 +51,7 @@ public void OnPluginStart()
     RegAdminCmd("sm_sync_status", CommandSyncStatus, ADMFLAG_RCON, "Show offline sync status");
     RegAdminCmd("sm_force_sync", CommandForceSync, ADMFLAG_RCON, "Force sync offline queue");
 
+    LoadEdgeSyncConfig();
     InitEdgeSyncDb();
     StartSyncTimer();
 }
@@ -53,7 +62,18 @@ public void OnMapStart()
     {
         InitEdgeSyncDb();
     }
+    LoadEdgeSyncConfig();
     StartSyncTimer();
+}
+
+public void OnMapEnd()
+{
+    StopSyncTimer();
+}
+
+public void OnPluginEnd()
+{
+    StopSyncTimer();
 }
 
 public void OnSyncIntervalChanged(ConVar convar, const char[] oldValue, const char[] newValue)
@@ -70,17 +90,172 @@ void StartSyncTimer()
 
 void StopSyncTimer()
 {
-    g_SyncTimer = null;
+    if (g_SyncTimer != null)
+    {
+        delete g_SyncTimer;
+        g_SyncTimer = null;
+    }
 }
 
 public Action Timer_SyncQueue(Handle timer)
 {
-    if (g_SyncTimer == timer)
-    {
-        g_SyncTimer = null;
-    }
     SyncOfflineQueue();
     return Plugin_Continue;
+}
+
+bool GetCurrentServerPort(int &port)
+{
+    ConVar hostport = FindConVar("hostport");
+    if (hostport == null)
+    {
+        return false;
+    }
+
+    port = hostport.IntValue;
+    return port > 0;
+}
+
+bool ParseConfigValueLine(const char[] line, const char[] key, char[] value, int maxLen)
+{
+    value[0] = '\0';
+    if (StrContains(line, key, false) != 0)
+    {
+        return false;
+    }
+
+    int firstQuote = FindCharInString(line, '"');
+    if (firstQuote < 0)
+    {
+        return false;
+    }
+
+    int secondQuote = FindCharInString(line[firstQuote + 1], '"');
+    if (secondQuote < 0)
+    {
+        return false;
+    }
+    secondQuote += firstQuote + 1;
+
+    int copyLength = secondQuote - firstQuote - 1;
+    if (copyLength >= maxLen)
+    {
+        copyLength = maxLen - 1;
+    }
+
+    for (int i = 0; i < copyLength; i++)
+    {
+        value[i] = line[firstQuote + 1 + i];
+    }
+    value[copyLength] = '\0';
+    return true;
+}
+
+bool CopyQuotedValue(const char[] line, int firstQuote, char[] value, int maxLen, int &nextOffset)
+{
+    value[0] = '\0';
+
+    int secondQuote = FindCharInString(line[firstQuote + 1], '"');
+    if (secondQuote < 0)
+    {
+        return false;
+    }
+    secondQuote += firstQuote + 1;
+
+    int copyLength = secondQuote - firstQuote - 1;
+    if (copyLength >= maxLen)
+    {
+        copyLength = maxLen - 1;
+    }
+
+    for (int i = 0; i < copyLength; i++)
+    {
+        value[i] = line[firstQuote + 1 + i];
+    }
+    value[copyLength] = '\0';
+    nextOffset = secondQuote + 1;
+    return true;
+}
+
+bool ParseServerMappingLine(const char[] line, int &port, char[] token, int tokenMaxLen)
+{
+    token[0] = '\0';
+    port = 0;
+
+    if (StrContains(line, "manger_server", false) != 0)
+    {
+        return false;
+    }
+
+    int firstQuote = FindCharInString(line, '"');
+    if (firstQuote < 0)
+    {
+        return false;
+    }
+
+    char portText[16];
+    int nextOffset = 0;
+    if (!CopyQuotedValue(line, firstQuote, portText, sizeof(portText), nextOffset))
+    {
+        return false;
+    }
+
+    int tokenQuote = FindCharInString(line[nextOffset], '"');
+    if (tokenQuote < 0)
+    {
+        return false;
+    }
+    tokenQuote += nextOffset;
+
+    if (!CopyQuotedValue(line, tokenQuote, token, tokenMaxLen, nextOffset))
+    {
+        return false;
+    }
+
+    port = StringToInt(portText);
+    TrimString(token);
+    return port > 0;
+}
+
+void LoadEdgeSyncConfig()
+{
+    int currentPort = 0;
+    GetCurrentServerPort(currentPort);
+
+    char path[PLATFORM_MAX_PATH];
+    BuildPath(Path_SM, path, sizeof(path), "../../cfg/sourcemod/manger_online_reporter.cfg");
+
+    File file = OpenFile(path, "r");
+    if (file == null)
+    {
+        return;
+    }
+
+    char line[512];
+    while (!file.EndOfFile() && file.ReadLine(line, sizeof(line)))
+    {
+        TrimString(line);
+        if (line[0] == '\0' || (line[0] == '/' && line[1] == '/'))
+        {
+            continue;
+        }
+
+        char value[256];
+        if (ParseConfigValueLine(line, "manger_api_base_url", value, sizeof(value)))
+        {
+            g_ApiBaseUrl.SetString(value);
+            continue;
+        }
+
+        int port = 0;
+        char token[MAX_SERVER_TOKEN];
+        if (ParseServerMappingLine(line, port, token, sizeof(token)) && port == currentPort)
+        {
+            g_ServerPort = port;
+            strcopy(g_ServerReportToken, sizeof(g_ServerReportToken), token);
+        }
+    }
+
+    delete file;
 }
 
 void InitEdgeSyncDb()
@@ -261,6 +436,11 @@ void WriteLocalAuditLog(
 void SyncOfflineQueue()
 {
     if (g_EdgeSyncDb == null) return;
+    if (g_SyncInFlight) return;
+    if (g_ServerPort <= 0 || g_ServerReportToken[0] == '\0')
+    {
+        LoadEdgeSyncConfig();
+    }
     if (g_ServerPort <= 0 || g_ServerReportToken[0] == '\0') return;
 
     // 查询待同步的操作
@@ -333,9 +513,22 @@ void SyncOfflineQueue()
     // 发送同步请求
     char url[512];
     g_ApiBaseUrl.GetString(url, sizeof(url));
+    TrimString(url);
+    if (url[0] == '\0')
+    {
+        delete jsonPayload;
+        delete ids;
+        return;
+    }
+    int len = strlen(url);
+    if (len > 0 && url[len - 1] == '/')
+    {
+        url[len - 1] = '\0';
+    }
     StrCat(url, sizeof(url), "/offline/sync");
 
     HTTPRequest request = new HTTPRequest(url);
+    g_SyncInFlight = true;
     request.Post(jsonPayload, OnSyncResponse, ids);
     delete jsonPayload;
 }
@@ -348,7 +541,8 @@ public void OnSyncResponse(HTTPResponse response, any value, const char[] error)
     {
         LogError("[EdgeSync] Sync failed: %s", error);
         g_IsOnline = false;
-        MarkOperationsFailed(ids, error);
+        g_SyncInFlight = false;
+        MarkOperationsRetryable(ids, error);
         delete ids;
         return;
     }
@@ -359,12 +553,21 @@ public void OnSyncResponse(HTTPResponse response, any value, const char[] error)
         g_IsOnline = false;
         char errorMsg[64];
         Format(errorMsg, sizeof(errorMsg), "HTTP %d", response.Status);
-        MarkOperationsFailed(ids, errorMsg);
+        g_SyncInFlight = false;
+        if (response.Status >= HTTPStatus_BadRequest && response.Status < HTTPStatus_InternalServerError)
+        {
+            MarkOperationsFailed(ids, errorMsg);
+        }
+        else
+        {
+            MarkOperationsRetryable(ids, errorMsg);
+        }
         delete ids;
         return;
     }
 
     g_IsOnline = true;
+    g_SyncInFlight = false;
     g_LastSyncTime = GetTime();
 
     // 解析响应
@@ -414,6 +617,24 @@ void MarkOperationsFailed(ArrayList ids, const char[] error)
         int id = ids.Get(i);
         char query[512];
         Format(query, sizeof(query), "UPDATE offline_queue SET status = 'failed', sync_error = '%s', retry_count = retry_count + 1 WHERE id = %d", escapedError, id);
+        SQL_FastQuery(g_EdgeSyncDb, query);
+    }
+
+    UpdatePendingCount();
+}
+
+void MarkOperationsRetryable(ArrayList ids, const char[] error)
+{
+    if (g_EdgeSyncDb == null) return;
+
+    char escapedError[256];
+    SQL_EscapeString(g_EdgeSyncDb, error, escapedError, sizeof(escapedError));
+
+    for (int i = 0; i < ids.Length; i++)
+    {
+        int id = ids.Get(i);
+        char query[512];
+        Format(query, sizeof(query), "UPDATE offline_queue SET status = 'pending', sync_error = '%s', retry_count = retry_count + 1 WHERE id = %d", escapedError, id);
         SQL_FastQuery(g_EdgeSyncDb, query);
     }
 

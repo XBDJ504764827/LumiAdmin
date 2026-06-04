@@ -6,6 +6,8 @@ import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { Modal } from '../../shared/Modal.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
+import { StatusPill } from '../../shared/StatusPill.jsx';
+import { FilePreview, FileItem, fileIcon, fileActionLabel } from '../../shared/FilePreview.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { notifyPendingReviewsUpdated, usePendingReviewIndicators } from '../../hooks/usePendingReviewIndicators.js';
 
@@ -29,9 +31,9 @@ async function fetchGlobalBans(steamid64) {
 }
 
 const STATUS_MAP = {
-  pending: { label: '待审核', pill: 'pill-warning' },
-  approved: { label: '已通过', pill: 'pill-success' },
-  rejected: { label: '已驳回', pill: 'pill-offline' },
+  pending: { label: '待审核', pill: 'warning' },
+  approved: { label: '已通过', pill: 'success' },
+  rejected: { label: '已驳回', pill: 'offline' },
 };
 const STATUS_FILTERS = [
   { value: undefined, label: '全部状态' },
@@ -39,76 +41,6 @@ const STATUS_FILTERS = [
   { value: 'approved', label: '已通过' },
   { value: 'rejected', label: '已驳回' },
 ];
-
-function fileIcon(category) {
-  if (category === 'video') return '🎬';
-  if (category === 'image') return '🖼';
-  if (category === 'audio') return '🎵';
-  return '📎';
-}
-
-function fileActionLabel(category) {
-  if (category === 'image') return '打开原图';
-  return '下载原文件';
-}
-
-function renderFilePreview(file) {
-  if (!file.url) return null;
-
-  if (file.category === 'video') {
-    return (
-      <video
-        src={file.url}
-        controls
-        preload="metadata"
-        style={{
-          width: '100%',
-          maxHeight: 360,
-          marginTop: 10,
-          borderRadius: 8,
-          background: '#000',
-        }}
-      >
-        当前浏览器不支持播放该视频，请下载原文件查看。
-      </video>
-    );
-  }
-
-  if (file.category === 'audio') {
-    return (
-      <audio
-        src={file.url}
-        controls
-        preload="metadata"
-        style={{ width: '100%', marginTop: 10 }}
-      >
-        当前浏览器不支持播放该音频，请下载原文件查看。
-      </audio>
-    );
-  }
-
-  if (file.category === 'image') {
-    return (
-      <a href={file.url} target="_blank" rel="noopener noreferrer" style={{ display: 'block', marginTop: 10 }}>
-        <img
-          src={file.url}
-          alt={file.file_name}
-          loading="lazy"
-          style={{
-            display: 'block',
-            width: '100%',
-            maxHeight: 360,
-            objectFit: 'contain',
-            borderRadius: 8,
-            background: 'var(--surface1)',
-          }}
-        />
-      </a>
-    );
-  }
-
-  return null;
-}
 
 export function BanAppealPage() {
   const { session } = useAuth();
@@ -176,7 +108,6 @@ export function BanAppealPage() {
     setGlobalBans(bans);
     setGlobalBansLoading(false);
 
-    // 加载申诉文件
     try {
       const filesData = await api.listAdminAppealFiles(token, item.id);
       setAppealFiles(filesData.files ?? []);
@@ -261,49 +192,50 @@ export function BanAppealPage() {
         value={search}
         onChange={(v) => { setSearch(v); setPage(1); }}
         placeholder="搜索 SteamID / 玩家名称..."
+        aria-label="搜索封禁申诉"
       />
 
       <div className="card">
-        <div className="card-body" style={{ padding: 0 }}>
+        <div className="card-body p-0">
           <div className="table-responsive">
-            <table className="data-table">
+            <table className="data-table" role="table" aria-label="封禁申诉列表">
               <thead>
                 <tr>
-                  <th>玩家名称</th>
-                  <th>SteamID64</th>
-                  <th>申诉理由</th>
-                  <th>封禁原因</th>
-                  <th>状态</th>
-                  <th>申诉时间</th>
-                  <th>审核人</th>
-                  <th>审核时间</th>
-                  <th style={{ textAlign: 'right' }}>操作</th>
+                  <th scope="col">玩家名称</th>
+                  <th scope="col">SteamID64</th>
+                  <th scope="col">申诉理由</th>
+                  <th scope="col">封禁原因</th>
+                  <th scope="col">状态</th>
+                  <th scope="col">申诉时间</th>
+                  <th scope="col">审核人</th>
+                  <th scope="col">审核时间</th>
+                  <th scope="col" className="text-right">操作</th>
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan={9} style={{ textAlign: 'center', color: 'var(--text2)' }}>正在加载申诉数据...</td></tr>
+                  <tr><td colSpan={9} className="text-center text-muted">正在加载申诉数据...</td></tr>
                 ) : null}
                 {!loading && loadError ? (
-                  <tr><td colSpan={9} style={{ textAlign: 'center', color: 'var(--danger)' }}>{loadError}</td></tr>
+                  <tr><td colSpan={9} className="text-center text-danger">{loadError}</td></tr>
                 ) : null}
                 {!loading && items.map((item) => {
                   const st = STATUS_MAP[item.status] || { label: item.status, pill: '' };
                   return (
                     <tr key={item.id}>
-                      <td style={{ fontWeight: 600 }}>{item.player_name}</td>
+                      <td className="fw-600">{item.player_name}</td>
                       <td className="steam-id">{item.steam_id}</td>
-                      <td style={{ color: 'var(--text2)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <td className="text-muted text-ellipsis" style={{ maxWidth: 200 }}>
                         <span title={item.appeal_reason}>{item.appeal_reason}</span>
                       </td>
-                      <td style={{ color: 'var(--text2)', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <td className="text-muted text-ellipsis" style={{ maxWidth: 160 }}>
                         <span title={item.ban_reason}>{item.ban_reason || '-'}</span>
                       </td>
-                      <td><span className={`status-pill ${st.pill}`}>{st.label}</span></td>
-                      <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(item.created_at, { seconds: false })}</td>
+                      <td><StatusPill kind={st.pill}>{st.label}</StatusPill></td>
+                      <td className="text-muted-light">{formatChinaDateTime(item.created_at, { seconds: false })}</td>
                       <td>{item.reviewed_by || '-'}</td>
-                      <td style={{ color: 'var(--text3)' }}>{item.reviewed_at ? formatChinaDateTime(item.reviewed_at, { seconds: false }) : '-'}</td>
-                      <td style={{ textAlign: 'right' }}>
+                      <td className="text-muted-light">{item.reviewed_at ? formatChinaDateTime(item.reviewed_at, { seconds: false }) : '-'}</td>
+                      <td className="text-right">
                         <div className="action-btn-group">
                           <button className="action-btn action-btn-accent" onClick={() => openDetail(item)}>详情</button>
                           {canReview && item.status === 'pending' ? (
@@ -318,7 +250,7 @@ export function BanAppealPage() {
                   );
                 })}
                 {!loading && items.length === 0 ? (
-                  <tr><td colSpan={9} style={{ textAlign: 'center', color: 'var(--text2)' }}>暂无申诉记录</td></tr>
+                  <tr><td colSpan={9} className="text-center text-muted">暂无申诉记录</td></tr>
                 ) : null}
               </tbody>
             </table>
@@ -336,57 +268,53 @@ export function BanAppealPage() {
         footer={<button className="btn btn-outline" onClick={() => { setDetailOpen(false); setDetailItem(null); setGlobalBans([]); }}>关闭</button>}
       >
         {detailItem ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div className="form-group">
-              <label style={{ marginBottom: 4 }}>玩家信息</label>
-              <div style={{ color: 'var(--text2)', fontSize: 13 }}>
+          <div className="flex-col gap-12">
+            <div className="detail-field">
+              <div className="detail-field-label">玩家信息</div>
+              <div className="detail-field-value">
                 <div>名称：{detailItem.player_name}</div>
                 <div>SteamID64：{detailItem.steam_id}</div>
               </div>
             </div>
-            <div className="form-group">
-              <label style={{ marginBottom: 4 }}>封禁信息</label>
-              <div style={{ color: 'var(--text2)', fontSize: 13 }}>
+            <div className="detail-field">
+              <div className="detail-field-label">封禁信息</div>
+              <div className="detail-field-value">
                 <div>封禁原因：{detailItem.ban_reason || '-'}</div>
                 <div>封禁类型：{detailItem.ban_type === 'steam' ? 'Steam 封禁' : detailItem.ban_type === 'ip' ? 'IP 封禁' : detailItem.ban_type || '-'}</div>
                 <div>操作人：{detailItem.ban_operator_name || '-'}</div>
                 <div>服务器：{detailItem.ban_server_name || '-'}</div>
               </div>
             </div>
-            <div className="form-group">
-              <label style={{ marginBottom: 4 }}>申诉理由</label>
-              <div style={{ color: 'var(--text2)', fontSize: 13, whiteSpace: 'pre-wrap', background: 'var(--surface2)', padding: 8, borderRadius: 6 }}>
-                {detailItem.appeal_reason}
-              </div>
+            <div className="detail-field">
+              <div className="detail-field-label">申诉理由</div>
+              <div className="detail-field-value-block">{detailItem.appeal_reason}</div>
             </div>
-            <div className="form-group">
-              <label style={{ marginBottom: 4 }}>处理状态</label>
+            <div className="detail-field">
+              <div className="detail-field-label">处理状态</div>
               <div>
-                <span className={`status-pill ${STATUS_MAP[detailItem.status]?.pill || ''}`}>
+                <StatusPill kind={STATUS_MAP[detailItem.status]?.pill || ''}>
                   {STATUS_MAP[detailItem.status]?.label || detailItem.status}
-                </span>
+                </StatusPill>
               </div>
               {detailItem.reviewed_by ? (
-                <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
+                <div className="text-muted-light fs-12 mt-4">
                   由 {detailItem.reviewed_by} 于 {formatChinaDateTime(detailItem.reviewed_at, { seconds: false })} 处理
                 </div>
               ) : null}
               {detailItem.review_note ? (
-                <div style={{ color: 'var(--text2)', fontSize: 13, marginTop: 4, whiteSpace: 'pre-wrap', background: 'var(--surface2)', padding: 8, borderRadius: 6 }}>
-                  审核备注：{detailItem.review_note}
-                </div>
+                <div className="review-note">审核备注：{detailItem.review_note}</div>
               ) : null}
             </div>
 
             {/* 全球封禁记录 */}
-            <div className="form-group">
-              <label style={{ marginBottom: 4 }}>全球封禁记录</label>
+            <div className="detail-field">
+              <div className="detail-field-label">全球封禁记录</div>
               {globalBansLoading ? (
-                <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>正在查询全球封禁记录...</div>
+                <div className="text-muted-light fs-13 p-8">正在查询全球封禁记录...</div>
               ) : globalBans.length > 0 ? (
-                <div className="global-ban-detail" style={{ marginTop: 4 }}>
+                <div className="global-ban-detail mt-4">
                   <div className="global-ban-alert">
-                    <div className="global-ban-alert-icon">⚠</div>
+                    <div className="global-ban-alert-icon" aria-hidden="true">⚠</div>
                     <div className="global-ban-alert-text">
                       该玩家在全球 KZ 封禁库中有 <strong>{globalBans.length}</strong> 条封禁记录，请谨慎审核！
                     </div>
@@ -445,62 +373,37 @@ export function BanAppealPage() {
                   </div>
                 </div>
               ) : (
-                <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>未查询到全球封禁记录。</div>
+                <div className="text-muted-light fs-13 p-8">未查询到全球封禁记录。</div>
               )}
             </div>
 
             {/* 申诉辅助文件 */}
-            <div className="form-group">
-              <label style={{ marginBottom: 4 }}>辅助文件</label>
+            <div className="detail-field">
+              <div className="detail-field-label">辅助文件</div>
               {appealFilesLoading ? (
-                <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>正在加载文件列表...</div>
+                <div className="text-muted-light fs-13 p-8">正在加载文件列表...</div>
               ) : appealFiles.length > 0 ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div className="flex-col gap-10">
                   {appealFiles.map((file) => (
-                    <div
-                      key={file.id}
-                      style={{
-                        padding: '10px 14px',
-                        background: 'var(--surface2)',
-                        borderRadius: 10,
-                        fontSize: 13,
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
-                          <span style={{ fontSize: 18, flexShrink: 0 }}>
-                            {fileIcon(file.category)}
-                          </span>
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {file.file_name}
-                            </div>
-                            <div style={{ fontSize: 11, color: 'var(--text3)' }}>
-                              {(file.file_size / 1024 / 1024).toFixed(1)} MB
-                              {file.content_type ? ` · ${file.content_type}` : ''}
-                            </div>
-                          </div>
-                        </div>
-                        {file.url ? (
-                          <a
-                            href={file.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="action-btn"
-                            style={{ flexShrink: 0, textDecoration: 'none' }}
-                          >
-                            {fileActionLabel(file.category)}
-                          </a>
-                        ) : (
-                          <span style={{ fontSize: 11, color: 'var(--text3)', flexShrink: 0 }}>不可用</span>
-                        )}
-                      </div>
-                      {renderFilePreview(file)}
-                    </div>
+                    <FileItem key={file.id} file={file}>
+                      {file.url ? (
+                        <a
+                          href={file.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="action-btn flex-shrink-0"
+                          aria-label={`${fileActionLabel(file.category)} ${file.file_name}`}
+                        >
+                          {fileActionLabel(file.category)}
+                        </a>
+                      ) : (
+                        <span className="text-muted-light fs-11 flex-shrink-0">不可用</span>
+                      )}
+                    </FileItem>
                   ))}
                 </div>
               ) : (
-                <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>该申诉未上传辅助文件。</div>
+                <div className="text-muted-light fs-13 p-8">该申诉未上传辅助文件。</div>
               )}
             </div>
           </div>
@@ -526,20 +429,21 @@ export function BanAppealPage() {
         }
       >
         {reviewItem ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ color: 'var(--text2)', fontSize: 13 }}>
+          <div className="flex-col gap-12">
+            <div className="text-muted fs-13">
               <div><strong>玩家：</strong>{reviewItem.player_name}（{reviewItem.steam_id}）</div>
               <div><strong>封禁原因：</strong>{reviewItem.ban_reason || '-'}</div>
               <div><strong>申诉理由：</strong>{reviewItem.appeal_reason}</div>
             </div>
             {reviewMode === 'approve' && (
-              <div style={{ color: 'var(--warning-text)', fontSize: 13, background: 'var(--warning-bg)', padding: 8, borderRadius: 6 }}>
+              <div className="bg-warning text-warning fs-13 rounded-md" style={{ padding: 8 }}>
                 通过申诉后将自动解除该玩家的封禁记录。
               </div>
             )}
             <div className="form-group">
-              <label>审核备注</label>
+              <label htmlFor="review-note">审核备注</label>
               <textarea
+                id="review-note"
                 className="form-control"
                 value={reviewNote}
                 onChange={(e) => setReviewNote(e.target.value)}

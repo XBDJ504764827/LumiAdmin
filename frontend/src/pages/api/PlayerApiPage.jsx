@@ -238,7 +238,7 @@ export function PlayerApiPage() {
             <div className="card-sub">当前通过插件上报的实时在线玩家信息</div>
           </div>
         </div>
-        <div className="card-body" style={{ padding: 0 }}>
+        <div className="card-body" className="p-0">
           {playersState.error ? (
             <div style={{ padding: 20, textAlign: 'center', color: 'var(--accent)' }}>{playersState.error.message}</div>
           ) : (
@@ -261,10 +261,10 @@ export function PlayerApiPage() {
                   ) : (
                     rows.map((row, idx) => (
                       <tr key={`${row.serverName}-${row.steamId}-${idx}`}>
-                        <td style={{ fontWeight: 600 }}>{row.player}</td>
+                        <td className="fw-600">{row.player}</td>
                         <td className="steam-id">{row.steamId}</td>
                         <td className="steam-id">{row.ipAddress}</td>
-                        <td style={{ color: 'var(--text2)' }}>{row.serverName}</td>
+                        <td className="text-muted">{row.serverName}</td>
                         <td><span className="status-pill pill-online">{row.syncedText}</span></td>
                       </tr>
                     ))
@@ -278,7 +278,7 @@ export function PlayerApiPage() {
 
       {/* 分发配置 */}
       {canConfigure && (
-        <div className="card" style={{ marginTop: 16 }}>
+        <div className="card" className="mt-16">
           <div className="card-header">
             <div>
               <div className="card-title">API 端点配置</div>
@@ -357,7 +357,7 @@ export function PlayerApiPage() {
                             <span>服务器：{selectedServerNames}</span>
                           </div>
                         </div>
-                        <div className="action-btn-group" style={{ flexShrink: 0 }}>
+                        <div className="action-btn-group" className="flex-shrink-0">
                           <button className="action-btn action-btn-accent" onClick={() => openEditWebhook(index)}>编辑</button>
                           <button className="action-btn action-btn-danger" onClick={() => removeWebhook(index)}>移除</button>
                         </div>
@@ -396,12 +396,12 @@ export function PlayerApiPage() {
               }}>
                 配置完成后，通过 <strong>{window.location.origin}/webhook/后缀</strong> 即可获取在线玩家数据。
                 {draftWebhook.publicPath.trim() && (
-                  <div style={{ marginTop: 4 }}>当前地址：<strong>{window.location.origin}/webhook/{draftWebhook.publicPath.trim()}</strong></div>
+                  <div className="mt-4">当前地址：<strong>{window.location.origin}/webhook/{draftWebhook.publicPath.trim()}</strong></div>
                 )}
               </div>
 
               <div className="form-group">
-                <label>自定义访问后缀 <span style={{ color: 'var(--accent)' }}>*</span></label>
+                <label>自定义访问后缀 <span className="text-accent">*</span></label>
                 <input
                   type="text" className="form-control"
                   value={draftWebhook.publicPath}
@@ -527,7 +527,7 @@ export function PlayerApiPage() {
                         }}
                       >
                         <span style={{ color: 'var(--text3)', cursor: 'grab', fontSize: 14, userSelect: 'none' }}>&#9776;</span>
-                        <span style={{ fontWeight: 500 }}>{server.name}</span>
+                        <span className="fw-500">{server.name}</span>
                         <span style={{
                           fontSize: 11, color: 'var(--text3)', background: 'var(--surface2)',
                           padding: '1px 6px', borderRadius: 3,

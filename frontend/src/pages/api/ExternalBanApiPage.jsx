@@ -173,7 +173,7 @@ export function ExternalBanApiPage() {
       </div>
 
       <div className="card">
-        <div className="card-body" style={{ padding: 0 }}>
+        <div className="card-body" className="p-0">
           <div className="table-responsive">
             <table className="data-table">
               <thead>
@@ -183,7 +183,7 @@ export function ExternalBanApiPage() {
                   <th>封禁类型</th>
                   <th>自动同步</th>
                   <th>Token</th>
-                  <th style={{ textAlign: 'right' }}>操作</th>
+                  <th className="text-right">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -195,14 +195,14 @@ export function ExternalBanApiPage() {
                 {targets.map((target) => (
                   <tr key={target.id}>
                     <td>
-                      <div style={{ fontWeight: 600 }}>{target.name}</div>
+                      <div className="fw-600">{target.name}</div>
                       {!target.enabled ? <div style={{ color: 'var(--text3)', fontSize: 12 }}>已禁用</div> : null}
                     </td>
                     <td className="steam-id">{target.base_url}</td>
                     <td>{banTypeOptions.find((item) => item.value === target.default_ban_type)?.label ?? target.default_ban_type}</td>
-                    <td>{target.auto_sync ? <span className="status-pill pill-online">开启</span> : <span style={{ color: 'var(--text3)' }}>关闭</span>}</td>
+                    <td>{target.auto_sync ? <span className="status-pill pill-online">开启</span> : <span className="text-muted-light">关闭</span>}</td>
                     <td>{target.has_token ? <span className="status-pill pill-online">已保存</span> : <span style={{ color: 'var(--danger)' }}>未配置</span>}</td>
-                    <td style={{ textAlign: 'right' }}>
+                    <td className="text-right">
                       <div className="action-btn-group">
                         <button className="action-btn" onClick={() => handleTest(target)} disabled={testingId === target.id}>
                           {testingId === target.id ? '测试中' : '测试'}

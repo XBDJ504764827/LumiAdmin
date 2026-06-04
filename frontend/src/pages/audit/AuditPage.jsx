@@ -86,7 +86,7 @@ export function AuditPage() {
             <div className="card-sub">全量审计日志</div>
           </div>
         </div>
-        <div className="card-body" style={{ padding: 0 }}>
+        <div className="card-body" className="p-0">
           {/* 过滤栏 */}
           <div className="filter-bar">
             <SearchBar
@@ -127,7 +127,7 @@ export function AuditPage() {
             </select>
           </div>
 
-          {loading ? <div style={{ padding: 20 }}>正在加载审计日志...</div> : null}
+          {loading ? <div className="p-20">正在加载审计日志...</div> : null}
           {!loading && error ? <div style={{ padding: 20, color: 'var(--accent)' }}>{error}</div> : null}
           {!loading && !error ? (
             <div className="table-responsive">
@@ -158,24 +158,24 @@ export function AuditPage() {
                       </td>
                       <td>
                         <div>
-                          <code style={{ fontSize: 12 }}>{item.target}</code>
+                          <code className="fs-12">{item.target}</code>
                           {item.player_name ? <div style={{ fontSize: 12, color: 'var(--text3)' }}>{item.player_name}</div> : null}
                         </div>
                       </td>
                       <td>
                         <div>
-                          <span style={{ fontWeight: 500 }}>{item.operator_name}</span>
+                          <span className="fw-500">{item.operator_name}</span>
                           {item.operator_steamid ? <div style={{ fontSize: 11, color: 'var(--text3)' }}>{item.operator_steamid}</div> : null}
                         </div>
                       </td>
                       <td>
                         <span className="status-pill pill-default">{SOURCE_LABELS[item.source] || item.source}</span>
                       </td>
-                      <td style={{ fontSize: 13 }}>
+                      <td className="fs-13">
                         {item.server_name ? (
                           <div>
                             <span>{item.server_name}</span>
-                            {item.server_port ? <span style={{ color: 'var(--text3)' }}>:{item.server_port}</span> : null}
+                            {item.server_port ? <span className="text-muted-light">:{item.server_port}</span> : null}
                           </div>
                         ) : '-'}
                       </td>
@@ -192,7 +192,7 @@ export function AuditPage() {
                           <div><strong>时长:</strong> {item.duration_minutes === 0 ? '永久' : `${item.duration_minutes}分钟`}</div>
                         ) : null}
                         {item.message ? (
-                          <div style={{ marginTop: 4 }}>{item.message}</div>
+                          <div className="mt-4">{item.message}</div>
                         ) : null}
                       </td>
                     </tr>

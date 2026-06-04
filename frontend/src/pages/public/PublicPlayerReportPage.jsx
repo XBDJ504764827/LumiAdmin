@@ -192,7 +192,7 @@ export function PublicPlayerReportPage() {
         <div className="public-card">
           <div className="public-card-body">
             <div className="form-group">
-              <label>被举报玩家 Steam 标识符 <span style={{ color: 'var(--accent)' }}>*</span></label>
+              <label>被举报玩家 Steam 标识符 <span className="text-accent">*</span></label>
               <input className="form-control" value={steamInput} onChange={(event) => setSteamInput(event.target.value)} onBlur={handleResolve} disabled={busy} placeholder="SteamID64 / SteamID / 个人主页链接" />
             </div>
             <div className="form-group">
@@ -204,7 +204,7 @@ export function PublicPlayerReportPage() {
               <input className="form-control" value={contact} onChange={(event) => setContact(event.target.value)} disabled={busy} placeholder="可选，便于管理员补充核实" />
             </div>
             <div className="form-group">
-              <label>举报理由 <span style={{ color: 'var(--accent)' }}>*</span></label>
+              <label>举报理由 <span className="text-accent">*</span></label>
               <textarea className="form-control" value={reason} onChange={(event) => setReason(event.target.value)} rows={5} disabled={busy} placeholder="请说明违规行为、发生时间、服务器、地图等信息" />
             </div>
 
@@ -220,15 +220,15 @@ export function PublicPlayerReportPage() {
               </div>
 
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
-                <button type="button" className="btn btn-outline btn-sm" onClick={() => videoRef.current?.click()} disabled={busy} style={{ fontSize: 12 }}>
+                <button type="button" className="btn btn-outline btn-sm" onClick={() => videoRef.current?.click()} disabled={busy} className="fs-12">
                   🎬 选择录像
                 </button>
                 <input ref={videoRef} type="file" accept={ALLOWED_VIDEO} multiple style={{ display: 'none' }} onChange={(event) => handleFileSelect(event.target.files, videoRef)} />
-                <button type="button" className="btn btn-outline btn-sm" onClick={() => imageRef.current?.click()} disabled={busy} style={{ fontSize: 12 }}>
+                <button type="button" className="btn btn-outline btn-sm" onClick={() => imageRef.current?.click()} disabled={busy} className="fs-12">
                   🖼 选择图片
                 </button>
                 <input ref={imageRef} type="file" accept={ALLOWED_IMAGE} multiple style={{ display: 'none' }} onChange={(event) => handleFileSelect(event.target.files, imageRef)} />
-                <button type="button" className="btn btn-outline btn-sm" onClick={() => audioRef.current?.click()} disabled={busy} style={{ fontSize: 12 }}>
+                <button type="button" className="btn btn-outline btn-sm" onClick={() => audioRef.current?.click()} disabled={busy} className="fs-12">
                   🎵 选择录音
                 </button>
                 <input ref={audioRef} type="file" accept={ALLOWED_AUDIO} multiple style={{ display: 'none' }} onChange={(event) => handleFileSelect(event.target.files, audioRef)} />
@@ -237,7 +237,7 @@ export function PublicPlayerReportPage() {
               {files.length > 0 ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {phase === 'uploading' ? (
-                    <div style={{ marginBottom: 4 }}>
+                    <div className="mb-4">
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4, color: 'var(--text2)' }}>
                         <span>正在上传文件...</span>
                         <span style={{ fontWeight: 600, color: 'var(--accent)' }}>{progress}%</span>

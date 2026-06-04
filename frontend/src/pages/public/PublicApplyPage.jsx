@@ -115,7 +115,7 @@ export function PublicApplyPage() {
         <div className="public-card">
           <div className="public-card-body">
             <div className="form-group">
-              <label>Steam 标识符 <span style={{ color: 'var(--accent)' }}>*</span></label>
+              <label>Steam 标识符 <span className="text-accent">*</span></label>
               <input
                 type="text"
                 className="form-control"
@@ -131,7 +131,7 @@ export function PublicApplyPage() {
               </div>
             </div>
             <div className="form-group">
-              <label>游戏昵称 <span style={{ color: 'var(--accent)' }}>*</span></label>
+              <label>游戏昵称 <span className="text-accent">*</span></label>
               <input
                 type="text"
                 className="form-control"

@@ -150,7 +150,7 @@ export function ExternalServerPage() {
       </div>
 
       <div className="card">
-        <div className="card-body" style={{ padding: 0 }}>
+        <div className="card-body" className="p-0">
           <div className="table-responsive">
             <table className="data-table">
               <thead>
@@ -174,14 +174,14 @@ export function ExternalServerPage() {
                 {servers.map((server) => (
                   <React.Fragment key={server.id}>
                     <tr>
-                      <td style={{ fontWeight: 600 }}>{server.name}{!server.enabled && <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--text3)' }}>已禁用</span>}</td>
+                      <td className="fw-600">{server.name}{!server.enabled && <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--text3)' }}>已禁用</span>}</td>
                       <td className="steam-id">{server.ip}:{server.port}</td>
                       <td>
                         {server.statusQueriedAt
                           ? <span className="status-pill pill-online">已查询</span>
-                          : <span style={{ color: 'var(--text3)' }}>未查询</span>}
+                          : <span className="text-muted-light">未查询</span>}
                       </td>
-                      <td style={{ color: 'var(--text2)' }}>{server.currentMap || '-'}</td>
+                      <td className="text-muted">{server.currentMap || '-'}</td>
                       <td>
                         <span
                           style={{ cursor: server.playerCount > 0 ? 'pointer' : 'default' }}
@@ -209,7 +209,7 @@ export function ExternalServerPage() {
                     </tr>
                     {expandedPlayers === server.id && server.players.length > 0 && (
                       <tr>
-                        <td colSpan={8} style={{ padding: 0 }}>
+                        <td colSpan={8} className="p-0">
                           <div style={{
                             display: 'flex',
                             flexWrap: 'wrap',
@@ -251,17 +251,17 @@ export function ExternalServerPage() {
             </div>
             <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <div className="form-group">
-                <label>名称 <span style={{ color: 'var(--accent)' }}>*</span></label>
+                <label>名称 <span className="text-accent">*</span></label>
                 <input type="text" className="form-control" value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} placeholder="服务器显示名称" />
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 12 }}>
                 <div className="form-group">
-                  <label>IP 地址 <span style={{ color: 'var(--accent)' }}>*</span></label>
+                  <label>IP 地址 <span className="text-accent">*</span></label>
                   <input type="text" className="form-control" value={form.ip} onChange={(e) => setForm((p) => ({ ...p, ip: e.target.value }))} placeholder="192.168.1.100" />
                 </div>
                 <div className="form-group">
-                  <label>端口 <span style={{ color: 'var(--accent)' }}>*</span></label>
+                  <label>端口 <span className="text-accent">*</span></label>
                   <input type="number" className="form-control" value={form.port} onChange={(e) => setForm((p) => ({ ...p, port: e.target.value }))} />
                 </div>
               </div>

@@ -274,21 +274,21 @@ export function UsersPage() {
       />
 
       <div className="card">
-        <div className="card-body" style={{ padding: 0 }}>
+        <div className="card-body" className="p-0">
           <div className="table-responsive">
             <table className="data-table">
               <thead>
-                <tr><th>用户名</th><th>权限</th><th>状态</th><th>备注</th><th>steamid</th><th>创建时间</th><th style={{ textAlign: 'right' }}>操作</th></tr>
+                <tr><th>用户名</th><th>权限</th><th>状态</th><th>备注</th><th>steamid</th><th>创建时间</th><th className="text-right">操作</th></tr>
               </thead>
               <tbody>
                 {isLoading ? (
-                  <tr><td colSpan={7} style={{ color: 'var(--text2)' }}>正在加载用户列表...</td></tr>
+                  <tr><td colSpan={7} className="text-muted">正在加载用户列表...</td></tr>
                 ) : null}
                 {!isLoading && error ? (
-                  <tr><td colSpan={7} style={{ color: 'var(--accent)' }}>{error.message}</td></tr>
+                  <tr><td colSpan={7} className="text-accent">{error.message}</td></tr>
                 ) : null}
                 {!isLoading && !error && items.length === 0 ? (
-                  <tr><td colSpan={7} style={{ color: 'var(--text2)' }}>暂无管理员账号。</td></tr>
+                  <tr><td colSpan={7} className="text-muted">暂无管理员账号。</td></tr>
                 ) : null}
                 {!isLoading && !error && items.map((item) => (
                   <tr key={item.id}>
@@ -300,10 +300,10 @@ export function UsersPage() {
                     </td>
                     <td><span className={`role-badge ${roleClass(item.role)}`}>{getRoleLabel(item.role)}</span></td>
                     <td><span className={`status-pill ${item.enabled ? 'pill-online' : 'pill-offline'}`}>{item.enabled ? '已启用' : '已禁用'}</span></td>
-                    <td style={{ color: 'var(--text3)' }}>{item.remark ?? '-'}</td>
+                    <td className="text-muted-light">{item.remark ?? '-'}</td>
                     <td className="steam-id">{item.steam_id ?? '-'}</td>
-                    <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(item.created_at)}</td>
-                    <td style={{ textAlign: 'right' }}>
+                    <td className="text-muted-light">{formatChinaDateTime(item.created_at)}</td>
+                    <td className="text-right">
                       <div className="action-btn-group">
                         {canToggleEnabled(item) ? <button className={`action-btn ${item.enabled ? 'action-btn-danger' : 'action-btn-success'}`} onClick={() => handleToggleEnabled(item)}>{item.enabled ? '禁用' : '启用'}</button> : null}
                         {canRevokeSessions(item) ? <button className="action-btn" onClick={() => handleRevokeSessions(item)}>强制登出</button> : null}

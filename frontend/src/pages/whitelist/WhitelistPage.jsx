@@ -30,7 +30,7 @@ function renderNicknameCell(item, globalBans, openBanDetail) {
   const itemBans = globalBans[item.steamid64];
   const hasGlobalBan = Array.isArray(itemBans) && itemBans.length > 0;
   return (
-    <td style={{ fontWeight: 600 }} data-player-info="true">
+    <td className="fw-600" data-player-info="true">
       <div className="nickname-cell">{item.nickname}</div>
       {hasGlobalBan && (
         <button className="global-ban-btn" onClick={() => openBanDetail(item.steamid64)}>
@@ -45,8 +45,8 @@ function renderNicknameCell(item, globalBans, openBanDetail) {
 
 function renderSteamNameCell(item, canRefreshSteam, refreshing, onRefresh) {
   return (
-    <td style={{ color: item.steam_persona_name ? 'var(--accent2)' : 'var(--text3)' }} data-player-info="true">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+    <td className={item.steam_persona_name ? 'text-accent' : 'text-muted-light'} data-player-info="true">
+      <div className="flex items-center gap-4">
         <span>{item.steam_persona_name ?? '-'}</span>
         {canRefreshSteam ? (
           <button
@@ -389,7 +389,7 @@ export function WhitelistPage() {
           <div className="page-title">白名单审核大厅</div>
           <div className="page-sub">处理玩家申请，或手动添加特定玩家。</div>
         </div>
-        <div style={{ display: 'flex', gap: 10 }}>
+        <div className="flex gap-10">
           {canManualCreate ? <button className="btn btn-accent" onClick={() => setManualModalOpen(true)}>手动添加白名单</button> : null}
           {canRefreshSteam ? <button className="btn btn-outline" onClick={handleRefreshAllSteamNames} disabled={refreshing}>{refreshing ? '刷新中...' : '刷新Steam名称'}</button> : null}
         </div>
@@ -416,21 +416,21 @@ export function WhitelistPage() {
             <div className="card-sub">当前白名单申请记录</div>
           </div>
         </div>
-        <div className="card-body" style={{ padding: 0 }}>
-          {loading ? <div style={{ padding: 20 }}>正在加载白名单数据...</div> : null}
+        <div className="card-body" className="p-0">
+          {loading ? <div className="p-20">正在加载白名单数据...</div> : null}
           {!loading && error ? <div style={{ padding: 20, color: 'var(--accent)' }}>{error}</div> : null}
           {!loading && !error ? (
             <div className="table-responsive">
               <table className="data-table">
                 <thead>
                   {tab === 'pending' ? (
-                    <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>申请时间</th><th style={{ textAlign: 'right' }}>操作</th></tr>
+                    <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>申请时间</th><th className="text-right">操作</th></tr>
                   ) : null}
                   {tab === 'approved' ? (
-                    <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>申请时间</th><th>通过时间</th><th>审核管理员</th><th>通过理由</th><th style={{ textAlign: 'right' }}>操作</th></tr>
+                    <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>申请时间</th><th>通过时间</th><th>审核管理员</th><th>通过理由</th><th className="text-right">操作</th></tr>
                   ) : null}
                   {tab === 'rejected' ? (
-                    <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>拒绝理由</th><th>申请时间</th><th>拒绝时间</th><th>审核管理员</th><th style={{ textAlign: 'right' }}>操作</th></tr>
+                    <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>拒绝理由</th><th>申请时间</th><th>拒绝时间</th><th>审核管理员</th><th className="text-right">操作</th></tr>
                   ) : null}
                 </thead>
                 <tbody>
@@ -444,8 +444,8 @@ export function WhitelistPage() {
                       <td className="steam-id" data-player-info="true">{item.steamid64}</td>
                       <td className="steam-id" data-player-info="true">{item.steamid ?? '-'}</td>
                       <td className="steam-id" data-player-info="true">{item.steamid3 ?? '-'}</td>
-                      <td style={{ color: 'var(--text3)' }} data-player-info="true">{formatChinaDateTime(item.applied_at)}</td>
-                      <td style={{ textAlign: 'right' }}>
+                      <td className="text-muted-light" data-player-info="true">{formatChinaDateTime(item.applied_at)}</td>
+                      <td className="text-right">
                         {canReview ? <div className="action-btn-group">
                           <button className="action-btn action-btn-success" onClick={() => handleApprove(item)} disabled={submitting}>通过</button>
                           <button className="action-btn action-btn-danger" onClick={() => openRejectModal(item)} disabled={submitting}>拒绝</button>
@@ -460,11 +460,11 @@ export function WhitelistPage() {
                       <td className="steam-id">{item.steamid64}</td>
                       <td className="steam-id">{item.steamid ?? '-'}</td>
                       <td className="steam-id">{item.steamid3 ?? '-'}</td>
-                      <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(item.applied_at)}</td>
-                      <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(item.approved_at)}</td>
+                      <td className="text-muted-light">{formatChinaDateTime(item.applied_at)}</td>
+                      <td className="text-muted-light">{formatChinaDateTime(item.approved_at)}</td>
                       <td>{item.approved_by ?? '-'}</td>
                       <td style={{ color: item.approval_reason ? 'var(--accent2)' : 'var(--text3)', maxWidth: 200, wordBreak: 'break-word' }}>{item.approval_reason ?? '-'}</td>
-                      <td style={{ textAlign: 'right' }}>
+                      <td className="text-right">
                         {canRevoke ? <button className="action-btn action-btn-danger" onClick={() => handleRevoke(item)} disabled={submitting}>删除审核</button> : null}
                       </td>
                     </tr>
@@ -477,10 +477,10 @@ export function WhitelistPage() {
                       <td className="steam-id">{item.steamid ?? '-'}</td>
                       <td className="steam-id">{item.steamid3 ?? '-'}</td>
                       <td>{item.rejection_reason ?? '-'}</td>
-                      <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(item.applied_at)}</td>
-                      <td style={{ color: 'var(--text3)' }}>{formatChinaDateTime(item.rejected_at)}</td>
+                      <td className="text-muted-light">{formatChinaDateTime(item.applied_at)}</td>
+                      <td className="text-muted-light">{formatChinaDateTime(item.rejected_at)}</td>
                       <td>{item.rejected_by ?? '-'}</td>
-                      <td style={{ textAlign: 'right' }}>
+                      <td className="text-right">
                         {canReview ? <button className="action-btn action-btn-success" onClick={() => handleRestore(item)} disabled={submitting}>恢复通过</button> : null}
                       </td>
                     </tr>

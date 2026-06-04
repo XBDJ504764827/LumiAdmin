@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { onlinePlayerFields, onlinePlayerKey, buildKickCommand, buildBanCommand } from './onlinePlayers.js';
+
+const componentsSource = readFileSync(resolve(import.meta.dirname, 'CommunityComponents.jsx'), 'utf8');
 
 test('onlinePlayerFields exposes structured player details for styled display', () => {
   const player = {
@@ -33,4 +37,9 @@ test('buildKickCommand escapes double quotes in player name', () => {
 test('buildBanCommand generates correct RCON command', () => {
   assert.equal(buildBanCommand('76561198000000000', 0, '作弊'), 'sm_ban "76561198000000000" 0 "作弊"');
   assert.equal(buildBanCommand('76561198000000000', 60, '恶意行为'), 'sm_ban "76561198000000000" 60 "恶意行为"');
+});
+
+test('OnlinePlayerCard ban toggle keeps base button styling classes', () => {
+  assert.match(componentsSource, /className="btn btn-outline btn-sm text-accent"/);
+  assert.doesNotMatch(componentsSource, /className="btn btn-outline btn-sm"\s+className="text-accent"/);
 });

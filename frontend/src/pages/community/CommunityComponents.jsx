@@ -45,7 +45,7 @@ export function OnlinePlayerCard({ player, canOperate, onKick, onBan }) {
             <button className="btn btn-outline btn-sm" onClick={() => setShowKickForm(!showKickForm)}>
               {showKickForm ? '取消' : '踢出'}
             </button>
-            <button className="btn btn-outline btn-sm" className="text-accent" onClick={() => setShowBanForm(!showBanForm)}>
+            <button className="btn btn-outline btn-sm text-accent" onClick={() => setShowBanForm(!showBanForm)}>
               {showBanForm ? '取消' : '封禁'}
             </button>
           </div>

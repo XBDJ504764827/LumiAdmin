@@ -133,7 +133,7 @@ export function PublicBanPage() {
             <span className="public-stat-label">永久封禁</span>
           </div>
           <div className="public-stat">
-            <span className="public-stat-value" className="text-muted-light">{data.stats?.expired ?? 0}</span>
+            <span className="public-stat-value text-muted-light">{data.stats?.expired ?? 0}</span>
             <span className="public-stat-label">已过期</span>
           </div>
           <div className="public-stat">

@@ -345,7 +345,7 @@ export function PlayerAccessPage() {
             <div className="card-sub">此处仅展示被单独配置了允许/禁止进服规则的玩家，其余白名单玩家默认全服通行。</div>
           </div>
         </div>
-        <div className="card-body" className="p-0">
+        <div className="card-body p-0">
           {loading ? (
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>加载中...</div>
           ) : error ? (
@@ -459,7 +459,7 @@ export function PlayerAccessPage() {
                               onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                             >
                               <span className="fw-500">{player.nickname}</span>
-                              <span className="steam-id" className="fs-11">{player.steamid64}</span>
+                              <span className="steam-id fs-11">{player.steamid64}</span>
                             </div>
                           ))
                         )}

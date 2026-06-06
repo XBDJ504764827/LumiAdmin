@@ -48,6 +48,7 @@ use crate::{
 // ---------------------------------------------------------------------------
 
 type GlobalBansCache = Arc<RwLock<HashMap<String, (serde_json::Value, chrono::DateTime<Utc>)>>>;
+type GokzStatsCache = Arc<RwLock<HashMap<String, (serde_json::Value, chrono::DateTime<Utc>)>>>;
 
 #[derive(Clone)]
 pub struct AppCtx {
@@ -55,6 +56,7 @@ pub struct AppCtx {
     pub db: Database,
     pub access_snapshot: SnapshotStore,
     pub global_bans_cache: GlobalBansCache,
+    pub gokz_stats_cache: GokzStatsCache,
     pub server_config_cache: Arc<ServerConfigCache>,
     pub steam_resolver: SteamResolver,
     pub notification_hub: NotificationHub,
@@ -443,11 +445,20 @@ pub fn router(
             "/api/public/global-bans/batch",
             post(public::get_global_bans_batch),
         )
+        .route(
+            "/api/public/gokz/player-stats/:steamid64",
+            get(public::get_gokz_player_stats),
+        )
+        .route(
+            "/api/public/gokz/player-stats/batch",
+            post(public::get_gokz_player_stats_batch),
+        )
         .with_state(AppCtx {
             config: config.clone(),
             db,
             access_snapshot,
             global_bans_cache: Arc::new(RwLock::new(HashMap::new())),
+            gokz_stats_cache: Arc::new(RwLock::new(HashMap::new())),
             server_config_cache,
             steam_resolver,
             notification_hub: create_notification_hub(),

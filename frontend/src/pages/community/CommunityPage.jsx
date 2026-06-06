@@ -429,7 +429,7 @@ export function CommunityPage() {
           icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>}
           title="访问限制"
         >
-          <div className="form-hint" className="mb-12">
+          <div className="form-hint mb-12">
             设置社区统一的访问限制。所有未开启「自定义设置」的服务器将自动使用此配置。
           </div>
           <div className="toggle-row">
@@ -450,7 +450,7 @@ export function CommunityPage() {
             />
           </div>
           {(communityAccessForm.min_rating !== '0' || communityAccessForm.min_steam_level !== '0') ? (
-            <div className="form-row" className="mt-8">
+            <div className="form-row mt-8">
               <div className="form-group">
                 <label>最低进入 Rating</label>
                 <input type="number" min="0" className="form-control" placeholder="0" value={communityAccessForm.min_rating} onChange={(e) => setCommunityAccessForm((prev) => ({ ...prev, min_rating: e.target.value }))} />
@@ -496,7 +496,7 @@ export function CommunityPage() {
               <label>服务器 IP</label>
               <input type="text" className="form-control" placeholder="例如：192.168.1.100" value={serverForm.ip} onChange={(e) => handleServerFieldChange('ip', e.target.value)} />
             </div>
-            <div className="form-group" className="flex-1">
+            <div className="form-group flex-1">
               <label>端口</label>
               <input type="number" className="form-control" placeholder="27015" value={serverForm.port} onChange={(e) => handleServerFieldChange('port', e.target.value)} />
             </div>
@@ -542,7 +542,7 @@ export function CommunityPage() {
                 <ToggleSwitch checked={serverForm.access_restriction_enabled} onChange={(v) => handleServerFieldChange('access_restriction_enabled', v)} />
               </div>
               {serverForm.access_restriction_enabled ? (
-                <div className="form-row" className="mt-8">
+                <div className="form-row mt-8">
                   <div className="form-group">
                     <label>最低进入 Rating</label>
                     <input type="number" min="0" className="form-control" placeholder="0" value={serverForm.min_rating} onChange={(e) => handleServerFieldChange('min_rating', e.target.value)} />
@@ -633,11 +633,11 @@ export function CommunityPage() {
       ) : null}
 
       {error ? (
-        <div className="card"><div className="card-body" className="text-accent">{error.message}</div></div>
+        <div className="card"><div className="card-body text-accent">{error.message}</div></div>
       ) : null}
 
       {!loading && !error && groups.length === 0 ? (
-        <div className="card"><div className="card-body" className="text-muted">暂无社区组。</div></div>
+        <div className="card"><div className="card-body text-muted">暂无社区组。</div></div>
       ) : null}
 
       {groups.map((group) => (
@@ -662,7 +662,7 @@ export function CommunityPage() {
               </div>
             ) : null}
           </div>
-          <div className="card-body" className="p-0">
+          <div className="card-body p-0">
             <div className="table-responsive">
               <table className="data-table">
                 <thead>

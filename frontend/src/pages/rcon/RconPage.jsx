@@ -162,7 +162,7 @@ export function RconPage() {
               </div>
             </div>
           </div>
-          <div className="card-body" className="p-0">
+          <div className="card-body p-0">
             <div className="table-responsive">
               <table className="data-table">
                 <thead>
@@ -201,7 +201,7 @@ export function RconPage() {
       ))}
 
       {/* 自定义命令 */}
-      <div className="card" className="mt-16">
+      <div className="card mt-16">
         <div className="card-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span className="text-accent">
@@ -227,10 +227,9 @@ export function RconPage() {
               onKeyDown={(e) => { if (e.key === 'Enter' && customCommand.trim()) handleCustomExecute(); }}
             />
             <button
-              className="btn btn-primary"
+              className="btn btn-primary flex-shrink-0"
               disabled={!selectedServerId || !customCommand.trim() || !!executing}
               onClick={handleCustomExecute}
-              className="flex-shrink-0"
             >
               {executing === customCommand.trim() ? '执行中...' : '执行'}
             </button>

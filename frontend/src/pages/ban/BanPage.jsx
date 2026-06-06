@@ -463,7 +463,7 @@ export function BanPage() {
       />
 
       <div className="card">
-        <div className="card-body" className="p-0">
+        <div className="card-body p-0">
           <div className="table-responsive">
             <table className="data-table">
               <thead>
@@ -587,9 +587,9 @@ export function BanPage() {
         <div className="form-group"><label>IP 地址</label><input type="text" className="form-control" value={form.ip_address} onChange={(event) => setForm((prev) => ({ ...prev, ip_address: event.target.value }))} placeholder="留空后等待插件自动获取" /></div>
         <div className="form-group"><label>封禁理由 <span className="text-accent">*</span></label><textarea className="form-control" value={form.reason} onChange={(event) => setForm((prev) => ({ ...prev, reason: event.target.value }))} placeholder="请输入封禁理由" rows={3} /></div>
         {modalMode !== 'edit' ? (
-          <div className="form-section-card" className="mb-16">
+          <div className="form-section-card mb-16">
             <div className="form-section-header"><span>辅助文件（选填）</span></div>
-            <div className="form-hint" className="mb-12">可上传录像、截图或录音作为封禁依据，单个文件最大 100MB。</div>
+            <div className="form-hint mb-12">可上传录像、截图或录音作为封禁依据，单个文件最大 100MB。</div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
               <button type="button" className="btn btn-outline btn-sm" onClick={() => videoRef.current?.click()} disabled={submitting}>选择录像</button>
               <input ref={videoRef} type="file" accept={ALLOWED_VIDEO} multiple style={{ display: 'none' }} onChange={(event) => handleFileSelect(event.target.files, videoRef)} />

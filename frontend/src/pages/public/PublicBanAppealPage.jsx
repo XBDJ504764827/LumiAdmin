@@ -356,7 +356,7 @@ export function PublicBanAppealPage() {
                         />
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                            <span className="status-pill pill-accent" className="fs-11">
+                            <span className="status-pill pill-accent fs-11">
                               {ban.ban_type === 'steam' ? 'Steam 封禁' : 'IP 封禁'}
                             </span>
                             <span style={{ fontSize: 12, color: 'var(--text3)' }}>
@@ -397,7 +397,7 @@ export function PublicBanAppealPage() {
 
             {/* 辅助文件上传 */}
             {bans !== null && bans.length > 0 && (
-              <div className="form-section-card" className="mb-16">
+              <div className="form-section-card mb-16">
                 <div className="form-section-header">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="16" height="16">
                     <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />

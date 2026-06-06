@@ -238,7 +238,7 @@ export function PlayerApiPage() {
             <div className="card-sub">当前通过插件上报的实时在线玩家信息</div>
           </div>
         </div>
-        <div className="card-body" className="p-0">
+        <div className="card-body p-0">
           {playersState.error ? (
             <div style={{ padding: 20, textAlign: 'center', color: 'var(--accent)' }}>{playersState.error.message}</div>
           ) : (
@@ -278,7 +278,7 @@ export function PlayerApiPage() {
 
       {/* 分发配置 */}
       {canConfigure && (
-        <div className="card" className="mt-16">
+        <div className="card mt-16">
           <div className="card-header">
             <div>
               <div className="card-title">API 端点配置</div>
@@ -357,7 +357,7 @@ export function PlayerApiPage() {
                             <span>服务器：{selectedServerNames}</span>
                           </div>
                         </div>
-                        <div className="action-btn-group" className="flex-shrink-0">
+                        <div className="action-btn-group flex-shrink-0">
                           <button className="action-btn action-btn-accent" onClick={() => openEditWebhook(index)}>编辑</button>
                           <button className="action-btn action-btn-danger" onClick={() => removeWebhook(index)}>移除</button>
                         </div>

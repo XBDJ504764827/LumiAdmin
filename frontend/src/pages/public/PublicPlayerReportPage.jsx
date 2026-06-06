@@ -220,15 +220,15 @@ export function PublicPlayerReportPage() {
               </div>
 
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
-                <button type="button" className="btn btn-outline btn-sm" onClick={() => videoRef.current?.click()} disabled={busy} className="fs-12">
+                <button type="button" className="btn btn-outline btn-sm fs-12" onClick={() => videoRef.current?.click()} disabled={busy}>
                   🎬 选择录像
                 </button>
                 <input ref={videoRef} type="file" accept={ALLOWED_VIDEO} multiple style={{ display: 'none' }} onChange={(event) => handleFileSelect(event.target.files, videoRef)} />
-                <button type="button" className="btn btn-outline btn-sm" onClick={() => imageRef.current?.click()} disabled={busy} className="fs-12">
+                <button type="button" className="btn btn-outline btn-sm fs-12" onClick={() => imageRef.current?.click()} disabled={busy}>
                   🖼 选择图片
                 </button>
                 <input ref={imageRef} type="file" accept={ALLOWED_IMAGE} multiple style={{ display: 'none' }} onChange={(event) => handleFileSelect(event.target.files, imageRef)} />
-                <button type="button" className="btn btn-outline btn-sm" onClick={() => audioRef.current?.click()} disabled={busy} className="fs-12">
+                <button type="button" className="btn btn-outline btn-sm fs-12" onClick={() => audioRef.current?.click()} disabled={busy}>
                   🎵 选择录音
                 </button>
                 <input ref={audioRef} type="file" accept={ALLOWED_AUDIO} multiple style={{ display: 'none' }} onChange={(event) => handleFileSelect(event.target.files, audioRef)} />

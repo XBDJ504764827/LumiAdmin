@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Modal } from '../../shared/Modal.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 
@@ -169,7 +169,7 @@ export function ApproveModal({ open, onClose, item, bans, risk, reason, setReaso
         </>
       }
     >
-      <div className="global-ban-alert" className="mb-12">
+      <div className="global-ban-alert mb-12">
         <div className="global-ban-alert-icon">⚠</div>
         <div className="global-ban-alert-text">
           该玩家在全球 KZ 封禁库中有 <strong>{bans.length}</strong> 条封禁记录。请完整查看下方封禁详情，倒计时结束并填写通过理由后才可正式通过。
@@ -238,6 +238,146 @@ export function BanDetailModal({ open, onClose, steamid64, bans }) {
         </div>
         <GlobalBanRecordList bans={bans} />
       </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// gokz.top 数据获取（会话级缓存 + 批量接口）
+// ---------------------------------------------------------------------------
+
+const GOKZ_CACHE = new Map();
+
+const KZ_MODES = [
+  { key: 'KZT', label: 'KZT' },
+  { key: 'SKZ', label: 'SKZ' },
+  { key: 'VNL', label: 'VNL' },
+  { key: 'OVR', label: 'OVR' },
+];
+
+async function fetchPlayerKzStats(steamid64) {
+  if (GOKZ_CACHE.has(steamid64)) return GOKZ_CACHE.get(steamid64);
+
+  const results = {};
+  try {
+    const response = await fetch('/api/public/gokz/player-stats/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ steamid64 }),
+    });
+    if (response.ok) {
+      const data = await response.json();
+      for (const mode of KZ_MODES) {
+        const s = data[mode.key];
+        results[mode.key] = s && s.rating != null ? {
+          rating: s.rating,
+          rank: s.rank ?? null,
+          points: s.points ?? 0,
+          mapFinish: s.unique_map_finishes ?? 0,
+        } : null;
+      }
+    }
+  } catch { /* 批量请求失败，全部置 null */ }
+
+  GOKZ_CACHE.set(steamid64, results);
+  return results;
+}
+
+// ---------------------------------------------------------------------------
+// 玩家详细信息 Modal（白名单待审核）
+// ---------------------------------------------------------------------------
+
+export function PlayerDetailModal({ open, onClose, item }) {
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const loadStats = useCallback(async () => {
+    if (!item?.steamid64) return;
+    // 前端会话缓存命中时直接使用，不显示 loading
+    if (GOKZ_CACHE.has(item.steamid64)) {
+      setStats(GOKZ_CACHE.get(item.steamid64));
+      return;
+    }
+    try {
+      setLoading(true);
+      setError('');
+      const data = await fetchPlayerKzStats(item.steamid64);
+      setStats(data);
+    } catch {
+      setError('加载 KZ 统计数据失败，请稍后重试。');
+    } finally {
+      setLoading(false);
+    }
+  }, [item?.steamid64]);
+
+  useEffect(() => {
+    if (open && item?.steamid64) loadStats();
+    if (!open) setError('');
+  }, [open, item?.steamid64, loadStats]);
+
+  return (
+    <Modal
+      open={open}
+      title="玩家详细信息"
+      onClose={onClose}
+      footer={<button className="btn btn-outline" onClick={onClose}>关闭</button>}
+    >
+      {item ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div className="form-group">
+            <label className="mb-4">玩家信息</label>
+            <div style={{ color: 'var(--text2)', fontSize: 13 }}>
+              <div>游戏昵称：{item.nickname || '-'}</div>
+              <div>Steam 名称：{item.steam_persona_name || '-'}</div>
+              <div>SteamID64：{item.steamid64 || '-'}</div>
+              <div>SteamID2：{item.steamid || '-'}</div>
+              <div>SteamID3：{item.steamid3 || '-'}</div>
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label className="mb-4">申请信息</label>
+            <div style={{ color: 'var(--text2)', fontSize: 13 }}>
+              <div>申请时间：{item.applied_at ? formatChinaDateTime(item.applied_at) : '-'}</div>
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label className="mb-4">GOKZ.TOP 统计</label>
+            {loading ? (
+              <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>正在加载 KZ 统计数据...</div>
+            ) : error ? (
+              <div style={{ color: 'var(--accent)', fontSize: 13, padding: '8px 0' }}>{error}</div>
+            ) : stats ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {KZ_MODES.map((mode) => {
+                  const s = stats[mode.key];
+                  if (!s) return null;
+                  return (
+                    <div
+                      key={mode.key}
+                      style={{
+                        padding: '10px 14px',
+                        background: 'var(--surface2)',
+                        borderRadius: 10,
+                        fontSize: 13,
+                      }}
+                    >
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>{mode.label}</div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 20px', color: 'var(--text2)', fontSize: 12 }}>
+                        <span>Rating：{s.rating !== null ? s.rating.toFixed(2) : '未收录'}</span>
+                        <span>排名：{s.rank !== null ? `#${s.rank}` : '-'}</span>
+                        <span>通过地图：{s.mapFinish} 张</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </Modal>
   );
 }

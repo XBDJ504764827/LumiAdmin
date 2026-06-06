@@ -173,7 +173,7 @@ export function ExternalBanApiPage() {
       </div>
 
       <div className="card">
-        <div className="card-body" className="p-0">
+        <div className="card-body p-0">
           <div className="table-responsive">
             <table className="data-table">
               <thead>

@@ -86,7 +86,7 @@ export function AuditPage() {
             <div className="card-sub">全量审计日志</div>
           </div>
         </div>
-        <div className="card-body" className="p-0">
+        <div className="card-body p-0">
           {/* 过滤栏 */}
           <div className="filter-bar">
             <SearchBar

@@ -8,7 +8,7 @@ import { Pagination } from '../../shared/Pagination.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { notifyPendingReviewsUpdated, usePendingReviewIndicators } from '../../hooks/usePendingReviewIndicators.js';
 import { fetchGlobalBansBatch, parseBanData, inferGlobalBanRisk } from './whitelistGlobalBans.js';
-import { ManualCreateModal, RejectModal, ApproveModal, BanDetailModal } from './WhitelistModals.jsx';
+import { ManualCreateModal, RejectModal, ApproveModal, BanDetailModal, PlayerDetailModal } from './WhitelistModals.jsx';
 
 const emptyManualForm = { nickname: '', steam_input: '' };
 const APPROVE_REVIEW_SECONDS = 5;
@@ -97,6 +97,7 @@ export function WhitelistPage() {
   const [globalBansLoading, setGlobalBansLoading] = useState(false);
   const fetchedSteamIdsRef = useRef(new Set());
   const [banDetailModal, setBanDetailModal] = useState({ open: false, steamid64: '', bans: [] });
+  const [detailModal, setDetailModal] = useState({ open: false, item: null });
   const [refreshing, setRefreshing] = useState(false);
   const [playerContextMenu, setPlayerContextMenu] = useState({
     open: false, x: 0, y: 0, steamid64: '', nickname: '',
@@ -377,6 +378,7 @@ export function WhitelistPage() {
   const closeRejectModal = () => setRejectModal({ open: false, item: null, reason: '', error: '' });
   const closeApproveModal = () => setApproveModal(emptyApproveModal());
   const closeBanDetailModal = () => setBanDetailModal({ open: false, steamid64: '', bans: [] });
+  const closeDetailModal = () => setDetailModal({ open: false, item: null });
   const closeManualModal = () => { setManualModalOpen(false); setManualForm(emptyManualForm); setManualError(''); };
   const setRejectReason = (reason) => setRejectModal((prev) => ({ ...prev, reason, error: '' }));
   const setApproveReason = (reason) => setApproveModal((prev) => ({ ...prev, reason, error: '' }));
@@ -416,7 +418,7 @@ export function WhitelistPage() {
             <div className="card-sub">当前白名单申请记录</div>
           </div>
         </div>
-        <div className="card-body" className="p-0">
+        <div className="card-body p-0">
           {loading ? <div className="p-20">正在加载白名单数据...</div> : null}
           {!loading && error ? <div style={{ padding: 20, color: 'var(--accent)' }}>{error}</div> : null}
           {!loading && !error ? (
@@ -447,6 +449,7 @@ export function WhitelistPage() {
                       <td className="text-muted-light" data-player-info="true">{formatChinaDateTime(item.applied_at)}</td>
                       <td className="text-right">
                         {canReview ? <div className="action-btn-group">
+                          <button className="action-btn action-btn-accent" onClick={() => setDetailModal({ open: true, item })}>详细</button>
                           <button className="action-btn action-btn-success" onClick={() => handleApprove(item)} disabled={submitting}>通过</button>
                           <button className="action-btn action-btn-danger" onClick={() => openRejectModal(item)} disabled={submitting}>拒绝</button>
                         </div> : null}
@@ -548,6 +551,11 @@ export function WhitelistPage() {
         onClose={closeBanDetailModal}
         steamid64={banDetailModal.steamid64}
         bans={banDetailModal.bans}
+      />
+      <PlayerDetailModal
+        open={detailModal.open}
+        onClose={closeDetailModal}
+        item={detailModal.item}
       />
 
       {dialog}

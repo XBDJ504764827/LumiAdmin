@@ -129,7 +129,7 @@ export function NotificationPage() {
             <div className="card-sub">共 {total} 条通知</div>
           </div>
         </div>
-        <div className="card-body" className="p-0">
+        <div className="card-body p-0">
           <div className="filter-bar">
             <select
               className="filter-select"

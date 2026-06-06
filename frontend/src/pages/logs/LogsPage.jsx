@@ -61,7 +61,7 @@ export function LogsPage() {
         placeholder="搜索操作人 / 模块 / 动作..."
       />
 
-      <div className="card"><div className="card-body" className="p-0">
+      <div className="card"><div className="card-body p-0">
         <div className="table-responsive"><table className="data-table"><thead><tr><th>操作人</th><th>模块</th><th>操作动作</th><th>目标详情</th><th>操作IP</th><th>操作时间</th></tr></thead><tbody>
           {loading ? <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text2)' }}>正在加载日志...</td></tr> : null}
           {error ? <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--accent)' }}>{error}</td></tr> : null}

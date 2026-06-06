@@ -204,7 +204,7 @@ export function DashboardPage() {
               <div className="card-sub">当前所有网站管理员</div>
             </div>
           </div>
-          <div className="card-body" className="p-0">
+          <div className="card-body p-0">
             <div className="table-responsive">
               <table className="data-table">
                 <thead>
@@ -261,7 +261,7 @@ export function DashboardPage() {
             <div className="card-sub">最近通过的申请</div>
           </div>
         </div>
-        <div className="card-body" className="p-0">
+        <div className="card-body p-0">
           <div className="table-responsive">
             <table className="data-table">
               <thead>

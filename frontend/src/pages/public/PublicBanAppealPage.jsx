@@ -29,6 +29,12 @@ function fileCategoryIcon(cat) {
   return '📎';
 }
 
+const APPEAL_STATUS_MAP = {
+  pending: { label: '待审核', icon: '⏳', color: 'var(--warning-text, #f59e0b)', bg: 'var(--warning-bg, #fef3c7)' },
+  approved: { label: '已通过（已解封）', icon: '✅', color: 'var(--success-text, #22c55e)', bg: 'var(--success-bg, #dcfce7)' },
+  rejected: { label: '已驳回', icon: '❌', color: 'var(--danger-text, #ef4444)', bg: 'var(--danger-bg, #fee2e2)' },
+};
+
 function getFileCategory(name) {
   const lower = name.toLowerCase();
   if (lower.match(/\.(mp4|avi|mov|webm|mkv)$/)) return 'video';
@@ -103,6 +109,10 @@ export function PublicBanAppealPage() {
   const [selectedBanId, setSelectedBanId] = useState('');
   const [reason, setReason] = useState('');
 
+  // 玩家已有的申诉记录
+  const [existingAppeals, setExistingAppeals] = useState(null);
+  const [loadingAppeals, setLoadingAppeals] = useState(false);
+
   // 流程状态: 'idle' | 'submitting' | 'uploading' | 'done'
   const [phase, setPhase] = useState('idle');
   const [error, setError] = useState('');
@@ -123,6 +133,7 @@ export function PublicBanAppealPage() {
     setBans(null);
     setSelectedBanId('');
     setSteamid64('');
+    setExistingAppeals(null);
   }
 
   async function handleSteamBlur() {
@@ -136,7 +147,9 @@ export function PublicBanAppealPage() {
       else setResolveError('未能自动获取 Steam 名称，请手动填写。');
       setSteamid64(result.steamid64);
 
+      // 并发查询封禁记录和已有申诉
       setLoadingBans(true);
+      setLoadingAppeals(true);
       try {
         const banResult = await api.queryActiveBans({ steam_input: trimmed });
         setBans(banResult.bans ?? []);
@@ -145,9 +158,19 @@ export function PublicBanAppealPage() {
       } finally {
         setLoadingBans(false);
       }
+
+      try {
+        const appealResult = await api.queryAppealStatus({ steam_input: trimmed });
+        setExistingAppeals(appealResult.appeals ?? []);
+      } catch {
+        setExistingAppeals([]);
+      } finally {
+        setLoadingAppeals(false);
+      }
     } catch {
       setResolveError('无法解析 Steam 标识符，请检查输入。');
       setBans(null);
+      setExistingAppeals(null);
     } finally {
       setResolving(false);
     }
@@ -376,6 +399,112 @@ export function PublicBanAppealPage() {
                     ))}
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* 历史申诉记录 */}
+            {steamid64 && !loadingAppeals && existingAppeals !== null && existingAppeals.length > 0 && (
+              <div className="form-section-card mb-16">
+                <div className="form-section-header">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="16" height="16">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                    <line x1="16" y1="13" x2="8" y2="13" />
+                    <line x1="16" y1="17" x2="8" y2="17" />
+                  </svg>
+                  <span>我的申诉记录</span>
+                </div>
+                <div className="form-hint" style={{ marginBottom: 14 }}>
+                  以下是您之前提交的封禁申诉及其审核结果。
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {existingAppeals.map((appeal) => {
+                    const st = APPEAL_STATUS_MAP[appeal.status] || { label: appeal.status, icon: '📋', color: 'var(--text2)', bg: 'var(--surface2)' };
+                    return (
+                      <div
+                        key={appeal.id}
+                        style={{
+                          border: '1px solid var(--border)',
+                          borderRadius: 10,
+                          overflow: 'hidden',
+                          transition: 'border-color 0.2s',
+                        }}
+                      >
+                        {/* 申诉卡片头部 - 状态 */}
+                        <div style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          padding: '10px 14px',
+                          background: st.bg,
+                          borderBottom: '1px solid var(--border)',
+                        }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontSize: 16 }}>{st.icon}</span>
+                            <span style={{ fontWeight: 600, fontSize: 13, color: st.color }}>{st.label}</span>
+                          </div>
+                          <span style={{ fontSize: 11, color: 'var(--text3)' }}>
+                            提交于 {formatChinaDateTime(appeal.created_at, { seconds: false })}
+                          </span>
+                        </div>
+
+                        {/* 申诉卡片内容 */}
+                        <div style={{ padding: '12px 14px' }}>
+                          {/* 封禁信息 */}
+                          <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 8 }}>
+                            <div style={{ marginBottom: 3 }}>
+                              <strong>封禁原因：</strong>{appeal.ban_reason || '-'}
+                            </div>
+                            <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+                              {appeal.ban_type === 'steam' ? 'Steam 封禁' : appeal.ban_type === 'ip' ? 'IP 封禁' : ''}
+                              {appeal.ban_server_name ? ` · ${appeal.ban_server_name}` : ''}
+                            </div>
+                          </div>
+
+                          {/* 玩家的申诉理由 */}
+                          <div style={{
+                            fontSize: 13, color: 'var(--text2)',
+                            padding: '8px 10px', background: 'var(--surface2)', borderRadius: 6,
+                            marginBottom: 8,
+                          }}>
+                            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>我的申诉理由：</div>
+                            {appeal.appeal_reason}
+                          </div>
+
+                          {/* 管理员审核结果 */}
+                          {appeal.status !== 'pending' && (
+                            <div style={{
+                              fontSize: 13,
+                              padding: '8px 10px', borderRadius: 6,
+                              background: appeal.status === 'approved' ? 'var(--success-bg, #dcfce7)' : 'var(--danger-bg, #fee2e2)',
+                              border: `1px solid ${appeal.status === 'approved' ? 'var(--success-text, #22c55e)' : 'var(--danger-text, #ef4444)'}33`,
+                            }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                                <span style={{ fontWeight: 600, color: st.color }}>
+                                  {appeal.status === 'approved' ? '管理员已通过申诉并解封' : '管理员已驳回申诉'}
+                                </span>
+                              </div>
+                              {appeal.reviewed_by && (
+                                <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 2 }}>
+                                  审核人：{appeal.reviewed_by}
+                                  {appeal.reviewed_at ? ` · ${formatChinaDateTime(appeal.reviewed_at, { seconds: false })}` : ''}
+                                </div>
+                              )}
+                              {appeal.review_note && (
+                                <div style={{
+                                  fontSize: 13, color: 'var(--text2)',
+                                  marginTop: 4, paddingTop: 6,
+                                  borderTop: '1px solid var(--border)',
+                                }}>
+                                  <span style={{ fontSize: 11, color: 'var(--text3)' }}>管理员回复：</span>
+                                  {appeal.review_note}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
 

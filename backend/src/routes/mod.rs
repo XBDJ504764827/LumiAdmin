@@ -422,6 +422,10 @@ pub fn router(
             get(public::public_ban_appeals_info).post(public::submit_ban_appeal),
         )
         .route(
+            "/api/public/ban-appeals/query",
+            post(public::query_appeal_status),
+        )
+        .route(
             "/api/public/ban-appeals/submit",
             post(public::submit_ban_appeal),
         )

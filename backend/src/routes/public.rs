@@ -398,6 +398,35 @@ pub(crate) async fn submit_ban_appeal(
     ))
 }
 
+/// 查询玩家的申诉状态（公开接口，玩家通过 SteamID 查询自己的申诉记录和审核结果）
+pub(crate) async fn query_appeal_status(
+    State(ctx): State<AppCtx>,
+    Json(body): Json<QueryBansBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let resolver = &ctx.steam_resolver;
+    let parsed = resolver.resolve(&body.steam_input).await.map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+    })?;
+
+    let appeals = ban_appeal_service::query_appeals_by_steam_id(&ctx.db, &parsed.steamid64)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "查询申诉状态失败");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "查询申诉状态失败"})),
+            )
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "steamid64": parsed.steamid64,
+        "appeals": appeals,
+    })))
+}
+
 async fn fetch_global_bans_json(url: String, timeout: Duration) -> Option<serde_json::Value> {
     use crate::http_client;
 

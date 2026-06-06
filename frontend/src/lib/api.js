@@ -131,6 +131,7 @@ export const api = {
   submitWhitelist: (body) => request('/api/public/whitelist', { method: 'POST', body: JSON.stringify(body) }),
   resolveSteam: (body) => request('/api/public/steam/resolve', { method: 'POST', body: JSON.stringify(body) }),
   queryActiveBans: (body) => request('/api/public/bans/query', { method: 'POST', body: JSON.stringify(body) }),
+  queryAppealStatus: (body) => request('/api/public/ban-appeals/query', { method: 'POST', body: JSON.stringify(body) }),
   submitBanAppeal: (body) => request('/api/public/ban-appeals/submit', { method: 'POST', body: JSON.stringify(body) }),
   uploadAppealFiles: (appealId, formData) => request(`/api/public/ban-appeals/${appealId}/files`, { method: 'POST', headers: {}, body: formData }),
   submitPlayerReport: (body) => request('/api/public/player-reports', { method: 'POST', body: JSON.stringify(body) }),

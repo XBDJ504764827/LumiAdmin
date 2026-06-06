@@ -405,6 +405,69 @@ pub async fn reject_appeal(
     })
 }
 
+/// 按 SteamID 查询玩家的申诉记录（公开接口，供玩家查看申诉状态和管理员回复）
+pub async fn query_appeals_by_steam_id(
+    db: &Database,
+    steam_id: &str,
+) -> anyhow::Result<Vec<BanAppealItem>> {
+    let steam_id = steam_id.trim();
+    anyhow::ensure!(!steam_id.is_empty(), "SteamID 不能为空");
+
+    let rows = sqlx::query_as::<_, AppealWithBanRow>(
+        r#"SELECT ba.id, ba.ban_id, ba.steam_id, ba.player_name, ba.appeal_reason,
+                  ba.status, COALESCE(reviewer_user.display_name, ba.reviewed_by) AS reviewed_by, ba.review_note, ba.reviewed_at, ba.created_at,
+                  br.reason AS ban_reason, br.ban_type, COALESCE(ban_operator_user.display_name, br.operator_name) AS ban_operator_name, br.server_name AS ban_server_name
+           FROM ban_appeals ba
+           LEFT JOIN ban_records br ON ba.ban_id = br.id
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
+             FROM users u
+             WHERE u.username = ba.reviewed_by
+                OR u.display_name = ba.reviewed_by
+                OR NULLIF(u.remark, '') = ba.reviewed_by
+             ORDER BY CASE WHEN u.username = ba.reviewed_by THEN 0 WHEN u.display_name = ba.reviewed_by THEN 1 ELSE 2 END
+             LIMIT 1
+           ) reviewer_user ON true
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
+             FROM users u
+             WHERE u.username = br.operator_name
+                OR u.display_name = br.operator_name
+                OR NULLIF(u.remark, '') = br.operator_name
+             ORDER BY CASE WHEN u.username = br.operator_name THEN 0 WHEN u.display_name = br.operator_name THEN 1 ELSE 2 END
+             LIMIT 1
+           ) ban_operator_user ON true
+           WHERE ba.steam_id = $1
+           ORDER BY ba.created_at DESC"#,
+    )
+    .bind(steam_id)
+    .fetch_all(&db.pool)
+    .await?;
+
+    let items = rows
+        .into_iter()
+        .map(|row| BanAppealItem {
+            id: row.id,
+            ban_id: row.ban_id,
+            steam_id: row.steam_id,
+            player_name: row.player_name,
+            appeal_reason: row.appeal_reason,
+            status: row.status,
+            reviewed_by: row.reviewed_by,
+            review_note: row.review_note,
+            reviewed_at: row.reviewed_at.map(|v| v.to_rfc3339()),
+            created_at: row.created_at.to_rfc3339(),
+            ban_reason: row.ban_reason,
+            ban_type: row.ban_type,
+            ban_operator_name: row.ban_operator_name,
+            ban_server_name: row.ban_server_name,
+            upload_token: None,
+        })
+        .collect();
+
+    Ok(items)
+}
+
 pub fn verify_upload_token(stored_hash: Option<&str>, token: &str) -> bool {
     let Some(stored_hash) = stored_hash else {
         return false;

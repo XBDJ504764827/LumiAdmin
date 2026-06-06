@@ -19,6 +19,7 @@ pub mod offline_sync_service;
 pub mod permission_service;
 pub mod player_access_rule_service;
 pub mod player_api_service;
+pub mod player_detail_service;
 pub mod player_report_service;
 pub mod plugin_ban_service;
 pub mod public_service;

@@ -93,3 +93,7 @@ pub fn can_toggle_user_enabled(actor: &Operator, target: &crate::models::User) -
 pub fn can_view_audit_logs(actor: &Operator) -> bool {
     matches!(actor.role.as_str(), "developer" | "admin" | "normal")
 }
+
+pub fn can_manage_player_internal_data(actor: &Operator) -> bool {
+    matches!(actor.role.as_str(), "developer" | "admin")
+}

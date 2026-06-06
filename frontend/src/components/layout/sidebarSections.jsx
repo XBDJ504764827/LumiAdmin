@@ -12,6 +12,7 @@ const icons = {
   rcon: icon(<><rect x="2" y="2" width="20" height="8" rx="2" /><rect x="2" y="14" width="20" height="8" rx="2" /><circle cx="6" cy="6" r="1" /><circle cx="6" cy="18" r="1" /><path d="M12 6h6M12 18h6" strokeLinecap="round" /></>),
   whitelist: icon(<><path d="M2 12L5 8l3 2 3-5 3 3" /><rect x="1" y="1" width="14" height="14" rx="2" /></>),
   ban: icon(<><circle cx="8" cy="8" r="6" /><path d="M5 5L11 11M11 5L5 11" /></>),
+  playerDetail: icon(<><circle cx="6" cy="4.5" r="2.5" /><path d="M2 13.5c0-3 1.8-5 4-5s4 2 4 5" /><path d="M11 3h4M11 7h4M11 11h4" strokeLinecap="round" /></>),
   banAppeal: icon(<><path d="M8 1.5C5.5 1.5 3.5 3.5 3 6c0 2.5-1 3.5-2.5 5h15C14 9.5 13 8.5 13 6c-.5-2.5-2.5-4.5-5-4.5z" /><path d="M6 12.5c.5 1 1 1.5 2 1.5s1.5-.5 2-1.5" strokeLinecap="round" /><path d="M3 1.5L13 11.5" strokeLinecap="round" /></>),
   playerReport: icon(<><path d="M8 1.5l6 2.5v4.5c0 3.5-2.4 5.5-6 6-3.6-.5-6-2.5-6-6V4l6-2.5z" /><path d="M8 5v4" strokeLinecap="round" /><path d="M8 12h.01" strokeLinecap="round" /></>),
   users: icon(<><circle cx="8" cy="5" r="3" /><path d="M2 14c0-3.314 2.686-5 6-5s6 1.686 6 5" /></>),
@@ -72,6 +73,7 @@ export function sidebarSections(role) {
         { path: '/community', label: '社区组管理', icon: icons.community },
         { path: '/whitelist', label: '白名单管理', icon: icons.whitelist, pendingKey: 'whitelist' },
         { path: '/ban', label: '封禁管理', icon: icons.ban },
+        { path: '/player-detail', label: '玩家详情', icon: icons.playerDetail },
         ...(canReviewReports ? [
           { path: '/ban-appeal', label: '封禁申诉', icon: icons.banAppeal, pendingKey: 'banAppeal' },
           { path: '/player-reports', label: '玩家举报', icon: icons.playerReport, pendingKey: 'playerReport' },

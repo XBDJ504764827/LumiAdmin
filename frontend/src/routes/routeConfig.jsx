@@ -16,6 +16,7 @@ const ExternalBanApiPage = lazy(() => import('../pages/api/ExternalBanApiPage.js
 const ExternalServerPage = lazy(() => import('../pages/external/ExternalServerPage.jsx').then(m => ({ default: m.ExternalServerPage })));
 const MapSyncPage = lazy(() => import('../pages/mapSync/MapSyncPage.jsx').then(m => ({ default: m.MapSyncPage })));
 const PlayerAccessPage = lazy(() => import('../pages/playerAccess/PlayerAccessPage.jsx').then(m => ({ default: m.PlayerAccessPage })));
+const PlayerDetailPage = lazy(() => import('../pages/playerDetail/PlayerDetailPage.jsx').then(m => ({ default: m.PlayerDetailPage })));
 const AuditPage = lazy(() => import('../pages/audit/AuditPage.jsx').then(m => ({ default: m.AuditPage })));
 const NotificationPage = lazy(() => import('../pages/notifications/NotificationPage.jsx').then(m => ({ default: m.NotificationPage })));
 const PublicApplyPage = lazy(() => import('../pages/public/PublicApplyPage.jsx').then(m => ({ default: m.PublicApplyPage })));
@@ -35,6 +36,7 @@ export const protectedRoutes = [
   { path: '/rcon', element: <Lazy><RconPage /></Lazy>, roles: ['admin', 'developer'] },
   { path: '/whitelist', element: <Lazy><WhitelistPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },
   { path: '/ban', element: <Lazy><BanPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },
+  { path: '/player-detail', element: <Lazy><PlayerDetailPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },
   { path: '/ban-appeal', element: <Lazy><BanAppealPage /></Lazy>, roles: ['admin', 'developer'] },
   { path: '/player-reports', element: <Lazy><PlayerReportPage /></Lazy>, roles: ['admin', 'developer'] },
   { path: '/users', element: <Lazy><UsersPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },

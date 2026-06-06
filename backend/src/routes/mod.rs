@@ -9,6 +9,7 @@ pub mod external_server;
 pub mod map_sync;
 pub mod misc;
 pub mod notification;
+pub mod player_detail;
 pub mod player_report;
 pub mod plugin;
 pub mod public;
@@ -277,6 +278,16 @@ pub fn router(
             get(plugin::get_player_api_config).put(plugin::update_player_api_config),
         )
         .route("/webhook/:public_path", get(plugin::webhook_public))
+        // -- player detail --
+        .route("/api/player-detail", get(player_detail::get_player_detail))
+        .route(
+            "/api/player-detail/internal/:steamid64",
+            put(player_detail::update_player_internal_profile),
+        )
+        .route(
+            "/api/player-detail/evidence/:source_type/:file_id",
+            put(player_detail::update_evidence_metadata),
+        )
         // -- whitelist --
         .route("/api/whitelist", get(whitelist::whitelist))
         .route("/api/whitelist/manual", post(whitelist::create_whitelist))

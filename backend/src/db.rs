@@ -54,6 +54,7 @@ impl Database {
         self.migrate_appeal_files_schema().await?;
         self.migrate_ban_files_schema().await?;
         self.migrate_player_reports_schema().await?;
+        self.migrate_player_internal_notes_schema().await?;
         self.migrate_adds_missing_constraints_and_indexes().await?;
         Ok(())
     }
@@ -1218,6 +1219,12 @@ SteamID64: {steam_id}
         )
         .execute(&self.pool)
         .await?;
+        sqlx::query(r#"ALTER TABLE appeal_files ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]"#)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(r#"ALTER TABLE appeal_files ADD COLUMN IF NOT EXISTS note TEXT"#)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -1239,6 +1246,12 @@ SteamID64: {steam_id}
         .await?;
 
         sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_ban_files_ban_id ON ban_files (ban_id)"#)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(r#"ALTER TABLE ban_files ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]"#)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(r#"ALTER TABLE ban_files ADD COLUMN IF NOT EXISTS note TEXT"#)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -1293,6 +1306,34 @@ SteamID64: {steam_id}
         sqlx::query(
             r#"CREATE INDEX IF NOT EXISTS idx_player_report_files_report_id
                ON player_report_files (report_id)"#,
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(r#"ALTER TABLE player_report_files ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]"#)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(r#"ALTER TABLE player_report_files ADD COLUMN IF NOT EXISTS note TEXT"#)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn migrate_player_internal_notes_schema(&self) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"CREATE TABLE IF NOT EXISTS player_internal_notes (
+              steamid64 TEXT PRIMARY KEY,
+              note TEXT NOT NULL DEFAULT '',
+              tags TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+              updated_by TEXT,
+              updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )"#,
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            r#"CREATE INDEX IF NOT EXISTS idx_player_internal_notes_updated_at
+               ON player_internal_notes (updated_at DESC)"#,
         )
         .execute(&self.pool)
         .await?;

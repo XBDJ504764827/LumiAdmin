@@ -538,10 +538,9 @@ export function PublicBanAppealPage() {
                 </div>
 
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
-                  <button type="button" className="btn btn-outline btn-sm"
+                  <button type="button" className="btn btn-outline btn-sm fs-12"
                     onClick={() => videoRef.current?.click()}
                     disabled={isSubmitting()}
-                    className="fs-12"
                   >
                     🎬 选择录像
                   </button>
@@ -549,10 +548,9 @@ export function PublicBanAppealPage() {
                     style={{ display: 'none' }}
                     onChange={(e) => handleFileSelect(e.target.files, videoRef)}
                   />
-                  <button type="button" className="btn btn-outline btn-sm"
+                  <button type="button" className="btn btn-outline btn-sm fs-12"
                     onClick={() => imageRef.current?.click()}
                     disabled={isSubmitting()}
-                    className="fs-12"
                   >
                     🖼 选择图片
                   </button>
@@ -560,10 +558,9 @@ export function PublicBanAppealPage() {
                     style={{ display: 'none' }}
                     onChange={(e) => handleFileSelect(e.target.files, imageRef)}
                   />
-                  <button type="button" className="btn btn-outline btn-sm"
+                  <button type="button" className="btn btn-outline btn-sm fs-12"
                     onClick={() => audioRef.current?.click()}
                     disabled={isSubmitting()}
-                    className="fs-12"
                   >
                     🎵 选择录音
                   </button>

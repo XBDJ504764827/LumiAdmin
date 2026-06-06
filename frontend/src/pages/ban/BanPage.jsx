@@ -475,7 +475,7 @@ export function BanPage() {
                 {!loading && items.map((x) => (
                   <tr key={x.id}>
                     <td>
-                      <div className="fw-600">{x.player || '待自动获取'}</div>
+                      <div className="fw-600" style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={x.player || '待自动获取'}>{x.player || '待自动获取'}</div>
                     </td>
                     <td className="steam-id">{x.steam_id}</td>
                     <td>{x.ban_type === 'ip' ? 'IP 封禁' : 'Steam 账号封禁'}</td>

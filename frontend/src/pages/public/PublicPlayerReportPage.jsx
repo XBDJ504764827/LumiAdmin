@@ -8,6 +8,12 @@ const ALLOWED_IMAGE = '.jpg,.jpeg,.png,.gif,.webp,.bmp';
 const ALLOWED_AUDIO = '.mp3,.wav,.ogg,.m4a,.flac';
 const API_BASE = import.meta.env.VITE_API_BASE ?? '';
 
+const REPORT_STATUS_MAP = {
+  pending:  { label: '待审核',   icon: '⏳', color: '#f59e0b', bg: '#fef3c7' },
+  approved: { label: '已处理',   icon: '✅', color: '#22c55e', bg: '#dcfce7' },
+  rejected: { label: '已驳回',   icon: '❌', color: '#ef4444', bg: '#fee2e2' },
+};
+
 function getFileCategory(name) {
   const lower = name.toLowerCase();
   if (lower.match(/\.(mp4|avi|mov|webm|mkv)$/)) return 'video';
@@ -27,6 +33,17 @@ function formatFileSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatChinaDateTime(iso, opts) {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    const pad = (n) => String(n).padStart(2, '0');
+    const base = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    if (opts?.seconds !== false) return `${base}:${pad(d.getSeconds())}`;
+    return base;
+  } catch { return iso; }
 }
 
 function uploadWithProgress(reportId, formData, uploadToken, onProgress) {
@@ -70,6 +87,10 @@ export function PublicPlayerReportPage() {
   const audioRef = useRef(null);
   const idRef = useRef(0);
 
+  // Query state
+  const [existingReports, setExistingReports] = useState(null);
+  const [loadingReports, setLoadingReports] = useState(false);
+
   function handleFileSelect(selected, inputRef) {
     if (!selected?.length) return;
     let firstError = '';
@@ -98,11 +119,25 @@ export function PublicPlayerReportPage() {
   }
 
   async function handleResolve() {
-    if (!steamInput.trim()) return;
+    if (!steamInput.trim()) {
+      setExistingReports(null);
+      return;
+    }
     try {
       const result = await api.resolveSteam({ steam_input: steamInput.trim() });
       if (result.persona_name && !targetName.trim()) setTargetName(result.persona_name);
     } catch {}
+
+    // Query existing reports for this player
+    setLoadingReports(true);
+    try {
+      const result = await api.queryPlayerReportStatus({ steam_input: steamInput.trim() });
+      setExistingReports(result.reports ?? []);
+    } catch {
+      setExistingReports(null);
+    } finally {
+      setLoadingReports(false);
+    }
   }
 
   async function handleSubmit() {
@@ -195,6 +230,107 @@ export function PublicPlayerReportPage() {
               <label>被举报玩家 Steam 标识符 <span className="text-accent">*</span></label>
               <input className="form-control" value={steamInput} onChange={(event) => setSteamInput(event.target.value)} onBlur={handleResolve} disabled={busy} placeholder="SteamID64 / SteamID / 个人主页链接" />
             </div>
+
+            {/* 历史举报记录 */}
+            {loadingReports && (
+              <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0 16px', textAlign: 'center' }}>
+                正在查询历史举报记录...
+              </div>
+            )}
+            {existingReports !== null && !loadingReports && existingReports.length > 0 && (
+              <div className="form-section-card mb-16">
+                <div className="form-section-header">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="16" height="16">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                    <line x1="16" y1="13" x2="8" y2="13" />
+                    <line x1="16" y1="17" x2="8" y2="17" />
+                  </svg>
+                  <span>举报记录</span>
+                </div>
+                <div className="form-hint" style={{ marginBottom: 14 }}>
+                  以下是该玩家之前的举报记录及审核结果。
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {existingReports.map((report) => {
+                    const st = REPORT_STATUS_MAP[report.status] || { label: report.status, icon: '📋', color: 'var(--text2)', bg: 'var(--surface2)' };
+                    return (
+                      <div
+                        key={report.id}
+                        style={{
+                          border: '1px solid var(--border)',
+                          borderRadius: 10,
+                          overflow: 'hidden',
+                          transition: 'border-color 0.2s',
+                        }}
+                      >
+                        {/* 卡片头部 - 状态 */}
+                        <div style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          padding: '10px 14px',
+                          background: st.bg,
+                          borderBottom: '1px solid var(--border)',
+                        }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontSize: 16 }}>{st.icon}</span>
+                            <span style={{ fontWeight: 600, fontSize: 13, color: st.color }}>{st.label}</span>
+                          </div>
+                          <span style={{ fontSize: 11, color: 'var(--text3)' }}>
+                            提交于 {formatChinaDateTime(report.created_at, { seconds: false })}
+                          </span>
+                        </div>
+
+                        {/* 卡片内容 */}
+                        <div style={{ padding: '12px 14px' }}>
+                          {/* 举报理由 */}
+                          <div style={{
+                            fontSize: 13, color: 'var(--text2)',
+                            padding: '8px 10px', background: 'var(--surface2)', borderRadius: 6,
+                            marginBottom: 8,
+                          }}>
+                            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>举报理由：</div>
+                            <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{report.report_reason}</div>
+                          </div>
+
+                          {/* 管理员审核结果 */}
+                          {report.status !== 'pending' && (
+                            <div style={{
+                              fontSize: 13,
+                              padding: '8px 10px', borderRadius: 6,
+                              background: report.status === 'approved' ? 'var(--success-bg, #dcfce7)' : 'var(--danger-bg, #fee2e2)',
+                              border: `1px solid ${report.status === 'approved' ? 'var(--success-text, #22c55e)' : 'var(--danger-text, #ef4444)'}33`,
+                            }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                                <span style={{ fontWeight: 600, color: st.color }}>
+                                  {report.status === 'approved' ? '管理员已根据举报封禁该玩家' : '管理员已驳回举报'}
+                                </span>
+                              </div>
+                              {report.reviewed_by && (
+                                <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 2 }}>
+                                  审核人：{report.reviewed_by}
+                                  {report.reviewed_at ? ` · ${formatChinaDateTime(report.reviewed_at, { seconds: false })}` : ''}
+                                </div>
+                              )}
+                              {report.review_note && (
+                                <div style={{
+                                  fontSize: 13, color: 'var(--text2)',
+                                  marginTop: 4, paddingTop: 6,
+                                  borderTop: '1px solid var(--border)',
+                                }}>
+                                  <span style={{ fontSize: 11, color: 'var(--text3)' }}>管理员回复：</span>
+                                  <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{report.review_note}</span>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <div className="form-group">
               <label>被举报玩家名称</label>
               <input className="form-control" value={targetName} onChange={(event) => setTargetName(event.target.value)} disabled={busy} placeholder="可选，输入 Steam 标识符后会尝试自动获取" />

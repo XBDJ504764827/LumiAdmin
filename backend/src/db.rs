@@ -963,6 +963,12 @@ SteamID64: {steam_id}
         )
         .execute(&self.pool)
         .await?;
+        sqlx::query(
+            r#"CREATE INDEX IF NOT EXISTS idx_external_ban_syncs_local_ban_id
+               ON external_ban_syncs (local_ban_id)"#,
+        )
+        .execute(&self.pool)
+        .await?;
 
         Ok(())
     }
@@ -1225,6 +1231,9 @@ SteamID64: {steam_id}
         sqlx::query(r#"ALTER TABLE appeal_files ADD COLUMN IF NOT EXISTS note TEXT"#)
             .execute(&self.pool)
             .await?;
+        sqlx::query(r#"ALTER TABLE appeal_files ADD COLUMN IF NOT EXISTS uploaded_by TEXT"#)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -1313,6 +1322,9 @@ SteamID64: {steam_id}
             .execute(&self.pool)
             .await?;
         sqlx::query(r#"ALTER TABLE player_report_files ADD COLUMN IF NOT EXISTS note TEXT"#)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(r#"ALTER TABLE player_report_files ADD COLUMN IF NOT EXISTS uploaded_by TEXT"#)
             .execute(&self.pool)
             .await?;
         Ok(())

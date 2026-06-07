@@ -152,7 +152,7 @@ export function RconPage() {
 
       {/* 命令目录 */}
       {COMMAND_CATEGORIES.map((cat) => (
-        <div className="card" key={cat.name} className="mt-16">
+        <div className="card mt-16" key={cat.name}>
           <div className="card-header">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span className="text-accent">{cat.icon}</span>

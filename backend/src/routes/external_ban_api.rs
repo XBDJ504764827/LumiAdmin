@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
@@ -7,7 +7,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::routes::{current_operator, forbidden, invalid_request, AppCtx};
-use crate::services::external_ban_api_service;
+use crate::services::{audit_service, external_ban_api_service};
 
 #[derive(Deserialize)]
 pub(crate) struct TargetBody {
@@ -127,6 +127,33 @@ pub(crate) async fn sync_ban(
     let result = external_ban_api_service::sync_ban(&ctx.db, id)
         .await
         .map_err(invalid_request)?;
+
+    // Write audit log for manual sync
+    if let Err(e) = audit_service::write_audit_log(
+        &ctx.db,
+        audit_service::AuditLogInput {
+            operation: "external_ban_sync".to_string(),
+            target: id.to_string(),
+            target_type: "ban".to_string(),
+            player_name: None,
+            reason: None,
+            duration_minutes: None,
+            operator_name: actor.display_name.clone(),
+            operator_steamid: None,
+            source: "manual_sync".to_string(),
+            server_id: None,
+            server_name: None,
+            server_port: None,
+            success: result.ok,
+            message: Some(result.message.clone()),
+            idempotency_key: None,
+        },
+    )
+    .await
+    {
+        tracing::warn!(%e, "external ban sync audit log write failed");
+    }
+
     Ok(Json(serde_json::json!({ "result": result })))
 }
 
@@ -141,5 +168,88 @@ pub(crate) async fn sync_ban_to_target(
     let result = external_ban_api_service::sync_ban_to_target(&ctx.db, ban_id, target_id)
         .await
         .map_err(invalid_request)?;
+    Ok(Json(serde_json::json!({ "result": result })))
+}
+
+// ---------------------------------------------------------------------------
+// Sync history: list sync records, get per-ban sync status
+// ---------------------------------------------------------------------------
+
+pub(crate) async fn list_sync_records(
+    State(ctx): State<AppCtx>,
+    headers: axum::http::HeaderMap,
+    Query(query): Query<external_ban_api_service::SyncRecordQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let actor = current_operator(&ctx, &headers).await?;
+    ensure_admin(&actor)?;
+
+    let (items, total) = external_ban_api_service::list_sync_records(&ctx.db, &query)
+        .await
+        .map_err(invalid_request)?;
+
+    let page = query.page.unwrap_or(1);
+    let page_size = query.page_size.unwrap_or(20);
+    Ok(Json(serde_json::json!({
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    })))
+}
+
+pub(crate) async fn get_ban_sync_status(
+    State(ctx): State<AppCtx>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let _actor = current_operator(&ctx, &headers).await?;
+
+    let items = external_ban_api_service::get_ban_sync_status(&ctx.db, id)
+        .await
+        .map_err(invalid_request)?;
+    Ok(Json(serde_json::json!({ "items": items })))
+}
+
+// ---------------------------------------------------------------------------
+// Batch retry failed syncs
+// ---------------------------------------------------------------------------
+
+pub(crate) async fn retry_failed_syncs(
+    State(ctx): State<AppCtx>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let actor = current_operator(&ctx, &headers).await?;
+    ensure_admin(&actor)?;
+
+    let result = external_ban_api_service::retry_failed_syncs(&ctx.db)
+        .await
+        .map_err(invalid_request)?;
+
+    // Audit log for retry
+    if let Err(e) = audit_service::write_audit_log(
+        &ctx.db,
+        audit_service::AuditLogInput {
+            operation: "external_ban_retry".to_string(),
+            target: "batch".to_string(),
+            target_type: "sync".to_string(),
+            player_name: None,
+            reason: None,
+            duration_minutes: None,
+            operator_name: actor.display_name.clone(),
+            operator_steamid: None,
+            source: "manual_retry".to_string(),
+            server_id: None,
+            server_name: None,
+            server_port: None,
+            success: result.ok,
+            message: Some(result.message.clone()),
+            idempotency_key: None,
+        },
+    )
+    .await
+    {
+        tracing::warn!(%e, "retry failed syncs audit log write failed");
+    }
+
     Ok(Json(serde_json::json!({ "result": result })))
 }

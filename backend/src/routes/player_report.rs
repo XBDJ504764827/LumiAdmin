@@ -414,11 +414,12 @@ pub(crate) async fn list_report_files(
         content_type: String,
         storage_key: String,
         category: String,
+        uploaded_by: Option<String>,
         uploaded_at: chrono::DateTime<chrono::Utc>,
     }
 
     let files: Vec<FileRow> = sqlx::query_as(
-        r#"SELECT id, file_name, file_size, content_type, storage_key, category, uploaded_at
+        r#"SELECT id, file_name, file_size, content_type, storage_key, category, uploaded_by, uploaded_at
            FROM player_report_files WHERE report_id = $1 ORDER BY uploaded_at ASC"#,
     )
     .bind(report_id)
@@ -443,6 +444,7 @@ pub(crate) async fn list_report_files(
                 "file_size": file.file_size,
                 "content_type": file.content_type,
                 "category": file.category,
+                "uploaded_by": file.uploaded_by,
                 "uploaded_at": file.uploaded_at.to_rfc3339(),
                 "url": url,
             })
@@ -450,4 +452,188 @@ pub(crate) async fn list_report_files(
         .collect();
 
     Ok(Json(serde_json::json!({ "files": items })))
+}
+
+pub(crate) async fn upload_report_files(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Path(report_id): Path<Uuid>,
+    mut multipart: Multipart,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let actor = current_operator(&ctx, &headers).await?;
+    if !permission_service::can_review_player_reports(&actor) {
+        return Err(forbidden());
+    }
+
+    // Verify report exists
+    sqlx::query(r#"SELECT id FROM player_reports WHERE id = $1"#)
+        .bind(report_id)
+        .fetch_optional(&ctx.db.pool)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "查询举报记录失败");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "查询举报记录失败" })),
+            )
+        })?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "举报记录不存在" })),
+        ))?;
+
+    let r2 = ctx.r2_storage.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "文件上传服务未配置" })),
+        )
+    })?;
+
+    let max_size = ctx.config.appeal_file_max_size_bytes;
+    let mut uploaded: Vec<serde_json::Value> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(e) => {
+                tracing::warn!(%e, "读取举报附件 multipart 字段失败");
+                errors.push("读取上传内容失败".to_string());
+                break;
+            }
+        };
+
+        let file_name = match field.file_name() {
+            Some(name) => name.to_string(),
+            None => continue,
+        };
+
+        if !r2_storage::is_allowed_file_type(&file_name) {
+            errors.push(format!("不支持的文件类型: {file_name}"));
+            continue;
+        }
+
+        let content_type = field
+            .content_type()
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| r2_storage::guess_content_type(&file_name).to_string());
+
+        let data = match field.bytes().await {
+            Ok(bytes) => bytes.to_vec(),
+            Err(e) => {
+                errors.push(format!("读取文件失败: {file_name} - {e}"));
+                continue;
+            }
+        };
+        let file_size = data.len();
+
+        if file_size > max_size {
+            errors.push(format!(
+                "文件 {} 超出大小限制（最大 {}MB）",
+                file_name,
+                max_size / 1024 / 1024
+            ));
+            continue;
+        }
+
+        if file_size == 0 {
+            errors.push(format!("文件为空: {file_name}"));
+            continue;
+        }
+
+        match r2
+            .upload_with_prefix("player-reports", report_id, &file_name, &content_type, data)
+            .await
+        {
+            Ok(key) => {
+                let category = r2_storage::file_category(&file_name);
+                if let Err(e) = sqlx::query(
+                    r#"INSERT INTO player_report_files (id, report_id, file_name, file_size, content_type, storage_key, category, uploaded_by)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
+                )
+                .bind(Uuid::new_v4())
+                .bind(report_id)
+                .bind(&file_name)
+                .bind(file_size as i64)
+                .bind(&content_type)
+                .bind(&key)
+                .bind(category)
+                .bind(&actor.display_name)
+                .execute(&ctx.db.pool)
+                .await
+                {
+                    tracing::warn!(%e, "写入举报附件记录失败");
+                }
+
+                uploaded.push(serde_json::json!({
+                    "file_name": file_name,
+                    "file_size": file_size,
+                    "category": category,
+                }));
+            }
+            Err(e) => {
+                tracing::error!(%e, "report file R2 upload failed for {file_name}");
+                errors.push(format!("上传文件 {file_name} 失败，请稍后重试"));
+            }
+        }
+    }
+
+    if uploaded.is_empty() && errors.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "未选择可上传的文件" })),
+        ));
+    }
+
+    if uploaded.is_empty() && !errors.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "所有文件上传失败",
+                "errors": errors,
+            })),
+        ));
+    }
+
+    Ok(Json(serde_json::json!({
+        "uploaded": uploaded,
+        "errors": if errors.is_empty() { None } else { Some(errors) },
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// Public: query report status by SteamID
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub(crate) struct QueryReportStatusBody {
+    pub steam_input: String,
+}
+
+pub(crate) async fn query_report_status(
+    State(ctx): State<AppCtx>,
+    Json(body): Json<QueryReportStatusBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let parsed = ctx.steam_resolver.resolve(&body.steam_input).await.map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+    })?;
+
+    let reports = player_report_service::query_reports_by_target_steam_id(&ctx.db, &parsed.steamid64)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "查询举报状态失败");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "查询举报状态失败"})),
+            )
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "steamid64": parsed.steamid64,
+        "reports": reports,
+    })))
 }

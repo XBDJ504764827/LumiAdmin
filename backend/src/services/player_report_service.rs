@@ -369,3 +369,29 @@ fn new_upload_token() -> String {
 fn hash_upload_token(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes()))
 }
+
+/// 按 SteamID 查询玩家的举报记录（公开接口，供玩家查看举报状态和管理员审核结果）
+pub async fn query_reports_by_target_steam_id(
+    db: &Database,
+    steam_id: &str,
+) -> anyhow::Result<Vec<PlayerReportItem>> {
+    let steam_id = steam_id.trim();
+    anyhow::ensure!(!steam_id.is_empty(), "SteamID 不能为空");
+
+    let rows = sqlx::query_as::<_, PlayerReportRow>(
+        r#"SELECT id, target_steam_id, target_player_name, reporter_contact, report_reason,
+                  status, reviewed_by, review_note, reviewed_at, created_at
+           FROM player_reports
+           WHERE target_steam_id = $1
+           ORDER BY created_at DESC"#,
+    )
+    .bind(steam_id)
+    .fetch_all(&db.pool)
+    .await?;
+
+    // upload_token is deliberately None — public queries must not expose the token
+    Ok(rows
+        .into_iter()
+        .map(|row| row_to_item(row, None))
+        .collect())
+}

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Modal } from '../../shared/Modal.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
+import { InternalNoteBadge } from '../../shared/InternalNote.jsx';
 
 // ---------------------------------------------------------------------------
 // 全球封禁记录列表（共享组件）
@@ -191,6 +192,7 @@ export function ApproveModal({ open, onClose, item, bans, risk, reason, setReaso
         <div><strong>玩家:</strong> {item?.nickname ?? '-'}</div>
         <div><strong>SteamID64:</strong> <code>{item?.steamid64 ?? '-'}</code></div>
       </div>
+      <InternalNoteBadge steamid64={item?.steamid64} />
       <div className="mb-16">
         <GlobalBanRecordList bans={bans} />
       </div>
@@ -376,6 +378,8 @@ export function PlayerDetailModal({ open, onClose, item }) {
               </div>
             ) : null}
           </div>
+
+          <InternalNoteBadge steamid64={item?.steamid64} />
         </div>
       ) : null}
     </Modal>

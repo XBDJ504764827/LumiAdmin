@@ -271,6 +271,19 @@ pub fn router(
             "/api/bans/:ban_id/sync-external/:target_id",
             post(external_ban_api::sync_ban_to_target),
         )
+        // -- external ban API sync history --
+        .route(
+            "/api/external-ban-api/syncs/retry-failed",
+            post(external_ban_api::retry_failed_syncs),
+        )
+        .route(
+            "/api/external-ban-api/syncs",
+            get(external_ban_api::list_sync_records),
+        )
+        .route(
+            "/api/external-ban-api/bans/:id/sync-status",
+            get(external_ban_api::get_ban_sync_status),
+        )
         // -- player api --
         .route("/api/player-api/players", get(plugin::player_api_players))
         .route(
@@ -282,7 +295,8 @@ pub fn router(
         .route("/api/player-detail", get(player_detail::get_player_detail))
         .route(
             "/api/player-detail/internal/:steamid64",
-            put(player_detail::update_player_internal_profile),
+            get(player_detail::get_player_internal_profile)
+                .put(player_detail::update_player_internal_profile),
         )
         .route(
             "/api/player-detail/evidence/:source_type/:file_id",
@@ -354,7 +368,7 @@ pub fn router(
         )
         .route(
             "/api/ban-appeals/:id/files",
-            get(ban_appeal::list_appeal_files),
+            get(ban_appeal::list_appeal_files).post(ban_appeal::upload_appeal_files),
         )
         .route(
             "/api/ban-appeals/files/:file_id/url",
@@ -372,7 +386,7 @@ pub fn router(
         )
         .route(
             "/api/player-reports/:id/files",
-            get(player_report::list_report_files),
+            get(player_report::list_report_files).post(player_report::upload_report_files),
         )
         // -- audit --
         .route("/api/audit/logs", get(misc::list_audit_logs))
@@ -451,6 +465,10 @@ pub fn router(
         .route(
             "/api/public/player-reports/:id/files",
             post(player_report::upload_player_report_files),
+        )
+        .route(
+            "/api/public/player-reports/query",
+            post(player_report::query_report_status),
         )
         .route(
             "/api/public/global-bans/:steamid64",

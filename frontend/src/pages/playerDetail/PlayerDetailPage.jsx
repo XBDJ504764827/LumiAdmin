@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useAuth } from '../../state/auth.jsx';
+import { useToast, ToastContainer } from '../../shared/Toast.jsx';
 import { StatusPill } from '../../shared/StatusPill.jsx';
 import { FileItem, fileActionLabel } from '../../shared/FilePreview.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
@@ -539,6 +540,7 @@ function AdminActionsTable({ adminActions, auditLogs }) {
 
 export function PlayerDetailPage() {
   const { session } = useAuth();
+  const { toast, toasts, dismiss: dismissToast } = useToast();
   const token = session?.token ?? null;
   const [steamInput, setSteamInput] = useState('');
   const [lastQuery, setLastQuery] = useState('');
@@ -582,8 +584,9 @@ export function PlayerDetailPage() {
       setError('');
       const result = await api.updatePlayerInternalProfile(token, detail.profile.steamid64, body);
       setDetail((prev) => prev ? { ...prev, internal_profile: result.item } : prev);
+      toast({ title: '保存成功', message: '内部备注已更新。' });
     } catch (requestError) {
-      setError(requestError.message || '保存内部备注失败');
+      toast({ title: '保存失败', message: requestError.message || '保存内部备注失败', tone: 'danger' });
     } finally {
       setInternalSaving(false);
     }
@@ -823,6 +826,7 @@ export function PlayerDetailPage() {
           </div>
         </>
       ) : null}
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

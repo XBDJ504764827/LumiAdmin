@@ -1,6 +1,7 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
+import { InternalNoteBadge, InternalNoteInline } from '../../shared/InternalNote.jsx';
 import { Modal } from '../../shared/Modal.jsx';
 import { useAuth } from '../../state/auth.jsx';
 import { useToast, ToastContainer } from '../../shared/Toast.jsx';
@@ -114,6 +115,8 @@ export function BanPage() {
   const [detailFiles, setDetailFiles] = useState([]);
   const [detailFilesLoading, setDetailFilesLoading] = useState(false);
   const [detailFilesError, setDetailFilesError] = useState('');
+  const [detailSyncStatus, setDetailSyncStatus] = useState([]);
+  const [detailSyncLoading, setDetailSyncLoading] = useState(false);
   const [apiModalOpen, setApiModalOpen] = useState(false);
   const [apiKeys, setApiKeys] = useState([]);
   const [apiKeysLoading, setApiKeysLoading] = useState(false);
@@ -316,18 +319,23 @@ export function BanPage() {
     setDetailFiles([]);
     setDetailFilesError('');
     setDetailFilesLoading(true);
+    setDetailSyncStatus([]);
+    setDetailSyncLoading(true);
     try {
-      const [detailResult, fileResult] = await Promise.all([
+      const [detailResult, fileResult, syncResult] = await Promise.all([
         api.getBan(token, item.id),
         api.listBanFiles(token, item.id),
+        api.banSyncStatus(token, item.id).catch(() => ({ items: [] })),
       ]);
       setDetailItem(detailResult.item ?? item);
       setDetailFiles(fileResult.files ?? []);
+      setDetailSyncStatus(syncResult.items ?? []);
     } catch (requestError) {
       setDetailFilesError(requestError.message || '加载附件失败');
     } finally {
       setDetailLoading(false);
       setDetailFilesLoading(false);
+      setDetailSyncLoading(false);
     }
   }
 
@@ -362,6 +370,12 @@ export function BanPage() {
   }
 
   async function handleSyncExternalBan(item) {
+    const ok = await confirm({
+      title: '同步到外部封禁 API',
+      message: `确定将 ${item.player || item.steam_id} 的封禁记录同步到所有已启用的外部 API 吗？`,
+      confirmText: '确认同步',
+    });
+    if (!ok) return;
     try {
       setSyncingExternalId(item.id);
       const result = await api.syncExternalBan(token, item.id);
@@ -476,6 +490,7 @@ export function BanPage() {
                   <tr key={x.id}>
                     <td>
                       <div className="fw-600" style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={x.player || '待自动获取'}>{x.player || '待自动获取'}</div>
+                      <InternalNoteInline steamid64={x.steam_id} />
                     </td>
                     <td className="steam-id">{x.steam_id}</td>
                     <td>{x.ban_type === 'ip' ? 'IP 封禁' : 'Steam 账号封禁'}</td>
@@ -682,6 +697,33 @@ export function BanPage() {
               ) : null}
             </div>
 
+            {canManageAll && (detailSyncStatus.length > 0 || detailSyncLoading) ? (
+              <div className="form-group">
+                <label className="mb-4">外部同步状态</label>
+                {detailSyncLoading ? <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>正在加载同步状态...</div> : null}
+                {!detailSyncLoading && detailSyncStatus.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {detailSyncStatus.map((sync) => {
+                      const statusMap = {
+                        synced: { label: '已同步', cls: 'pill-online' },
+                        failed: { label: '失败', cls: 'pill-offline' },
+                        unsynced: { label: '已撤销', cls: 'pill-away' },
+                        pending: { label: '待同步', cls: 'pill-idle' },
+                      };
+                      const info = statusMap[sync.status] || { label: sync.status, cls: 'pill-idle' };
+                      return (
+                        <div key={sync.target_id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                          <span>{sync.target_name}</span>
+                          <span className={`status-pill ${info.cls}`}>{info.label}</span>
+                          {sync.last_error ? <span style={{ color: 'var(--danger)', fontSize: 12 }} title={sync.last_error}>（{sync.last_error.length > 40 ? sync.last_error.slice(0, 40) + '...' : sync.last_error}）</span> : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             <div className="form-group">
               <label className="mb-4">辅助文件</label>
               {detailFilesLoading ? <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>正在加载附件...</div> : null}
@@ -724,6 +766,7 @@ export function BanPage() {
                 </div>
               ) : null}
             </div>
+            <InternalNoteBadge steamid64={detailItem?.steam_id} />
           </div>
         ) : null}
       </Modal>

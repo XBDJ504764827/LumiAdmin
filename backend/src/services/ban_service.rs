@@ -4,7 +4,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct BanItem {
     pub id: Uuid,
     pub player: Option<String>,

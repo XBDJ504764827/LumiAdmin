@@ -4,6 +4,7 @@ import { useAuth } from '../../state/auth.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { useToast, ToastContainer } from '../../shared/Toast.jsx';
 import { formatChinaDate } from '../../shared/time.js';
+import { InternalNoteInline, InternalNoteBadge } from '../../shared/InternalNote.jsx';
 
 export function PlayerAccessPage() {
   const { session } = useAuth();
@@ -369,6 +370,7 @@ export function PlayerAccessPage() {
                       <td>
                         <div className="fw-600">{rule.nickname}</div>
                         <div className="steam-id" style={{ fontSize: 11, marginTop: 2 }}>{rule.steamid64}</div>
+                        <InternalNoteInline steamid64={rule.steamid64} />
                       </td>
                       <td style={{ minWidth: 200 }}>{renderAccessTags(rule)}</td>
                       <td className="text-muted-light">{formatChinaDate(rule.updated_at)}</td>
@@ -467,6 +469,7 @@ export function PlayerAccessPage() {
                     )}
                   </div>
                 )}
+                <InternalNoteBadge steamid64={selectedPlayer?.steamid64 || form.steamid64} />
               </div>
 
               {/* ── 优先级说明 ── */}

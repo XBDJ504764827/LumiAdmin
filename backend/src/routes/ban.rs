@@ -154,7 +154,28 @@ pub(crate) async fn create_ban(
     {
         tracing::warn!(%e, "ban create notification failed");
     }
-    external_ban_api_service::sync_ban_if_enabled(&ctx.db, &item).await;
+    let sync_result = external_ban_api_service::sync_ban_if_enabled(&ctx.db, &item).await;
+    if !sync_result.ok {
+        tracing::warn!(ban_id = %item.id, "auto-sync had failures: {}", sync_result.message);
+        if let Err(e) = notification_service::notify_all_admins(
+            &ctx.db,
+            &ctx.notification_hub,
+            None,
+            "external_sync_failed",
+            "外部封禁自动同步失败",
+            &format!(
+                "封禁 {} ({}) 同步失败：{}",
+                item.player.as_deref().unwrap_or("未知"),
+                item.steam_id,
+                sync_result.message
+            ),
+            Some("/external-ban-api"),
+        )
+        .await
+        {
+            tracing::warn!(%e, "sync failure notification failed");
+        }
+    }
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({ "item": item })),
@@ -202,6 +223,9 @@ pub(crate) async fn update_ban(
     {
         tracing::warn!(%e, "日志写入失败");
     }
+    if let Err(e) = external_ban_api_service::resync_ban(&ctx.db, id, &item).await {
+        tracing::warn!(%e, ban_id = %id, "external ban resync failed on update");
+    }
     Ok(Json(serde_json::json!({ "item": item })))
 }
 
@@ -218,9 +242,22 @@ pub(crate) async fn delete_ban(
         return Err(forbidden());
     }
 
+    // Read sync records before hard-delete (CASCADE will remove them)
+    let sync_records = external_ban_api_service::read_sync_records_before_delete(&ctx.db, id)
+        .await
+        .unwrap_or_default();
+
     ban_service::delete_ban(&ctx.db, id)
         .await
         .map_err(invalid_request)?;
+
+    // Notify external APIs about the deletion (fire-and-forget)
+    if !sync_records.is_empty() {
+        tokio::spawn(async move {
+            external_ban_api_service::notify_external_deletes(&sync_records).await;
+        });
+    }
+
     let log_target = record.player.as_deref().unwrap_or(&record.steam_id);
     if let Err(e) = log_service::create_log(
         &ctx.db,
@@ -265,6 +302,9 @@ pub(crate) async fn unban_ban(
     .await
     {
         tracing::warn!(%e, "日志写入失败");
+    }
+    if let Err(e) = external_ban_api_service::unsync_ban(&ctx.db, id).await {
+        tracing::warn!(%e, ban_id = %id, "external ban unsync failed on unban");
     }
     Ok(Json(serde_json::json!({ "item": item })))
 }
@@ -588,7 +628,28 @@ pub(crate) async fn create_plugin_ban(
     {
         tracing::warn!(%e, "plugin ban audit log write failed");
     }
-    external_ban_api_service::sync_ban_if_enabled(&ctx.db, &item).await;
+    let sync_result = external_ban_api_service::sync_ban_if_enabled(&ctx.db, &item).await;
+    if !sync_result.ok {
+        tracing::warn!(ban_id = %item.id, "plugin auto-sync had failures: {}", sync_result.message);
+        if let Err(e) = notification_service::notify_all_admins(
+            &ctx.db,
+            &ctx.notification_hub,
+            None,
+            "external_sync_failed",
+            "外部封禁自动同步失败",
+            &format!(
+                "封禁 {} ({}) 同步失败：{}",
+                item.player.as_deref().unwrap_or("未知"),
+                item.steam_id,
+                sync_result.message
+            ),
+            Some("/external-ban-api"),
+        )
+        .await
+        {
+            tracing::warn!(%e, "sync failure notification failed");
+        }
+    }
 
     let kick_message = if item.duration_minutes == 0 {
         format!("你已被永久封禁，原因：{}", item.reason)
@@ -704,6 +765,9 @@ pub(crate) async fn unban_plugin_ban(
     .await
     {
         tracing::warn!(%e, "plugin unban audit log write failed");
+    }
+    if let Err(e) = external_ban_api_service::unsync_ban(&ctx.db, item.id).await {
+        tracing::warn!(%e, ban_id = %item.id, "external ban unsync failed on plugin unban");
     }
 
     Ok(Json(serde_json::json!({ "item": item })))

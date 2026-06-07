@@ -1,8 +1,9 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useAuth } from '../../state/auth.jsx';
 import { useToast, ToastContainer } from '../../shared/Toast.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
+import { InternalNoteBadge, InternalNoteInline } from '../../shared/InternalNote.jsx';
 import { Modal } from '../../shared/Modal.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
@@ -51,6 +52,9 @@ export function PlayerReportPage() {
   const [submitting, setSubmitting] = useState(false);
 
   const canReview = session?.role === 'developer' || session?.role === 'admin';
+  const reviewFileRef = useRef(null);
+  const [uploadingReportFiles, setUploadingReportFiles] = useState(false);
+  const [reviewFiles, setReviewFiles] = useState([]);
 
   const loadItems = useCallback(async () => {
     if (!token) return;
@@ -98,6 +102,7 @@ export function PlayerReportPage() {
     setReviewItem(item);
     setReviewStatus(nextStatus);
     setReviewNote('');
+    setReviewFiles([]);
     setReviewOpen(true);
   }
 
@@ -124,12 +129,30 @@ export function PlayerReportPage() {
 
     try {
       setSubmitting(true);
+
+      // Upload files first if any
+      if (reviewFiles.length > 0) {
+        setUploadingReportFiles(true);
+        const formData = new FormData();
+        for (const f of reviewFiles) formData.append('files', f, f.name);
+        try {
+          await api.uploadAdminReportFiles(token, reviewItem.id, formData);
+        } catch (e) {
+          toast({ title: '文件上传失败', message: e.message, tone: 'danger' });
+          setSubmitting(false);
+          setUploadingReportFiles(false);
+          return;
+        }
+        setUploadingReportFiles(false);
+      }
+
       await api.reviewPlayerReport(token, reviewItem.id, {
         status: reviewStatus,
         review_note: reviewNote.trim() || null,
       });
       setReviewOpen(false);
       setReviewItem(null);
+      setReviewFiles([]);
       await loadItems();
       notifyPendingReviewsUpdated({ source: 'playerReport', action: reviewStatus });
       toast({ title: '驳回成功', message: '已驳回该玩家举报。' });
@@ -204,7 +227,10 @@ export function PlayerReportPage() {
                   const st = STATUS_MAP[item.status] || { label: item.status, pill: '' };
                   return (
                     <tr key={item.id}>
-                      <td className="fw-600">{item.target_player_name || '-'}</td>
+                      <td className="fw-600">
+                        {item.target_player_name || '-'}
+                        <InternalNoteInline steamid64={item.target_steam_id} />
+                      </td>
                       <td className="steam-id">{item.target_steam_id}</td>
                       <td className="text-muted text-ellipsis" style={{ maxWidth: 240 }}>
                         <span title={item.report_reason}>{item.report_reason}</span>
@@ -307,19 +333,24 @@ export function PlayerReportPage() {
                 <div className="flex-col gap-10">
                   {reportFiles.map((file) => (
                     <FileItem key={file.id} file={file}>
-                      {file.url ? (
-                        <a
-                          href={file.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="action-btn flex-shrink-0"
-                          aria-label={`${fileActionLabel(file.category)} ${file.file_name}`}
-                        >
-                          {fileActionLabel(file.category)}
-                        </a>
-                      ) : (
-                        <span className="text-muted-light fs-11 flex-shrink-0">不可用</span>
-                      )}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                        {file.uploaded_by ? (
+                          <span className="status-pill pill-idle" style={{ fontSize: 11 }}>{file.uploaded_by}</span>
+                        ) : null}
+                        {file.url ? (
+                          <a
+                            href={file.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="action-btn flex-shrink-0"
+                            aria-label={`${fileActionLabel(file.category)} ${file.file_name}`}
+                          >
+                            {fileActionLabel(file.category)}
+                          </a>
+                        ) : (
+                          <span className="text-muted-light fs-11 flex-shrink-0">不可用</span>
+                        )}
+                      </div>
                     </FileItem>
                   ))}
                 </div>
@@ -327,6 +358,7 @@ export function PlayerReportPage() {
                 <div className="text-muted-light fs-13 p-8">该举报未上传证据文件。</div>
               )}
             </div>
+            <InternalNoteBadge steamid64={detailItem?.target_steam_id} />
           </div>
         ) : null}
       </Modal>
@@ -366,6 +398,50 @@ export function PlayerReportPage() {
                 rows={3}
                 style={{ resize: 'vertical' }}
               />
+            </div>
+            <div className="form-group">
+              <label>证据文件（选填）</label>
+              <div className="form-hint" style={{ marginBottom: 8 }}>可上传截图、录像或录音作为驳回依据。</div>
+              <input
+                ref={reviewFileRef}
+                type="file"
+                accept=".mp4,.avi,.mov,.webm,.mkv,.jpg,.jpeg,.png,.gif,.webp,.bmp,.mp3,.wav,.ogg,.m4a,.flac"
+                multiple
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const selected = Array.from(e.target.files || []);
+                  if (selected.length) setReviewFiles((prev) => [...prev, ...selected]);
+                  if (reviewFileRef.current) reviewFileRef.current.value = '';
+                }}
+              />
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: reviewFiles.length > 0 ? 10 : 0 }}>
+                <button type="button" className="btn btn-outline btn-sm fs-12" onClick={() => reviewFileRef.current?.click()} disabled={submitting}>
+                  🖼 选择图片
+                </button>
+                <button type="button" className="btn btn-outline btn-sm fs-12" onClick={() => { reviewFileRef.current.accept = '.mp4,.avi,.mov,.webm,.mkv'; reviewFileRef.current?.click(); reviewFileRef.current.accept = '.mp4,.avi,.mov,.webm,.mkv,.jpg,.jpeg,.png,.gif,.webp,.bmp,.mp3,.wav,.ogg,.m4a,.flac'; }} disabled={submitting}>
+                  🎬 选择录像
+                </button>
+                <button type="button" className="btn btn-outline btn-sm fs-12" onClick={() => { reviewFileRef.current.accept = '.mp3,.wav,.ogg,.m4a,.flac'; reviewFileRef.current?.click(); reviewFileRef.current.accept = '.mp4,.avi,.mov,.webm,.mkv,.jpg,.jpeg,.png,.gif,.webp,.bmp,.mp3,.wav,.ogg,.m4a,.flac'; }} disabled={submitting}>
+                  🎵 选择录音
+                </button>
+              </div>
+              {reviewFiles.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {reviewFiles.map((file, idx) => (
+                    <div key={`${file.name}-${idx}`} style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      padding: '8px 10px', background: 'var(--surface2)', borderRadius: 6, fontSize: 13,
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
+                        <span>{file.name.match(/\.(mp4|avi|mov|webm|mkv)$/i) ? '🎬' : file.name.match(/\.(mp3|wav|ogg|m4a|flac)$/i) ? '🎵' : '🖼'}</span>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</span>
+                        <span style={{ color: 'var(--text3)', fontSize: 11, flexShrink: 0 }}>{(file.size / 1024 / 1024).toFixed(1)} MB</span>
+                      </div>
+                      <button type="button" onClick={() => setReviewFiles((prev) => prev.filter((_, i) => i !== idx))} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 14, padding: '0 4px' }}>✕</button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         ) : null}

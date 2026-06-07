@@ -6,6 +6,7 @@ use crate::{
 use chrono::{DateTime, Utc};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use uuid::Uuid;
 
 const VALID_BAN_TYPES: &[&str] = &[
@@ -34,7 +35,7 @@ pub struct ExternalBanApiTargetPublic {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
-struct ExternalBanApiTargetRow {
+pub(crate) struct ExternalBanApiTargetRow {
     pub id: Uuid,
     pub name: String,
     pub enabled: bool,
@@ -93,6 +94,36 @@ struct ExternalBanCreatePayload {
     notes: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stats: Option<String>,
+}
+
+// ---- Sync record listing (for sync history UI) ----
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct ExternalBanSyncRecord {
+    pub local_ban_id: Uuid,
+    pub target_id: Uuid,
+    pub target_name: String,
+    pub external_uuid: Option<String>,
+    pub external_id: Option<i64>,
+    pub status: String,
+    pub last_error: Option<String>,
+    pub synced_at: Option<String>,
+    pub updated_at: String,
+    pub ban_player: Option<String>,
+    pub ban_steam_id: Option<String>,
+    pub ban_reason: Option<String>,
+    pub ban_status: Option<String>,
+    #[sqlx(default)]
+    pub total: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SyncRecordQuery {
+    pub target_id: Option<Uuid>,
+    pub status: Option<String>,
+    pub search: Option<String>,
+    pub page: Option<i64>,
+    pub page_size: Option<i64>,
 }
 
 fn public_target(row: ExternalBanApiTargetRow) -> ExternalBanApiTargetPublic {
@@ -294,7 +325,7 @@ pub async fn sync_ban_to_target(
     Ok(sync_ban_to_targets(db, &[target], &ban).await)
 }
 
-pub async fn sync_ban_if_enabled(db: &Database, ban: &BanItem) {
+pub async fn sync_ban_if_enabled(db: &Database, ban: &BanItem) -> ExternalBanSyncSummary {
     let targets = sqlx::query_as::<_, ExternalBanApiTargetRow>(
         r#"SELECT id, name, enabled, base_url, bearer_token, default_ban_type, auto_sync,
                   notes_template, stats_template, created_at, updated_at
@@ -306,9 +337,13 @@ pub async fn sync_ban_if_enabled(db: &Database, ban: &BanItem) {
     .await
     .unwrap_or_default();
     if targets.is_empty() {
-        return;
+        return ExternalBanSyncSummary {
+            ok: true,
+            message: "无自动同步目标".to_string(),
+            items: vec![],
+        };
     }
-    let _ = sync_ban_to_targets(db, &targets, ban).await;
+    sync_ban_to_targets(db, &targets, ban).await
 }
 
 async fn sync_ban_to_targets(
@@ -316,24 +351,30 @@ async fn sync_ban_to_targets(
     targets: &[ExternalBanApiTargetRow],
     ban: &BanItem,
 ) -> ExternalBanSyncSummary {
-    let mut items = Vec::with_capacity(targets.len());
-    for target in targets {
-        let item = match sync_ban_with_target(db, target, ban).await {
-            Ok(result) => result,
-            Err(error) => {
-                tracing::warn!(ban_id = %ban.id, target_id = %target.id, %error, "external ban sync failed");
-                ExternalBanSyncItem {
-                    target_id: target.id,
-                    target_name: target.name.clone(),
-                    ok: false,
-                    message: error.to_string(),
-                    external_uuid: None,
-                    external_id: None,
+    let futures: Vec<_> = targets
+        .iter()
+        .map(|target| {
+            let db = db.clone();
+            let target = target.clone();
+            async move {
+                match sync_ban_with_target(&db, &target, ban).await {
+                    Ok(result) => result,
+                    Err(error) => {
+                        tracing::warn!(ban_id = %ban.id, target_id = %target.id, %error, "external ban sync failed");
+                        ExternalBanSyncItem {
+                            target_id: target.id,
+                            target_name: target.name.clone(),
+                            ok: false,
+                            message: error.to_string(),
+                            external_uuid: None,
+                            external_id: None,
+                        }
+                    }
                 }
             }
-        };
-        items.push(item);
-    }
+        })
+        .collect();
+    let items = futures::future::join_all(futures).await;
 
     let ok_count = items.iter().filter(|item| item.ok).count();
     ExternalBanSyncSummary {
@@ -355,12 +396,16 @@ async fn sync_ban_with_target(
     let token = bearer_token(target)?;
     let payload = build_payload(target, ban)?;
     let url = format!("{}/v1/bans", target.base_url.trim_end_matches('/'));
-    let response = http_client()
-        .post(url)
-        .bearer_auth(token)
-        .json(&payload)
-        .send()
-        .await?;
+    let response = tokio::time::timeout(
+        Duration::from_secs(15),
+        http_client()
+            .post(url)
+            .bearer_auth(token)
+            .json(&payload)
+            .send(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("{} 请求超时（15s）", target.name))??;
 
     let status = response.status();
     if status.is_success() {
@@ -527,6 +572,435 @@ async fn upsert_sync(
     .execute(&db.pool)
     .await?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Unsync: notify external APIs when a ban is unbanned or deleted
+// ---------------------------------------------------------------------------
+
+/// Delete a ban on an external API by its external_uuid.
+async fn delete_external_ban(
+    base_url: &str,
+    token: &str,
+    external_uuid: &str,
+) -> anyhow::Result<()> {
+    let url = format!(
+        "{}/v1/bans/{}",
+        base_url.trim_end_matches('/'),
+        external_uuid
+    );
+    let response = tokio::time::timeout(
+        Duration::from_secs(15),
+        http_client().delete(&url).bearer_auth(token).send(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("删除外部封禁请求超时（15s）"))??;
+
+    if response.status().is_success() || response.status() == StatusCode::NOT_FOUND {
+        return Ok(());
+    }
+    let status = response.status();
+    let message = read_error_message(response).await;
+    anyhow::bail!("删除外部封禁返回 {status}: {message}");
+}
+
+/// Notify all external APIs that a ban has been lifted.
+/// Called after unban when the ban record still exists (status = 'inactive').
+pub async fn unsync_ban(db: &Database, ban_id: Uuid) -> anyhow::Result<()> {
+    #[derive(sqlx::FromRow)]
+    struct SyncedRecord {
+        target_id: Uuid,
+        external_uuid: Option<String>,
+    }
+
+    let records: Vec<SyncedRecord> = sqlx::query_as(
+        r#"SELECT target_id, external_uuid
+           FROM external_ban_syncs
+           WHERE local_ban_id = $1 AND status = 'synced' AND external_uuid IS NOT NULL"#,
+    )
+    .bind(ban_id)
+    .fetch_all(&db.pool)
+    .await?;
+
+    if records.is_empty() {
+        return Ok(());
+    }
+
+    for record in &records {
+        let target = match get_target_row(db, record.target_id).await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(target_id = %record.target_id, %e, "failed to fetch target for unsync");
+                continue;
+            }
+        };
+
+        let token = match bearer_token(&target) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(target_id = %target.id, %e, "no bearer token for unsync");
+                continue;
+            }
+        };
+
+        let uuid_str = match record.external_uuid.as_deref() {
+            Some(u) => u,
+            None => continue,
+        };
+
+        match delete_external_ban(&target.base_url, token, uuid_str).await {
+            Ok(()) => {
+                if let Err(e) = upsert_sync(
+                    db,
+                    ban_id,
+                    target.id,
+                    None,
+                    None,
+                    "unsynced",
+                    None,
+                )
+                .await
+                {
+                    tracing::warn!(%e, "failed to update sync status to unsynced");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(ban_id = %ban_id, target_id = %target.id, %e, "external ban delete failed");
+                if let Err(up_err) = upsert_sync(
+                    db,
+                    ban_id,
+                    target.id,
+                    None,
+                    None,
+                    "unsynced",
+                    Some(&e.to_string()),
+                )
+                .await
+                {
+                    tracing::warn!(%up_err, "failed to update sync status");
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Read sync records for a ban *before* hard-deleting the ban record.
+/// Returns (target_row, external_uuid) pairs so we can notify external APIs after the delete.
+pub async fn read_sync_records_before_delete(
+    db: &Database,
+    ban_id: Uuid,
+) -> anyhow::Result<Vec<(ExternalBanApiTargetRow, String)>> {
+    #[derive(sqlx::FromRow)]
+    struct DeletedSync {
+        target_id: Option<Uuid>,
+        external_uuid: Option<String>,
+    }
+
+    let deleted: Vec<DeletedSync> = sqlx::query_as(
+        r#"DELETE FROM external_ban_syncs
+           WHERE local_ban_id = $1
+           RETURNING target_id, external_uuid"#,
+    )
+    .bind(ban_id)
+    .fetch_all(&db.pool)
+    .await?;
+
+    let mut result = Vec::new();
+    for row in deleted {
+        let target_id = match row.target_id {
+            Some(id) => id,
+            None => continue,
+        };
+        let external_uuid = match row.external_uuid {
+            Some(u) => u,
+            None => continue,
+        };
+        if let Ok(target) = get_target_row(db, target_id).await {
+            result.push((target, external_uuid));
+        }
+    }
+    Ok(result)
+}
+
+/// Notify external APIs about deleted sync records (called after hard-deleting the ban).
+pub async fn notify_external_deletes(
+    records: &[(ExternalBanApiTargetRow, String)],
+) {
+    for (target, external_uuid) in records {
+        let token = match bearer_token(target) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(target_id = %target.id, %e, "no bearer token for external delete");
+                continue;
+            }
+        };
+        if let Err(e) = delete_external_ban(&target.base_url, token, external_uuid).await {
+            tracing::warn!(target_id = %target.id, external_uuid = %external_uuid, %e, "external ban delete failed");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Re-sync: when a ban is updated, delete old external bans and re-create
+// ---------------------------------------------------------------------------
+
+pub async fn resync_ban(
+    db: &Database,
+    ban_id: Uuid,
+    updated_ban: &BanItem,
+) -> anyhow::Result<ExternalBanSyncSummary> {
+    // 1. Find all synced records for this ban with an external UUID
+    #[derive(sqlx::FromRow)]
+    struct SyncedRecord {
+        target_id: Uuid,
+        external_uuid: Option<String>,
+    }
+    let records: Vec<SyncedRecord> = sqlx::query_as(
+        r#"SELECT target_id, external_uuid
+           FROM external_ban_syncs
+           WHERE local_ban_id = $1 AND status = 'synced'"#,
+    )
+    .bind(ban_id)
+    .fetch_all(&db.pool)
+    .await?;
+
+    // 2. Delete external bans and reset sync rows
+    for record in &records {
+        if let Some(ref external_uuid) = record.external_uuid {
+            if let Ok(target) = get_target_row(db, record.target_id).await {
+                if let Ok(token) = bearer_token(&target) {
+                    if let Err(e) =
+                        delete_external_ban(&target.base_url, token, external_uuid).await
+                    {
+                        tracing::warn!(ban_id = %ban_id, target_id = %record.target_id, %e, "failed to delete external ban for resync");
+                    }
+                }
+            }
+        }
+        // Reset sync row to pending
+        let _ = sqlx::query(
+            r#"UPDATE external_ban_syncs
+               SET status = 'pending', external_uuid = NULL, external_id = NULL,
+                   synced_at = NULL, last_error = NULL, updated_at = now()
+               WHERE local_ban_id = $1 AND target_id = $2"#,
+        )
+        .bind(ban_id)
+        .bind(record.target_id)
+        .execute(&db.pool)
+        .await;
+    }
+
+    // 3. Re-sync to all enabled targets
+    let targets = sqlx::query_as::<_, ExternalBanApiTargetRow>(
+        r#"SELECT id, name, enabled, base_url, bearer_token, default_ban_type, auto_sync,
+                  notes_template, stats_template, created_at, updated_at
+           FROM external_ban_api_targets
+           WHERE enabled = true
+           ORDER BY created_at ASC"#,
+    )
+    .fetch_all(&db.pool)
+    .await?;
+
+    if targets.is_empty() {
+        return Ok(ExternalBanSyncSummary {
+            ok: true,
+            message: "无启用的外部封禁 API".to_string(),
+            items: vec![],
+        });
+    }
+
+    Ok(sync_ban_to_targets(db, &targets, updated_ban).await)
+}
+
+// ---------------------------------------------------------------------------
+// Sync history: list sync records, get per-ban sync status
+// ---------------------------------------------------------------------------
+
+pub async fn list_sync_records(
+    db: &Database,
+    query: &SyncRecordQuery,
+) -> anyhow::Result<(Vec<ExternalBanSyncRecord>, i64)> {
+    let page = query.page.unwrap_or(1).max(1);
+    let page_size = query.page_size.unwrap_or(20).clamp(1, 100);
+    let offset = (page - 1) * page_size;
+
+    let mut sql = String::from(
+        r#"SELECT s.local_ban_id, s.target_id, t.name AS target_name,
+                  s.external_uuid, s.external_id, s.status, s.last_error,
+                  s.synced_at::TEXT, s.updated_at::TEXT,
+                  b.player AS ban_player, b.steam_id AS ban_steam_id,
+                  b.reason AS ban_reason, b.status AS ban_status,
+                  COUNT(*) OVER() AS total
+           FROM external_ban_syncs s
+           JOIN external_ban_api_targets t ON t.id = s.target_id
+           LEFT JOIN ban_records b ON b.id = s.local_ban_id
+           WHERE 1=1"#,
+    );
+    let mut bind_idx = 1u32;
+
+    if query.target_id.is_some() {
+        bind_idx += 1;
+        sql.push_str(&format!(" AND s.target_id = ${bind_idx}"));
+    }
+    if query.status.is_some() {
+        bind_idx += 1;
+        sql.push_str(&format!(" AND s.status = ${bind_idx}"));
+    }
+    if query.search.is_some() {
+        bind_idx += 1;
+        let search_idx = bind_idx;
+        bind_idx += 1;
+        sql.push_str(&format!(
+            " AND (b.steam_id ILIKE ${search_idx} OR b.player ILIKE ${bind_idx})"
+        ));
+    }
+
+    sql.push_str(" ORDER BY s.updated_at DESC");
+    sql.push_str(&format!(
+        " LIMIT {page_size_int} OFFSET {offset_int}",
+        page_size_int = page_size,
+        offset_int = offset
+    ));
+
+    let mut q = sqlx::query_as::<_, ExternalBanSyncRecord>(&sql);
+
+    // Pre-compute search pattern to satisfy lifetime requirements
+    let search_pattern = query
+        .search
+        .as_ref()
+        .map(|s| format!("%{s}%"));
+
+    if let Some(ref target_id) = query.target_id {
+        q = q.bind(target_id);
+    }
+    if let Some(ref status) = query.status {
+        q = q.bind(status);
+    }
+    if let Some(ref pattern) = search_pattern {
+        q = q.bind(pattern).bind(pattern);
+    }
+
+    let rows = q.fetch_all(&db.pool).await?;
+    let total = rows.first().and_then(|r| r.total).unwrap_or(0);
+
+    Ok((rows, total))
+}
+
+pub async fn get_ban_sync_status(
+    db: &Database,
+    ban_id: Uuid,
+) -> anyhow::Result<Vec<ExternalBanSyncRecord>> {
+    let rows = sqlx::query_as::<_, ExternalBanSyncRecord>(
+        r#"SELECT s.local_ban_id, s.target_id, t.name AS target_name,
+                  s.external_uuid, s.external_id, s.status, s.last_error,
+                  s.synced_at::TEXT, s.updated_at::TEXT,
+                  b.player AS ban_player, b.steam_id AS ban_steam_id,
+                  b.reason AS ban_reason, b.status AS ban_status
+           FROM external_ban_syncs s
+           JOIN external_ban_api_targets t ON t.id = s.target_id
+           LEFT JOIN ban_records b ON b.id = s.local_ban_id
+           WHERE s.local_ban_id = $1
+           ORDER BY t.name ASC"#,
+    )
+    .bind(ban_id)
+    .fetch_all(&db.pool)
+    .await?;
+    Ok(rows)
+}
+
+// ---------------------------------------------------------------------------
+// Batch retry failed syncs
+// ---------------------------------------------------------------------------
+
+pub async fn retry_failed_syncs(db: &Database) -> anyhow::Result<ExternalBanSyncSummary> {
+    // Find all failed sync records where the ban is still active
+    #[derive(sqlx::FromRow)]
+    struct FailedSync {
+        local_ban_id: Uuid,
+        target_id: Uuid,
+    }
+
+    let failed: Vec<FailedSync> = sqlx::query_as(
+        r#"SELECT s.local_ban_id, s.target_id
+           FROM external_ban_syncs s
+           JOIN ban_records b ON b.id = s.local_ban_id
+           WHERE s.status = 'failed' AND b.status = 'active'"#,
+    )
+    .fetch_all(&db.pool)
+    .await?;
+
+    if failed.is_empty() {
+        return Ok(ExternalBanSyncSummary {
+            ok: true,
+            message: "没有可重试的失败同步".to_string(),
+            items: vec![],
+        });
+    }
+
+    // Group by ban, fetch bans and targets, then re-sync
+    let mut all_items: Vec<ExternalBanSyncItem> = Vec::new();
+
+    // Collect unique ban IDs
+    let ban_ids: Vec<Uuid> = failed
+        .iter()
+        .map(|f| f.local_ban_id)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    for ban_id in &ban_ids {
+        let ban = match ban_service::get_ban(db, *ban_id).await {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!(ban_id = %ban_id, %e, "failed to fetch ban for retry");
+                continue;
+            }
+        };
+
+        let target_ids: Vec<Uuid> = failed
+            .iter()
+            .filter(|f| f.local_ban_id == *ban_id)
+            .map(|f| f.target_id)
+            .collect();
+
+        let mut targets = Vec::new();
+        for tid in &target_ids {
+            if let Ok(t) = get_target_row(db, *tid).await {
+                if t.enabled {
+                    targets.push(t);
+                }
+            }
+        }
+
+        if targets.is_empty() {
+            continue;
+        }
+
+        // Reset sync rows to pending before retrying
+        for tid in &target_ids {
+            let _ = sqlx::query(
+                r#"UPDATE external_ban_syncs
+                   SET status = 'pending', last_error = NULL, updated_at = now()
+                   WHERE local_ban_id = $1 AND target_id = $2"#,
+            )
+            .bind(ban_id)
+            .bind(tid)
+            .execute(&db.pool)
+            .await;
+        }
+
+        let summary = sync_ban_to_targets(db, &targets, &ban).await;
+        all_items.extend(summary.items);
+    }
+
+    let ok_count = all_items.iter().filter(|item| item.ok).count();
+    Ok(ExternalBanSyncSummary {
+        ok: ok_count == all_items.len(),
+        message: format!("重试完成：成功 {ok_count}/{}", all_items.len()),
+        items: all_items,
+    })
 }
 
 #[cfg(test)]

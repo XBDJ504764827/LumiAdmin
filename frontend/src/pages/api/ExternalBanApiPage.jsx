@@ -1,8 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useAuth } from '../../state/auth.jsx';
 import { useToast, ToastContainer } from '../../shared/Toast.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
+import { Pagination } from '../../shared/Pagination.jsx';
+import { SearchBar } from '../../shared/SearchBar.jsx';
 
 const banTypeOptions = [
   { value: 'ban_evasion', label: 'Ban Evasion' },
@@ -13,6 +15,13 @@ const banTypeOptions = [
   { value: 'strafe_macro', label: 'Strafe Macro' },
   { value: 'other', label: 'Other' },
 ];
+
+const syncStatusMap = {
+  synced: { label: '已同步', className: 'pill-online' },
+  failed: { label: '失败', className: 'pill-offline' },
+  unsynced: { label: '已撤销', className: 'pill-away' },
+  pending: { label: '待同步', className: 'pill-idle' },
+};
 
 const defaultForm = {
   name: '',
@@ -58,6 +67,7 @@ export function ExternalBanApiPage() {
   const { confirm, dialog } = useConfirmDialog();
   const token = session?.token ?? null;
 
+  // ---- Target management state ----
   const [targets, setTargets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -66,6 +76,14 @@ export function ExternalBanApiPage() {
   const [form, setForm] = useState(defaultForm);
   const [saving, setSaving] = useState(false);
   const [testingId, setTestingId] = useState(null);
+
+  // ---- Sync history state ----
+  const [syncData, setSyncData] = useState(null);
+  const [syncLoading, setSyncLoading] = useState(false);
+  const [syncSearch, setSyncSearch] = useState('');
+  const [syncStatus, setSyncStatus] = useState('');
+  const [syncPage, setSyncPage] = useState(1);
+  const [retrying, setRetrying] = useState(false);
 
   async function loadTargets() {
     try {
@@ -80,7 +98,23 @@ export function ExternalBanApiPage() {
     }
   }
 
+  const loadSyncHistory = useCallback(async (page = syncPage, search = syncSearch, status = syncStatus) => {
+    try {
+      setSyncLoading(true);
+      const params = { page, page_size: 20 };
+      if (search) params.search = search;
+      if (status) params.status = status;
+      const result = await api.externalBanApiSyncs(token, params);
+      setSyncData(result);
+    } catch {
+      setSyncData(null);
+    } finally {
+      setSyncLoading(false);
+    }
+  }, [token, syncPage, syncSearch, syncStatus]);
+
   useEffect(() => { loadTargets(); }, [token]);
+  useEffect(() => { if (token) loadSyncHistory(); }, [token, syncPage, syncSearch, syncStatus]);
 
   function openCreate() {
     setEditingTarget(null);
@@ -158,6 +192,38 @@ export function ExternalBanApiPage() {
     }
   }
 
+  async function handleRetryFailed() {
+    try {
+      setRetrying(true);
+      const result = await api.retryFailedExternalBanSyncs(token);
+      toast({
+        title: result.result.ok ? '重试完成' : '部分重试失败',
+        message: result.result.message,
+        tone: result.result.ok ? 'success' : 'warning',
+      });
+      loadSyncHistory();
+    } catch (error) {
+      toast({ title: '重试失败', message: error.message, tone: 'danger' });
+    } finally {
+      setRetrying(false);
+    }
+  }
+
+  function handleSyncSearch(term) {
+    setSyncSearch(term);
+    setSyncPage(1);
+  }
+
+  function handleSyncStatusChange(e) {
+    setSyncStatus(e.target.value);
+    setSyncPage(1);
+  }
+
+  const syncItems = syncData?.items ?? [];
+  const syncTotal = syncData?.total ?? 0;
+  const syncPageSize = syncData?.page_size ?? 20;
+  const failedCount = syncItems.filter((x) => x.status === 'failed').length;
+
   return (
     <div id="external-ban-api" className="content-section active">
       <div className="breadcrumb">
@@ -172,6 +238,7 @@ export function ExternalBanApiPage() {
         <button className="btn btn-primary" onClick={openCreate}>添加外部 API</button>
       </div>
 
+      {/* ---- Target management table ---- */}
       <div className="card">
         <div className="card-body p-0">
           <div className="table-responsive">
@@ -216,6 +283,78 @@ export function ExternalBanApiPage() {
               </tbody>
             </table>
           </div>
+        </div>
+      </div>
+
+      {/* ---- Sync history section ---- */}
+      <div style={{ marginTop: 32 }}>
+        <div className="page-header" style={{ marginBottom: 16 }}>
+          <div>
+            <div className="page-title" style={{ fontSize: 18 }}>同步历史</div>
+            <div className="page-sub">查看封禁记录与外部 API 的同步状态。</div>
+          </div>
+          {syncTotal > 0 && (
+            <button className="btn btn-outline" onClick={handleRetryFailed} disabled={retrying}>
+              {retrying ? '重试中...' : '重试失败同步'}
+            </button>
+          )}
+        </div>
+
+        <div className="filter-bar">
+          <SearchBar value={syncSearch} onChange={handleSyncSearch} placeholder="搜索 SteamID / 玩家名" />
+          <select className="form-control" style={{ width: 140 }} value={syncStatus} onChange={handleSyncStatusChange}>
+            <option value="">全部状态</option>
+            <option value="synced">已同步</option>
+            <option value="failed">失败</option>
+            <option value="unsynced">已撤销</option>
+            <option value="pending">待同步</option>
+          </select>
+        </div>
+
+        <div className="card">
+          <div className="card-body p-0">
+            <div className="table-responsive">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>玩家</th>
+                    <th>SteamID</th>
+                    <th>目标</th>
+                    <th>状态</th>
+                    <th>外部 UUID</th>
+                    <th>错误信息</th>
+                    <th>同步时间</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {syncLoading ? <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--text2)' }}>正在加载...</td></tr> : null}
+                  {!syncLoading && !syncData ? <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--text2)' }}>暂无同步记录。</td></tr> : null}
+                  {!syncLoading && syncData && syncItems.length === 0 ? (
+                    <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--text2)' }}>暂无匹配的同步记录。</td></tr>
+                  ) : null}
+                  {syncItems.map((item) => {
+                    const statusInfo = syncStatusMap[item.status] || { label: item.status, className: 'pill-idle' };
+                    return (
+                      <tr key={`${item.local_ban_id}-${item.target_id}`}>
+                        <td>{item.ban_player || '-'}</td>
+                        <td className="steam-id">{item.ban_steam_id || '-'}</td>
+                        <td>{item.target_name}</td>
+                        <td><span className={`status-pill ${statusInfo.className}`}>{statusInfo.label}</span></td>
+                        <td className="steam-id">{item.external_uuid || '-'}</td>
+                        <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.last_error || ''}>
+                          {item.last_error ? <span style={{ color: 'var(--danger)' }}>{item.last_error}</span> : '-'}
+                        </td>
+                        <td style={{ whiteSpace: 'nowrap' }}>{item.synced_at || item.updated_at}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          {syncTotal > syncPageSize ? (
+            <Pagination page={syncPage} total={syncTotal} pageSize={syncPageSize} onChange={setSyncPage} />
+          ) : null}
         </div>
       </div>
 

@@ -384,7 +384,7 @@ pub async fn update_evidence_metadata(
     ))
 }
 
-async fn fetch_internal_profile(
+pub async fn fetch_internal_profile(
     db: &Database,
     steamid64: &str,
 ) -> anyhow::Result<Option<PlayerInternalProfile>> {

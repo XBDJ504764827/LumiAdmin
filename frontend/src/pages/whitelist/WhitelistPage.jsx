@@ -9,6 +9,7 @@ import { formatChinaDateTime } from '../../shared/time.js';
 import { notifyPendingReviewsUpdated, usePendingReviewIndicators } from '../../hooks/usePendingReviewIndicators.js';
 import { fetchGlobalBansBatch, parseBanData, inferGlobalBanRisk } from './whitelistGlobalBans.js';
 import { ManualCreateModal, RejectModal, ApproveModal, BanDetailModal, PlayerDetailModal } from './WhitelistModals.jsx';
+import { InternalNoteInline } from '../../shared/InternalNote.jsx';
 
 const emptyManualForm = { nickname: '', steam_input: '' };
 const APPROVE_REVIEW_SECONDS = 5;
@@ -39,6 +40,7 @@ function renderNicknameCell(item, globalBans, openBanDetail) {
           <span className="global-ban-count">{itemBans.length}</span>
         </button>
       )}
+      <InternalNoteInline steamid64={item.steamid64} />
     </td>
   );
 }

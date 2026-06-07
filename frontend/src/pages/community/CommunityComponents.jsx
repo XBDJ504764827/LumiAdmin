@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { BAN_DURATION_OPTIONS, BAN_REASON_OPTIONS } from './onlinePlayers.js';
+import { InternalNoteBadge } from '../../shared/InternalNote.jsx';
 
 /**
  * 在线玩家卡片组件
@@ -51,6 +52,7 @@ export function OnlinePlayerCard({ player, canOperate, onKick, onBan }) {
           </div>
         ) : null}
       </div>
+      <InternalNoteBadge steamid64={player.steam_id64} />
       {showKickForm ? (
         <div className="online-player-action-form">
           <div className="action-form-input-row">

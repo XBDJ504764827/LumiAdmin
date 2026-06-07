@@ -48,6 +48,24 @@ pub(crate) async fn get_player_detail(
     Ok(Json(serde_json::json!({ "data": detail })))
 }
 
+/// 获取玩家内部备注（管理员只读）
+pub(crate) async fn get_player_internal_profile(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Path(steamid64): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let actor = current_operator(&ctx, &headers).await?;
+    if !permission_service::can_manage_player_internal_data(&actor) {
+        return Err(forbidden());
+    }
+
+    let profile = player_detail_service::fetch_internal_profile(&ctx.db, &steamid64)
+        .await
+        .map_err(invalid_request)?;
+
+    Ok(Json(serde_json::json!({ "internal_profile": profile })))
+}
+
 pub(crate) async fn update_player_internal_profile(
     State(ctx): State<AppCtx>,
     headers: HeaderMap,

@@ -1,5 +1,6 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
+import { useApiQuery } from '../../shared/useApiQuery.js';
 import { useAuth } from '../../state/auth.jsx';
 import { useToast, ToastContainer } from '../../shared/Toast.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
@@ -36,9 +37,11 @@ export function PlayerReportPage() {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState(undefined);
   const [page, setPage] = useState(1);
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState('');
+
+  const { data, isLoading, error: loadError, refetch } = useApiQuery(
+    ['playerReports', { page, search, status }],
+    (token) => api.playerReports(token, { page, page_size: 20, ...(search ? { search } : {}), ...(status ? { status } : {}) }),
+  );
 
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailItem, setDetailItem] = useState(null);
@@ -55,26 +58,6 @@ export function PlayerReportPage() {
   const reviewFileRef = useRef(null);
   const [uploadingReportFiles, setUploadingReportFiles] = useState(false);
   const [reviewFiles, setReviewFiles] = useState([]);
-
-  const loadItems = useCallback(async () => {
-    if (!token) return;
-    try {
-      setLoading(true);
-      setLoadError('');
-      const params = { page, page_size: 20 };
-      if (search) params.search = search;
-      if (status) params.status = status;
-      const result = await api.playerReports(token, params);
-      setData(result);
-    } catch {
-      setData(null);
-      setLoadError('加载玩家举报失败，请稍后重试');
-    } finally {
-      setLoading(false);
-    }
-  }, [token, page, search, status]);
-
-  React.useEffect(() => { loadItems(); }, [loadItems]);
 
   async function openDetail(item) {
     setDetailItem(item);
@@ -153,7 +136,7 @@ export function PlayerReportPage() {
       setReviewOpen(false);
       setReviewItem(null);
       setReviewFiles([]);
-      await loadItems();
+      await refetch();
       notifyPendingReviewsUpdated({ source: 'playerReport', action: reviewStatus });
       toast({ title: '驳回成功', message: '已驳回该玩家举报。' });
     } catch (e) {
@@ -217,13 +200,13 @@ export function PlayerReportPage() {
                 </tr>
               </thead>
               <tbody>
-                {loading ? (
+                {isLoading ? (
                   <tr><td colSpan={9} className="text-center text-muted">正在加载玩家举报...</td></tr>
                 ) : null}
-                {!loading && loadError ? (
-                  <tr><td colSpan={9} className="text-center text-danger">{loadError}</td></tr>
+                {!isLoading && loadError ? (
+                  <tr><td colSpan={9} className="text-center text-danger">{loadError.message}</td></tr>
                 ) : null}
-                {!loading && items.map((item) => {
+                {!isLoading && items.map((item) => {
                   const st = STATUS_MAP[item.status] || { label: item.status, pill: '' };
                   return (
                     <tr key={item.id}>
@@ -256,7 +239,7 @@ export function PlayerReportPage() {
                     </tr>
                   );
                 })}
-                {!loading && items.length === 0 ? (
+                {!isLoading && items.length === 0 ? (
                   <tr><td colSpan={9} className="text-center text-muted">暂无玩家举报</td></tr>
                 ) : null}
               </tbody>

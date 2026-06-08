@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
+import { useApiQuery } from '../../shared/useApiQuery.js';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { useAuth } from '../../state/auth.jsx';
 import { useToast, ToastContainer } from '../../shared/Toast.jsx';
@@ -85,9 +86,6 @@ export function WhitelistPage() {
   const [tab, setTab] = useState(getSavedTab);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
   const [manualModalOpen, setManualModalOpen] = useState(false);
   const [rejectModal, setRejectModal] = useState({ open: false, item: null, reason: '', error: '' });
   const [approveModal, setApproveModal] = useState(emptyApproveModal);
@@ -114,23 +112,10 @@ export function WhitelistPage() {
   // 数据加载
   // ---------------------------------------------------------------------------
 
-  const loadItems = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError('');
-      const params = { page, page_size: 20, status: tab };
-      if (search) params.search = search;
-      const response = await api.whitelist(token, params);
-      setData(response);
-    } catch (loadError) {
-      setError(loadError.message);
-      setData(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [token, tab, page, search]);
-
-  useEffect(() => { loadItems(); }, [loadItems]);
+  const { data, isLoading, error, refetch } = useApiQuery(
+    ['whitelist', { tab, page, search }],
+    (token) => api.whitelist(token, { page, page_size: 20, status: tab, ...(search ? { search } : {}) }),
+  );
 
   useEffect(() => {
     if (!approveModal.open || approveModal.secondsRemaining <= 0) return undefined;
@@ -210,7 +195,7 @@ export function WhitelistPage() {
     try {
       setSubmitting(true);
       await api.approveWhitelist(token, item.id);
-      await loadItems();
+      await refetch();
       notifyPendingReviewsUpdated({ source: 'whitelist', action: 'approve' });
       toast({ title: '审核通过', message: `${item.nickname} 的白名单申请已通过。` });
     } catch (actionError) {
@@ -232,7 +217,7 @@ export function WhitelistPage() {
       setSubmitting(true);
       await api.approveWhitelist(token, approveModal.item.id, { reason: approveModal.reason.trim() });
       setApproveModal(emptyApproveModal());
-      await loadItems();
+      await refetch();
       notifyPendingReviewsUpdated({ source: 'whitelist', action: 'approve' });
       toast({ title: '审核通过', message: `${approveModal.item.nickname} 的白名单申请已通过。` });
     } catch (actionError) {
@@ -254,7 +239,7 @@ export function WhitelistPage() {
       setSubmitting(true);
       await api.rejectWhitelist(token, rejectModal.item.id, { reason: rejectModal.reason.trim() });
       setRejectModal({ open: false, item: null, reason: '', error: '' });
-      await loadItems();
+      await refetch();
       notifyPendingReviewsUpdated({ source: 'whitelist', action: 'reject' });
       toast({ title: '已拒绝', message: `已拒绝 ${rejectModal.item.nickname} 的白名单申请。` });
     } catch (actionError) {
@@ -266,7 +251,7 @@ export function WhitelistPage() {
     try {
       setSubmitting(true);
       await api.restoreWhitelist(token, item.id);
-      await loadItems();
+      await refetch();
       notifyPendingReviewsUpdated({ source: 'whitelist', action: 'restore' });
       toast({ title: '恢复成功', message: `${item.nickname} 的白名单已恢复。` });
     } catch (actionError) {
@@ -283,7 +268,7 @@ export function WhitelistPage() {
     try {
       setSubmitting(true);
       await api.revokeWhitelist(token, item.id);
-      await loadItems();
+      await refetch();
       notifyPendingReviewsUpdated({ source: 'whitelist', action: 'revoke' });
       toast({ title: '删除成功', message: `${item.nickname} 的白名单审核已删除。` });
     } catch (actionError) {
@@ -303,7 +288,7 @@ export function WhitelistPage() {
       });
       setManualModalOpen(false);
       setManualForm(emptyManualForm);
-      await loadItems();
+      await refetch();
       notifyPendingReviewsUpdated({ source: 'whitelist', action: 'manual_create' });
       toast({ title: '添加成功', message: `已手动添加 ${manualForm.nickname.trim()} 的白名单。` });
     } catch (actionError) {
@@ -345,7 +330,7 @@ export function WhitelistPage() {
     try {
       setRefreshing(true);
       const result = await api.refreshSingleSteamName(token, item.id);
-      await loadItems();
+      await refetch();
       toast({ title: '刷新成功', message: `Steam名称已更新为: ${result.steam_persona_name ?? '(未获取到)'}` });
     } catch (actionError) {
       toast({ title: '刷新失败', message: actionError.message, tone: 'danger' });
@@ -356,7 +341,7 @@ export function WhitelistPage() {
     try {
       setRefreshing(true);
       const result = await api.refreshAllSteamNames(token, tab);
-      await loadItems();
+      await refetch();
       toast({ title: '批量刷新完成', message: `成功更新了 ${result.updated_count} 条记录的Steam名称。` });
     } catch (actionError) {
       toast({ title: '批量刷新失败', message: actionError.message, tone: 'danger' });
@@ -421,9 +406,9 @@ export function WhitelistPage() {
           </div>
         </div>
         <div className="card-body p-0">
-          {loading ? <div className="p-20">正在加载白名单数据...</div> : null}
-          {!loading && error ? <div style={{ padding: 20, color: 'var(--accent)' }}>{error}</div> : null}
-          {!loading && !error ? (
+          {isLoading ? <div className="p-20">正在加载白名单数据...</div> : null}
+          {!isLoading && error ? <div style={{ padding: 20, color: 'var(--accent)' }}>{error.message}</div> : null}
+          {!isLoading && !error ? (
             <div className="table-responsive">
               <table className="data-table">
                 <thead>

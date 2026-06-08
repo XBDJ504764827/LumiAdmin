@@ -1,5 +1,6 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
+import { useApiQuery } from '../../shared/useApiQuery.js';
 import { useAuth } from '../../state/auth.jsx';
 import { useToast, ToastContainer } from '../../shared/Toast.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
@@ -53,9 +54,11 @@ export function BanAppealPage() {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState(undefined);
   const [page, setPage] = useState(1);
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState('');
+
+  const { data, isLoading, error: loadError, refetch } = useApiQuery(
+    ['banAppeals', { page, search, status }],
+    (token) => api.banAppeals(token, { page, page_size: 20, ...(search ? { search } : {}), ...(status ? { status } : {}) }),
+  );
 
   // 审核弹窗
   const [reviewOpen, setReviewOpen] = useState(false);
@@ -76,27 +79,8 @@ export function BanAppealPage() {
   const reviewFileRef = useRef(null);
   const [reviewFiles, setReviewFiles] = useState([]);
 
-  const loadItems = useCallback(async () => {
-    try {
-      setLoading(true);
-      setLoadError('');
-      const params = { page, page_size: 20 };
-      if (search) params.search = search;
-      if (status) params.status = status;
-      const result = await api.banAppeals(token, params);
-      setData(result);
-    } catch {
-      setData(null);
-      setLoadError('加载申诉数据失败，请稍后重试');
-    } finally {
-      setLoading(false);
-    }
-  }, [token, page, search, status]);
-
-  React.useEffect(() => { loadItems(); }, [loadItems]);
-
   function refresh() {
-    loadItems();
+    refetch();
   }
 
   async function openDetail(item) {
@@ -232,13 +216,13 @@ export function BanAppealPage() {
                 </tr>
               </thead>
               <tbody>
-                {loading ? (
+                {isLoading ? (
                   <tr><td colSpan={9} className="text-center text-muted">正在加载申诉数据...</td></tr>
                 ) : null}
-                {!loading && loadError ? (
-                  <tr><td colSpan={9} className="text-center text-danger">{loadError}</td></tr>
+                {!isLoading && loadError ? (
+                  <tr><td colSpan={9} className="text-center text-danger">{loadError.message}</td></tr>
                 ) : null}
-                {!loading && items.map((item) => {
+                {!isLoading && items.map((item) => {
                   const st = STATUS_MAP[item.status] || { label: item.status, pill: '' };
                   return (
                     <tr key={item.id}>
@@ -271,7 +255,7 @@ export function BanAppealPage() {
                     </tr>
                   );
                 })}
-                {!loading && items.length === 0 ? (
+                {!isLoading && items.length === 0 ? (
                   <tr><td colSpan={9} className="text-center text-muted">暂无申诉记录</td></tr>
                 ) : null}
               </tbody>

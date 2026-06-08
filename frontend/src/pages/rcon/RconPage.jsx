@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useAuth } from '../../state/auth.jsx';
+import { useApiQuery } from '../../shared/useApiQuery.js';
 import { useToast, ToastContainer } from '../../shared/Toast.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 
@@ -37,12 +38,16 @@ export function RconPage() {
   const { toast, toasts, dismiss: dismissToast } = useToast();
   const token = session?.token ?? null;
 
-  const [groups, setGroups] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState('');
   const [selectedServerId, setSelectedServerId] = useState('');
   const [executing, setExecuting] = useState('');
   const [customCommand, setCustomCommand] = useState('');
+
+  const { data: serversResponse, isLoading, error: loadError } = useApiQuery(
+    ['communityServers'],
+    (token) => api.servers(token),
+  );
+
+  const groups = serversResponse?.groups ?? [];
 
   // 服务器列表（扁平化）
   const allServers = groups.flatMap((g) =>
@@ -56,22 +61,6 @@ export function RconPage() {
     }))
   );
   const selectedServer = allServers.find((s) => s.id === selectedServerId);
-
-  const loadServers = useCallback(async () => {
-    try {
-      setLoading(true);
-      setLoadError('');
-      const response = await api.servers(token);
-      setGroups(response?.groups ?? []);
-    } catch {
-      setGroups([]);
-      setLoadError('加载服务器列表失败，请稍后重试');
-    } finally {
-      setLoading(false);
-    }
-  }, [token]);
-
-  useEffect(() => { loadServers(); }, [loadServers]);
 
   async function handleExecute(cmd) {
     if (!selectedServerId) {
@@ -103,6 +92,9 @@ export function RconPage() {
     setCustomCommand('');
   }
 
+  // handleExecute 内部需要 token，但 useApiMutation 不太适合这里因为需要 selectedServerId
+  // 使用 useApiQuery 已获取 serversResponse，token 通过 useApiQuery 自动注入
+
   return (
     <div id="rcon" className="content-section active">
       <div className="breadcrumb"><span>核心管理</span><span className="sep">›</span><span className="current">RCON 命令</span></div>
@@ -122,10 +114,10 @@ export function RconPage() {
           </div>
         </div>
         <div className="card-body">
-          {loading ? (
+          {isLoading ? (
             <div className="text-muted-light">正在加载服务器列表...</div>
           ) : loadError ? (
-            <div style={{ color: 'var(--danger)' }}>{loadError}</div>
+            <div style={{ color: 'var(--danger)' }}>{loadError.message}</div>
           ) : allServers.length === 0 ? (
             <div className="text-muted-light">暂无可用服务器，请先在社区组管理中添加服务器。</div>
           ) : (

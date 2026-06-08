@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { useAuth } from '../../state/auth.jsx';
+import React, { useState } from 'react';
+import { useApiQuery } from '../../shared/useApiQuery.js';
 import { api } from '../../lib/api.js';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
@@ -19,31 +19,13 @@ function modulePillClass(module) {
 }
 
 export function LogsPage() {
-  const { session } = useAuth();
-  const token = session?.token ?? null;
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
 
-  const loadItems = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError('');
-      const params = { page, page_size: 20 };
-      if (search) params.search = search;
-      const result = await api.logs(token, params);
-      setData(result);
-    } catch (loadError) {
-      setError(loadError.message);
-      setData(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [token, page, search]);
-
-  useEffect(() => { loadItems(); }, [loadItems]);
+  const { data, isLoading, error } = useApiQuery(
+    ['logs', { page, search }],
+    (token) => api.logs(token, { page, page_size: 20, ...(search ? { search } : {}) }),
+  );
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
@@ -63,9 +45,9 @@ export function LogsPage() {
 
       <div className="card"><div className="card-body p-0">
         <div className="table-responsive"><table className="data-table"><thead><tr><th>操作人</th><th>模块</th><th>操作动作</th><th>目标详情</th><th>操作IP</th><th>操作时间</th></tr></thead><tbody>
-          {loading ? <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text2)' }}>正在加载日志...</td></tr> : null}
-          {error ? <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--accent)' }}>{error}</td></tr> : null}
-          {!loading && !error && items.map((x) => (
+          {isLoading ? <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text2)' }}>正在加载日志...</td></tr> : null}
+          {!isLoading && error ? <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--accent)' }}>{error.message}</td></tr> : null}
+          {!isLoading && !error && items.map((x) => (
             <tr key={`${x.operator_name}-${x.created_at}`}>
               <td className="fw-500">{x.operator_name}</td>
               <td><span className={`status-pill ${modulePillClass(x.module)}`}>{x.module}</span></td>
@@ -75,7 +57,7 @@ export function LogsPage() {
               <td className="text-muted-light">{formatChinaDateTime(x.created_at, { seconds: false })}</td>
             </tr>
           ))}
-          {!loading && !error && items.length === 0 ? <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text2)' }}>暂无日志记录</td></tr> : null}
+          {!isLoading && !error && items.length === 0 ? <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text2)' }}>暂无日志记录</td></tr> : null}
         </tbody></table></div>
       </div></div>
 

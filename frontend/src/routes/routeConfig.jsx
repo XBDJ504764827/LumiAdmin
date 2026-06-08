@@ -1,5 +1,6 @@
 import React, { lazy, Suspense } from 'react';
 import { PageSkeleton } from '../shared/PageSkeleton.jsx';
+import { ErrorBoundary } from '../shared/ErrorBoundary.jsx';
 
 const DashboardPage = lazy(() => import('../pages/dashboard/DashboardPage.jsx').then(m => ({ default: m.DashboardPage })));
 const CommunityPage = lazy(() => import('../pages/community/CommunityPage.jsx').then(m => ({ default: m.CommunityPage })));
@@ -27,7 +28,11 @@ const PublicPlayerReportPage = lazy(() => import('../pages/public/PublicPlayerRe
 const NotFoundPage = lazy(() => import('../pages/notFound/NotFoundPage.jsx').then(m => ({ default: m.NotFoundPage })));
 
 function Lazy({ children }) {
-  return <Suspense fallback={<PageSkeleton />}>{children}</Suspense>;
+  return (
+    <ErrorBoundary>
+      <Suspense fallback={<PageSkeleton />}>{children}</Suspense>
+    </ErrorBoundary>
+  );
 }
 
 export const protectedRoutes = [

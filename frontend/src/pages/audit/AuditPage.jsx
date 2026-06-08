@@ -1,7 +1,6 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { api } from '../../lib/api.js';
-import { useAuth } from '../../state/auth.jsx';
-import { ToastContainer, useToast } from '../../shared/Toast.jsx';
+import { useApiQuery } from '../../shared/useApiQuery.js';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
@@ -21,41 +20,25 @@ const SOURCE_LABELS = {
 };
 
 export function AuditPage() {
-  const { session } = useAuth();
-  const { toast, toasts, dismiss: dismissToast } = useToast();
-  const token = session?.token ?? null;
-
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
-  // 过滤条件
   const [search, setSearch] = useState('');
   const [operationFilter, setOperationFilter] = useState('');
   const [sourceFilter, setSourceFilter] = useState('');
   const [successFilter, setSuccessFilter] = useState('');
   const [page, setPage] = useState(1);
 
-  const loadItems = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError('');
-      const params = { page, page_size: 20 };
-      if (search) params.target = search;
-      if (operationFilter) params.operation = operationFilter;
-      if (sourceFilter) params.source = sourceFilter;
-      if (successFilter) params.success = successFilter === 'true';
-      const result = await api.auditLogs(token, params);
-      setData(result);
-    } catch (err) {
-      setError(err.message);
-      setData(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [token, page, search, operationFilter, sourceFilter, successFilter]);
+  const buildParams = () => {
+    const params = { page, page_size: 20 };
+    if (search) params.target = search;
+    if (operationFilter) params.operation = operationFilter;
+    if (sourceFilter) params.source = sourceFilter;
+    if (successFilter) params.success = successFilter === 'true';
+    return params;
+  };
 
-  useEffect(() => { loadItems(); }, [loadItems]);
+  const { data, isLoading, error } = useApiQuery(
+    ['auditLogs', { page, search, operationFilter, sourceFilter, successFilter }],
+    (token) => api.auditLogs(token, buildParams()),
+  );
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
@@ -127,9 +110,9 @@ export function AuditPage() {
             </select>
           </div>
 
-          {loading ? <div className="p-20">正在加载审计日志...</div> : null}
-          {!loading && error ? <div style={{ padding: 20, color: 'var(--accent)' }}>{error}</div> : null}
-          {!loading && !error ? (
+          {isLoading ? <div className="p-20">正在加载审计日志...</div> : null}
+          {!isLoading && error ? <div style={{ padding: 20, color: 'var(--accent)' }}>{error.message}</div> : null}
+          {!isLoading && !error ? (
             <div className="table-responsive">
               <table className="data-table">
                 <thead>
@@ -205,8 +188,6 @@ export function AuditPage() {
       </div>
 
       <Pagination page={page} pageSize={20} total={total} onChange={setPage} />
-
-      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

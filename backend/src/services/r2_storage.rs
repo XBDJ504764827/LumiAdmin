@@ -177,11 +177,11 @@ impl R2Storage {
         );
 
         let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(reqwest::header::AUTHORIZATION, auth_header.parse().unwrap());
-        headers.insert("x-amz-date", amz_date.parse().unwrap());
-        headers.insert("x-amz-content-sha256", payload_hash.parse().unwrap());
-        headers.insert(reqwest::header::CONTENT_TYPE, content_type.parse().unwrap());
-        headers.insert(reqwest::header::HOST, host.parse().unwrap());
+        headers.insert(reqwest::header::AUTHORIZATION, auth_header.parse().map_err(|e| anyhow::anyhow!("invalid AUTHORIZATION header: {e}"))?);
+        headers.insert("x-amz-date", amz_date.parse().map_err(|e| anyhow::anyhow!("invalid x-amz-date header: {e}"))?);
+        headers.insert("x-amz-content-sha256", payload_hash.parse().map_err(|e| anyhow::anyhow!("invalid x-amz-content-sha256 header: {e}"))?);
+        headers.insert(reqwest::header::CONTENT_TYPE, content_type.parse().map_err(|e| anyhow::anyhow!("invalid CONTENT_TYPE header: {e}"))?);
+        headers.insert(reqwest::header::HOST, host.parse().map_err(|e| anyhow::anyhow!("invalid HOST header: {e}"))?);
 
         Ok(headers)
     }

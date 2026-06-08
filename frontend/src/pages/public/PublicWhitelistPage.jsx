@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useState } from 'react';
+import { useApiQuery } from '../../shared/useApiQuery.js';
 import { api } from '../../lib/api.js';
 import { PublicPageShell } from './PublicPageShell.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
@@ -8,33 +9,18 @@ import { formatChinaDateTime } from '../../shared/time.js';
 export function PublicWhitelistPage() {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
 
-  const loadItems = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const params = { page, page_size: 20 };
-      if (search) params.search = search;
-      const result = await api.publicWhitelist(params);
-      setData(result);
-    } catch (err) {
-      setError(err);
-      setData(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [page, search]);
-
-  useEffect(() => { loadItems(); }, [loadItems]);
+  const { data, isLoading, error, refetch } = useApiQuery(
+    ['publicWhitelist', { page, search }],
+    () => api.publicWhitelist({ page, page_size: 20, ...(search ? { search } : {}) }),
+    { enabled: true },
+  );
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
 
   function renderContent() {
-    if (loading) return (
+    if (isLoading) return (
       <div className="public-loading">
         <div className="public-loading-spinner" />
         正在加载白名单...
@@ -44,7 +30,7 @@ export function PublicWhitelistPage() {
     if (error) return (
       <div className="public-error">
         加载白名单失败
-        <div><button className="public-error-retry" onClick={loadItems}>重新加载</button></div>
+        <div><button className="public-error-retry" onClick={() => refetch()}>重新加载</button></div>
       </div>
     );
 
@@ -103,7 +89,7 @@ export function PublicWhitelistPage() {
         <p>查看当前已通过审核的白名单玩家，所有信息实时更新。</p>
       </div>
 
-      {!loading && data && (
+      {!isLoading && data && (
         <div className="public-stats">
           <div className="public-stat">
             <span className="public-stat-value" style={{ color: 'var(--teal)' }}>{total}</span>

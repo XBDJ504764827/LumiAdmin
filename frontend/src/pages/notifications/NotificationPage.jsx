@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api.js';
-import { useAuth } from '../../state/auth.jsx';
+import { useApiQuery, useApiMutation } from '../../shared/useApiQuery.js';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { notifyNotificationsUpdated } from '../../hooks/useNotifications.js';
 import { formatChinaDateTime } from '../../shared/time.js';
@@ -37,66 +37,29 @@ const TYPE_PILL_CLASS = {
 };
 
 export function NotificationPage() {
-  const { session } = useAuth();
   const navigate = useNavigate();
-  const token = session?.token ?? null;
 
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
   const [page, setPage] = useState(1);
   const [typeFilter, setTypeFilter] = useState('');
   const [readFilter, setReadFilter] = useState('');
 
-  const loadItems = useCallback(async () => {
-    if (!token) return;
-    try {
-      setLoading(true);
-      setError('');
-      const params = { page, page_size: 20 };
-      const result = await api.notifications(token, params);
-      setData(result);
-    } catch (err) {
-      setError(err.message);
-      setData(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [token, page]);
+  const { data, isLoading, error, refetch } = useApiQuery(
+    ['notifications', { page }],
+    (token) => api.notifications(token, { page, page_size: 20 }),
+  );
 
-  useEffect(() => { loadItems(); }, [loadItems]);
+  const markReadMutation = useApiMutation(
+    ({ token, id }) => api.markNotificationRead(token, id),
+    { invalidateQueries: ['notifications'] },
+  );
+
+  const markAllReadMutation = useApiMutation(
+    ({ token }) => api.markAllNotificationsRead(token),
+    { invalidateQueries: ['notifications'] },
+  );
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
-
-  async function handleMarkRead(id) {
-    if (!token) return;
-    try {
-      await api.markNotificationRead(token, id);
-      setData(prev => prev ? {
-        ...prev,
-        items: prev.items.map(n => n.id === id ? { ...n, read: true } : n),
-      } : prev);
-      notifyNotificationsUpdated({ action: 'mark_read', id });
-    } catch {}
-  }
-
-  async function handleMarkAllRead() {
-    if (!token) return;
-    try {
-      await api.markAllNotificationsRead(token);
-      setData(prev => prev ? {
-        ...prev,
-        items: prev.items.map(n => ({ ...n, read: true })),
-      } : prev);
-      notifyNotificationsUpdated({ action: 'mark_all_read' });
-    } catch {}
-  }
-
-  function handleClick(n) {
-    if (!n.read) handleMarkRead(n.id);
-    if (n.link) navigate(n.link);
-  }
 
   const filtered = items.filter((n) => {
     if (typeFilter && n.type !== typeFilter) return false;
@@ -106,6 +69,25 @@ export function NotificationPage() {
   });
 
   const hasUnread = items.some(n => !n.read);
+
+  async function handleMarkRead(id) {
+    try {
+      await markReadMutation.mutateAsync({ id });
+      notifyNotificationsUpdated({ action: 'mark_read', id });
+    } catch {}
+  }
+
+  async function handleMarkAllRead() {
+    try {
+      await markAllReadMutation.mutateAsync({});
+      notifyNotificationsUpdated({ action: 'mark_all_read' });
+    } catch {}
+  }
+
+  function handleClick(n) {
+    if (!n.read) handleMarkRead(n.id);
+    if (n.link) navigate(n.link);
+  }
 
   return (
     <div id="notifications" className="content-section active">
@@ -152,9 +134,9 @@ export function NotificationPage() {
             </select>
           </div>
 
-          {loading ? <div className="p-20">正在加载通知...</div> : null}
-          {!loading && error ? <div style={{ padding: 20, color: 'var(--accent)' }}>{error}</div> : null}
-          {!loading && !error ? (
+          {isLoading ? <div className="p-20">正在加载通知...</div> : null}
+          {!isLoading && error ? <div style={{ padding: 20, color: 'var(--accent)' }}>{error.message}</div> : null}
+          {!isLoading && !error ? (
             <div className="notification-page-list">
               {filtered.length === 0 ? (
                 <div style={{ padding: 32, textAlign: 'center', color: 'var(--text3)' }}>暂无通知。</div>

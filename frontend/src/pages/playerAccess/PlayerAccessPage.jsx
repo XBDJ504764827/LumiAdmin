@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useAuth } from '../../state/auth.jsx';
+import { useApiQuery, useApiMutation } from '../../shared/useApiQuery.js';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { useToast, ToastContainer } from '../../shared/Toast.jsx';
 import { formatChinaDate } from '../../shared/time.js';
@@ -11,10 +12,6 @@ export function PlayerAccessPage() {
   const { confirm, dialog } = useConfirmDialog();
   const { toast, toasts, dismiss: dismissToast } = useToast();
   const token = session?.token ?? null;
-
-  const [rules, setRules] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
 
   // 弹窗状态
   const [modalOpen, setModalOpen] = useState(false);
@@ -30,9 +27,6 @@ export function PlayerAccessPage() {
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
 
-  // 社区和服务器列表
-  const [groups, setGroups] = useState([]);
-
   // 玩家搜索
   const [searchInput, setSearchInput] = useState('');
   const [searchResults, setSearchResults] = useState([]);
@@ -43,30 +37,40 @@ export function PlayerAccessPage() {
   // 社区展开/折叠
   const [expandedGroups, setExpandedGroups] = useState({});
 
-  const loadRules = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError('');
-      const result = await api.playerAccessRules(token);
-      setRules(result.items ?? []);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [token]);
+  // 使用 React Query 获取规则列表
+  const { data: rulesData, isLoading, error } = useApiQuery(
+    ['playerAccessRules'],
+    (token) => api.playerAccessRules(token),
+  );
+  const rules = rulesData?.items ?? [];
 
-  const loadGroups = useCallback(async () => {
-    try {
-      const result = await api.servers(token);
-      setGroups(result.groups ?? []);
-    } catch { /* ignore */ }
-  }, [token]);
+  // 使用 React Query 获取社区/服务器列表
+  const { data: serversData } = useApiQuery(
+    ['communityServers'],
+    (token) => api.servers(token),
+  );
+  const groups = serversData?.groups ?? [];
 
-  useEffect(() => { loadRules(); loadGroups(); }, [loadRules, loadGroups]);
+  // 创建规则 mutation
+  const createRuleMutation = useApiMutation(
+    ({ token, ...body }) => api.createPlayerAccessRule(token, body),
+    { invalidateQueries: ['playerAccessRules'] },
+  );
+
+  // 更新规则 mutation
+  const updateRuleMutation = useApiMutation(
+    ({ token, id, ...body }) => api.updatePlayerAccessRule(token, id, body),
+    { invalidateQueries: ['playerAccessRules'] },
+  );
+
+  // 删除规则 mutation
+  const deleteRuleMutation = useApiMutation(
+    ({ token, id }) => api.deletePlayerAccessRule(token, id),
+    { invalidateQueries: ['playerAccessRules'] },
+  );
 
   // 服务端搜索白名单玩家
-  const searchWhitelist = useCallback(async (query) => {
+  async function searchWhitelist(query) {
     if (!query.trim()) { setSearchResults([]); return; }
     try {
       setSearching(true);
@@ -77,9 +81,9 @@ export function PlayerAccessPage() {
     } finally {
       setSearching(false);
     }
-  }, [token]);
+  }
 
-  const handleSearchChange = useCallback((e) => {
+  function handleSearchChange(e) {
     const value = e.target.value;
     setSearchInput(value);
     setSelectedPlayer(null);
@@ -92,7 +96,7 @@ export function PlayerAccessPage() {
     }
     setSearching(true);
     searchTimerRef.current = setTimeout(() => searchWhitelist(value), 300);
-  }, [searchWhitelist]);
+  }
 
   function openCreateModal() {
     setEditingRule(null);
@@ -218,7 +222,8 @@ export function PlayerAccessPage() {
       setSubmitting(true);
       setFormError('');
       if (editingRule) {
-        await api.updatePlayerAccessRule(token, editingRule.id, {
+        await updateRuleMutation.mutateAsync({
+          id: editingRule.id,
           nickname: form.nickname.trim(),
           allowed_communities: form.allowedCommunities,
           blocked_communities: form.blockedCommunities,
@@ -227,7 +232,7 @@ export function PlayerAccessPage() {
         });
         toast({ title: '更新成功', message: `${form.nickname} 的进服权限已更新。` });
       } else {
-        await api.createPlayerAccessRule(token, {
+        await createRuleMutation.mutateAsync({
           steamid64: form.steamid64.trim(),
           nickname: form.nickname.trim(),
           allowed_communities: form.allowedCommunities,
@@ -238,7 +243,6 @@ export function PlayerAccessPage() {
         toast({ title: '创建成功', message: `${form.nickname} 的进服权限已创建。` });
       }
       setModalOpen(false);
-      loadRules();
     } catch (e) {
       setFormError(e.message);
     } finally {
@@ -254,9 +258,8 @@ export function PlayerAccessPage() {
     });
     if (!confirmed) return;
     try {
-      await api.deletePlayerAccessRule(token, rule.id);
+      await deleteRuleMutation.mutateAsync({ id: rule.id });
       toast({ title: '已重置', message: `${rule.nickname} 的权限已重置为默认。` });
-      loadRules();
     } catch (e) {
       toast({ title: '操作失败', message: e.message, tone: 'danger' });
     }
@@ -347,10 +350,10 @@ export function PlayerAccessPage() {
           </div>
         </div>
         <div className="card-body p-0">
-          {loading ? (
+          {isLoading ? (
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>加载中...</div>
           ) : error ? (
-            <div style={{ padding: 40, textAlign: 'center', color: 'var(--accent)' }}>{error}</div>
+            <div style={{ padding: 40, textAlign: 'center', color: 'var(--accent)' }}>{error.message}</div>
           ) : rules.length === 0 ? (
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>暂无特殊权限配置，所有白名单玩家默认可进入所有服务器。</div>
           ) : (

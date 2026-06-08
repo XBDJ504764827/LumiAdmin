@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useState } from 'react';
+import { useApiQuery } from '../../shared/useApiQuery.js';
 import { api } from '../../lib/api.js';
 import { PublicPageShell } from './PublicPageShell.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
@@ -29,33 +30,18 @@ function banStatusPill(item) {
 export function PublicBanPage() {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
 
-  const loadItems = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const params = { page, page_size: 20 };
-      if (search) params.search = search;
-      const result = await api.publicBans(params);
-      setData(result);
-    } catch (err) {
-      setError(err);
-      setData(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [page, search]);
-
-  useEffect(() => { loadItems(); }, [loadItems]);
+  const { data, isLoading, error, refetch } = useApiQuery(
+    ['publicBans', { page, search }],
+    () => api.publicBans({ page, page_size: 20, ...(search ? { search } : {}) }),
+    { enabled: true },
+  );
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
 
   function renderContent() {
-    if (loading) return (
+    if (isLoading) return (
       <div className="public-loading">
         <div className="public-loading-spinner" />
         正在加载封禁记录...
@@ -65,7 +51,7 @@ export function PublicBanPage() {
     if (error) return (
       <div className="public-error">
         加载封禁记录失败
-        <div><button className="public-error-retry" onClick={loadItems}>重新加载</button></div>
+        <div><button className="public-error-retry" onClick={() => refetch()}>重新加载</button></div>
       </div>
     );
 
@@ -122,7 +108,7 @@ export function PublicBanPage() {
         <p>为维护良好的游戏环境，违规玩家将被公示在此处。封禁状态包括封禁中、永久封禁和已过期。</p>
       </div>
 
-      {!loading && data && (
+      {!isLoading && data && (
         <div className="public-stats">
           <div className="public-stat">
             <span className="public-stat-value" style={{ color: 'var(--warning-text)' }}>{data.stats?.active ?? 0}</span>

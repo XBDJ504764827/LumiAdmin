@@ -1,4 +1,3 @@
-import React from 'react';
 
 export function Pagination({ page, pageSize, total, onChange }) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));

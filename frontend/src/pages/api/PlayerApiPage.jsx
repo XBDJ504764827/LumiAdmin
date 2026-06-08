@@ -37,7 +37,9 @@ export function PlayerApiPage() {
 
   useEffect(() => {
     if (configState.data?.config) {
-      setForm(normalizePlayerApiConfig(configState.data.config));
+      React.startTransition(() => {
+        setForm(normalizePlayerApiConfig(configState.data.config));
+      });
     }
   }, [configState.data]);
 

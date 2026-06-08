@@ -1,4 +1,3 @@
-import React from 'react';
 
 export function Modal({ open, title, subtitle, children, footer, onClose, wide = false, extraWide = false }) {
   if (!open) return null;

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { getNextTheme, getStorage, getStoredTheme, getSystemTheme, persistTheme } from './themeCore.js';
 
 const ThemeContext = createContext(null);

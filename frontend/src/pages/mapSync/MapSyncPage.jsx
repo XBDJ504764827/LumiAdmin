@@ -68,17 +68,19 @@ export function MapSyncPage() {
   const overview = overviewState.data?.overview;
   const config = overview?.config;
   const agents = overview?.agents ?? [];
-  const recentTasks = overview?.recent_tasks ?? [];
+  const recentTasks = useMemo(() => overview?.recent_tasks ?? [], [overview]);
   const mapPoolNames = overview?.map_pool_names ?? [];
 
   useEffect(() => {
     if (!config) return;
-    setForm({
-      enabled: config.enabled,
-      autoUpdate: config.auto_update,
-      sourceUrls: (config.source_urls?.length ? config.source_urls : defaultSources).join('\n'),
-      mapPoolUrl: config.map_pool_url || defaultForm.mapPoolUrl,
-      checkIntervalSecs: config.check_interval_secs ?? 3600,
+    React.startTransition(() => {
+      setForm({
+        enabled: config.enabled,
+        autoUpdate: config.auto_update,
+        sourceUrls: (config.source_urls?.length ? config.source_urls : defaultSources).join('\n'),
+        mapPoolUrl: config.map_pool_url || defaultForm.mapPoolUrl,
+        checkIntervalSecs: config.check_interval_secs ?? 3600,
+      });
     });
   }, [config]);
 

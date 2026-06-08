@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../state/auth.jsx';
 
@@ -125,7 +125,7 @@ export function useNotifications() {
     }
 
     connect();
-    fetchUnreadCount();
+    React.startTransition(() => { fetchUnreadCount(); });
 
     return () => {
       alive = false;

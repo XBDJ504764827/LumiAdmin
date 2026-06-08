@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useApiQuery } from '../../shared/useApiQuery.js';
 import { useAuth } from '../../state/auth.jsx';
@@ -9,7 +9,7 @@ import { Modal } from '../../shared/Modal.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { StatusPill } from '../../shared/StatusPill.jsx';
-import { FilePreview, FileItem, fileIcon, fileActionLabel } from '../../shared/FilePreview.jsx';
+import { FileItem, fileActionLabel } from '../../shared/FilePreview.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { notifyPendingReviewsUpdated, usePendingReviewIndicators } from '../../hooks/usePendingReviewIndicators.js';
 

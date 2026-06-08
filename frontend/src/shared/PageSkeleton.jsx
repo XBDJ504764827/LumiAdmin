@@ -1,4 +1,3 @@
-import React from 'react';
 
 /**
  * 页面加载骨架屏

@@ -1,4 +1,3 @@
-import React from 'react';
 
 const icon = (children) => (
   <svg viewBox="0 0 16 16" fill="none" width="16" height="16" stroke="currentColor" strokeWidth="1.5">

@@ -1,8 +1,7 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { Modal } from '../../shared/Modal.jsx';
-import { StatusPill } from '../../shared/StatusPill.jsx';
 import {
   buildDeleteGroupConfirmMessage,
   buildDeleteGroupFailureMessage,
@@ -23,7 +22,7 @@ import {
   fillCommunityAccessConfig,
   buildAccessSummary,
 } from './communityAccess.js';
-import { onlinePlayerKey, buildKickCommand, buildBanCommand, BAN_DURATION_OPTIONS, BAN_REASON_OPTIONS } from './onlinePlayers.js';
+import { onlinePlayerKey, buildKickCommand } from './onlinePlayers.js';
 import { OnlinePlayerCard, ToggleSwitch, FormSectionCard, ServerRconFeedback } from './CommunityComponents.jsx';
 import { COMMAND_CATEGORIES } from '../rcon/RconPage.jsx';
 import { useAuth } from '../../state/auth.jsx';
@@ -249,7 +248,7 @@ export function CommunityPage() {
     }
   }
 
-  async function handleDeleteGroup(group) {
+  async function _handleDeleteGroup(group) {
     const confirmed = await confirm({ title: '删除社区组', message: buildDeleteGroupConfirmMessage(group) });
     if (!confirmed) return;
     try {
@@ -340,7 +339,7 @@ export function CommunityPage() {
     setRconModal((prev) => ({ ...prev, customCommand: '' }));
   }
 
-  async function handleResetReportToken(server) {
+  async function _handleResetReportToken(server) {
     if (!canManageToken) return;
     const confirmed = await confirm({ title: '重置上报 Token', message: buildResetReportTokenConfirmMessage(server.name), confirmText: '确认重置' });
     if (!confirmed) return;
@@ -404,7 +403,7 @@ export function CommunityPage() {
   }
 
   // 找到服务器所属社区
-  function findGroupForServer(serverId) {
+  function _findGroupForServer(serverId) {
     for (const group of groups) {
       if (group.servers.some((s) => s.id === serverId)) return group;
     }

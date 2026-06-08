@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useApiQuery } from '../../shared/useApiQuery.js';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
@@ -6,7 +6,7 @@ import { InternalNoteInline } from '../../shared/InternalNote.jsx';
 import { useAuth } from '../../state/auth.jsx';
 import { useToast, ToastContainer } from '../../shared/Toast.jsx';
 import { buildBanFormFromRecord } from './banForm.js';
-import { formatBanDuration, formatBanSource, formatExpiresAt } from './banDisplay.js';
+import { formatBanDuration, formatExpiresAt } from './banDisplay.js';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -71,14 +71,16 @@ export function BanPage() {
   React.useEffect(() => {
     const prefill = location.state?.playerReportPrefill;
     if (!prefill || !canCreate) return;
-    setFormMode('create');
-    setEditingBanId(null);
-    setPrefillForm(buildBanFormFromPlayerReport(prefill));
-    setReportReview({
-      reportId: prefill.reportId,
-      player: prefill.player || prefill.steamId,
+    React.startTransition(() => {
+      setFormMode('create');
+      setEditingBanId(null);
+      setPrefillForm(buildBanFormFromPlayerReport(prefill));
+      setReportReview({
+        reportId: prefill.reportId,
+        player: prefill.player || prefill.steamId,
+      });
+      setFormOpen(true);
     });
-    setFormOpen(true);
     navigate(location.pathname, { replace: true, state: null });
   }, [location.state, location.pathname, navigate, canCreate]);
 

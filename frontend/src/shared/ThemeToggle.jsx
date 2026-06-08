@@ -1,4 +1,3 @@
-import React from 'react';
 import { useTheme } from '../state/theme.jsx';
 
 export function ThemeToggle({ compact = false }) {

@@ -2,8 +2,8 @@ import React, { useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { Modal } from '../../shared/Modal.jsx';
 import { useToast } from '../../shared/Toast.jsx';
-import { BAN_TYPE_OPTIONS, banModalSubmitText, banModalTitle, buildBanFormFromRecord, buildCreateBanPayload, emptyBanForm, validateBanForm } from './banForm.js';
-import { notifyPendingReviewsUpdated } from '../../hooks/usePendingReviewIndicators.js';
+import { BAN_TYPE_OPTIONS, banModalSubmitText, banModalTitle, buildCreateBanPayload, emptyBanForm, validateBanForm } from './banForm.js';
+
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
 const ALLOWED_VIDEO = '.mp4,.avi,.mov,.webm,.mkv';
@@ -67,7 +67,7 @@ function uploadBanFilesWithProgress(banId, formData, token, onProgress) {
  * @param {string} props.token - API token
  */
 export function BanFormModal({ open, mode, editingBanId, reportReview, prefillForm, onClose, onSuccess, token }) {
-  const { toast } = useToast();
+  const { toast: _toast } = useToast();
   const [form, setForm] = useState(emptyBanForm);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -82,15 +82,17 @@ export function BanFormModal({ open, mode, editingBanId, reportReview, prefillFo
   // 当外部数据变化时重置
   React.useEffect(() => {
     if (open) {
-      if (prefillForm) {
-        setForm(prefillForm);
-      } else {
-        setForm(emptyBanForm);
-      }
-      setError('');
-      setSelectedFiles([]);
-      setUploadProgress(0);
-      setSavePhase('idle');
+      React.startTransition(() => {
+        if (prefillForm) {
+          setForm(prefillForm);
+        } else {
+          setForm(emptyBanForm);
+        }
+        setError('');
+        setSelectedFiles([]);
+        setUploadProgress(0);
+        setSavePhase('idle');
+      });
     }
   }, [open, prefillForm]);
 

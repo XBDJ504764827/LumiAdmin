@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useToast } from '../../shared/Toast.jsx';
 import { useAuth } from '../../state/auth.jsx';
@@ -15,7 +15,7 @@ export function BanApiModal({ open, onClose }) {
   const [apiKeyCreating, setApiKeyCreating] = useState(false);
   const [newApiToken, setNewApiToken] = useState('');
 
-  async function loadApiKeys() {
+  const loadApiKeys = useCallback(async () => {
     try {
       setApiKeysLoading(true);
       const result = await api.banApiKeys(token);
@@ -25,15 +25,17 @@ export function BanApiModal({ open, onClose }) {
     } finally {
       setApiKeysLoading(false);
     }
-  }
+  }, [token, toast]);
 
   React.useEffect(() => {
     if (open) {
-      setNewApiToken('');
-      setApiKeyName('');
-      loadApiKeys();
+      React.startTransition(() => {
+        setNewApiToken('');
+        setApiKeyName('');
+        loadApiKeys();
+      });
     }
-  }, [open]);
+  }, [open, loadApiKeys]);
 
   async function handleCreateApiKey() {
     if (!apiKeyName.trim()) {

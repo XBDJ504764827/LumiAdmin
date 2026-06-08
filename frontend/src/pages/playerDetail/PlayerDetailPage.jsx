@@ -207,8 +207,10 @@ function InternalProfilePanel({ profile, canEdit, saving, onSave }) {
   const [tagsText, setTagsText] = useState('');
 
   useEffect(() => {
-    setNote(profile?.note ?? '');
-    setTagsText(tagsToText(profile?.tags ?? []));
+    React.startTransition(() => {
+      setNote(profile?.note ?? '');
+      setTagsText(tagsToText(profile?.tags ?? []));
+    });
   }, [profile]);
 
   if (!canEdit) {
@@ -263,8 +265,10 @@ function EvidenceEditor({ file, onSave, saving }) {
   const [tagsText, setTagsText] = useState(tagsToText(file.tags ?? []));
 
   useEffect(() => {
-    setNote(file.note || '');
-    setTagsText(tagsToText(file.tags ?? []));
+    React.startTransition(() => {
+      setNote(file.note || '');
+      setTagsText(tagsToText(file.tags ?? []));
+    });
   }, [file]);
 
   if (!editing) {

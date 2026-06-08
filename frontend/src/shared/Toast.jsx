@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 let toastId = 0;
 
@@ -39,7 +39,11 @@ function ToastItem({ data, onDismiss }) {
   const timerRef = useRef(null);
   const pausedRef = useRef(false);
   const remainingRef = useRef(data.duration);
-  const startRef = useRef(Date.now());
+  const startRef = useRef(0);
+
+  useEffect(() => {
+    startRef.current = Date.now();
+  }, []);
 
   useEffect(() => {
     timerRef.current = setTimeout(() => onDismiss(data.id), data.duration);

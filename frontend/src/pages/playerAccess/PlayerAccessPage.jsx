@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useAuth } from '../../state/auth.jsx';
 import { useApiQuery, useApiMutation } from '../../shared/useApiQuery.js';
@@ -49,7 +49,7 @@ export function PlayerAccessPage() {
     ['communityServers'],
     (token) => api.servers(token),
   );
-  const groups = serversData?.groups ?? [];
+  const groups = useMemo(() => serversData?.groups ?? [], [serversData]);
 
   // 创建规则 mutation
   const createRuleMutation = useApiMutation(

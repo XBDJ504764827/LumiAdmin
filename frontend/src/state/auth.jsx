@@ -8,15 +8,15 @@ export function AuthProvider({ children }) {
   const [session, setSession] = useState(null);
   const [bootstrapLoading, setBootstrapLoading] = useState(true);
   const sessionRef = useRef(session);
-  sessionRef.current = session;
+  useEffect(() => { sessionRef.current = session; });
 
   useEffect(() => {
     const token = readStoredToken(typeof window !== 'undefined' ? window.localStorage : null);
     const initialSession = defaultSessionFromToken(token);
-    setSession(initialSession);
+    React.startTransition(() => { setSession(initialSession); });
 
     if (!token) {
-      setBootstrapLoading(false);
+      React.startTransition(() => { setBootstrapLoading(false); });
       return;
     }
 

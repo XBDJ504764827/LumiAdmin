@@ -1,4 +1,4 @@
-import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, createElement, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../state/auth.jsx';
 
@@ -59,7 +59,7 @@ export function usePendingReviewData() {
   }, [token, canReviewWhitelist, canReviewReports]);
 
   useEffect(() => {
-    refresh();
+    React.startTransition(() => { refresh(); });
   }, [refresh]);
 
   useEffect(() => {

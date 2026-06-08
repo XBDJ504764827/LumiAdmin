@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useApiQuery, useApiMutation } from '../../shared/useApiQuery.js';
@@ -43,7 +43,7 @@ export function NotificationPage() {
   const [typeFilter, setTypeFilter] = useState('');
   const [readFilter, setReadFilter] = useState('');
 
-  const { data, isLoading, error, refetch } = useApiQuery(
+  const { data, isLoading, error, refetch: _refetch } = useApiQuery(
     ['notifications', { page }],
     (token) => api.notifications(token, { page, page_size: 20 }),
   );

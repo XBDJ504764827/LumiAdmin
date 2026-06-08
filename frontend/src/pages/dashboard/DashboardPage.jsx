@@ -1,4 +1,3 @@
-import React from 'react';
 import { useAuth } from '../../state/auth.jsx';
 import { api } from '../../lib/api.js';
 import { useApiQuery } from '../../shared/useApiQuery.js';
@@ -54,7 +53,7 @@ function cpuColor(cpu) {
 
 export function DashboardPage() {
   const { session } = useAuth();
-  const token = session?.token ?? null;
+  const _token = session?.token ?? null;
   
   const metrics = useApiQuery(
     ['dashboard'],

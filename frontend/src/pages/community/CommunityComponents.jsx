@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { BAN_DURATION_OPTIONS, BAN_REASON_OPTIONS } from './onlinePlayers.js';
 import { InternalNoteBadge } from '../../shared/InternalNote.jsx';
 

@@ -10,7 +10,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
  */
 export function InfiniteList({
   loadMore,
-  renderItem,
+  renderItem: _renderItem,
   pageSize = 20,
   initialData = null,
   threshold = 200, // 距离底部多少像素时触发加载
@@ -23,17 +23,6 @@ export function InfiniteList({
   const [hasMore, setHasMore] = useState(true);
   const containerRef = useRef(null);
   const loadingRef = useRef(false);
-
-  // 初始加载
-  useEffect(() => {
-    if (initialData) {
-      setItems(initialData.items || []);
-      setTotal(initialData.total || 0);
-      setHasMore((initialData.items?.length || 0) < (initialData.total || 0));
-    } else {
-      loadData(1);
-    }
-  }, []);
 
   const loadData = useCallback(async (pageNum) => {
     if (loadingRef.current) return;
@@ -61,6 +50,17 @@ export function InfiniteList({
       loadingRef.current = false;
     }
   }, [loadMore, pageSize]);
+
+  // 初始加载
+  useEffect(() => {
+    if (initialData) {
+      setItems(initialData.items || []);
+      setTotal(initialData.total || 0);
+      setHasMore((initialData.items?.length || 0) < (initialData.total || 0));
+    } else {
+      loadData(1);
+    }
+  }, [initialData, loadData]);
 
   // 滚动检测
   useEffect(() => {
@@ -160,8 +160,8 @@ export function useInfiniteScroll({
 
   // 初始加载
   useEffect(() => {
-    loadData(1);
-  }, []);
+    React.startTransition(() => { loadData(1); });
+  }, [loadData]);
 
   // Intersection Observer
   useEffect(() => {

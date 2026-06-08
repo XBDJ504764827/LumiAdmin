@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useApiQuery } from '../../shared/useApiQuery.js';
 import { useAuth } from '../../state/auth.jsx';
@@ -9,7 +9,7 @@ import { Modal } from '../../shared/Modal.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { StatusPill } from '../../shared/StatusPill.jsx';
-import { FilePreview, FileItem, fileTypeLabel, fileActionLabel, formatFileSize } from '../../shared/FilePreview.jsx';
+import { FileItem, fileActionLabel } from '../../shared/FilePreview.jsx';
 import { useNavigate } from 'react-router-dom';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { notifyPendingReviewsUpdated, usePendingReviewIndicators } from '../../hooks/usePendingReviewIndicators.js';
@@ -56,7 +56,7 @@ export function PlayerReportPage() {
 
   const canReview = session?.role === 'developer' || session?.role === 'admin';
   const reviewFileRef = useRef(null);
-  const [uploadingReportFiles, setUploadingReportFiles] = useState(false);
+  const [_uploadingReportFiles, setUploadingReportFiles] = useState(false);
   const [reviewFiles, setReviewFiles] = useState([]);
 
   async function openDetail(item) {

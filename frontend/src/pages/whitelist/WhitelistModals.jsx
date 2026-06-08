@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Modal } from '../../shared/Modal.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { InternalNoteBadge } from '../../shared/InternalNote.jsx';
@@ -293,29 +293,33 @@ export function PlayerDetailModal({ open, onClose, item }) {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const itemRef = useRef(item);
+
+  useEffect(() => { itemRef.current = item; }, [item]);
 
   const loadStats = useCallback(async () => {
-    if (!item?.steamid64) return;
+    const steamid64 = itemRef.current?.steamid64;
+    if (!steamid64) return;
     // 前端会话缓存命中时直接使用，不显示 loading
-    if (GOKZ_CACHE.has(item.steamid64)) {
-      setStats(GOKZ_CACHE.get(item.steamid64));
+    if (GOKZ_CACHE.has(steamid64)) {
+      React.startTransition(() => { setStats(GOKZ_CACHE.get(steamid64)); });
       return;
     }
     try {
       setLoading(true);
       setError('');
-      const data = await fetchPlayerKzStats(item.steamid64);
-      setStats(data);
+      const data = await fetchPlayerKzStats(steamid64);
+      React.startTransition(() => { setStats(data); });
     } catch {
       setError('加载 KZ 统计数据失败，请稍后重试。');
     } finally {
       setLoading(false);
     }
-  }, [item?.steamid64]);
+  }, []);
 
   useEffect(() => {
-    if (open && item?.steamid64) loadStats();
-    if (!open) setError('');
+    if (open && item?.steamid64) React.startTransition(() => { loadStats(); });
+    if (!open) React.startTransition(() => { setError(''); });
   }, [open, item?.steamid64, loadStats]);
 
   return (

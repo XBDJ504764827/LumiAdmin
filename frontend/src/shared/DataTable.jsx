@@ -1,4 +1,4 @@
-import React from 'react';
+import { useMemo } from 'react';
 
 /**
  * 增强型 DataTable 组件
@@ -23,6 +23,11 @@ export function DataTable({
   className = '',
 }) {
   const colSpan = columns.length || 1;
+
+  const keyedRows = useMemo(() => rows.map((row, index) => ({
+    row,
+    key: row[keyField] ?? `__row_${index}`,
+  })), [rows, keyField]);
 
   return (
     <div className={`table-wrap ${className}`.trim()}>
@@ -50,11 +55,10 @@ export function DataTable({
           {error && (
             <tr><td colSpan={colSpan} className="table-status-cell" style={{ color: 'var(--danger-text)' }}>{error}</td></tr>
           )}
-          {!loading && rows.length === 0 && (
+          {!loading && keyedRows.length === 0 && (
             <tr><td colSpan={colSpan} className="table-status-cell">{emptyText}</td></tr>
           )}
-          {!loading && rows.map((row) => {
-            const key = row[keyField] ?? Math.random();
+          {!loading && keyedRows.map(({ row, key }) => {
             return (
               <tr
                 key={key}

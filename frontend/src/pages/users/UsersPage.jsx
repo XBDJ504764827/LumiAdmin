@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { Modal } from '../../shared/Modal.jsx';
@@ -34,7 +34,7 @@ export function UsersPage() {
   const { session } = useAuth();
   const { confirm, dialog } = useConfirmDialog();
   const { toast, toasts, dismiss: dismissToast } = useToast();
-  const token = session?.token ?? null;
+  const _token = session?.token ?? null;
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [createOpen, setCreateOpen] = useState(false);
@@ -51,7 +51,7 @@ export function UsersPage() {
   const canCreate = isDeveloper || isAdmin;
 
   // 使用 React Query 获取用户列表
-  const { data, isLoading, error, refetch } = useApiQuery(
+  const { data, isLoading, error, refetch: _refetch } = useApiQuery(
     ['users', { page, search }],
     (token) => api.users(token, { page, page_size: 20, ...(search ? { search } : {}) })
   );

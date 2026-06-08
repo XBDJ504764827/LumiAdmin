@@ -85,7 +85,7 @@ export function ExternalBanApiPage() {
   const [syncPage, setSyncPage] = useState(1);
   const [retrying, setRetrying] = useState(false);
 
-  async function loadTargets() {
+  const loadTargets = useCallback(async () => {
     try {
       setLoading(true);
       setLoadError('');
@@ -96,7 +96,7 @@ export function ExternalBanApiPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [token]);
 
   const loadSyncHistory = useCallback(async (page = syncPage, search = syncSearch, status = syncStatus) => {
     try {
@@ -113,8 +113,8 @@ export function ExternalBanApiPage() {
     }
   }, [token, syncPage, syncSearch, syncStatus]);
 
-  useEffect(() => { loadTargets(); }, [token]);
-  useEffect(() => { if (token) loadSyncHistory(); }, [token, syncPage, syncSearch, syncStatus]);
+  useEffect(() => { React.startTransition(() => { loadTargets(); }); }, [loadTargets]);
+  useEffect(() => { if (token) React.startTransition(() => { loadSyncHistory(); }); }, [token, loadSyncHistory, syncPage, syncSearch, syncStatus]);
 
   function openCreate() {
     setEditingTarget(null);
@@ -222,7 +222,7 @@ export function ExternalBanApiPage() {
   const syncItems = syncData?.items ?? [];
   const syncTotal = syncData?.total ?? 0;
   const syncPageSize = syncData?.page_size ?? 20;
-  const failedCount = syncItems.filter((x) => x.status === 'failed').length;
+  const _failedCount = syncItems.filter((x) => x.status === 'failed').length;
 
   return (
     <div id="external-ban-api" className="content-section active">

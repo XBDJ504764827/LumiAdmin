@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { api } from '../../lib/api.js';
 import { PublicPageShell } from './PublicPageShell.jsx';
 

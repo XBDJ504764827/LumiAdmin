@@ -1,4 +1,3 @@
-import React from 'react';
 
 export function PageHeader({ breadcrumb, title, subtitle, action }) {
   return (

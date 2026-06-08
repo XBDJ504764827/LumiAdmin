@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../state/auth.jsx';
 
@@ -16,11 +16,11 @@ export function usePlayerInternalProfile(steamid64) {
 
   useEffect(() => {
     if (!steamid64 || !token || !canView) {
-      setProfile(null);
+      React.startTransition(() => { setProfile(null); });
       return;
     }
     let cancelled = false;
-    setLoading(true);
+    React.startTransition(() => { setLoading(true); });
     api.getPlayerInternalProfile(token, steamid64)
       .then((result) => {
         if (!cancelled) setProfile(result.internal_profile ?? null);

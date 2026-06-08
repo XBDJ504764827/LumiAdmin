@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useApiQuery } from '../../shared/useApiQuery.js';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
@@ -92,7 +92,7 @@ export function WhitelistPage() {
   const [manualForm, setManualForm] = useState(emptyManualForm);
   const [manualError, setManualError] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [globalBansVersion, setGlobalBansVersion] = useState(0);
+  const [_globalBansVersion, setGlobalBansVersion] = useState(0);
   const globalBansRef = useRef({});
   const [globalBansLoading, setGlobalBansLoading] = useState(false);
   const fetchedSteamIdsRef = useRef(new Set());

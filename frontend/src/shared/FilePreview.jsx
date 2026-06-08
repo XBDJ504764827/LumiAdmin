@@ -1,4 +1,3 @@
-import React from 'react';
 
 /**
  * 文件预览组件

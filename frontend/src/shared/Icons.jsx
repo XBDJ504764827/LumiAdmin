@@ -1,4 +1,3 @@
-import React from 'react';
 
 /**
  * 共享图标组件库

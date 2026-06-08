@@ -5,20 +5,10 @@ import { formatBanDuration, formatBanSource, formatExpiresAt } from './banDispla
 import { formatChinaDateTime } from '../../shared/time.js';
 import { InternalNoteBadge } from '../../shared/InternalNote.jsx';
 
-const MAX_FILE_SIZE = 100 * 1024 * 1024;
-
 function formatFileSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function getFileCategory(name) {
-  const lower = name.toLowerCase();
-  if (lower.match(/\.(mp4|avi|mov|webm|mkv)$/)) return 'video';
-  if (lower.match(/\.(jpg|jpeg|png|gif|webp|bmp)$/)) return 'image';
-  if (lower.match(/\.(mp3|wav|ogg|m4a|flac)$/)) return 'audio';
-  return 'other';
 }
 
 function fileCategoryLabel(category) {
@@ -43,13 +33,14 @@ export function BanDetailModal({ open, item: initialItem, onClose, canManageAll 
   useEffect(() => {
     if (!open || !initialItem) return;
 
-    setDetailItem(initialItem);
-    setDetailFiles([]);
-    setDetailFilesError('');
-    setDetailSyncStatus([]);
-
     let cancelled = false;
     (async () => {
+      React.startTransition(() => {
+        setDetailItem(initialItem);
+        setDetailFiles([]);
+        setDetailFilesError('');
+        setDetailSyncStatus([]);
+      });
       setDetailLoading(true);
       setDetailFilesLoading(true);
       setDetailSyncLoading(true);
@@ -75,7 +66,7 @@ export function BanDetailModal({ open, item: initialItem, onClose, canManageAll 
     })();
 
     return () => { cancelled = true; };
-  }, [open, initialItem]);
+  }, [open, initialItem, token]);
 
   if (!open || !detailItem) return null;
 

@@ -5,7 +5,7 @@ export function SearchBar({ value, onChange, placeholder = '搜索...', statusOp
   const timerRef = useRef(null);
 
   useEffect(() => {
-    setLocal(value ?? '');
+    React.startTransition(() => { setLocal(value ?? ''); });
   }, [value]);
 
   useEffect(() => () => {

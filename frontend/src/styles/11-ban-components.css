@@ -356,6 +356,18 @@
   max-width: 420px;
 }
 
+.not-found-icon {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 20px;
+  border-radius: 18px;
+  background: var(--surface2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text3);
+}
+
 .not-found-code {
   font-size: 96px;
   font-weight: 600;
@@ -363,6 +375,7 @@
   line-height: 1;
   margin-bottom: 16px;
   font-family: 'DM Mono', monospace;
+  opacity: 0.8;
 }
 
 .not-found-title {
@@ -377,6 +390,13 @@
   color: var(--text2);
   margin-bottom: 32px;
   line-height: 1.6;
+}
+
+.not-found-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
 }
 
 /* ================================================================

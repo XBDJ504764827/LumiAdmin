@@ -7,7 +7,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::routes::{current_operator, forbidden, invalid_request, AppCtx};
-use crate::services::map_sync_service;
+use crate::services::{log_service, map_sync_service, rate_limit_service::extract_client_ip};
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct UpdateConfigBody {
@@ -72,13 +72,25 @@ pub(crate) async fn update_map_sync_config(
         map_sync_service::UpdateMapSyncConfigInput {
             enabled: body.enabled,
             auto_update: body.auto_update,
-            source_urls: body.source_urls,
-            map_pool_url: body.map_pool_url,
+            source_urls: body.source_urls.clone(),
+            map_pool_url: body.map_pool_url.clone(),
             check_interval_secs: body.check_interval_secs,
         },
     )
     .await
     .map_err(invalid_request)?;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "地图同步",
+        "更新同步配置",
+        &format!("启用: {}, 自动更新: {}, 间隔: {}s", body.enabled, body.auto_update, body.check_interval_secs),
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(Json(serde_json::json!({ "config": config })))
 }
 
@@ -95,13 +107,25 @@ pub(crate) async fn create_map_sync_agent(
     let agent = map_sync_service::create_agent(
         &ctx.db,
         map_sync_service::CreateMapSyncAgentInput {
-            name: body.name,
-            target_type: body.target_type,
+            name: body.name.clone(),
+            target_type: body.target_type.clone(),
             enabled: body.enabled,
         },
     )
     .await
     .map_err(invalid_request)?;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "地图同步",
+        "创建同步代理",
+        &format!("{} ({})", body.name, body.target_type),
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(Json(serde_json::json!({ "agent": agent })))
 }
 
@@ -114,9 +138,22 @@ pub(crate) async fn delete_map_sync_agent(
     if !matches!(actor.role.as_str(), "admin" | "developer") {
         return Err(forbidden());
     }
+    let agent_info = map_sync_service::find_agent_info(&ctx.db, id).await;
     map_sync_service::delete_agent(&ctx.db, id)
         .await
         .map_err(invalid_request)?;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "地图同步",
+        "删除同步代理",
+        &agent_info.unwrap_or_else(|| id.to_string()),
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -132,6 +169,18 @@ pub(crate) async fn reset_map_sync_agent_token(
     let agent = map_sync_service::reset_agent_token(&ctx.db, id)
         .await
         .map_err(invalid_request)?;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "地图同步",
+        "重置代理Token",
+        &agent.name,
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(Json(serde_json::json!({ "agent": agent })))
 }
 
@@ -146,6 +195,18 @@ pub(crate) async fn check_all_maps(
     let result = map_sync_service::check_and_enqueue_all(&ctx.db)
         .await
         .map_err(invalid_request)?;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "地图同步",
+        "手动检查所有地图",
+        &format!("新增任务: {}", result.tasks_created),
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(Json(serde_json::json!({ "result": result })))
 }
 
@@ -161,6 +222,18 @@ pub(crate) async fn sync_single_map(
     let result = map_sync_service::enqueue_single_map(&ctx.db, &map_name)
         .await
         .map_err(invalid_request)?;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "地图同步",
+        "手动同步地图",
+        &map_name,
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(Json(serde_json::json!({ "result": result })))
 }
 

@@ -126,16 +126,22 @@ pub(crate) async fn create_ban(
     .await
     .map_err(invalid_request)?;
 
-    let log_target = item.player.as_deref().unwrap_or(&item.steam_id);
+    let log_target = format!(
+        "{} ({}) | 类型: {} | 理由: {}",
+        item.player.as_deref().unwrap_or("未知"),
+        item.steam_id,
+        item.ban_type,
+        item.reason
+    );
     let client_ip = extract_client_ip(&headers);
-    let log_ip = item.ip_address.as_deref().unwrap_or(&client_ip);
+    let log_ip = client_ip.clone();
     if let Err(e) = log_service::create_log(
         &ctx.db,
         &operator_name,
         "封禁管理",
         "添加封禁",
-        log_target,
-        log_ip,
+        &log_target,
+        &log_ip,
     )
     .await
     {
@@ -210,13 +216,19 @@ pub(crate) async fn update_ban(
     )
     .await
     .map_err(invalid_request)?;
-    let log_target = item.player.as_deref().unwrap_or(&item.steam_id);
+    let log_target = format!(
+        "{} ({}) | 类型: {} | 理由: {}",
+        item.player.as_deref().unwrap_or("未知"),
+        item.steam_id,
+        item.ban_type,
+        item.reason
+    );
     if let Err(e) = log_service::create_log(
         &ctx.db,
         &actor.display_name,
         "封禁管理",
         "编辑封禁",
-        log_target,
+        &log_target,
         &extract_client_ip(&headers),
     )
     .await
@@ -258,13 +270,17 @@ pub(crate) async fn delete_ban(
         });
     }
 
-    let log_target = record.player.as_deref().unwrap_or(&record.steam_id);
+    let log_target = format!(
+        "{} ({})",
+        record.player.as_deref().unwrap_or("未知"),
+        record.steam_id
+    );
     if let Err(e) = log_service::create_log(
         &ctx.db,
         &actor.display_name,
         "封禁管理",
         "删除封禁",
-        log_target,
+        &log_target,
         &extract_client_ip(&headers),
     )
     .await
@@ -290,13 +306,18 @@ pub(crate) async fn unban_ban(
     let item = ban_service::unban(&ctx.db, id, &actor.display_name)
         .await
         .map_err(invalid_request)?;
-    let log_target = item.player.as_deref().unwrap_or(&item.steam_id);
+    let log_target = format!(
+        "{} ({}) | 类型: {}",
+        item.player.as_deref().unwrap_or("未知"),
+        item.steam_id,
+        item.ban_type
+    );
     if let Err(e) = log_service::create_log(
         &ctx.db,
         &actor.display_name,
         "封禁管理",
         "解封",
-        log_target,
+        &log_target,
         &extract_client_ip(&headers),
     )
     .await
@@ -537,6 +558,19 @@ pub(crate) async fn upload_ban_files(
                 "errors": errors,
             })),
         ));
+    }
+
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "封禁管理",
+        "上传封禁附件",
+        &format!("封禁 {} — 上传 {} 个文件", ban_id, uploaded.len()),
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
     }
 
     Ok(Json(serde_json::json!({
@@ -780,6 +814,7 @@ pub(crate) async fn check_plugin_ban(
     let result = plugin_ban_service::check_plugin_ban(
         &ctx.db,
         &ctx.access_snapshot,
+        &ctx.active_ban_cache,
         plugin_ban_service::PluginBanCheckInput {
             report_token: body.report_token,
             port: body.port,

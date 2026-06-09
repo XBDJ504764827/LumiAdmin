@@ -36,6 +36,7 @@ use crate::{
     db::Database,
     models::{Operator, preferred_operator_name},
     services::{
+        access_cache::{ActiveBanCache, WhitelistCache},
         access_snapshot_service::SnapshotStore,
         notification_service::{NotificationHub, create_notification_hub},
         r2_storage::R2Storage,
@@ -59,6 +60,8 @@ pub struct AppCtx {
     pub global_bans_cache: GlobalBansCache,
     pub gokz_stats_cache: GokzStatsCache,
     pub server_config_cache: Arc<ServerConfigCache>,
+    pub active_ban_cache: Arc<ActiveBanCache>,
+    pub whitelist_cache: Arc<WhitelistCache>,
     pub steam_resolver: SteamResolver,
     pub notification_hub: NotificationHub,
     pub r2_storage: Option<R2Storage>,
@@ -120,6 +123,8 @@ pub fn router(
     db: Database,
     access_snapshot: SnapshotStore,
     server_config_cache: Arc<ServerConfigCache>,
+    active_ban_cache: Arc<ActiveBanCache>,
+    whitelist_cache: Arc<WhitelistCache>,
     steam_resolver: SteamResolver,
 ) -> Router {
     Router::new()
@@ -493,6 +498,8 @@ pub fn router(
             global_bans_cache: Arc::new(RwLock::new(HashMap::new())),
             gokz_stats_cache: Arc::new(RwLock::new(HashMap::new())),
             server_config_cache,
+            active_ban_cache,
+            whitelist_cache,
             steam_resolver,
             notification_hub: create_notification_hub(),
             r2_storage: R2Storage::new(&config),

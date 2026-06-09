@@ -358,16 +358,22 @@ pub(crate) async fn ban_report(
     .await
     .map_err(invalid_request)?;
 
-    let log_target = result.ban.player.as_deref().unwrap_or(&result.ban.steam_id);
+    let log_target = format!(
+        "{} ({}) | 类型: {} | 理由: {}",
+        result.ban.player.as_deref().unwrap_or("未知"),
+        result.ban.steam_id,
+        result.ban.ban_type,
+        result.ban.reason
+    );
     let client_ip = extract_client_ip(&headers);
-    let log_ip = result.ban.ip_address.as_deref().unwrap_or(&client_ip);
+    let log_ip = client_ip.clone();
     let _ = log_service::create_log(
         &ctx.db,
         &actor.display_name,
         "玩家举报",
         "根据举报封禁玩家",
-        log_target,
-        log_ip,
+        &log_target,
+        &log_ip,
     )
     .await;
 
@@ -594,6 +600,21 @@ pub(crate) async fn upload_report_files(
                 "errors": errors,
             })),
         ));
+    }
+
+    if !uploaded.is_empty() {
+        if let Err(e) = log_service::create_log(
+            &ctx.db,
+            &actor.display_name,
+            "玩家举报",
+            "上传举报证据文件",
+            &format!("举报 {} — 上传 {} 个文件", report_id, uploaded.len()),
+            &extract_client_ip(&headers),
+        )
+        .await
+        {
+            tracing::warn!(%e, "日志写入失败");
+        }
     }
 
     Ok(Json(serde_json::json!({

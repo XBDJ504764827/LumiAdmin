@@ -15,6 +15,7 @@ import { notifyPendingReviewsUpdated } from '../../hooks/usePendingReviewIndicat
 import { BanApiModal } from './BanApiModal.jsx';
 import { BanDetailModal } from './BanDetailModal.jsx';
 import { BanFormModal } from './BanFormModal.jsx';
+import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 
 function buildBanFormFromPlayerReport(report) {
   return {
@@ -213,17 +214,17 @@ export function BanPage() {
                 <tr><th>玩家</th><th>SteamID64</th><th>封禁属性</th><th>封禁理由</th><th>时长 / 到期</th><th>状态</th><th>封禁时间</th><th className="text-right">操作</th></tr>
               </thead>
               <tbody>
-                {isLoading ? <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--text2)' }}>正在加载封禁数据...</td></tr> : null}
-                {!isLoading && loadError ? <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--danger)' }}>{loadError.message}</td></tr> : null}
+                {isLoading ? <TableLoading colSpan={8} text="正在加载封禁数据..." /> : null}
+                {!isLoading && loadError ? <TableError colSpan={8} message={loadError.message} /> : null}
                 {!isLoading && items.map((x) => (
                   <tr key={x.id}>
                     <td>
-                      <div className="fw-600" style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={x.player || '待自动获取'}>{x.player || '待自动获取'}</div>
+                      <div className="fw-600 text-ellipsis-160" title={x.player || '待自动获取'}>{x.player || '待自动获取'}</div>
                       <InternalNoteInline steamid64={x.steam_id} />
                     </td>
                     <td className="steam-id">{x.steam_id}</td>
                     <td>{x.ban_type === 'ip' ? 'IP 封禁' : 'Steam 账号封禁'}</td>
-                    <td style={{ color: 'var(--text2)', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={x.reason}>{x.reason}</td>
+                    <td className="text-muted text-ellipsis-260" title={x.reason}>{x.reason}</td>
                     <td>
                       <div>{formatBanDuration(x.duration_minutes)}</div>
                       <div style={{ color: 'var(--text3)', fontSize: 12 }}>{formatExpiresAt(x.expires_at)}</div>
@@ -246,7 +247,7 @@ export function BanPage() {
                     </td>
                   </tr>
                 ))}
-                {!isLoading && !loadError && items.length === 0 ? <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--text2)' }}>暂无封禁记录</td></tr> : null}
+                {!isLoading && !loadError && items.length === 0 ? <TableEmpty colSpan={8} text="暂无封禁记录" /> : null}
               </tbody>
             </table>
           </div>

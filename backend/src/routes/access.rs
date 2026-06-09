@@ -41,6 +41,8 @@ pub(crate) async fn check_plugin_access(
         &ctx.config,
         &ctx.access_snapshot,
         &ctx.server_config_cache,
+        &ctx.active_ban_cache,
+        &ctx.whitelist_cache,
         access_service::AccessCheckInput {
             report_token: body.report_token,
             port: body.port,

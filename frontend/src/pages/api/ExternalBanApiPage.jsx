@@ -98,10 +98,10 @@ export function ExternalBanApiPage() {
     }
   }, [token]);
 
-  const loadSyncHistory = useCallback(async (page = syncPage, search = syncSearch, status = syncStatus) => {
+  const loadSyncHistory = useCallback(async (page, search, status) => {
     try {
       setSyncLoading(true);
-      const params = { page, page_size: 20 };
+      const params = { page: page ?? 1, page_size: 20 };
       if (search) params.search = search;
       if (status) params.status = status;
       const result = await api.externalBanApiSyncs(token, params);
@@ -111,10 +111,10 @@ export function ExternalBanApiPage() {
     } finally {
       setSyncLoading(false);
     }
-  }, [token, syncPage, syncSearch, syncStatus]);
+  }, [token]);
 
   useEffect(() => { React.startTransition(() => { loadTargets(); }); }, [loadTargets]);
-  useEffect(() => { if (token) React.startTransition(() => { loadSyncHistory(); }); }, [token, loadSyncHistory, syncPage, syncSearch, syncStatus]);
+  useEffect(() => { if (token) React.startTransition(() => { loadSyncHistory(syncPage, syncSearch, syncStatus); }); }, [token, loadSyncHistory, syncPage, syncSearch, syncStatus]);
 
   function openCreate() {
     setEditingTarget(null);
@@ -201,7 +201,7 @@ export function ExternalBanApiPage() {
         message: result.result.message,
         tone: result.result.ok ? 'success' : 'warning',
       });
-      loadSyncHistory();
+      loadSyncHistory(syncPage, syncSearch, syncStatus);
     } catch (error) {
       toast({ title: '重试失败', message: error.message, tone: 'danger' });
     } finally {

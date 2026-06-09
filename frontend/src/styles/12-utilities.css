@@ -8,6 +8,7 @@
 .text-muted-light { color: var(--text3) !important; }
 .text-primary { color: var(--text) !important; }
 .text-accent { color: var(--accent) !important; }
+.text-accent2 { color: var(--accent2) !important; }
 .text-danger { color: var(--danger-text) !important; }
 .text-success { color: var(--success-text) !important; }
 .text-warning { color: var(--warning-text) !important; }
@@ -15,6 +16,11 @@
 /* ── 文本样式 ── */
 .text-mono { font-family: var(--mono) !important; }
 .text-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.text-ellipsis-160 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
+.text-ellipsis-200 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
+.text-ellipsis-260 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+.text-ellipsis-280 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
+.text-ellipsis-320 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
 .text-pre-wrap { white-space: pre-wrap; }
 .text-nowrap { white-space: nowrap; }
 .text-break { word-break: break-word; overflow-wrap: anywhere; }
@@ -422,6 +428,87 @@
 
   .action-btn-group { gap: 3px; }
   .action-btn { padding: 5px 10px; font-size: 11px; }
+}
+
+/* ── 统一表格状态（加载 / 错误 / 空数据） ── */
+.table-state-cell {
+  padding: 0 !important;
+}
+
+.table-state-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 36px 20px;
+  color: var(--text3);
+  font-size: 13.5px;
+}
+
+.table-state-inner--error {
+  color: var(--danger-text);
+}
+
+.table-state-inner--empty {
+  flex-direction: column;
+  gap: 12px;
+}
+
+.table-state-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: var(--surface2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text3);
+}
+
+.table-state-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: table-state-spin 0.6s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes table-state-spin {
+  to { transform: rotate(360deg); }
+}
+
+.table-state-text {
+  line-height: 1.5;
+}
+
+/* ── 通用空状态 V2（非表格场景） ── */
+.empty-state-v2 {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+  text-align: center;
+}
+
+.empty-state-v2-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  background: var(--surface2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text3);
+  margin-bottom: 10px;
+}
+
+.empty-state-v2-text {
+  color: var(--text3);
+  font-size: 13.5px;
+  line-height: 1.5;
 }
 
 /* 打印样式 */

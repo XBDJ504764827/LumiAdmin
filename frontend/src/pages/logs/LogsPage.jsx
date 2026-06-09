@@ -3,19 +3,32 @@ import { useApiQuery } from '../../shared/useApiQuery.js';
 import { api } from '../../lib/api.js';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
+import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 
 const MODULE_TONE = {
   '白名单管理': 'pill-online',
   '封禁管理': 'pill-danger',
-  '社区配置': 'pill-info',
-  '用户管理': 'pill-warning',
-  '玩家进服': 'pill-info',
-  '玩家API': 'pill-info',
+  '社区组管理': 'pill-warning',
+  'RCON命令': 'pill-danger',
+  '外部服务器': 'pill-info',
+  '玩家信息API': 'pill-info',
+  'API密钥管理': 'pill-info',
+  '封禁API': 'pill-danger',
+  '外部封禁API': 'pill-info',
+  '地图同步': 'pill-info',
+  '网站用户管理': 'pill-warning',
+  '玩家进服设置': 'pill-info',
+  '封禁申诉': 'pill-warning',
+  '玩家举报': 'pill-warning',
+  '公共展示页': 'pill-online',
+  '认证': 'pill-info',
+  '游戏封禁': 'pill-danger',
+  '游戏解封': 'pill-online',
 };
 
 function modulePillClass(module) {
-  return MODULE_TONE[module] ?? 'pill-info';
+  return MODULE_TONE[module] ?? 'pill-default';
 }
 
 export function LogsPage() {
@@ -45,8 +58,8 @@ export function LogsPage() {
 
       <div className="card"><div className="card-body p-0">
         <div className="table-responsive"><table className="data-table"><thead><tr><th>操作人</th><th>模块</th><th>操作动作</th><th>目标详情</th><th>操作IP</th><th>操作时间</th></tr></thead><tbody>
-          {isLoading ? <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text2)' }}>正在加载日志...</td></tr> : null}
-          {!isLoading && error ? <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--accent)' }}>{error.message}</td></tr> : null}
+          {isLoading ? <TableLoading colSpan={6} text="正在加载日志..." /> : null}
+          {!isLoading && error ? <TableError colSpan={6} message={error.message} /> : null}
           {!isLoading && !error && items.map((x) => (
             <tr key={`${x.operator_name}-${x.created_at}`}>
               <td className="fw-500">{x.operator_name}</td>
@@ -57,7 +70,7 @@ export function LogsPage() {
               <td className="text-muted-light">{formatChinaDateTime(x.created_at, { seconds: false })}</td>
             </tr>
           ))}
-          {!isLoading && !error && items.length === 0 ? <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text2)' }}>暂无日志记录</td></tr> : null}
+          {!isLoading && !error && items.length === 0 ? <TableEmpty colSpan={6} text="暂无日志记录" /> : null}
         </tbody></table></div>
       </div></div>
 

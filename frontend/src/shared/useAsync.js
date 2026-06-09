@@ -1,14 +1,16 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 export function useAsync(factory, deps = []) {
   const [state, setState] = useState({ data: null, error: null, loading: true });
+  const factoryRef = useRef(factory);
+  factoryRef.current = factory;
 
   useEffect(() => {
     let cancelled = false;
     React.startTransition(() => { setState((prev) => ({ ...prev, loading: true })); });
 
     Promise.resolve()
-      .then(() => factory())
+      .then(() => factoryRef.current())
       .then((data) => {
         if (!cancelled) setState({ data, error: null, loading: false });
       })
@@ -20,7 +22,7 @@ export function useAsync(factory, deps = []) {
       cancelled = true;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [factory, ...deps]);
+  }, deps);
 
   return state;
 }

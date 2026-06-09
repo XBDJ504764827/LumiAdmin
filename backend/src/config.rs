@@ -119,14 +119,14 @@ impl Config {
             http_timeout_secs: env_u64("HTTP_TIMEOUT_SECS", 300),
             http_connect_timeout_secs: env_u64("HTTP_CONNECT_TIMEOUT_SECS", 5),
             // 请求超时
-            request_timeout_secs: env_u64("REQUEST_TIMEOUT_SECS", 300),
+            request_timeout_secs: env_u64("REQUEST_TIMEOUT_SECS", 60),
             // CORS 允许的来源
             cors_origin: std::env::var("CORS_ORIGIN").ok().filter(|v| !v.is_empty()),
             mysql_database_url: std::env::var("MYSQL_DATABASE_URL")
                 .ok()
                 .filter(|v| !v.is_empty()),
             // 后台任务间隔配置
-            ban_expiry_check_interval_secs: env_u64("BAN_EXPIRY_CHECK_INTERVAL_SECS", 60),
+            ban_expiry_check_interval_secs: env_u64("BAN_EXPIRY_CHECK_INTERVAL_SECS", 15),
             steam_name_refresh_interval_secs: env_u64("STEAM_NAME_REFRESH_INTERVAL_SECS", 6 * 3600),
             session_cleanup_interval_secs: env_u64("SESSION_CLEANUP_INTERVAL_SECS", 600),
             rcon_poll_scan_interval_secs: env_u64("RCON_POLL_SCAN_INTERVAL_SECS", 5),

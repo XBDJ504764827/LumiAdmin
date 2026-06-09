@@ -404,7 +404,7 @@ function BansTable({ items }) {
           {items.map((item) => (
             <tr key={item.id}>
               <td><StatusPill kind={statusKind(item.status, 'ban')}>{statusLabel(item.status)}</StatusPill></td>
-              <td className="text-ellipsis" style={{ maxWidth: 280 }} title={item.reason}>{item.reason}</td>
+              <td className="text-ellipsis text-ellipsis-280" title={item.reason}>{item.reason}</td>
               <td>{durationLabel(item.duration_minutes)}</td>
               <td>{item.server_name || '-'}</td>
               <td>{item.operator_name || '-'}</td>
@@ -437,7 +437,7 @@ function AppealsTable({ items }) {
           {items.map((item) => (
             <tr key={item.id}>
               <td><StatusPill kind={statusKind(item.status, 'appeal')}>{statusLabel(item.status)}</StatusPill></td>
-              <td className="text-ellipsis" style={{ maxWidth: 260 }} title={item.appeal_reason}>{item.appeal_reason}</td>
+              <td className="text-ellipsis text-ellipsis-260" title={item.appeal_reason}>{item.appeal_reason}</td>
               <td className="text-ellipsis" style={{ maxWidth: 220 }} title={item.ban_reason || ''}>{item.ban_reason || '-'}</td>
               <td>{item.reviewed_by || '-'}</td>
               <td>{formatChinaDateTime(item.created_at, { seconds: false })}</td>
@@ -664,9 +664,69 @@ export function PlayerDetailPage() {
       </div>
 
       {!detail && !loading ? (
-        <div className="card">
-          <div className="card-body">
-            <EmptyBlock>输入 SteamID 后查看玩家详情。</EmptyBlock>
+        <div className="player-welcome-card">
+          <div className="player-welcome-inner">
+            <div className="player-welcome-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="28" height="28">
+                <circle cx="9" cy="7" r="4" />
+                <path d="M2 21v-2a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v2" />
+                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                <path d="M21 21v-2a4 4 0 0 0-3-3.87" />
+              </svg>
+            </div>
+            <div className="player-welcome-title">查询玩家信息</div>
+            <div className="player-welcome-desc">在上方输入 SteamID，即可查看该玩家的封禁记录、白名单状态、申诉举报、在线记录和附件证据等完整信息。</div>
+            <div className="player-welcome-formats">
+              <div className="player-welcome-format-label">支持的输入格式</div>
+              <div className="player-welcome-format-list">
+                <span className="player-welcome-format-tag">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="13" height="13"><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg>
+                  SteamID64
+                </span>
+                <span className="player-welcome-format-tag">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="13" height="13"><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg>
+                  STEAM_0:0:xxxxx
+                </span>
+                <span className="player-welcome-format-tag">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="13" height="13"><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg>
+                  [U:1:xxxxx]
+                </span>
+                <span className="player-welcome-format-tag">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="13" height="13"><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg>
+                  Steam 个人主页链接
+                </span>
+              </div>
+            </div>
+            <div className="player-welcome-features">
+              <div className="player-welcome-feature">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="18" height="18"><circle cx="12" cy="12" r="10" /><path d="M4.93 4.93l14.14 14.14" /></svg>
+                <div className="player-welcome-feature-text">
+                  <strong>封禁查询</strong>
+                  <span>活跃/历史封禁记录</span>
+                </div>
+              </div>
+              <div className="player-welcome-feature">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="18" height="18"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>
+                <div className="player-welcome-feature-text">
+                  <strong>白名单状态</strong>
+                  <span>申请与审核状态</span>
+                </div>
+              </div>
+              <div className="player-welcome-feature">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="18" height="18"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>
+                <div className="player-welcome-feature-text">
+                  <strong>申诉举报</strong>
+                  <span>完整的申诉与举报历史</span>
+                </div>
+              </div>
+              <div className="player-welcome-feature">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="18" height="18"><rect x="2" y="3" width="20" height="14" rx="2" ry="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" /></svg>
+                <div className="player-welcome-feature-text">
+                  <strong>在线记录</strong>
+                  <span>当前/最近在线上报</span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       ) : null}

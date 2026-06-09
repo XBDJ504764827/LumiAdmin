@@ -11,6 +11,7 @@ import { notifyPendingReviewsUpdated, usePendingReviewIndicators } from '../../h
 import { fetchGlobalBansBatch, parseBanData, inferGlobalBanRisk } from './whitelistGlobalBans.js';
 import { ManualCreateModal, RejectModal, ApproveModal, BanDetailModal, PlayerDetailModal } from './WhitelistModals.jsx';
 import { InternalNoteInline } from '../../shared/InternalNote.jsx';
+import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 
 const emptyManualForm = { nickname: '', steam_input: '' };
 const APPROVE_REVIEW_SECONDS = 5;
@@ -400,14 +401,14 @@ export function WhitelistPage() {
           <div>
             <div className="card-title">
               申请列表
-              {globalBansLoading ? <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--text3)', marginLeft: 8 }}>正在加载全球封禁记录...</span> : null}
+              {globalBansLoading ? <span className="fs-12 fw-400 text-muted-light ml-8">正在加载全球封禁记录...</span> : null}
             </div>
             <div className="card-sub">当前白名单申请记录</div>
           </div>
         </div>
         <div className="card-body p-0">
-          {isLoading ? <div className="p-20">正在加载白名单数据...</div> : null}
-          {!isLoading && error ? <div style={{ padding: 20, color: 'var(--accent)' }}>{error.message}</div> : null}
+          {isLoading ? <TableLoading colSpan={tab === 'pending' ? 7 : 10} text="正在加载白名单数据..." /> : null}
+          {!isLoading && error ? <TableError colSpan={tab === 'pending' ? 7 : 10} message={error.message} /> : null}
           {!isLoading && !error ? (
             <div className="table-responsive">
               <table className="data-table">
@@ -424,7 +425,7 @@ export function WhitelistPage() {
                 </thead>
                 <tbody>
                   {items.length === 0 ? (
-                    <tr><td colSpan={tab === 'pending' ? 7 : 10} style={{ padding: 20, color: 'var(--text3)' }}>当前分区暂无记录。</td></tr>
+                    <TableEmpty colSpan={tab === 'pending' ? 7 : 10} text="当前分区暂无记录" />
                   ) : null}
                   {tab === 'pending' ? items.map((item) => (
                     <tr key={item.id} className={rowClassName(item, globalBans)} onContextMenu={(event) => handlePendingRowContextMenu(event, item)}>
@@ -453,7 +454,7 @@ export function WhitelistPage() {
                       <td className="text-muted-light">{formatChinaDateTime(item.applied_at)}</td>
                       <td className="text-muted-light">{formatChinaDateTime(item.approved_at)}</td>
                       <td>{item.approved_by ?? '-'}</td>
-                      <td style={{ color: item.approval_reason ? 'var(--accent2)' : 'var(--text3)', maxWidth: 200, wordBreak: 'break-word' }}>{item.approval_reason ?? '-'}</td>
+                      <td className={`text-break ${item.approval_reason ? 'text-accent2' : 'text-muted-light'}`} style={{ maxWidth: 200 }}>{item.approval_reason ?? '-'}</td>
                       <td className="text-right">
                         {canRevoke ? <button className="action-btn action-btn-danger" onClick={() => handleRevoke(item)} disabled={submitting}>删除审核</button> : null}
                       </td>

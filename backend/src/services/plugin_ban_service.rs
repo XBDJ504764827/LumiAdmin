@@ -1,6 +1,9 @@
 use crate::{
     db::Database,
-    services::{access_snapshot_service, ban_service::BanItem},
+    services::{
+        access_cache::ActiveBanCache, access_snapshot_service,
+        ban_service::BanItem,
+    },
 };
 use chrono::{Duration, Utc};
 use serde::Serialize;
@@ -483,6 +486,7 @@ pub async fn poll_active_bans_incremental(
 pub async fn check_plugin_ban(
     db: &Database,
     snapshot_store: &access_snapshot_service::SnapshotStore,
+    ban_cache: &ActiveBanCache,
     input: PluginBanCheckInput,
 ) -> anyhow::Result<PluginBanCheckResult> {
     let steam_id = super::normalize_optional_string(input.steam_id.clone());
@@ -492,7 +496,7 @@ pub async fn check_plugin_ban(
         "SteamID 或 IP 不能为空"
     );
 
-    match check_plugin_ban_live(db, input.clone()).await {
+    match check_plugin_ban_live(db, ban_cache, input.clone()).await {
         Ok(result) => Ok(result),
         Err(error) => {
             tracing::warn!(%error, "live plugin ban check failed, trying snapshot fallback");
@@ -537,6 +541,7 @@ pub async fn check_plugin_ban(
 
 async fn check_plugin_ban_live(
     db: &Database,
+    ban_cache: &ActiveBanCache,
     input: PluginBanCheckInput,
 ) -> anyhow::Result<PluginBanCheckResult> {
     let server = authenticate_server(db, input.port, &input.report_token).await?;
@@ -548,6 +553,38 @@ async fn check_plugin_ban_live(
         steam_id.is_some() || ip_address.is_some(),
         "SteamID 或 IP 不能为空"
     );
+
+    let cached_ban = match (&steam_id, &ip_address) {
+        (Some(sid), Some(ip)) => {
+            let by_steam = ban_cache.get_by_steam_id(sid).await;
+            match by_steam {
+                Some(ban) => Some(ban),
+                None => ban_cache.get_by_ip(ip).await,
+            }
+        }
+        (Some(sid), None) => ban_cache.get_by_steam_id(sid).await,
+        (None, Some(ip)) => ban_cache.get_by_ip(ip).await,
+        (None, None) => None,
+    };
+
+    if let Some(ban) = cached_ban {
+        complete_missing_ban_details(
+            db,
+            ban.id,
+            player.as_deref(),
+            ip_address.as_deref(),
+            &server,
+            server_port,
+        )
+        .await?;
+        let expires = ban.expires_at.map(|value| value.to_rfc3339());
+        return Ok(PluginBanCheckResult {
+            banned: true,
+            reason: Some(ban.reason.clone()),
+            expires_at: expires.clone(),
+            message: kick_message(&ban.reason, expires.as_deref()),
+        });
+    }
 
     let row = sqlx::query_as::<_, (Uuid, String, Option<chrono::DateTime<chrono::Utc>>)>(
         r#"SELECT id, reason, expires_at FROM ban_records

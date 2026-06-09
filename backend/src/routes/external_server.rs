@@ -7,7 +7,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::routes::{current_operator, forbidden, invalid_request, AppCtx};
-use crate::services::external_server_service;
+use crate::services::{external_server_service, log_service, rate_limit_service::extract_client_ip};
 
 pub(crate) async fn list_external_servers(
     State(ctx): State<AppCtx>,
@@ -57,16 +57,28 @@ pub(crate) async fn create_external_server(
     let server = external_server_service::create_server(
         &ctx.db,
         external_server_service::CreateExternalServerInput {
-            name: body.name,
-            ip: body.ip,
+            name: body.name.clone(),
+            ip: body.ip.clone(),
             port: body.port,
-            rcon_password: body.rcon_password,
+            rcon_password: body.rcon_password.clone(),
             enabled: body.enabled,
             poll_interval: body.poll_interval,
         },
     )
     .await
     .map_err(invalid_request)?;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "外部服务器",
+        "添加外部服务器",
+        &format!("{} ({}:{})", body.name, body.ip, body.port),
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(Json(serde_json::json!({ "server": server })))
 }
 
@@ -96,16 +108,28 @@ pub(crate) async fn update_external_server(
         &ctx.db,
         id,
         external_server_service::UpdateExternalServerInput {
-            name: body.name,
-            ip: body.ip,
+            name: body.name.clone(),
+            ip: body.ip.clone(),
             port: body.port,
-            rcon_password: body.rcon_password,
+            rcon_password: body.rcon_password.clone(),
             enabled: body.enabled,
             poll_interval: body.poll_interval,
         },
     )
     .await
     .map_err(invalid_request)?;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "外部服务器",
+        "编辑外部服务器",
+        &format!("{} ({}:{})", body.name, body.ip, body.port),
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(Json(serde_json::json!({ "server": server })))
 }
 
@@ -118,9 +142,23 @@ pub(crate) async fn delete_external_server(
     if !matches!(actor.role.as_str(), "admin" | "developer") {
         return Err(forbidden());
     }
+    // 获取服务器信息用于日志
+    let server_info = external_server_service::find_server_info(&ctx.db, id).await;
     external_server_service::delete_server(&ctx.db, id)
         .await
         .map_err(invalid_request)?;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "外部服务器",
+        "删除外部服务器",
+        &server_info.unwrap_or_else(|| id.to_string()),
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -341,35 +341,7 @@
 }
 
 @media (max-width: 768px) {
-  .sidebar { width: var(--sidebar-collapsed); }
-  .sidebar .nav-text, .sidebar-footer .nav-text, .sidebar-footer .user-info, .logout-text { display: none !important; }
-  .sidebar-logo .logo-text, .brand-text { opacity: 0; width: 0; display: none; }
-  .sidebar-collapse-btn { display: none; }
-  .main, .app-main { margin-left: var(--sidebar-collapsed); }
-  .topbar { padding: 0 16px; gap: 12px; }
-  .content-section, .page { padding: 20px 16px; }
-  .metrics-grid, .metric-grid { grid-template-columns: 1fr; gap: 12px; }
-  .player-detail-search { grid-template-columns: 1fr; }
-  .player-profile-panel { flex-direction: column; align-items: flex-start; }
-  .player-profile-actions { justify-content: flex-start; }
-  .player-detail-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .player-timeline-head { flex-direction: column; }
-  .player-timeline-tags { justify-content: flex-start; }
-  .player-evidence-filters { grid-template-columns: 1fr; }
-  .player-evidence-side { align-items: flex-start; max-width: none; width: 100%; }
-  .player-evidence-actions { justify-content: flex-start; }
-  .player-evidence-meta { align-items: flex-start; }
-  .dash-overview, .dash-perf-grid { grid-template-columns: 1fr; gap: 10px; }
-  .dash-hero { flex-direction: column; align-items: flex-start; gap: 12px; padding: 20px; }
-  .dash-hero-title { font-size: 18px; }
-  .search-shortcut, .searchbar span { display: none; }
-  .icon-btn:not(.notif-btn) { display: none; }
-  .public-nav-inner { padding: 0 14px; gap: 8px; }
-  .public-nav-link span { display: none; }
-  .public-main { padding: 20px 14px 36px; }
-  .public-hero h1 { font-size: 18px; }
-  .public-stats { gap: 8px; }
-  .public-stat { padding: 6px 10px; font-size: 12px; }
-  .public-table th, .public-table td { padding: 10px 10px; }
+  /* 登录页在移动端不需要额外的非登录样式 */
+  /* 通用 768px 断点规则已在 12-utilities.css 中统一管理 */
 }
 

@@ -144,3 +144,26 @@
 .metric-chart-wrap, .metric-chart-wrap canvas, .sparkline, .chart-placeholder { height: 48px; width: 100%; position: relative; border-radius: 12px; }
 .lower-grid { display: grid; grid-template-columns: 1fr 340px; gap: 16px; }
 
+/* ── GOKZ 统计竖线列表 ── */
+.gokz-list { display: flex; flex-direction: column; gap: 4px; }
+.gokz-row {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  padding: 6px 0 6px 12px;
+  font-size: 13px;
+  border-left: 3px solid var(--border);
+}
+.gokz-row-kzt  { border-left-color: #6c8eef; }
+.gokz-row-skz  { border-left-color: #e8913a; }
+.gokz-row-vnl  { border-left-color: #5bb98c; }
+.gokz-row-ovr  { border-left-color: #c47dd9; }
+.gokz-row-mode { font-weight: 600; color: var(--text); min-width: 32px; }
+.gokz-row-val  { color: var(--text2); }
+.gokz-loading, .gokz-error {
+  font-size: 13px;
+  padding: 8px 0;
+}
+.gokz-loading { color: var(--text3); }
+.gokz-error { color: var(--accent); }
+

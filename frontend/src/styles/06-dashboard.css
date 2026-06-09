@@ -453,6 +453,29 @@
   flex-shrink: 0;
 }
 .modal-header h2, .modal-header h3 { font-size: 16px; font-weight: 700; letter-spacing: -0.2px; }
+.modal-close-btn {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text3);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+.modal-close-btn:hover {
+  background: var(--surface2);
+  color: var(--text);
+}
+.modal-close-btn:active {
+  background: var(--border);
+  transform: scale(0.95);
+}
 .modal-body { padding: 20px 24px; overflow-y: auto; flex: 1; min-height: 0; }
 .confirm-dialog-message { color: var(--text2); line-height: 1.7; font-size: 14px; }
 .modal-footer {

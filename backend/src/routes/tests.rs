@@ -3,6 +3,7 @@ use crate::{
     config::Config,
     db::Database,
     services::{
+        access_cache::{ActiveBanCache, WhitelistCache},
         access_snapshot_service::SnapshotStore, server_config_cache::ServerConfigCache,
         steam_service::SteamResolver,
     },
@@ -13,7 +14,6 @@ use axum::{
     Router,
 };
 use serde_json::json;
-use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -32,6 +32,8 @@ fn test_app(config: Config, db: Database) -> Router {
         db,
         test_snapshot_store(),
         Arc::new(ServerConfigCache::new(300)),
+        Arc::new(ActiveBanCache::new()),
+        Arc::new(WhitelistCache::new()),
         SteamResolver::new(&config),
     )
 }

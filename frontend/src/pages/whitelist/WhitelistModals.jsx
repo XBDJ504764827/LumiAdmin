@@ -352,30 +352,20 @@ export function PlayerDetailModal({ open, onClose, item }) {
           <div className="form-group">
             <label className="mb-4">GOKZ.TOP 统计</label>
             {loading ? (
-              <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>正在加载 KZ 统计数据...</div>
+              <div className="gokz-loading">加载中…</div>
             ) : error ? (
-              <div style={{ color: 'var(--accent)', fontSize: 13, padding: '8px 0' }}>{error}</div>
+              <div className="gokz-error">{error}</div>
             ) : stats ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div className="gokz-list">
                 {KZ_MODES.map((mode) => {
                   const s = stats[mode.key];
                   if (!s) return null;
                   return (
-                    <div
-                      key={mode.key}
-                      style={{
-                        padding: '10px 14px',
-                        background: 'var(--surface2)',
-                        borderRadius: 10,
-                        fontSize: 13,
-                      }}
-                    >
-                      <div style={{ fontWeight: 600, marginBottom: 6 }}>{mode.label}</div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 20px', color: 'var(--text2)', fontSize: 12 }}>
-                        <span>Rating：{s.rating !== null ? s.rating.toFixed(2) : '未收录'}</span>
-                        <span>排名：{s.rank !== null ? `#${s.rank}` : '-'}</span>
-                        <span>通过地图：{s.mapFinish} 张</span>
-                      </div>
+                    <div key={mode.key} className={`gokz-row gokz-row-${mode.key.toLowerCase()}`}>
+                      <span className="gokz-row-mode">{mode.label}</span>
+                      <span className="gokz-row-val">{s.rating !== null ? s.rating.toFixed(2) : '-'}</span>
+                      <span className="gokz-row-val">{s.rank !== null ? `#${s.rank}` : '-'}</span>
+                      <span className="gokz-row-val">{s.mapFinish} 张</span>
                     </div>
                   );
                 })}

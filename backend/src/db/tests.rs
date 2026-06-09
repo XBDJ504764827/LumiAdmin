@@ -3,9 +3,7 @@
         config::Config,
         services::{dashboard_service, public_service, whitelist_service},
     };
-    use crate::test_util;
 
-    use sqlx::postgres::PgPoolOptions;
     use uuid::Uuid;
 
     fn schema_url(base_url: &str, schema: &str) -> String {

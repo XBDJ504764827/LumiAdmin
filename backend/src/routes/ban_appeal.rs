@@ -308,6 +308,21 @@ pub(crate) async fn upload_appeal_files(
         ));
     }
 
+    if !uploaded.is_empty() {
+        if let Err(e) = log_service::create_log(
+            &ctx.db,
+            &actor.display_name,
+            "封禁申诉",
+            "上传申诉证据文件",
+            &format!("申诉 {} — 上传 {} 个文件", appeal_id, uploaded.len()),
+            &extract_client_ip(&headers),
+        )
+        .await
+        {
+            tracing::warn!(%e, "日志写入失败");
+        }
+    }
+
     Ok(Json(serde_json::json!({
         "uploaded": uploaded,
         "errors": if errors.is_empty() { None } else { Some(errors) },

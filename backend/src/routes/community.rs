@@ -7,7 +7,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::routes::{current_operator, forbidden, invalid_request, AppCtx};
-use crate::services::{community_service, permission_service};
+use crate::services::{community_service, log_service, permission_service, rate_limit_service::extract_client_ip};
 
 #[derive(Deserialize)]
 pub(crate) struct RconCommandBody {
@@ -42,6 +42,18 @@ pub(crate) async fn create_community_group(
     let group = community_service::create_group(&ctx.db, body)
         .await
         .map_err(invalid_request)?;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "社区组管理",
+        "创建社区组",
+        &group.name,
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({"group": group})),
@@ -63,6 +75,18 @@ pub(crate) async fn create_community_server(
         .map_err(invalid_request)?;
     // 新服务器创建后刷新缓存
     ctx.server_config_cache.invalidate_all().await;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "社区组管理",
+        "添加游戏服务器",
+        &format!("{} ({}:{}))", server.name, server.ip, server.port),
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({"server": server})),
@@ -78,11 +102,25 @@ pub(crate) async fn delete_community_group(
     if !permission_service::can_manage_community_mutation(&actor) {
         return Err(forbidden());
     }
+    // 获取社区组名称用于日志
+    let group_name = community_service::find_group_name(&ctx.db, group_id).await.unwrap_or_else(|_| group_id.to_string());
     community_service::delete_group(&ctx.db, group_id)
         .await
         .map_err(invalid_request)?;
     // 删除社区组后刷新全部缓存（因为组下所有服务器都被删除）
     ctx.server_config_cache.invalidate_all().await;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "社区组管理",
+        "删除社区组",
+        &group_name,
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -101,6 +139,22 @@ pub(crate) async fn update_community_access(
         .map_err(invalid_request)?;
     // 社区访问设置更新后刷新全部缓存（影响组下所有服务器的 effective_* 计算）
     ctx.server_config_cache.invalidate_all().await;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "社区组管理",
+        "更新社区访问限制",
+        &format!("{} (白名单模式: {}, Rating≥{}, Steam等级≥{})",
+            group.name,
+            if group.whitelist_mode_enabled { "开" } else { "关" },
+            group.min_rating,
+            group.min_steam_level),
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(Json(serde_json::json!({"group": group})))
 }
 
@@ -134,6 +188,18 @@ pub(crate) async fn update_community_server(
         .map_err(invalid_request)?;
     // 服务器配置更新后失效缓存
     ctx.server_config_cache.invalidate(server_id).await;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "社区组管理",
+        "编辑游戏服务器",
+        &format!("{} ({}:{}))", server.name, server.ip, server.port),
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(Json(serde_json::json!({"server": server})))
 }
 
@@ -146,11 +212,25 @@ pub(crate) async fn delete_community_server(
     if !permission_service::can_manage_community_mutation(&actor) {
         return Err(forbidden());
     }
+    // 获取服务器信息用于日志
+    let server_info = community_service::find_server_info(&ctx.db, server_id).await;
     community_service::delete_server(&ctx.db, server_id)
         .await
         .map_err(invalid_request)?;
     // 服务器删除后失效缓存
     ctx.server_config_cache.invalidate(server_id).await;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "社区组管理",
+        "删除游戏服务器",
+        &server_info.unwrap_or_else(|| server_id.to_string()),
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -214,6 +294,18 @@ pub(crate) async fn reset_server_report_token(
         .map_err(invalid_request)?;
     // report_token 更新后失效缓存
     ctx.server_config_cache.invalidate(server_id).await;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "社区组管理",
+        "重置服务器Token",
+        &server_id.to_string(),
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(Json(serde_json::json!({ "token": token })))
 }
 
@@ -231,5 +323,17 @@ pub(crate) async fn execute_rcon(
     let response = community_service::execute_rcon_command(&ctx.db, server_id, &body.command)
         .await
         .map_err(invalid_request)?;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "RCON命令",
+        "执行RCON命令",
+        &format!("服务器 {} → {}", server_id, body.command),
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(Json(serde_json::json!({ "response": response })))
 }

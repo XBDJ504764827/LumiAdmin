@@ -7,7 +7,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::routes::{current_operator, forbidden, invalid_request, AppCtx, ListQuery};
-use crate::services::{ban_api_service, external_ban_api_service, permission_service};
+use crate::services::{ban_api_service, external_ban_api_service, log_service, permission_service, rate_limit_service::extract_client_ip};
 
 #[derive(Deserialize)]
 pub(crate) struct CreateKeyBody {
@@ -96,10 +96,22 @@ pub(crate) async fn create_key(
     let result = ban_api_service::create_key(
         &ctx.db,
         actor.id,
-        ban_api_service::CreateBanApiKeyInput { name: body.name },
+        ban_api_service::CreateBanApiKeyInput { name: body.name.clone() },
     )
     .await
     .map_err(invalid_request)?;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "API密钥管理",
+        "创建封禁API密钥",
+        &body.name,
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({ "item": result.key, "token": result.token })),
@@ -116,9 +128,23 @@ pub(crate) async fn delete_key(
         return Err(forbidden());
     }
 
+    // 获取密钥名称用于日志
+    let key_name = ban_api_service::find_key_name(&ctx.db, id).await.unwrap_or_else(|| id.to_string());
     ban_api_service::delete_key(&ctx.db, id)
         .await
         .map_err(invalid_request)?;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "API密钥管理",
+        "删除封禁API密钥",
+        &key_name,
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -150,17 +176,29 @@ pub(crate) async fn create_integration_ban(
         &ctx.config,
         &key,
         ban_api_service::IntegrationCreateBanInput {
-            player: body.player,
-            steam_id: body.steam_id,
-            ban_type: body.ban_type,
-            ip_address: body.ip_address,
-            reason: body.reason,
+            player: body.player.clone(),
+            steam_id: body.steam_id.clone(),
+            ban_type: body.ban_type.clone(),
+            ip_address: body.ip_address.clone(),
+            reason: body.reason.clone(),
             duration_minutes: body.duration_minutes,
         },
     )
     .await
     .map_err(invalid_request)?;
     external_ban_api_service::sync_ban_if_enabled(&ctx.db, &item).await;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &format!("API:{}", key.name),
+        "封禁API",
+        "通过API创建封禁",
+        &format!("{} ({})", body.player.as_deref().unwrap_or(&body.steam_id), body.steam_id),
+        "",
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({ "item": item })),

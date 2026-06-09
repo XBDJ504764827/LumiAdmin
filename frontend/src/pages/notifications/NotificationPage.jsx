@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useApiQuery, useApiMutation } from '../../shared/useApiQuery.js';
 import { Pagination } from '../../shared/Pagination.jsx';
+import { EmptyBlock } from '../../shared/TableState.jsx';
 import { notifyNotificationsUpdated } from '../../hooks/useNotifications.js';
 import { formatChinaDateTime } from '../../shared/time.js';
 
@@ -139,7 +140,7 @@ export function NotificationPage() {
           {!isLoading && !error ? (
             <div className="notification-page-list">
               {filtered.length === 0 ? (
-                <div style={{ padding: 32, textAlign: 'center', color: 'var(--text3)' }}>暂无通知。</div>
+                <EmptyBlock>暂无通知</EmptyBlock>
               ) : null}
               {filtered.map((n) => (
                 <button

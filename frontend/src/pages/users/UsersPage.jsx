@@ -8,6 +8,7 @@ import { useApiQuery, useApiMutation } from '../../shared/useApiQuery.js';
 import { buildCreateUserPayload, buildUpdateUserPayload, validateCreateUserForm } from './userForm.js';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
+import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 
 const emptyCreateForm = { username: '', password: '', role: 'normal', steam_id: '', remark: '' };
@@ -282,13 +283,13 @@ export function UsersPage() {
               </thead>
               <tbody>
                 {isLoading ? (
-                  <tr><td colSpan={7} className="text-muted">正在加载用户列表...</td></tr>
+                  <TableLoading colSpan={7} />
                 ) : null}
                 {!isLoading && error ? (
-                  <tr><td colSpan={7} className="text-accent">{error.message}</td></tr>
+                  <TableError colSpan={7} message={error.message} />
                 ) : null}
                 {!isLoading && !error && items.length === 0 ? (
-                  <tr><td colSpan={7} className="text-muted">暂无管理员账号。</td></tr>
+                  <TableEmpty colSpan={7} text="暂无管理员账号" />
                 ) : null}
                 {!isLoading && !error && items.map((item) => (
                   <tr key={item.id}>

@@ -94,6 +94,22 @@ async fn main() -> anyhow::Result<()> {
         config.server_config_cache_refresh_interval_secs,
     );
 
+    // 启动活跃封禁缓存
+    let active_ban_cache = Arc::new(services::access_cache::ActiveBanCache::new());
+    services::access_cache::start_ban_cache_refresh_loop(
+        db.clone(),
+        active_ban_cache.clone(),
+        config.server_config_cache_refresh_interval_secs,
+    );
+
+    // 启动白名单缓存
+    let whitelist_cache = Arc::new(services::access_cache::WhitelistCache::new());
+    services::access_cache::start_whitelist_cache_refresh_loop(
+        db.clone(),
+        whitelist_cache.clone(),
+        config.server_config_cache_refresh_interval_secs,
+    );
+
     // 启动限流器
     let rate_limiters = Arc::new(RateLimiters::new());
     rate_limiters.clone().start_cleanup_task();
@@ -111,6 +127,8 @@ async fn main() -> anyhow::Result<()> {
         db,
         access_snapshot,
         server_config_cache,
+        active_ban_cache,
+        whitelist_cache,
         steam_resolver,
     )
     .layer(axum::middleware::from_fn(

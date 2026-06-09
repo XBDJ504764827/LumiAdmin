@@ -125,6 +125,19 @@ pub async fn delete_key(db: &Database, id: Uuid) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// 根据密钥 ID 获取密钥名称（用于日志记录）
+pub async fn find_key_name(db: &Database, id: Uuid) -> Option<String> {
+    let row: Option<(String,)> = sqlx::query_as(
+        r#"SELECT name FROM ban_api_keys WHERE id = $1"#,
+    )
+    .bind(id)
+    .fetch_optional(&db.pool)
+    .await
+    .ok()?;
+
+    row.map(|(name,)| name)
+}
+
 pub async fn authenticate_key(db: &Database, token: &str) -> anyhow::Result<BanApiKeyAuth> {
     let token = token.trim();
     anyhow::ensure!(!token.is_empty(), "API Key 不能为空");

@@ -279,6 +279,19 @@ pub async fn delete_target(db: &Database, id: Uuid) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// 根据目标 ID 获取目标信息描述（用于日志记录）
+pub async fn find_target_info(db: &Database, id: Uuid) -> Option<String> {
+    let row: Option<(String, String)> = sqlx::query_as(
+        r#"SELECT name, base_url FROM external_ban_api_targets WHERE id = $1"#,
+    )
+    .bind(id)
+    .fetch_optional(&db.pool)
+    .await
+    .ok()?;
+
+    row.map(|(name, url)| format!("{} ({})", name, url))
+}
+
 pub async fn test_target(db: &Database, id: Uuid) -> anyhow::Result<ExternalBanApiTestResult> {
     let target = get_target_row(db, id).await?;
     let token = bearer_token(&target)?;

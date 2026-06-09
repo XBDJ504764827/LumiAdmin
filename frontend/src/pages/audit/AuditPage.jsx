@@ -3,6 +3,7 @@ import { api } from '../../lib/api.js';
 import { useApiQuery } from '../../shared/useApiQuery.js';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
+import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 
 const OPERATION_LABELS = {
@@ -110,8 +111,8 @@ export function AuditPage() {
             </select>
           </div>
 
-          {isLoading ? <div className="p-20">正在加载审计日志...</div> : null}
-          {!isLoading && error ? <div style={{ padding: 20, color: 'var(--accent)' }}>{error.message}</div> : null}
+          {isLoading ? <TableLoading colSpan={8} text="正在加载审计日志..." /> : null}
+          {!isLoading && error ? <TableError colSpan={8} message={error.message} /> : null}
           {!isLoading && !error ? (
             <div className="table-responsive">
               <table className="data-table">
@@ -129,7 +130,7 @@ export function AuditPage() {
                 </thead>
                 <tbody>
                   {items.length === 0 ? (
-                    <tr><td colSpan={8} style={{ padding: 20, color: 'var(--text3)' }}>暂无审计记录。</td></tr>
+                    <TableEmpty colSpan={8} text="暂无审计记录" />
                   ) : null}
                   {items.map((item) => (
                     <tr key={item.id}>

@@ -1,3 +1,4 @@
+pub mod access_cache;
 pub mod access_service;
 pub mod access_snapshot_service;
 pub mod audit_service;

@@ -376,7 +376,7 @@ export function MapSyncPage() {
                   <tr key={agent.id}>
                     <td className="fw-600">{agent.name}</td>
                     <td>{targetTypeLabel(agent.target_type)}</td>
-                    <td className="steam-id" style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis' }}>{agent.token}</td>
+                    <td className="steam-id text-ellipsis-260">{agent.token}</td>
                     <td>{formatChinaMonthDayTime(agent.last_seen_at)}</td>
                     <td>{formatChinaMonthDayTime(agent.last_inventory_at)}</td>
                     <td>

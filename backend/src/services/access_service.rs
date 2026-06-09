@@ -3,6 +3,7 @@ use crate::{
     db::Database,
     http_client,
     services::{
+        access_cache::{ActiveBanCache, WhitelistCache},
         access_snapshot_service, player_access_rule_service, plugin_ban_service,
         server_config_cache,
     },
@@ -71,10 +72,12 @@ pub async fn check_access(
     config: &Config,
     snapshot_store: &access_snapshot_service::SnapshotStore,
     server_cache: &Arc<server_config_cache::ServerConfigCache>,
+    ban_cache: &ActiveBanCache,
+    wl_cache: &WhitelistCache,
     input: AccessCheckInput,
 ) -> anyhow::Result<AccessCheckResult> {
     let steam_id64 = normalize_steamid64(&input.steam_id64)?;
-    match check_access_live(db, config, input.clone(), &steam_id64, server_cache).await {
+    match check_access_live(db, config, input.clone(), &steam_id64, server_cache, ban_cache, wl_cache).await {
         Ok(result) => Ok(result),
         Err(error) => {
             warn!(%error, "live access check failed, trying snapshot fallback");
@@ -102,6 +105,8 @@ async fn check_access_live(
     input: AccessCheckInput,
     steam_id64: &str,
     server_cache: &Arc<server_config_cache::ServerConfigCache>,
+    ban_cache: &ActiveBanCache,
+    wl_cache: &WhitelistCache,
 ) -> anyhow::Result<AccessCheckResult> {
     // 使用缓存获取服务器配置
     let server = server_cache
@@ -109,8 +114,26 @@ async fn check_access_live(
         .await?
         .ok_or_else(|| anyhow::anyhow!("服务器 Token 或端口无效"))?;
 
-    // 1. 检查封禁状态
-    if let Some(ban) = active_ban(db, steam_id64, input.ip_address.as_deref()).await? {
+    // 1. 检查封禁状态（优先使用缓存）
+    let ban_info = {
+        let cached = ban_cache.get_by_steam_id(steam_id64).await;
+        let cached = match cached {
+            Some(ban) => Some(ban),
+            None => match input.ip_address.as_deref() {
+                Some(ip) => ban_cache.get_by_ip(ip).await,
+                None => None,
+            },
+        };
+        match cached {
+            Some(ban) => Some(ActiveBanInfo {
+                id: ban.id,
+                reason: ban.reason,
+                expires_at: ban.expires_at,
+            }),
+            None => active_ban(db, steam_id64, input.ip_address.as_deref()).await?,
+        }
+    };
+    if let Some(ban) = ban_info {
         let server_auth = plugin_ban_service::ServerAuth {
             id: server.id,
             name: server.name.clone(),
@@ -159,7 +182,7 @@ async fn check_access_live(
         return Ok(allow("允许进入服务器。"));
     }
 
-    let whitelist_approved = has_approved_whitelist(db, steam_id64).await?;
+    let whitelist_approved = wl_cache.contains(steam_id64).await;
 
     // 仅白名单模式：必须通过白名单才能进
     if effective_whitelist && !effective_restriction {
@@ -235,18 +258,6 @@ async fn active_ban(
         reason,
         expires_at,
     }))
-}
-
-async fn has_approved_whitelist(db: &Database, steam_id64: &str) -> anyhow::Result<bool> {
-    let count: (i64,) = sqlx::query_as(
-        r#"SELECT COUNT(*)
-           FROM whitelist_requests
-           WHERE steamid64 = $1 AND status = 'approved'"#,
-    )
-    .bind(steam_id64)
-    .fetch_one(&db.pool)
-    .await?;
-    Ok(count.0 > 0)
 }
 
 async fn load_player_profile(

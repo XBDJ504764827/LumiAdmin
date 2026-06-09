@@ -22,6 +22,7 @@ pub(crate) struct LogoutAllBody {
 
 pub(crate) async fn login(
     State(ctx): State<AppCtx>,
+    headers: HeaderMap,
     Json(body): Json<LoginBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let resp = auth_service::login(
@@ -38,6 +39,18 @@ pub(crate) async fn login(
             Json(serde_json::json!({"error":"用户名或密码错误"})),
         )
     })?;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &body.username,
+        "认证",
+        "登录成功",
+        &body.username,
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(Json(serde_json::json!({"session": resp.session})))
 }
 

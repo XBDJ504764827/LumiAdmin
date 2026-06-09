@@ -7,9 +7,9 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::routes::{current_operator, forbidden, invalid_request, AppCtx};
-use crate::services::{audit_service, external_ban_api_service};
+use crate::services::{audit_service, external_ban_api_service, log_service, rate_limit_service::extract_client_ip};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub(crate) struct TargetBody {
     pub name: String,
     pub enabled: bool,
@@ -64,9 +64,21 @@ pub(crate) async fn create_target(
     let actor = current_operator(&ctx, &headers).await?;
     ensure_admin(&actor)?;
 
-    let item = external_ban_api_service::create_target(&ctx.db, input_from_body(body))
+    let item = external_ban_api_service::create_target(&ctx.db, input_from_body(body.clone()))
         .await
         .map_err(invalid_request)?;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "外部封禁API",
+        "添加同步目标",
+        &format!("{} ({})", body.name, body.base_url),
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({ "item": item })),
@@ -82,9 +94,21 @@ pub(crate) async fn update_target(
     let actor = current_operator(&ctx, &headers).await?;
     ensure_admin(&actor)?;
 
-    let item = external_ban_api_service::update_target(&ctx.db, id, input_from_body(body))
+    let item = external_ban_api_service::update_target(&ctx.db, id, input_from_body(body.clone()))
         .await
         .map_err(invalid_request)?;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "外部封禁API",
+        "编辑同步目标",
+        &format!("{} ({})", body.name, body.base_url),
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(Json(serde_json::json!({ "item": item })))
 }
 
@@ -96,9 +120,23 @@ pub(crate) async fn delete_target(
     let actor = current_operator(&ctx, &headers).await?;
     ensure_admin(&actor)?;
 
+    // 获取目标信息用于日志
+    let target_info = external_ban_api_service::find_target_info(&ctx.db, id).await;
     external_ban_api_service::delete_target(&ctx.db, id)
         .await
         .map_err(invalid_request)?;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "外部封禁API",
+        "删除同步目标",
+        &target_info.unwrap_or_else(|| id.to_string()),
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -127,6 +165,20 @@ pub(crate) async fn sync_ban(
     let result = external_ban_api_service::sync_ban(&ctx.db, id)
         .await
         .map_err(invalid_request)?;
+
+    // Write admin_log for manual sync
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "外部封禁API",
+        "手动同步封禁",
+        &format!("{} — {}", id, result.message),
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
 
     // Write audit log for manual sync
     if let Err(e) = audit_service::write_audit_log(
@@ -224,6 +276,20 @@ pub(crate) async fn retry_failed_syncs(
     let result = external_ban_api_service::retry_failed_syncs(&ctx.db)
         .await
         .map_err(invalid_request)?;
+
+    // Admin log for retry
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "外部封禁API",
+        "重试失败同步",
+        &result.message,
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
 
     // Audit log for retry
     if let Err(e) = audit_service::write_audit_log(

@@ -718,7 +718,6 @@ mod tests {
     };
     use crate::{config::Config, db::Database, services::steam_service::SteamResolver};
     use chrono::{Duration, Utc};
-    use sqlx::postgres::PgPoolOptions;
     use uuid::Uuid;
 
     fn schema_url(base_url: &str, schema: &str) -> String {

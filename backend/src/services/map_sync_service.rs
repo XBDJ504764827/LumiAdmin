@@ -227,6 +227,19 @@ pub async fn delete_agent(db: &Database, id: Uuid) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// 根据代理 ID 获取代理名称（用于日志记录）
+pub async fn find_agent_info(db: &Database, id: Uuid) -> Option<String> {
+    let row: Option<(String, String)> = sqlx::query_as(
+        r#"SELECT name, target_type FROM map_sync_agents WHERE id = $1"#,
+    )
+    .bind(id)
+    .fetch_optional(&db.pool)
+    .await
+    .ok()?;
+
+    row.map(|(name, target_type)| format!("{} ({})", name, target_type))
+}
+
 pub async fn reset_agent_token(db: &Database, id: Uuid) -> anyhow::Result<MapSyncAgent> {
     sqlx::query_as::<_, MapSyncAgent>(
         r#"UPDATE map_sync_agents

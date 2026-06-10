@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useState } from 'react';
 export function useAsync(factory, deps = []) {
   const [state, setState] = useState({ data: null, error: null, loading: true });
   const factoryRef = useRef(factory);
-  factoryRef.current = factory;
+  useEffect(() => { factoryRef.current = factory; });
 
   useEffect(() => {
     let cancelled = false;

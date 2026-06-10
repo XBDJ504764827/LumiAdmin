@@ -26,16 +26,43 @@ fn test_snapshot_store() -> SnapshotStore {
     )
 }
 
-fn test_app(config: Config, db: Database) -> Router {
-    router(
+struct TestApp {
+    router: Router,
+    pub whitelist_cache: Arc<WhitelistCache>,
+    pub ban_cache: Arc<ActiveBanCache>,
+}
+
+impl Clone for TestApp {
+    fn clone(&self) -> Self {
+        Self {
+            router: self.router.clone(),
+            whitelist_cache: self.whitelist_cache.clone(),
+            ban_cache: self.ban_cache.clone(),
+        }
+    }
+}
+
+// Provide a oneshot method that properly handles cloning
+impl TestApp {
+    /// Makes a request to the router. Clones the router internally so self is not consumed.
+    pub fn oneshot(&self, req: Request<Body>) -> tower::util::Oneshot<Router, Request<Body>> {
+        self.router.clone().oneshot(req)
+    }
+}
+
+fn test_app(config: Config, db: Database) -> TestApp {
+    let whitelist_cache = Arc::new(WhitelistCache::new());
+    let ban_cache = Arc::new(ActiveBanCache::new());
+    let router = router(
         config.clone(),
         db,
         test_snapshot_store(),
         Arc::new(ServerConfigCache::new(300)),
-        Arc::new(ActiveBanCache::new()),
-        Arc::new(WhitelistCache::new()),
+        ban_cache.clone(),
+        whitelist_cache.clone(),
         SteamResolver::new(&config),
-    )
+    );
+    TestApp { router, whitelist_cache, ban_cache }
 }
 
 fn schema_url(base_url: &str, schema: &str) -> String {
@@ -491,7 +518,7 @@ async fn admin_can_view_and_reset_server_report_token() {
             .header("authorization", format!("Bearer {token}"))
             .body(Body::empty())
             .unwrap();
-        let response = app.clone().oneshot(request).await.unwrap();
+        let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -666,6 +693,7 @@ async fn access_check_whitelist_mode_requires_approved_global_whitelist() {
             assert_eq!(payload["result"]["message"], "你尚未通过白名单审核，无法进入服务器。");
 
             insert_whitelist_for_steamid64(&db, "76561198000000003", "approved").await?;
+            app.whitelist_cache.refresh(&db).await?;
             let approved = app
                 .oneshot(
                     Request::builder()
@@ -1855,7 +1883,7 @@ async fn normal_admin_can_approve_but_cannot_revoke_whitelist() {
             .header("content-type", "application/json")
             .body(Body::from("{}"))
             .unwrap();
-        let approve_response = app.clone().oneshot(approve_request).await.unwrap();
+        let approve_response = app.oneshot(approve_request).await.unwrap();
         assert_eq!(approve_response.status(), StatusCode::OK);
 
         let revoke_request = Request::builder()

@@ -289,7 +289,7 @@ async function fetchPlayerKzStats(steamid64) {
 // 玩家详细信息 Modal（白名单待审核）
 // ---------------------------------------------------------------------------
 
-export function PlayerDetailModal({ open, onClose, item }) {
+export function PlayerDetailModal({ open, onClose, item, canReview, submitting, onApprove, onReject }) {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -327,7 +327,17 @@ export function PlayerDetailModal({ open, onClose, item }) {
       open={open}
       title="玩家详细信息"
       onClose={onClose}
-      footer={<button className="btn btn-outline" onClick={onClose}>关闭</button>}
+      footer={
+        canReview && item ? (
+          <>
+            <button className="btn btn-outline" onClick={onClose}>关闭</button>
+            <button className="action-btn action-btn-danger" onClick={() => { onClose(); onReject(item); }} disabled={submitting}>拒绝</button>
+            <button className="action-btn action-btn-success" style={{ color: '#22c55e' }} onClick={() => { onClose(); onApprove(item); }} disabled={submitting}>通过</button>
+          </>
+        ) : (
+          <button className="btn btn-outline" onClick={onClose}>关闭</button>
+        )
+      }
     >
       {item ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>

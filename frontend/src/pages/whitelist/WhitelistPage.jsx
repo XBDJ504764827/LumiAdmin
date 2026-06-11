@@ -198,6 +198,7 @@ export function WhitelistPage() {
       await api.approveWhitelist(token, item.id);
       await refetch();
       notifyPendingReviewsUpdated({ source: 'whitelist', action: 'approve' });
+      closeDetailModal();
       toast({ title: '审核通过', message: `${item.nickname} 的白名单申请已通过。` });
     } catch (actionError) {
       toast({ title: '操作失败', message: actionError.message, tone: 'danger' });
@@ -220,6 +221,7 @@ export function WhitelistPage() {
       setApproveModal(emptyApproveModal());
       await refetch();
       notifyPendingReviewsUpdated({ source: 'whitelist', action: 'approve' });
+      closeDetailModal();
       toast({ title: '审核通过', message: `${approveModal.item.nickname} 的白名单申请已通过。` });
     } catch (actionError) {
       setApproveModal((prev) => ({ ...prev, error: actionError.message }));
@@ -242,6 +244,7 @@ export function WhitelistPage() {
       setRejectModal({ open: false, item: null, reason: '', error: '' });
       await refetch();
       notifyPendingReviewsUpdated({ source: 'whitelist', action: 'reject' });
+      closeDetailModal();
       toast({ title: '已拒绝', message: `已拒绝 ${rejectModal.item.nickname} 的白名单申请。` });
     } catch (actionError) {
       setRejectModal((prev) => ({ ...prev, error: actionError.message }));
@@ -438,8 +441,6 @@ export function WhitelistPage() {
                       <td className="text-right">
                         {canReview ? <div className="action-btn-group">
                           <button className="action-btn action-btn-accent" onClick={() => setDetailModal({ open: true, item })}>详细</button>
-                          <button className="action-btn action-btn-success" onClick={() => handleApprove(item)} disabled={submitting}>通过</button>
-                          <button className="action-btn action-btn-danger" onClick={() => openRejectModal(item)} disabled={submitting}>拒绝</button>
                         </div> : null}
                       </td>
                     </tr>
@@ -544,6 +545,10 @@ export function WhitelistPage() {
         open={detailModal.open}
         onClose={closeDetailModal}
         item={detailModal.item}
+        canReview={canReview}
+        submitting={submitting}
+        onApprove={handleApprove}
+        onReject={openRejectModal}
       />
 
       {dialog}

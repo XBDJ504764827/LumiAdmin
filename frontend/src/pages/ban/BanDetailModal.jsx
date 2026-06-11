@@ -72,7 +72,7 @@ export function BanDetailModal({ open, item: initialItem, onClose, canManageAll 
 
   return (
     <div className="modal-overlay active" onClick={onClose}>
-      <div className="modal" style={{ maxWidth: 680 }} onClick={(e) => e.stopPropagation()}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>封禁详细</h2>
           <span style={{ cursor: 'pointer', color: 'var(--text3)', fontSize: 18 }} onClick={onClose}>&#10005;</span>

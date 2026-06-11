@@ -244,12 +244,6 @@ export function BanAppealPage() {
                       <td className="text-right">
                         <div className="action-btn-group">
                           <button className="action-btn action-btn-accent" onClick={() => openDetail(item)}>详情</button>
-                          {canReview && item.status === 'pending' ? (
-                            <>
-                              <button className="action-btn action-btn-success" onClick={() => openReview(item, 'approve')}>通过</button>
-                              <button className="action-btn action-btn-danger" onClick={() => openReview(item, 'reject')}>驳回</button>
-                            </>
-                          ) : null}
                         </div>
                       </td>
                     </tr>
@@ -271,7 +265,17 @@ export function BanAppealPage() {
         open={detailOpen}
         title="申诉详情"
         onClose={() => { setDetailOpen(false); setDetailItem(null); setGlobalBans([]); }}
-        footer={<button className="btn btn-outline" onClick={() => { setDetailOpen(false); setDetailItem(null); setGlobalBans([]); }}>关闭</button>}
+        footer={
+          canReview && detailItem?.status === 'pending' ? (
+            <>
+              <button className="btn btn-outline" onClick={() => { setDetailOpen(false); setDetailItem(null); setGlobalBans([]); }}>关闭</button>
+              <button className="action-btn action-btn-danger" onClick={() => { setDetailOpen(false); setDetailItem(null); setGlobalBans([]); openReview(detailItem, 'reject'); }} disabled={submitting}>驳回</button>
+              <button className="action-btn action-btn-success" style={{ color: '#22c55e' }} onClick={() => { setDetailOpen(false); setDetailItem(null); setGlobalBans([]); openReview(detailItem, 'approve'); }} disabled={submitting}>通过</button>
+            </>
+          ) : (
+            <button className="btn btn-outline" onClick={() => { setDetailOpen(false); setDetailItem(null); setGlobalBans([]); }}>关闭</button>
+          )
+        }
       >
         {detailItem ? (
           <div className="flex-col gap-12">

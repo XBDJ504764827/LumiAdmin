@@ -10,9 +10,9 @@ import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { StatusPill } from '../../shared/StatusPill.jsx';
 import { FileItem, fileActionLabel } from '../../shared/FilePreview.jsx';
-import { useNavigate } from 'react-router-dom';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { notifyPendingReviewsUpdated, usePendingReviewIndicators } from '../../hooks/usePendingReviewIndicators.js';
+import { BanFormModal } from '../ban/BanFormModal.jsx';
 
 const STATUS_MAP = {
   pending: { label: '待审核', pill: 'warning' },
@@ -30,7 +30,6 @@ export function PlayerReportPage() {
   const { session } = useAuth();
   const { confirm, dialog } = useConfirmDialog();
   const { toast, toasts, dismiss: dismissToast } = useToast();
-  const navigate = useNavigate();
   const { counts: pendingCounts } = usePendingReviewIndicators();
   const token = session?.token ?? null;
 
@@ -53,6 +52,11 @@ export function PlayerReportPage() {
   const [reviewStatus, setReviewStatus] = useState('rejected');
   const [reviewNote, setReviewNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  // 封禁表单弹窗
+  const [banModalOpen, setBanModalOpen] = useState(false);
+  const [banModalPrefill, setBanModalPrefill] = useState(null);
+  const [banModalReportId, setBanModalReportId] = useState(null);
 
   const canReview = session?.role === 'developer' || session?.role === 'admin';
   const reviewFileRef = useRef(null);
@@ -90,16 +94,19 @@ export function PlayerReportPage() {
   }
 
   function openBanFromReport(item) {
-    navigate('/ban', {
-      state: {
-        playerReportPrefill: {
-          reportId: item.id,
-          player: item.target_player_name || '',
-          steamId: item.target_steam_id,
-          reason: item.report_reason,
-        },
-      },
+    setBanModalPrefill({
+      player: item.target_player_name || '',
+      steam_id: item.target_steam_id,
+      reason: item.report_reason,
     });
+    setBanModalReportId(item.id);
+    setBanModalOpen(true);
+  }
+
+  async function handleBanSuccess({ savedItem }) {
+    await refetch();
+    notifyPendingReviewsUpdated({ source: 'playerReport', action: 'approved' });
+    toast({ title: '封禁成功', message: `已封禁玩家 ${savedItem.player || savedItem.steam_id}，并将举报标记为已封禁。` });
   }
 
   async function handleReview() {
@@ -228,12 +235,6 @@ export function PlayerReportPage() {
                       <td className="text-right">
                         <div className="action-btn-group">
                           <button className="action-btn action-btn-accent" onClick={() => openDetail(item)}>详情</button>
-                          {canReview && item.status === 'pending' ? (
-                            <>
-                              <button className="action-btn action-btn-danger" onClick={() => openBanFromReport(item)}>封禁</button>
-                              <button className="action-btn action-btn-danger" onClick={() => openReview(item, 'rejected')}>驳回</button>
-                            </>
-                          ) : null}
                         </div>
                       </td>
                     </tr>
@@ -256,15 +257,15 @@ export function PlayerReportPage() {
         title="举报详情"
         onClose={closeDetail}
         footer={
-          <>
+          canReview && detailItem?.status === 'pending' ? (
+            <>
+              <button className="btn btn-outline" onClick={closeDetail}>关闭</button>
+              <button className="action-btn action-btn-danger" onClick={() => { const item = detailItem; closeDetail(); openReview(item, 'rejected'); }} disabled={submitting}>驳回</button>
+              <button className="action-btn action-btn-success" style={{ color: '#22c55e' }} onClick={() => { const item = detailItem; closeDetail(); openBanFromReport(item); }} disabled={submitting}>封禁</button>
+            </>
+          ) : (
             <button className="btn btn-outline" onClick={closeDetail}>关闭</button>
-            {canReview && detailItem?.status === 'pending' ? (
-              <>
-                <button className="btn btn-danger" onClick={() => { const item = detailItem; closeDetail(); openBanFromReport(item); }}>封禁</button>
-                <button className="btn btn-outline" onClick={() => { const item = detailItem; closeDetail(); openReview(item, 'rejected'); }}>驳回</button>
-              </>
-            ) : null}
-          </>
+          )
         }
       >
         {detailItem ? (
@@ -429,6 +430,16 @@ export function PlayerReportPage() {
           </div>
         ) : null}
       </Modal>
+
+      <BanFormModal
+        open={banModalOpen}
+        mode="create"
+        prefillForm={banModalPrefill}
+        reportReview={banModalReportId ? { reportId: banModalReportId } : null}
+        onClose={() => { setBanModalOpen(false); setBanModalPrefill(null); setBanModalReportId(null); }}
+        onSuccess={handleBanSuccess}
+        token={token}
+      />
 
       {dialog}
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />

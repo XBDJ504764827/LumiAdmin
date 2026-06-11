@@ -111,6 +111,8 @@ pub struct UpdateBanInput {
     pub ip_address: Option<String>,
     pub ban_type: String,
     pub reason: String,
+    pub duration_minutes: i32,
+    pub expires_at: Option<String>,
 }
 
 const BAN_DISPLAY_FIELDS: &str = "br.id, br.player, br.steam_id, br.ip_address, br.server_name, br.ban_type, br.duration_minutes, br.expires_at, br.reason, br.status, COALESCE(operator_user.display_name, br.operator_name) AS operator_name, br.source, br.server_id, br.server_port, br.removed_reason, COALESCE(removed_user.display_name, br.removed_by) AS removed_by, br.removed_at, br.created_at";
@@ -315,13 +317,30 @@ pub async fn update_ban(
         .resolve(steam_id_input)
         .await?
         .steamid64;
+
+    let duration_minutes = input.duration_minutes;
+    anyhow::ensure!(duration_minutes >= 0, "封禁时长不能为负数");
+    let expires_at = if let Some(ref expires_at_str) = input.expires_at {
+        let parsed = chrono::DateTime::parse_from_rfc3339(&format!("{}+08:00", expires_at_str))
+            .or_else(|_| chrono::DateTime::parse_from_rfc3339(expires_at_str))
+            .map_err(|e| anyhow::anyhow!("到期时间格式无效: {}", e))?;
+        anyhow::ensure!(parsed > chrono::Utc::now(), "封禁到期时间必须晚于当前时间");
+        Some(parsed.to_utc())
+    } else if duration_minutes == 0 {
+        None
+    } else {
+        Some(chrono::Utc::now() + chrono::Duration::minutes(i64::from(duration_minutes)))
+    };
+
     let row = sqlx::query_as::<_, BanRow>(
         r#"UPDATE ban_records
            SET player = $2,
                steam_id = $3,
                ip_address = $4,
                ban_type = $5,
-               reason = $6
+               reason = $6,
+               duration_minutes = $7,
+               expires_at = $8
            WHERE id = $1
            RETURNING id, player, steam_id, ip_address, server_name, ban_type,
                      duration_minutes, expires_at, reason, status, operator_name, source,
@@ -333,6 +352,8 @@ pub async fn update_ban(
     .bind(super::normalize_optional_string(input.ip_address))
     .bind(ban_type)
     .bind(reason)
+    .bind(duration_minutes)
+    .bind(expires_at)
     .fetch_one(&db.pool)
     .await?;
 

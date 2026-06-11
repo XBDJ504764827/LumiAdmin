@@ -59,9 +59,6 @@ export function BanPage() {
   // API 弹窗状态
   const [apiModalOpen, setApiModalOpen] = useState(false);
 
-  // 同步外部状态
-  const [syncingExternalId, setSyncingExternalId] = useState(null);
-
   const canManageAll = session?.role === 'developer' || session?.role === 'admin';
   const canCreate = canManageAll;
 
@@ -162,27 +159,6 @@ export function BanPage() {
     }
   }
 
-  async function handleSyncExternalBan(item) {
-    const ok = await confirm({
-      title: '同步到外部封禁 API',
-      message: `确定将 ${item.player || item.steam_id} 的封禁记录同步到所有已启用的外部 API 吗？`,
-      confirmText: '确认同步',
-    });
-    if (!ok) return;
-    try {
-      setSyncingExternalId(item.id);
-      const result = await api.syncExternalBan(token, item.id);
-      toast({
-        title: '同步成功',
-        message: result.result?.message || `${item.player || item.steam_id} 已同步到外部封禁 API。`,
-      });
-    } catch (requestError) {
-      toast({ title: '同步失败', message: requestError.message, tone: 'danger' });
-    } finally {
-      setSyncingExternalId(null);
-    }
-  }
-
   return (
     <div id="ban" className="content-section active">
       <div className="breadcrumb"><span>核心管理</span><span className="sep">›</span><span className="current">封禁管理</span></div>
@@ -235,11 +211,6 @@ export function BanPage() {
                       <div className="action-btn-group">
                         <button className="action-btn" onClick={() => setDetailItem(x)}>详细</button>
                         {canManageAll ? <button className="action-btn action-btn-accent" onClick={() => openEditModal(x)}>编辑</button> : null}
-                        {canManageAll && x.status === 'active' ? (
-                          <button className="action-btn" onClick={() => handleSyncExternalBan(x)} disabled={syncingExternalId === x.id}>
-                            {syncingExternalId === x.id ? '同步中' : '同步外部'}
-                          </button>
-                        ) : null}
                         {canUnban(x) && x.status === 'active' ? <button className="action-btn action-btn-success" onClick={() => handleUnban(x)}>解封</button> : null}
                         {canCreate && x.status === 'inactive' ? <button className="action-btn action-btn-danger" onClick={() => openRebanModal(x)}>重新封禁</button> : null}
                         {canManageAll ? <button className="action-btn action-btn-danger" onClick={() => handleDeleteBan(x)}>删除</button> : null}

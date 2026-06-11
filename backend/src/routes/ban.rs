@@ -216,6 +216,8 @@ pub(crate) async fn update_ban(
             ip_address: body.ip_address,
             ban_type: body.ban_type,
             reason: body.reason,
+            duration_minutes: body.duration_minutes.unwrap_or(0),
+            expires_at: body.expires_at,
         },
     )
     .await

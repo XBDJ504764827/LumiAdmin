@@ -99,6 +99,8 @@ pub struct CreateBanInput {
     pub ip_address: Option<String>,
     pub ban_type: String,
     pub reason: String,
+    pub duration_minutes: i32,
+    pub expires_at: Option<String>,
     pub operator_name: String,
 }
 
@@ -254,13 +256,28 @@ pub async fn create_ban(
         anyhow::bail!("该玩家已有活跃封禁记录，请先解封后再重新封禁");
     }
 
+    let duration_minutes = input.duration_minutes;
+    anyhow::ensure!(duration_minutes >= 0, "封禁时长不能为负数");
+    let expires_at = if let Some(ref expires_at_str) = input.expires_at {
+        // 前端传来自定义到期时间，解析 ISO 格式
+        let parsed = chrono::DateTime::parse_from_rfc3339(&format!("{}+08:00", expires_at_str))
+            .or_else(|_| chrono::DateTime::parse_from_rfc3339(expires_at_str))
+            .map_err(|e| anyhow::anyhow!("到期时间格式无效: {}", e))?;
+        anyhow::ensure!(parsed > chrono::Utc::now(), "封禁到期时间必须晚于当前时间");
+        Some(parsed.to_utc())
+    } else if duration_minutes == 0 {
+        None
+    } else {
+        Some(chrono::Utc::now() + chrono::Duration::minutes(i64::from(duration_minutes)))
+    };
+
     let row = sqlx::query_as::<_, BanRow>(
         r#"INSERT INTO ban_records (
                id, player, steam_id, ip_address, server_name, ban_type,
                duration_minutes, expires_at, reason, status, operator_name, source,
                server_id, server_port
            )
-           VALUES ($1, $2, $3, $4, NULL, $5, 0, NULL, $6, 'active', $7, 'manual', NULL, NULL)
+           VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8, 'active', $9, 'manual', NULL, NULL)
            RETURNING id, player, steam_id, ip_address, server_name, ban_type,
                      duration_minutes, expires_at, reason, status, operator_name, source,
                      server_id, server_port, removed_reason, removed_by, removed_at, created_at"#,
@@ -270,6 +287,8 @@ pub async fn create_ban(
     .bind(&steam_id)
     .bind(super::normalize_optional_string(input.ip_address))
     .bind(ban_type)
+    .bind(duration_minutes)
+    .bind(expires_at)
     .bind(reason)
     .bind(input.operator_name)
     .fetch_one(&db.pool)

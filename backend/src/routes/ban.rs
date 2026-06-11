@@ -20,6 +20,8 @@ pub(crate) struct BanBody {
     pub ban_type: String,
     pub ip_address: Option<String>,
     pub reason: String,
+    pub duration_minutes: Option<i32>,
+    pub expires_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -120,6 +122,8 @@ pub(crate) async fn create_ban(
             ip_address: body.ip_address,
             ban_type: body.ban_type,
             reason: body.reason,
+            duration_minutes: body.duration_minutes.unwrap_or(0),
+            expires_at: body.expires_at,
             operator_name: operator_name.clone(),
         },
     )

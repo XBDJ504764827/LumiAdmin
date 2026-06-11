@@ -1,8 +1,9 @@
 import React, { useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { Modal } from '../../shared/Modal.jsx';
+import { DatePicker } from '../../shared/DatePicker.jsx';
 import { useToast } from '../../shared/Toast.jsx';
-import { BAN_TYPE_OPTIONS, banModalSubmitText, banModalTitle, buildCreateBanPayload, emptyBanForm, validateBanForm } from './banForm.js';
+import { BAN_TYPE_OPTIONS, BAN_DURATION_OPTIONS, banModalSubmitText, banModalTitle, buildCreateBanPayload, emptyBanForm, validateBanForm } from './banForm.js';
 
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
@@ -189,6 +190,10 @@ export function BanFormModal({ open, mode, editingBanId, reportReview, prefillFo
       <div className="form-group"><label>玩家名称</label><input type="text" className="form-control" value={form.player} onChange={(event) => setForm((prev) => ({ ...prev, player: event.target.value }))} placeholder="留空后等待插件自动获取" /></div>
       <div className="form-group"><label>SteamID64 <span className="text-accent">*</span></label><input type="text" className="form-control" value={form.steam_id} onChange={(event) => setForm((prev) => ({ ...prev, steam_id: event.target.value }))} placeholder="76561198000000000" /></div>
       <div className="form-group"><label>封禁属性 <span className="text-accent">*</span></label><select className="form-control" value={form.ban_type} onChange={(event) => setForm((prev) => ({ ...prev, ban_type: event.target.value }))}><option value="">请选择封禁属性</option>{BAN_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
+      <div className="form-group"><label>封禁时长 <span className="text-accent">*</span></label><select className="form-control" value={form.duration_minutes} onChange={(event) => setForm((prev) => ({ ...prev, duration_minutes: Number(event.target.value), ...(Number(event.target.value) !== -1 ? { expires_at: null } : {}) }))}>{BAN_DURATION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
+      {form.duration_minutes === -1 ? (
+        <div className="form-group"><label>到期时间 <span className="text-accent">*</span></label><DatePicker value={form.expires_at} onChange={(val) => setForm((prev) => ({ ...prev, expires_at: val }))} minDate={new Date()} placeholder="选择封禁到期时间" /></div>
+      ) : null}
       <div className="form-group"><label>IP 地址</label><input type="text" className="form-control" value={form.ip_address} onChange={(event) => setForm((prev) => ({ ...prev, ip_address: event.target.value }))} placeholder="留空后等待插件自动获取" /></div>
       <div className="form-group"><label>封禁理由 <span className="text-accent">*</span></label><textarea className="form-control" value={form.reason} onChange={(event) => setForm((prev) => ({ ...prev, reason: event.target.value }))} placeholder="请输入封禁理由" rows={3} /></div>
       {mode !== 'edit' ? (
@@ -229,8 +234,8 @@ export function BanFormModal({ open, mode, editingBanId, reportReview, prefillFo
           ) : null}
         </div>
       ) : null}
-      {form.ban_type === 'steam' ? <div style={{ color: 'var(--text2)', fontSize: 13 }}>账号封禁：该 SteamID64 无法进入游戏服务器。</div> : null}
-      {form.ban_type === 'ip' ? <div style={{ color: 'var(--text2)', fontSize: 13 }}>IP 封禁：该玩家下次进服后将自动填写 IP 并且阻止该 IP 的玩家进入服务器。</div> : null}
+      {form.ban_type === 'steam' ? <div style={{ color: 'var(--text2)', fontSize: 13 }}>账号封禁：该 SteamID64 无法进入游戏服务器。{form.duration_minutes === 0 ? '永久封禁，不会自动到期。' : ''}{form.duration_minutes === -1 && form.expires_at ? `到期时间：${new Date(form.expires_at).toLocaleString('zh-CN')}。` : ''}</div> : null}
+      {form.ban_type === 'ip' ? <div style={{ color: 'var(--text2)', fontSize: 13 }}>IP 封禁：该玩家下次进服后将自动填写 IP 并且阻止该 IP 的玩家进入服务器。{form.duration_minutes === 0 ? '永久封禁，不会自动到期。' : ''}{form.duration_minutes === -1 && form.expires_at ? `到期时间：${new Date(form.expires_at).toLocaleString('zh-CN')}。` : ''}</div> : null}
       {error ? <div className="text-accent">{error}</div> : null}
     </Modal>
   );

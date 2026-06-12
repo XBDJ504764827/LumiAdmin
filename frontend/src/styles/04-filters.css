@@ -166,4 +166,31 @@
 }
 .gokz-loading { color: var(--text3); }
 .gokz-error { color: var(--accent); }
+.gokz-empty {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.gokz-empty-icon {
+  font-size: 18px;
+  color: var(--accent2);
+  line-height: 1;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.gokz-empty-title {
+  color: var(--text);
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.gokz-empty-desc {
+  color: var(--text3);
+  font-size: 12px;
+}
 

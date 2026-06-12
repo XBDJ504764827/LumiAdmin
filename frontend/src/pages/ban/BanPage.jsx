@@ -135,6 +135,12 @@ export function BanPage() {
   }
 
   async function handleUnban(item) {
+    const confirmed = await confirm({
+      title: '解封确认',
+      message: `确定要解封玩家 ${item.player || item.steam_id} 吗？解封后该玩家将能够正常进入服务器。`,
+      confirmText: '确认解封',
+    });
+    if (!confirmed) return;
     try {
       await api.unban(token, item.id);
       refetch();
@@ -147,7 +153,8 @@ export function BanPage() {
   async function handleDeleteBan(item) {
     const confirmed = await confirm({
       title: '删除封禁记录',
-      message: `确定删除 ${item.player || item.steam_id} 的封禁记录吗？`,
+      message: `确定删除 ${item.player || item.steam_id} 的封禁记录吗？此操作不可恢复。`,
+      confirmText: '确认删除',
     });
     if (!confirmed) return;
     try {

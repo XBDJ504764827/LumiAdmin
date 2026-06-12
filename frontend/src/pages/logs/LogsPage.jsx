@@ -16,7 +16,6 @@ const MODULE_TONE = {
   'API密钥管理': 'pill-info',
   '封禁API': 'pill-danger',
   '外部封禁API': 'pill-info',
-  '地图同步': 'pill-info',
   '网站用户管理': 'pill-warning',
   '玩家进服设置': 'pill-info',
   '封禁申诉': 'pill-warning',

@@ -365,22 +365,38 @@ export function PlayerDetailModal({ open, onClose, item, canReview, submitting, 
               <div className="gokz-loading">加载中…</div>
             ) : error ? (
               <div className="gokz-error">{error}</div>
-            ) : stats ? (
-              <div className="gokz-list">
-                {KZ_MODES.map((mode) => {
-                  const s = stats[mode.key];
-                  if (!s) return null;
-                  return (
+            ) : stats ? (() => {
+              const validRows = KZ_MODES
+                .map((mode) => ({ mode, s: stats[mode.key] }))
+                .filter(({ s }) => s);
+              if (validRows.length === 0) {
+                return (
+                  <div className="gokz-empty">
+                    <div className="gokz-empty-icon">ℹ</div>
+                    <div className="gokz-empty-title">该玩家在 GOKZ.TOP 暂无跳图记录</div>
+                    <div className="gokz-empty-desc">可能原因：玩家从未在全球站跳过图，或所有记录仅在未验证服务器。这不代表数据加载失败。</div>
+                  </div>
+                );
+              }
+              return (
+                <div className="gokz-list">
+                  {validRows.map(({ mode, s }) => (
                     <div key={mode.key} className={`gokz-row gokz-row-${mode.key.toLowerCase()}`}>
                       <span className="gokz-row-mode">{mode.label}</span>
                       <span className="gokz-row-val">{s.rating !== null ? s.rating.toFixed(2) : '-'}</span>
                       <span className="gokz-row-val">{s.rank !== null ? `#${s.rank}` : '-'}</span>
                       <span className="gokz-row-val">{s.mapFinish} 张</span>
                     </div>
-                  );
-                })}
+                  ))}
+                </div>
+              );
+            })() : (
+              <div className="gokz-empty">
+                <div className="gokz-empty-icon">ℹ</div>
+                <div className="gokz-empty-title">未能获取 GOKZ.TOP 数据</div>
+                <div className="gokz-empty-desc">外部 API 暂不可用，请稍后重试。</div>
               </div>
-            ) : null}
+            )}
           </div>
 
           <InternalNoteBadge steamid64={item?.steamid64} />

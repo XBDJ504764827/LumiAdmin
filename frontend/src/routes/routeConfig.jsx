@@ -15,7 +15,6 @@ const ApiListPage = lazy(() => import('../pages/api/ApiListPage.jsx').then(m => 
 const PlayerApiPage = lazy(() => import('../pages/api/PlayerApiPage.jsx').then(m => ({ default: m.PlayerApiPage })));
 const ExternalBanApiPage = lazy(() => import('../pages/api/ExternalBanApiPage.jsx').then(m => ({ default: m.ExternalBanApiPage })));
 const ExternalServerPage = lazy(() => import('../pages/external/ExternalServerPage.jsx').then(m => ({ default: m.ExternalServerPage })));
-const MapSyncPage = lazy(() => import('../pages/mapSync/MapSyncPage.jsx').then(m => ({ default: m.MapSyncPage })));
 const PlayerAccessPage = lazy(() => import('../pages/playerAccess/PlayerAccessPage.jsx').then(m => ({ default: m.PlayerAccessPage })));
 const AccessLogPage = lazy(() => import('../pages/accessLog/AccessLogPage.jsx').then(m => ({ default: m.AccessLogPage })));
 const GlobalBanPage = lazy(() => import('../pages/globalBan/GlobalBanPage.jsx').then(m => ({ default: m.GlobalBanPage })));
@@ -57,7 +56,6 @@ export const protectedRoutes = [
   { path: '/player-api', element: <Lazy><PlayerApiPage /></Lazy>, roles: ['admin', 'developer'] },
   { path: '/external-ban-api', element: <Lazy><ExternalBanApiPage /></Lazy>, roles: ['admin', 'developer'] },
   { path: '/external-servers', element: <Lazy><ExternalServerPage /></Lazy>, roles: ['admin', 'developer'] },
-  { path: '/map-sync', element: <Lazy><MapSyncPage /></Lazy>, roles: ['admin', 'developer'] },
 ];
 
 export const publicRoutes = [

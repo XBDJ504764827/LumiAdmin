@@ -9,7 +9,6 @@ mod core;
 mod external;
 mod indexes;
 mod logs;
-mod map_sync;
 mod notifications;
 mod player_api;
 mod player_reports;
@@ -66,7 +65,6 @@ impl Database {
         self.migrate_external_ban_api_schema().await?;
         self.migrate_ban_api_keys_schema().await?;
         self.migrate_map_tiers_table().await?;
-        self.migrate_map_sync_schema().await?;
         self.migrate_notifications_schema().await?;
         self.migrate_ban_appeals_schema().await?;
         self.migrate_appeal_files_schema().await?;
@@ -113,19 +111,19 @@ impl Database {
             );
         }
 
+        Ok(())
+    }
+
+    /// 地图等级表（从 MySQL 同步）
+    async fn migrate_map_tiers_table(&self) -> anyhow::Result<()> {
         sqlx::query(
-            r#"UPDATE map_sync_config
-               SET map_pool_url = $1
-               WHERE id = true
-                 AND (
-                   btrim(map_pool_url) = ''
-                   OR map_pool_url = 'https://kztimerglobal.com/api/v1.0/maps?is_validated=true&limit=999'
-                 )"#,
+            r#"CREATE TABLE IF NOT EXISTS map_tiers (
+              map_name TEXT PRIMARY KEY,
+              tier INTEGER NOT NULL
+            )"#,
         )
-        .bind(&config.map_sync_map_pool_url)
         .execute(&self.pool)
         .await?;
-
         Ok(())
     }
 }

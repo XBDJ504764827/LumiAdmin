@@ -4,11 +4,18 @@
 //
 // 去重保证：
 //   1. global_bans 表以 kzt_ban_id 为 UNIQUE 键，同一条全球封禁只会有一条本地记录
-//   2. 每次同步只拉取 isExpired=false 的活跃封禁
+//   2. 每次同步只拉取 isExpired=false 的活跃封禁，API 不返回的视为已过期
 //   3. 已存在的 global_bans 记录只会做 UPDATE，不会重复创建本地封禁
 //   4. create_local_ban 检查 source='global_ban' 活跃封禁 + partial unique index 保证
 //      每个 steam_id 最多只有一条 source='global_ban' 的活跃封禁
 //   5. 管理员手动解封后，设置 manual_unbanned=true，同步不会再重新封禁
+//
+// 过期处理：
+//   - 同步时仅拉取 isExpired=false 的封禁，API 不再返回的封禁标记为 is_expired=true
+//   - 过期封禁的 local_ban_id 保留（不置 NULL），指向 status='inactive' 的 ban_records
+//   - 保留 local_ban_id 防止同步重复创建：下次同步时若 local_ban_id 不为 NULL
+//     且指向的 ban_records 仍为 inactive，说明该封禁曾因全球过期被解封，不会误重封
+//   - 如果 LumiAdmin 中有其他来源的活跃封禁，全球封禁过期不影响该玩家在 LumiAdmin 中的封禁状态
 use crate::db::Database;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -144,11 +151,12 @@ pub async fn fetch_live_global_bans(
 ///   - 拉取 KZTimer 所有活跃封禁（isExpired=false）
 ///   - 对每条封禁做 upsert（基于 kzt_ban_id）
 ///   - 只对新增的且未被手动解封的封禁创建本地 ban_records
-///   - 标记本地已不再出现在 API 中的封禁为过期
+///   - 标记本地已不再出现在 API 中的封禁为过期，解除本地封禁
+///   - 过期封禁保留 local_ban_id 引用（指向 inactive 的 ban_records），防止重复创建
 pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
     let mut result = SyncResult::default();
 
-    // 1) 拉取 KZTimer 所有活跃封禁（分页，最多 10000 条）
+    // 1) 拉取 KZTimer 所有活跃封禁（isExpired=false，分页，最多 10000 条）
     let mut all_bans: Vec<KZTBan> = Vec::new();
     for offset in (0..10000).step_by(500) {
         let bans = fetch_active_kzt_bans(offset, 500).await?;
@@ -168,15 +176,15 @@ pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
 
     // 3) 逐条 upsert
     for ban in &all_bans {
-        let existing: Option<(Uuid, Option<Uuid>, bool)> = sqlx::query_as(
-            "SELECT id, local_ban_id, manual_unbanned FROM global_bans WHERE kzt_ban_id = $1",
+        let existing: Option<(Uuid, Option<Uuid>, bool, Option<String>)> = sqlx::query_as(
+            "SELECT id, local_ban_id, manual_unbanned, ban_status FROM global_bans LEFT JOIN LATERAL (SELECT status AS ban_status FROM ban_records WHERE id = global_bans.local_ban_id) AS sub ON true WHERE kzt_ban_id = $1",
         )
         .bind(ban.id)
         .fetch_optional(&db.pool)
         .await?;
 
-        if let Some((gid, local_id, was_manual_unbanned)) = existing {
-            // 已存在 → 仅更新字段，不重复创建本地封禁
+        if let Some((gid, local_id, was_manual_unbanned, ban_record_status)) = existing {
+            // 已存在 → 仅更新字段
             sqlx::query(
                 r#"UPDATE global_bans SET
                     player_name = $2, ban_type = $3, notes = $4, stats = $5,
@@ -193,24 +201,34 @@ pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
             .execute(&db.pool)
             .await?;
 
-            // 如果之前没有本地封禁且没有被手动解封 → 创建本地封禁
-            if local_id.is_none() && !was_manual_unbanned {
-                let lid = create_local_ban(
-                    db,
-                    &ban.steamid64,
-                    &ban.player_name,
-                    &ban.ban_type,
-                    &ban.notes,
-                )
-                .await
-                .ok();
-                if let Some(Some(lid)) = lid {
-                    sqlx::query("UPDATE global_bans SET local_ban_id = $1 WHERE id = $2")
-                        .bind(lid)
-                        .bind(gid)
-                        .execute(&db.pool)
-                        .await?;
-                    result.re_banned += 1;
+            // 封禁在 API 中仍为活跃 → 确保本地封禁也是活跃的
+            if !was_manual_unbanned {
+                if local_id.is_none() {
+                    // 从未有本地封禁 → 创建
+                    let lid = create_local_ban(
+                        db,
+                        &ban.steamid64,
+                        &ban.player_name,
+                        &ban.ban_type,
+                        &ban.notes,
+                    )
+                    .await
+                    .ok();
+                    if let Some(Some(lid)) = lid {
+                        sqlx::query("UPDATE global_bans SET local_ban_id = $1 WHERE id = $2")
+                            .bind(lid)
+                            .bind(gid)
+                            .execute(&db.pool)
+                            .await?;
+                        result.re_banned += 1;
+                    }
+                } else if let Some(lid) = local_id {
+                    if ban_record_status.as_deref() == Some("inactive") {
+                        // 有本地封禁但已 inactive（之前因全球封禁过期被解封）→ 重新激活
+                        reactivate_local_ban(db, lid).await.ok();
+                        result.re_banned += 1;
+                    }
+                    // local_id 有值且 ban_records.status='active' → 无需操作
                 }
             }
         } else {
@@ -248,6 +266,8 @@ pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
     }
 
     // 4) 标记本地已不再出现在 API 中的封禁为过期
+    //    重要：local_ban_id 保留（不置 NULL），指向 status='inactive' 的 ban_records，
+    //    这样下次同步时即使 API 延迟返回该封禁，也不会误创建新的本地封禁
     let locally_active: Vec<(Uuid, i64, Option<Uuid>)> = sqlx::query_as(
         "SELECT id, kzt_ban_id, local_ban_id FROM global_bans WHERE is_expired = false",
     )
@@ -261,6 +281,7 @@ pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
                 .execute(&db.pool)
                 .await?;
             if let Some(lid) = local_id {
+                // 仅解除 global_ban 来源的封禁，不影响 LumiAdmin 中其他来源的封禁
                 unban_local(db, lid).await.ok();
             }
             result.expired += 1;
@@ -271,7 +292,7 @@ pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
 }
 
 /// 在 ban_records 中创建本地封禁（source = "global_ban"）
-/// 返回 None 表示跳过（有其他来源的活跃封禁）
+/// 返回 None 表示跳过（有其他来源的活跃封禁），返回 Some(id) 表示创建/复用成功
 async fn create_local_ban(
     db: &Database,
     steam_id64: &str,
@@ -291,7 +312,8 @@ async fn create_local_ban(
         return Ok(Some(existing_id));
     }
 
-    // 有其他来源的活跃封禁 → 不创建
+    // 有其他来源的活跃封禁 → 不创建全球封禁来源的记录
+    // LumiAdmin 封禁优先：即使全球封禁过期，玩家在 LumiAdmin 中仍被封禁
     let existing_other: Option<(Uuid,)> = sqlx::query_as(
         "SELECT id FROM ban_records WHERE steam_id = $1 AND source != 'global_ban' AND status = 'active'"
     )
@@ -300,7 +322,7 @@ async fn create_local_ban(
     .await?;
 
     if existing_other.is_some() {
-        tracing::info!(steam_id = steam_id64, "玩家已有非全球封禁的活跃封禁记录，跳过创建");
+        tracing::info!(steam_id = steam_id64, "玩家已有 LumiAdmin 活跃封禁记录，跳过创建全球封禁来源记录");
         return Ok(None);
     }
 
@@ -329,9 +351,22 @@ async fn create_local_ban(
 }
 
 /// 解除本地封禁（全球封禁过期时自动解封）
+/// 仅解除 source='global_ban' 的封禁，不影响 LumiAdmin 中其他来源的封禁
 async fn unban_local(db: &Database, ban_id: Uuid) -> anyhow::Result<()> {
+    // 只解封 global_ban 来源且当前 active 的记录，避免误解封其他来源的封禁
     sqlx::query(
-        "UPDATE ban_records SET status = 'inactive', removed_by = 'global_ban_sync', removed_at = now() WHERE id = $1 AND status = 'active'",
+        "UPDATE ban_records SET status = 'inactive', removed_by = 'global_ban_sync', removed_at = now() WHERE id = $1 AND status = 'active' AND source = 'global_ban'",
+    )
+    .bind(ban_id)
+    .execute(&db.pool)
+    .await?;
+    Ok(())
+}
+
+/// 重新激活本地封禁（全球封禁恢复时）
+async fn reactivate_local_ban(db: &Database, ban_id: Uuid) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE ban_records SET status = 'active', removed_by = NULL, removed_at = NULL WHERE id = $1 AND status = 'inactive' AND source = 'global_ban'",
     )
     .bind(ban_id)
     .execute(&db.pool)
@@ -368,9 +403,9 @@ pub async fn manual_unban(
         .await?;
     }
 
-    // 断开关联 + 标记为手动解封
+    // 标记为手动解封（不置 NULL local_ban_id，保留引用防止重封）
     sqlx::query(
-        "UPDATE global_bans SET local_ban_id = NULL, manual_unbanned = true WHERE id = $1",
+        "UPDATE global_bans SET manual_unbanned = true WHERE id = $1",
     )
     .bind(gid)
     .execute(&db.pool)
@@ -380,6 +415,23 @@ pub async fn manual_unban(
     ban_cache.refresh(db).await?;
 
     Ok(())
+}
+
+/// 清理误封禁数据：将 global_bans.is_expired=true 但 ban_records.status='active' 的记录修正为 inactive
+/// 用于修复之前同步 bug 导致的数据错误
+pub async fn cleanup_stale_global_bans(db: &Database) -> anyhow::Result<u64> {
+    let result = sqlx::query(
+        r#"UPDATE ban_records
+           SET status = 'inactive', removed_by = 'global_ban_cleanup', removed_at = now()
+           FROM global_bans
+           WHERE ban_records.id = global_bans.local_ban_id
+             AND global_bans.is_expired = true
+             AND ban_records.status = 'active'
+             AND ban_records.source = 'global_ban'"#,
+    )
+    .execute(&db.pool)
+    .await?;
+    Ok(result.rows_affected())
 }
 
 // =====================================================
@@ -450,6 +502,18 @@ pub fn start_global_ban_sync_loop(
     interval_secs: u64,
 ) {
     tokio::spawn(async move {
+        // 启动时先清理之前可能的误封禁数据
+        match cleanup_stale_global_bans(&db).await {
+            Ok(0) => {},
+            Ok(n) => {
+                tracing::info!(count = n, "清理了因全球封禁过期但本地仍活跃的误封禁记录");
+                if let Err(e) = ban_cache.refresh(&db).await {
+                    tracing::warn!(%e, "清理后刷新封禁缓存失败");
+                }
+            }
+            Err(e) => tracing::warn!(%e, "清理误封禁数据失败"),
+        }
+
         match sync_global_bans(&db).await {
             Ok(r) => {
                 tracing::info!(?r, "全球封禁初始同步完成");

@@ -29,8 +29,6 @@ pub struct Config {
     pub steam_name_refresh_interval_secs: u64,
     pub session_cleanup_interval_secs: u64,
     pub rcon_poll_scan_interval_secs: u64,
-    pub map_sync_scan_interval_secs: u64,
-    pub map_sync_map_pool_url: String,
     pub map_tier_sync_interval_secs: u64,
     // 服务器状态历史清理
     pub status_history_cleanup_interval_secs: u64,
@@ -135,10 +133,6 @@ impl Config {
             steam_name_refresh_interval_secs: env_u64("STEAM_NAME_REFRESH_INTERVAL_SECS", 6 * 3600),
             session_cleanup_interval_secs: env_u64("SESSION_CLEANUP_INTERVAL_SECS", 600),
             rcon_poll_scan_interval_secs: env_u64("RCON_POLL_SCAN_INTERVAL_SECS", 5),
-            map_sync_scan_interval_secs: env_u64("MAP_SYNC_SCAN_INTERVAL_SECS", 60),
-            map_sync_map_pool_url: std::env::var("MAP_SYNC_MAP_POOL_URL").unwrap_or_else(|_| {
-                "https://kztimerglobal.com/api/v1.0/maps?is_validated=true&limit=999".to_string()
-            }),
             map_tier_sync_interval_secs: env_u64("MAP_TIER_SYNC_INTERVAL_SECS", 6 * 3600),
             // 服务器状态历史清理：每小时清理一次，保留 1 小时数据
             status_history_cleanup_interval_secs: env_u64("STATUS_HISTORY_CLEANUP_INTERVAL_SECS", 3600),

@@ -93,10 +93,10 @@ function BanDetailModal({ ban, localBanId, manualUnbanned, onClose }) {
 
         <span className="detail-label">本地封禁</span>
         <span className="detail-value">
-          {localBanId
-            ? <StatusPill kind="danger">已同步封禁</StatusPill>
-            : manualUnbanned
-              ? <StatusPill kind="default">管理员已解封</StatusPill>
+          {manualUnbanned
+            ? <StatusPill kind="default">管理员已解封</StatusPill>
+            : localBanId
+              ? <StatusPill kind="danger">已同步封禁</StatusPill>
               : <StatusPill kind="success">未同步封禁</StatusPill>}
         </span>
       </div>
@@ -208,10 +208,10 @@ export function GlobalBanPage() {
                           {ban.notes || '-'}
                         </td>
                         <td>
-                          {item.local_ban_id
-                            ? <StatusPill kind="danger">已封禁</StatusPill>
-                            : item.manual_unbanned
-                              ? <StatusPill kind="default">已解封</StatusPill>
+                          {item.manual_unbanned
+                            ? <StatusPill kind="default">已解封</StatusPill>
+                            : item.local_ban_id
+                              ? <StatusPill kind="danger">已封禁</StatusPill>
                               : <StatusPill kind="success">未封禁</StatusPill>}
                         </td>
                         <td style={{ whiteSpace: 'nowrap' }}>

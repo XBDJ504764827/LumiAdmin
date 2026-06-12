@@ -47,7 +47,7 @@ export const protectedRoutes = [
   { path: '/player-reports', element: <Lazy><PlayerReportPage /></Lazy>, roles: ['admin', 'developer'] },
   { path: '/users', element: <Lazy><UsersPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },
   { path: '/player-access', element: <Lazy><PlayerAccessPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },
-  { path: '/access-logs', element: <Lazy><AccessLogPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },
+  { path: '/access-logs', element: <Lazy><AccessLogPage /></Lazy>, roles: ['admin', 'developer'] },
   { path: '/audit', element: <Lazy><AuditPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },
   { path: '/notifications', element: <Lazy><NotificationPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },
   { path: '/logs', element: <Lazy><LogsPage /></Lazy>, roles: ['admin', 'developer'] },

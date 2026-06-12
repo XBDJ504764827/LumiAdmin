@@ -37,6 +37,9 @@ pub struct Config {
     pub status_history_retention_secs: u64,
     pub server_config_cache_ttl_secs: u64,
     pub server_config_cache_refresh_interval_secs: u64,
+    // 进服记录清理
+    pub access_log_cleanup_interval_secs: u64,
+    pub access_log_retention_days: i64,
     // Cloudflare R2 存储配置
     pub r2_endpoint: Option<String>,
     pub r2_bucket: Option<String>,
@@ -143,6 +146,13 @@ impl Config {
                 "SERVER_CONFIG_CACHE_REFRESH_INTERVAL_SECS",
                 300,
             ),
+            // 进服记录清理：默认每天清理一次，保留 90 天
+            access_log_cleanup_interval_secs: env_u64("ACCESS_LOG_CLEANUP_INTERVAL_SECS", 86400),
+            access_log_retention_days: std::env::var("ACCESS_LOG_RETENTION_DAYS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .filter(|v: &i64| *v > 0)
+                .unwrap_or(90),
             // R2 配置
             r2_endpoint: std::env::var("R2_ENDPOINT").ok().filter(|v| !v.is_empty()),
             r2_bucket: std::env::var("R2_BUCKET").ok().filter(|v| !v.is_empty()),

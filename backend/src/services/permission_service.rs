@@ -94,6 +94,11 @@ pub fn can_view_audit_logs(actor: &Operator) -> bool {
     matches!(actor.role.as_str(), "developer" | "admin" | "normal")
 }
 
+/// 查看进服监控：含详细 IP/Rating/Steam 等级，只有 developer/admin 可看
+pub fn can_view_access_logs(actor: &Operator) -> bool {
+    matches!(actor.role.as_str(), "developer" | "admin")
+}
+
 pub fn can_manage_player_internal_data(actor: &Operator) -> bool {
     matches!(actor.role.as_str(), "developer" | "admin")
 }

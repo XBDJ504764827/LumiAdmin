@@ -78,6 +78,12 @@ async fn main() -> anyhow::Result<()> {
         config.status_history_cleanup_interval_secs,
         config.status_history_retention_secs as i64,
     );
+    // 启动进服记录清理
+    services::access_log_service::start_access_log_cleanup_loop(
+        db.clone(),
+        config.access_log_cleanup_interval_secs,
+        config.access_log_retention_days,
+    );
 
     // 启动地图等级同步（如果配置了 MySQL），启动时同步一次，之后每 6 小时同步一次
     if let Some(ref mysql_url) = config.mysql_database_url {

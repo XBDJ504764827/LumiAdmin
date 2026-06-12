@@ -198,6 +198,7 @@ pub(super) async fn migrate_player_access_cache_extended(&self) -> anyhow::Resul
     let new_columns = [
         ("allowed", "BOOLEAN NOT NULL DEFAULT true"),
         ("reject_reason", "TEXT"),
+        ("failure_code", "TEXT"),
     ];
     for (col, ty) in new_columns {
         sqlx::query(&format!(
@@ -216,6 +217,8 @@ pub(super) async fn migrate_player_access_cache_extended(&self) -> anyhow::Resul
     sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_player_access_logs_access_method ON player_access_logs (access_method)"#)
         .execute(&self.pool).await?;
     sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_player_access_logs_allowed ON player_access_logs (allowed)"#)
+        .execute(&self.pool).await?;
+    sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_player_access_logs_failure_code ON player_access_logs (failure_code)"#)
         .execute(&self.pool).await?;
     sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_player_access_logs_created_at ON player_access_logs (created_at DESC)"#)
         .execute(&self.pool).await?;

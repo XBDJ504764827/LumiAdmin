@@ -3,8 +3,6 @@ export function Pagination({ page, pageSize, total, onChange }) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const current = Math.min(page, totalPages);
 
-  if (totalPages <= 1) return null;
-
   const pages = [];
   const maxVisible = 5;
   let start = Math.max(1, current - Math.floor(maxVisible / 2));

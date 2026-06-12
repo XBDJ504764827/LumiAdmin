@@ -20,6 +20,16 @@ const ACCESS_METHOD_MAP = {
   custom_rule_rejected: { label: '规则拒绝', kind: 'danger' },
 };
 
+const FAILURE_CODE_MAP = {
+  banned: '被封禁',
+  not_whitelisted: '白名单未通过',
+  low_rating: 'Rating 不足',
+  low_steam_level: 'Steam 等级不足',
+  custom_rule_rejected: '自定义规则拒绝',
+  profile_fetch_failed: '无法获取玩家资料',
+  snapshot_unavailable: '服务降级',
+};
+
 function methodLabel(method) {
   return ACCESS_METHOD_MAP[method]?.label || method || '-';
 }
@@ -46,6 +56,11 @@ const ALLOWED_OPTIONS = [
   { value: 'false', label: '进服失败' },
 ];
 
+const FAILURE_CODE_OPTIONS = [
+  { value: '', label: '全部原因' },
+  ...Object.entries(FAILURE_CODE_MAP).map(([k, v]) => ({ value: k, label: v })),
+];
+
 export function AccessLogPage() {
   const { session } = useAuth();
   const token = session?.token ?? null;
@@ -56,20 +71,23 @@ export function AccessLogPage() {
     community_id: '',
     access_method: '',
     allowed: '',
+    failure_code: '',
     search: '',
   });
 
-  const queryBody = { page, page_size: 30 };
-  if (filters.steam_id64.trim()) queryBody.steam_id64 = filters.steam_id64.trim();
-  if (filters.server_id.trim()) queryBody.server_id = filters.server_id.trim();
-  if (filters.community_id.trim()) queryBody.community_id = filters.community_id.trim();
-  if (filters.access_method) queryBody.access_method = filters.access_method;
-  if (filters.allowed !== '') queryBody.allowed = filters.allowed === 'true';
-  if (filters.search.trim()) queryBody.search = filters.search.trim();
+  // 构建 GET 查询参数
+  const queryParams = { page, page_size: 30 };
+  if (filters.steam_id64.trim()) queryParams.steam_id64 = filters.steam_id64.trim();
+  if (filters.server_id.trim()) queryParams.server_id = filters.server_id.trim();
+  if (filters.community_id.trim()) queryParams.community_id = filters.community_id.trim();
+  if (filters.access_method) queryParams.access_method = filters.access_method;
+  if (filters.allowed !== '') queryParams.allowed = filters.allowed === 'true';
+  if (filters.failure_code) queryParams.failure_code = filters.failure_code;
+  if (filters.search.trim()) queryParams.search = filters.search.trim();
 
   const { data, isLoading, error } = useApiQuery(
-    ['accessLogs', queryBody],
-    (token) => api.accessLogs(token, queryBody),
+    ['accessLogs', queryParams],
+    (token) => api.accessLogs(token, queryParams),
     typeof session !== 'undefined',
   );
 
@@ -83,7 +101,7 @@ export function AccessLogPage() {
   }
 
   function clearFilters() {
-    setFilters({ steam_id64: '', server_id: '', community_id: '', access_method: '', allowed: '', search: '' });
+    setFilters({ steam_id64: '', server_id: '', community_id: '', access_method: '', allowed: '', failure_code: '', search: '' });
     setPage(1);
   }
 
@@ -96,7 +114,7 @@ export function AccessLogPage() {
       <div className="page-header">
         <div>
           <div className="page-title">进服监控</div>
-          <div className="page-sub">记录玩家每次尝试进入服务器的结果：进服成功/失败、进服方式、拒绝原因等。</div>
+          <div className="page-sub">记录玩家每次尝试进入服务器的结果：进服成功/失败、进服方式、失败原因等。</div>
         </div>
       </div>
 
@@ -115,28 +133,28 @@ export function AccessLogPage() {
             </select>
             <input
               className="form-control"
-              style={{ maxWidth: 220 }}
+              style={{ maxWidth: 200 }}
               placeholder="SteamID64"
               value={filters.steam_id64}
               onChange={(e) => setFilters((f) => ({ ...f, steam_id64: e.target.value }))}
             />
             <input
               className="form-control"
-              style={{ maxWidth: 280 }}
+              style={{ maxWidth: 260 }}
               placeholder="服务器 ID"
               value={filters.server_id}
               onChange={(e) => setFilters((f) => ({ ...f, server_id: e.target.value }))}
             />
             <input
               className="form-control"
-              style={{ maxWidth: 280 }}
+              style={{ maxWidth: 260 }}
               placeholder="社区组 ID"
               value={filters.community_id}
               onChange={(e) => setFilters((f) => ({ ...f, community_id: e.target.value }))}
             />
             <select
               className="form-control"
-              style={{ maxWidth: 140 }}
+              style={{ maxWidth: 130 }}
               value={filters.access_method}
               onChange={(e) => setFilters((f) => ({ ...f, access_method: e.target.value }))}
             >
@@ -144,9 +162,19 @@ export function AccessLogPage() {
                 <option key={o.value} value={o.value}>{o.label}</option>
               ))}
             </select>
+            <select
+              className="form-control"
+              style={{ maxWidth: 140 }}
+              value={filters.failure_code}
+              onChange={(e) => setFilters((f) => ({ ...f, failure_code: e.target.value }))}
+            >
+              {FAILURE_CODE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
             <input
               className="form-control"
-              style={{ maxWidth: 200 }}
+              style={{ maxWidth: 180 }}
               placeholder="搜索玩家/服务器..."
               value={filters.search}
               onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
@@ -178,7 +206,7 @@ export function AccessLogPage() {
                   <th>服务器</th>
                   <th>社区组</th>
                   <th>进服方式</th>
-                  <th>拒绝原因</th>
+                  <th>失败原因</th>
                   <th>Rating</th>
                   <th>Steam 等级</th>
                 </tr>
@@ -201,8 +229,10 @@ export function AccessLogPage() {
                       <td>{item.server_name} :{item.server_port}</td>
                       <td>{item.community_name || '-'}</td>
                       <td><StatusPill kind={methodKind(item.access_method)}>{methodLabel(item.access_method)}</StatusPill></td>
-                      <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.reject_reason || ''}>
-                        {item.reject_reason || '-'}
+                      <td style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.reject_reason || ''}>
+                        {item.failure_code
+                          ? (FAILURE_CODE_MAP[item.failure_code] || item.failure_code)
+                          : (item.reject_reason || '-')}
                       </td>
                       <td>{item.rating ?? '-'}</td>
                       <td>{item.steam_level ?? '-'}</td>
@@ -212,14 +242,12 @@ export function AccessLogPage() {
               </tbody>
             </table>
           </div>
-          {total > 0 ? (
-            <Pagination
-              page={page}
-              pageSize={30}
-              total={total}
-              onPageChange={setPage}
-            />
-          ) : null}
+          <Pagination
+            page={page}
+            pageSize={30}
+            total={total}
+            onPageChange={setPage}
+          />
         </>
       ) : null}
     </div>

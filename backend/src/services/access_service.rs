@@ -29,6 +29,8 @@ pub struct AccessCheckResult {
     pub message: String,
     /// 进服方式
     pub access_method: Option<String>,
+    /// 失败原因代码（进服失败时用于结构化筛选/统计）
+    pub failure_code: Option<String>,
     /// 玩家 GOKZ rating
     pub rating: Option<i32>,
     /// 玩家 Steam 等级
@@ -88,7 +90,7 @@ pub async fn check_access(
         Err(error) => {
             warn!(%error, "live access check failed, trying snapshot fallback");
             let Some(snapshot) = snapshot_store.read_snapshot().await? else {
-                return Ok(reject_with_method("访问控制服务暂时不可用，请稍后再试。", "snapshot_fallback"));
+                return Ok(reject_with_method("访问控制服务暂时不可用，请稍后再试。", "snapshot_fallback", "snapshot_unavailable"));
             };
             let decision = access_snapshot_service::evaluate_access_snapshot(
                 &snapshot,
@@ -162,7 +164,7 @@ async fn check_access_live(
             ),
             None => format!("你已被永久封禁，原因：{}", ban.reason),
         };
-        return Ok(reject_with_method(&message, "banned"));
+        return Ok(reject_with_method(&message, "banned", "banned"));
     }
 
     // 2. 检查玩家进服权限规则（优先级最高）
@@ -176,6 +178,7 @@ async fn check_access_live(
     if !access_allowed {
         return Ok(reject_with_method(
             access_reason.as_deref().unwrap_or("您被禁止进入该服务器"),
+            "custom_rule_rejected",
             "custom_rule_rejected"
         ));
     }
@@ -215,7 +218,7 @@ async fn check_access_live(
                 None,
             ))
         } else {
-            Ok(reject_with_method("你尚未通过白名单审核，无法进入服务器。", "whitelist_rejected"))
+            Ok(reject_with_method("你尚未通过白名单审核，无法进入服务器。", "whitelist_rejected", "not_whitelisted"))
         };
     }
 
@@ -223,7 +226,7 @@ async fn check_access_live(
     if !effective_whitelist && effective_restriction {
         return match load_player_profile(db, config, steam_id64).await? {
             Some(profile) => evaluate_restriction(&server, &profile),
-            None => Ok(reject_with_method("无法验证您的进入资格，请稍后再试。", "restriction_rejected")),
+            None => Ok(reject_with_method("无法验证您的进入资格，请稍后再试。", "restriction_rejected", "profile_fetch_failed")),
         };
     }
 
@@ -250,7 +253,7 @@ async fn check_access_live(
                     None,
                 ))
             } else {
-                Ok(reject_with_method("你的 GOKZ rating 未达到服务器最低要求。", "restriction_rejected"))
+                Ok(reject_with_method("你的 GOKZ rating 未达到服务器最低要求。", "restriction_rejected", "low_rating"))
             }
         }
     }
@@ -263,10 +266,10 @@ fn evaluate_restriction(
     let min_rating = server.effective_min_rating();
     let min_steam_level = server.effective_min_steam_level();
     if profile.rating < min_rating {
-        return Ok(reject_with_method("你的 GOKZ rating 未达到服务器最低要求。", "restriction_rejected"));
+        return Ok(reject_with_method("你的 GOKZ rating 未达到服务器最低要求。", "restriction_rejected", "low_rating"));
     }
     if profile.steam_level < min_steam_level {
-        return Ok(reject_with_method("你的 Steam 等级未达到服务器最低要求。", "restriction_rejected"));
+        return Ok(reject_with_method("你的 Steam 等级未达到服务器最低要求。", "restriction_rejected", "low_steam_level"));
     }
     Ok(allow_with_data(
         "已满足服务器进入限制，允许进入服务器。",
@@ -432,7 +435,8 @@ fn access_result_from_snapshot_decision(
     AccessCheckResult {
         allowed: decision.allowed,
         message: decision.message,
-        access_method: Some(if decision.allowed { "snapshot_fallback".to_string() } else { "snapshot_fallback".to_string() }),
+        access_method: Some("snapshot_fallback".to_string()),
+        failure_code: None,
         rating: None,
         steam_level: None,
     }
@@ -448,16 +452,18 @@ pub(crate) fn allow_with_data(
         allowed: true,
         message: message.to_string(),
         access_method: Some(access_method.to_string()),
+        failure_code: None,
         rating,
         steam_level,
     }
 }
 
-fn reject_with_method(message: &str, access_method: &str) -> AccessCheckResult {
+fn reject_with_method(message: &str, access_method: &str, failure_code: &str) -> AccessCheckResult {
     AccessCheckResult {
         allowed: false,
         message: message.to_string(),
         access_method: Some(access_method.to_string()),
+        failure_code: Some(failure_code.to_string()),
         rating: None,
         steam_level: None,
     }

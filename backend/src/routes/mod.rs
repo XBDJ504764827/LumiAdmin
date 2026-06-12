@@ -428,7 +428,7 @@ pub fn router(
         // -- player access logs --
         .route(
             "/api/player-access/logs",
-            post(access::list_access_logs),
+            get(access::list_access_logs),
         )
         // -- notifications --
         .route("/api/notifications", get(notification::list_notifications))

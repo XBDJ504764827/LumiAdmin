@@ -133,7 +133,7 @@ export const api = {
   createPlayerAccessRule: (token, body) => request('/api/player-access/rules', { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   updatePlayerAccessRule: (token, id, body) => request(`/api/player-access/rules/${id}`, { method: 'PUT', headers: withAuth(token), body: JSON.stringify(body) }),
   deletePlayerAccessRule: (token, id) => request(`/api/player-access/rules/${id}`, { method: 'DELETE', headers: withAuth(token) }),
-  accessLogs: (token, body) => request('/api/player-access/logs', { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
+  accessLogs: (token, params = {}) => request(`/api/player-access/logs${buildQueryString(params)}`, { headers: withAuth(token) }),
   publicWhitelist: (params = {}) => request(`/api/public/whitelist${buildQueryString(params)}`),
   publicBans: (params = {}) => request(`/api/public/bans${buildQueryString(params)}`),
   submitWhitelist: (body) => request('/api/public/whitelist', { method: 'POST', body: JSON.stringify(body) }),

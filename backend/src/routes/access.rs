@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
@@ -74,6 +74,7 @@ pub(crate) async fn check_plugin_access(
             community_name.as_deref(),
             result.allowed,
             &access_method,
+            result.failure_code.as_deref(),
             reject_reason,
             result.rating,
             result.steam_level,
@@ -267,38 +268,33 @@ pub(crate) async fn delete_player_access_rule(
 
 pub(crate) async fn list_access_logs(
     State(ctx): State<AppCtx>,
-    Json(body): Json<serde_json::Value>,
-) -> Json<serde_json::Value> {
-    let page = body.get("page").and_then(|v| v.as_i64()).unwrap_or(1).max(1);
-    let page_size = body.get("page_size").and_then(|v| v.as_i64()).unwrap_or(20).clamp(1, 100);
+    headers: HeaderMap,
+    Query(params): Query<access_log_service::AccessLogQueryParams>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let actor = current_operator(&ctx, &headers).await?;
+    if !permission_service::can_view_access_logs(&actor) {
+        return Err(forbidden());
+    }
 
-    let params = access_log_service::AccessLogQueryParams {
-        steam_id64: body.get("steam_id64").and_then(|v| v.as_str().map(String::from)),
-        server_id: body.get("server_id").and_then(|v| v.as_str().and_then(|s| Uuid::parse_str(s).ok())),
-        community_id: body.get("community_id").and_then(|v| v.as_str().and_then(|s| Uuid::parse_str(s).ok())),
-        access_method: body.get("access_method").and_then(|v| v.as_str().map(String::from)),
-        allowed: body.get("allowed").and_then(|v| v.as_bool()),
-        search: body.get("search").and_then(|v| v.as_str().map(String::from)),
-        page: Some(page),
-        page_size: Some(page_size),
-    };
+    let page = params.page();
+    let page_size = params.page_size();
 
     match access_log_service::query_access_logs(&ctx.db, &params).await {
-        Ok((items, total)) => Json(serde_json::json!({
+        Ok((items, total)) => Ok(Json(serde_json::json!({
             "items": items,
             "total": total,
             "page": page,
             "page_size": page_size,
-        })),
+        }))),
         Err(e) => {
             tracing::error!(%e, "查询进服记录失败");
-            Json(serde_json::json!({
+            Ok(Json(serde_json::json!({
                 "error": "查询进服记录失败",
                 "items": [],
                 "total": 0,
                 "page": page,
                 "page_size": page_size,
-            }))
+            })))
         }
     }
 }

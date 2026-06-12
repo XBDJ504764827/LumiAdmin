@@ -419,8 +419,8 @@ export function WhitelistPage() {
           </div>
         </div>
         <div className="card-body p-0">
-          {isLoading ? <TableLoading colSpan={tab === 'pending' ? 7 : 10} text="正在加载白名单数据..." /> : null}
-          {!isLoading && error ? <TableError colSpan={tab === 'pending' ? 7 : 10} message={error.message} /> : null}
+          {isLoading ? <table className="data-table"><tbody><TableLoading colSpan={tab === 'pending' ? 7 : 10} text="正在加载白名单数据..." /></tbody></table> : null}
+          {!isLoading && error ? <table className="data-table"><tbody><TableError colSpan={tab === 'pending' ? 7 : 10} message={error.message} /></tbody></table> : null}
           {!isLoading && !error ? (
             <div className="table-responsive">
               <table className="data-table">

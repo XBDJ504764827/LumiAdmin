@@ -321,9 +321,12 @@
 .online-player-server-name { font-size: 13px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 8px; }
 .online-player-server-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success-dot); display: inline-block; }
 
-/* 全球封禁标记样式 */
+/* ── 全球封禁标记样式 */
 .row-global-ban { background: var(--danger-bg) !important; }
 .row-global-ban:hover { background: var(--danger-bg-hover) !important; }
+/* ── 进服失败行样式 ── */
+.row-access-denied { opacity: 0.72; }
+.row-access-denied:hover { opacity: 1; }
 .nickname-cell { line-height: 1.4; }
 .global-ban-btn { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; padding: 2px 8px; font-size: 11px; font-weight: 600; border-radius: 12px; background: var(--accent); color: #fff; border: none; cursor: pointer; transition: all 0.2s; box-shadow: 0 1px 3px rgba(232,115,90,0.3); }
 .global-ban-btn:hover { transform: scale(1.05); box-shadow: 0 2px 6px rgba(232,115,90,0.4); }

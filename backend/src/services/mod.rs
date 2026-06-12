@@ -1,5 +1,6 @@
 pub mod access_cache;
 pub mod access_log_service;
+pub mod global_ban_service;
 pub mod access_service;
 pub mod access_snapshot_service;
 pub mod audit_service;

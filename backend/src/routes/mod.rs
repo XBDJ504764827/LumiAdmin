@@ -7,6 +7,7 @@ pub mod community;
 pub mod external_ban_api;
 pub mod external_server;
 pub mod map_sync;
+pub mod global_ban;
 pub mod misc;
 pub mod notification;
 pub mod player_detail;
@@ -430,6 +431,10 @@ pub fn router(
             "/api/player-access/logs",
             get(access::list_access_logs),
         )
+        // -- global bans --
+        .route("/api/global-bans", get(global_ban::list_global_bans))
+        .route("/api/global-bans/sync", post(global_ban::trigger_sync))
+        .route("/api/global-bans/:kzt_ban_id/unban", post(global_ban::manual_unban_global_ban))
         // -- notifications --
         .route("/api/notifications", get(notification::list_notifications))
         .route(

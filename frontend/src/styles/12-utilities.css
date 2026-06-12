@@ -518,3 +518,78 @@
   .content-section, .page { padding: 0 !important; }
   .card { box-shadow: none !important; border: 1px solid #ccc !important; break-inside: avoid; }
 }
+
+/* ── 详情面板（全球封禁详情等） ── */
+.detail-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px 20px;
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+.detail-label {
+  color: var(--text3);
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  padding-top: 2px;
+  white-space: nowrap;
+}
+.detail-value {
+  color: var(--text);
+  min-width: 0;
+  word-break: break-word;
+}
+.detail-value.mono {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--accent2);
+}
+.detail-value.pre {
+  white-space: pre-wrap;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text2);
+  background: var(--surface2);
+  padding: 8px 12px;
+  border-radius: 8px;
+  margin: 2px 0;
+}
+.detail-divider {
+  grid-column: 1 / -1;
+  height: 1px;
+  background: var(--border);
+  margin: 6px 0;
+}
+
+/* ── 同步结果提示条 ── */
+.sync-result-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-radius: var(--r-md);
+  margin-bottom: 16px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.sync-result-bar.success {
+  background: var(--success-bg);
+  color: var(--success-text);
+  border: 1px solid var(--success-text);
+}
+.sync-result-bar.error {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  border: 1px solid var(--danger-text);
+}
+.sync-result-bar .btn-sm { margin-left: auto; flex-shrink: 0; }
+
+/* ── 永久封禁标签 ── */
+.permanent-ban {
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.3px;
+}

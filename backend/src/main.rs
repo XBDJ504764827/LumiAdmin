@@ -84,6 +84,8 @@ async fn main() -> anyhow::Result<()> {
         config.access_log_cleanup_interval_secs,
         config.access_log_retention_days,
     );
+    // 启动全球封禁同步（从 KZTimer GlobalAPI）— 在 active_ban_cache 创建后调用
+    // （移到 active_ban_cache 初始化之后）
 
     // 启动地图等级同步（如果配置了 MySQL），启动时同步一次，之后每 6 小时同步一次
     if let Some(ref mysql_url) = config.mysql_database_url {
@@ -106,6 +108,12 @@ async fn main() -> anyhow::Result<()> {
         db.clone(),
         active_ban_cache.clone(),
         config.server_config_cache_refresh_interval_secs,
+    );
+    // 启动全球封禁同步（从 KZTimer GlobalAPI）
+    services::global_ban_service::start_global_ban_sync_loop(
+        db.clone(),
+        active_ban_cache.clone(),
+        config.global_ban_sync_interval_secs,
     );
 
     // 启动白名单缓存

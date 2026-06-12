@@ -43,6 +43,7 @@ export function sidebarSections(role) {
       icon: icons.logFolder,
       children: [
         { path: '/access-logs', label: '进服监控', icon: icons.logs },
+        { path: '/global-bans', label: '全球封禁', icon: icons.globe },
         { path: '/audit', label: '审计日志', icon: icons.audit },
         { path: '/logs', label: '操作日志', icon: icons.logs },
       ],

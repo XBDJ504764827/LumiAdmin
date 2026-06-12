@@ -5,6 +5,7 @@ import { useAuth } from '../../state/auth.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { StatusPill } from '../../shared/StatusPill.jsx';
+import { TableLoading, TableEmpty } from '../../shared/TableState.jsx';
 
 const ACCESS_METHOD_MAP = {
   // 进服成功
@@ -60,6 +61,8 @@ const FAILURE_CODE_OPTIONS = [
   { value: '', label: '全部原因' },
   ...Object.entries(FAILURE_CODE_MAP).map(([k, v]) => ({ value: k, label: v })),
 ];
+
+const COL_COUNT = 11;
 
 export function AccessLogPage() {
   const { session } = useAuth();
@@ -119,137 +122,132 @@ export function AccessLogPage() {
       </div>
 
       <div className="card" style={{ marginBottom: 16 }}>
-        <div className="card-body">
-          <form onSubmit={handleSearch} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            <select
-              className="form-control"
-              style={{ maxWidth: 120 }}
-              value={filters.allowed}
-              onChange={(e) => setFilters((f) => ({ ...f, allowed: e.target.value }))}
-            >
-              {ALLOWED_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
-            <input
-              className="form-control"
-              style={{ maxWidth: 200 }}
-              placeholder="SteamID64"
-              value={filters.steam_id64}
-              onChange={(e) => setFilters((f) => ({ ...f, steam_id64: e.target.value }))}
-            />
-            <input
-              className="form-control"
-              style={{ maxWidth: 260 }}
-              placeholder="服务器 ID"
-              value={filters.server_id}
-              onChange={(e) => setFilters((f) => ({ ...f, server_id: e.target.value }))}
-            />
-            <input
-              className="form-control"
-              style={{ maxWidth: 260 }}
-              placeholder="社区组 ID"
-              value={filters.community_id}
-              onChange={(e) => setFilters((f) => ({ ...f, community_id: e.target.value }))}
-            />
-            <select
-              className="form-control"
-              style={{ maxWidth: 130 }}
-              value={filters.access_method}
-              onChange={(e) => setFilters((f) => ({ ...f, access_method: e.target.value }))}
-            >
-              {ACCESS_METHOD_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
-            <select
-              className="form-control"
-              style={{ maxWidth: 140 }}
-              value={filters.failure_code}
-              onChange={(e) => setFilters((f) => ({ ...f, failure_code: e.target.value }))}
-            >
-              {FAILURE_CODE_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
-            <input
-              className="form-control"
-              style={{ maxWidth: 180 }}
-              placeholder="搜索玩家/服务器..."
-              value={filters.search}
-              onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
-            />
-            <button className="btn btn-primary" type="submit">查询</button>
-            {hasFilters && (
-              <button className="btn btn-outline" type="button" onClick={clearFilters}>
-                清除
-              </button>
-            )}
-          </form>
+        <div className="filter-bar">
+          <select
+            className="filter-select"
+            value={filters.allowed}
+            onChange={(e) => { setFilters((f) => ({ ...f, allowed: e.target.value })); setPage(1); }}
+          >
+            {ALLOWED_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+          <input
+            className="search-bar-input"
+            style={{ maxWidth: 180 }}
+            placeholder="SteamID64"
+            value={filters.steam_id64}
+            onChange={(e) => setFilters((f) => ({ ...f, steam_id64: e.target.value }))}
+          />
+          <input
+            className="search-bar-input"
+            style={{ maxWidth: 180 }}
+            placeholder="服务器 ID"
+            value={filters.server_id}
+            onChange={(e) => setFilters((f) => ({ ...f, server_id: e.target.value }))}
+          />
+          <input
+            className="search-bar-input"
+            style={{ maxWidth: 180 }}
+            placeholder="社区组 ID"
+            value={filters.community_id}
+            onChange={(e) => setFilters((f) => ({ ...f, community_id: e.target.value }))}
+          />
+          <select
+            className="filter-select"
+            value={filters.access_method}
+            onChange={(e) => { setFilters((f) => ({ ...f, access_method: e.target.value })); setPage(1); }}
+          >
+            {ACCESS_METHOD_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+          <select
+            className="filter-select"
+            value={filters.failure_code}
+            onChange={(e) => { setFilters((f) => ({ ...f, failure_code: e.target.value })); setPage(1); }}
+          >
+            {FAILURE_CODE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+          <input
+            className="search-bar-input"
+            style={{ maxWidth: 200 }}
+            placeholder="搜索玩家/服务器..."
+            value={filters.search}
+            onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
+          />
+          <button className="btn btn-primary" type="submit" onClick={handleSearch}>查询</button>
+          {hasFilters && (
+            <button className="btn btn-outline" type="button" onClick={clearFilters}>清除</button>
+          )}
         </div>
       </div>
 
-      {isLoading && <div style={{ padding: 24, color: 'var(--text3)' }}>加载中...</div>}
-      {error && <div style={{ padding: 24, color: 'var(--accent)' }}>加载失败: {error.message}</div>}
+      <div className="card">
+        <div className="table-responsive">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>结果</th>
+                <th>玩家</th>
+                <th>SteamID64</th>
+                <th>IP</th>
+                <th>服务器</th>
+                <th>社区组</th>
+                <th>进服方式</th>
+                <th>失败原因</th>
+                <th>Rating</th>
+                <th>Steam 等级</th>
+              </tr>
+            </thead>
+            <tbody>
+              {isLoading ? (
+                <TableLoading colSpan={COL_COUNT} text="正在加载进服记录..." />
+              ) : error ? (
+                <tr><td colSpan={COL_COUNT} className="table-state-cell">
+                  <div className="table-state-inner table-state-inner--error">加载失败: {error.message}</div>
+                </td></tr>
+              ) : items.length === 0 ? (
+                <TableEmpty colSpan={COL_COUNT} text="暂无进服记录" />
+              ) : (
+                items.map((item) => (
+                  <tr key={item.id} className={!item.allowed ? 'row-access-denied' : undefined}>
+                    <td style={{ whiteSpace: 'nowrap' }}>{formatChinaDateTime(item.created_at, { seconds: false })}</td>
+                    <td>
+                      <StatusPill kind={item.allowed ? 'success' : 'danger'}>
+                        {item.allowed ? '成功' : '失败'}
+                      </StatusPill>
+                    </td>
+                    <td className="fw-600">{item.player_name || '-'}</td>
+                    <td className="steam-id">{item.steam_id64}</td>
+                    <td className="steam-id">{item.ip_address || '-'}</td>
+                    <td>{item.server_name} :{item.server_port}</td>
+                    <td>{item.community_name || '-'}</td>
+                    <td><StatusPill kind={methodKind(item.access_method)}>{methodLabel(item.access_method)}</StatusPill></td>
+                    <td style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.reject_reason || ''}>
+                      {item.failure_code
+                        ? (FAILURE_CODE_MAP[item.failure_code] || item.failure_code)
+                        : (item.reject_reason || '-')}
+                    </td>
+                    <td>{item.rating ?? '-'}</td>
+                    <td>{item.steam_level ?? '-'}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
-      {!isLoading && !error ? (
-        <>
-          <div className="table-responsive">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>时间</th>
-                  <th>结果</th>
-                  <th>玩家</th>
-                  <th>SteamID64</th>
-                  <th>IP</th>
-                  <th>服务器</th>
-                  <th>社区组</th>
-                  <th>进服方式</th>
-                  <th>失败原因</th>
-                  <th>Rating</th>
-                  <th>Steam 等级</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.length === 0 ? (
-                  <tr><td colSpan={11} style={{ textAlign: 'center', color: 'var(--text3)' }}>暂无进服记录</td></tr>
-                ) : (
-                  items.map((item) => (
-                    <tr key={item.id} style={!item.allowed ? { opacity: 0.7 } : undefined}>
-                      <td style={{ whiteSpace: 'nowrap' }}>{formatChinaDateTime(item.created_at, { seconds: false })}</td>
-                      <td>
-                        <StatusPill kind={item.allowed ? 'success' : 'danger'}>
-                          {item.allowed ? '成功' : '失败'}
-                        </StatusPill>
-                      </td>
-                      <td className="fw-600">{item.player_name || '-'}</td>
-                      <td><code style={{ fontSize: 12 }}>{item.steam_id64}</code></td>
-                      <td><code style={{ fontSize: 12 }}>{item.ip_address || '-'}</code></td>
-                      <td>{item.server_name} :{item.server_port}</td>
-                      <td>{item.community_name || '-'}</td>
-                      <td><StatusPill kind={methodKind(item.access_method)}>{methodLabel(item.access_method)}</StatusPill></td>
-                      <td style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.reject_reason || ''}>
-                        {item.failure_code
-                          ? (FAILURE_CODE_MAP[item.failure_code] || item.failure_code)
-                          : (item.reject_reason || '-')}
-                      </td>
-                      <td>{item.rating ?? '-'}</td>
-                      <td>{item.steam_level ?? '-'}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-          <Pagination
-            page={page}
-            pageSize={30}
-            total={total}
-            onPageChange={setPage}
-          />
-        </>
-      ) : null}
+      <Pagination
+        page={page}
+        pageSize={30}
+        total={total}
+        onChange={setPage}
+      />
     </div>
   );
 }

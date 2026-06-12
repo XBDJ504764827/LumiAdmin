@@ -223,6 +223,54 @@ pub(super) async fn migrate_player_access_cache_extended(&self) -> anyhow::Resul
     sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_player_access_logs_created_at ON player_access_logs (created_at DESC)"#)
         .execute(&self.pool).await?;
 
+    // global_bans 全球封禁同步表
+    sqlx::query(
+        r#"CREATE TABLE IF NOT EXISTS global_bans (
+          id UUID PRIMARY KEY,
+          kzt_ban_id INTEGER NOT NULL UNIQUE,
+          steam_id64 TEXT NOT NULL,
+          player_name TEXT,
+          steam_id TEXT,
+          ban_type TEXT NOT NULL,
+          notes TEXT,
+          stats TEXT,
+          server_id INTEGER,
+          expires_on TEXT,
+          created_on TEXT,
+          updated_on TEXT,
+          is_expired BOOLEAN NOT NULL DEFAULT false,
+          local_ban_id UUID REFERENCES ban_records(id) ON DELETE SET NULL,
+          synced_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )"#,
+    )
+    .execute(&self.pool)
+    .await?;
+    sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_global_bans_steam_id64 ON global_bans (steam_id64)"#)
+        .execute(&self.pool).await?;
+    sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_global_bans_is_expired ON global_bans (is_expired)"#)
+        .execute(&self.pool).await?;
+    sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_global_bans_kzt_ban_id ON global_bans (kzt_ban_id)"#)
+        .execute(&self.pool).await?;
+    // 兼容旧表
+    let gb_columns = [
+        ("is_expired", "BOOLEAN NOT NULL DEFAULT false"),
+        ("local_ban_id", "UUID REFERENCES ban_records(id) ON DELETE SET NULL"),
+        ("manual_unbanned", "BOOLEAN NOT NULL DEFAULT false"),
+    ];
+    for (col, ty) in gb_columns {
+        sqlx::query(&format!(
+            r#"ALTER TABLE global_bans ADD COLUMN IF NOT EXISTS {} {}"#,
+            col, ty
+        ))
+        .execute(&self.pool)
+        .await?;
+    }
+    // 每个 steam_id 最多只有一条 source='global_ban' 的活跃封禁
+    sqlx::query(
+        r#"CREATE UNIQUE INDEX IF NOT EXISTS idx_ban_records_global_ban_steam_id
+           ON ban_records (steam_id) WHERE source = 'global_ban' AND status = 'active'"#
+    ).execute(&self.pool).await?;
+
     Ok(())
 }
 }

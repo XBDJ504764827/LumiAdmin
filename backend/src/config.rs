@@ -40,6 +40,8 @@ pub struct Config {
     // 进服记录清理
     pub access_log_cleanup_interval_secs: u64,
     pub access_log_retention_days: i64,
+    // 全球封禁同步
+    pub global_ban_sync_interval_secs: u64,
     // Cloudflare R2 存储配置
     pub r2_endpoint: Option<String>,
     pub r2_bucket: Option<String>,
@@ -153,6 +155,8 @@ impl Config {
                 .and_then(|v| v.parse().ok())
                 .filter(|v: &i64| *v > 0)
                 .unwrap_or(90),
+            // 全球封禁同步：默认 5 分钟
+            global_ban_sync_interval_secs: env_u64("GLOBAL_BAN_SYNC_INTERVAL_SECS", 300),
             // R2 配置
             r2_endpoint: std::env::var("R2_ENDPOINT").ok().filter(|v| !v.is_empty()),
             r2_bucket: std::env::var("R2_BUCKET").ok().filter(|v| !v.is_empty()),

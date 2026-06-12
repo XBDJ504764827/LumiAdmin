@@ -134,6 +134,10 @@ export const api = {
   updatePlayerAccessRule: (token, id, body) => request(`/api/player-access/rules/${id}`, { method: 'PUT', headers: withAuth(token), body: JSON.stringify(body) }),
   deletePlayerAccessRule: (token, id) => request(`/api/player-access/rules/${id}`, { method: 'DELETE', headers: withAuth(token) }),
   accessLogs: (token, params = {}) => request(`/api/player-access/logs${buildQueryString(params)}`, { headers: withAuth(token) }),
+  // Global Bans
+  globalBans: (token, params = {}) => request(`/api/global-bans${buildQueryString(params)}`, { headers: withAuth(token) }),
+  unbanGlobalBan: (token, kztBanId) => request(`/api/global-bans/${kztBanId}/unban`, { method: 'POST', headers: withAuth(token), body: JSON.stringify({}) }),
+  syncGlobalBans: (token) => request('/api/global-bans/sync', { method: 'POST', headers: withAuth(token), body: JSON.stringify({}) }),
   publicWhitelist: (params = {}) => request(`/api/public/whitelist${buildQueryString(params)}`),
   publicBans: (params = {}) => request(`/api/public/bans${buildQueryString(params)}`),
   submitWhitelist: (body) => request('/api/public/whitelist', { method: 'POST', body: JSON.stringify(body) }),

@@ -200,12 +200,34 @@ pub(crate) async fn query_active_bans(
     })))
 }
 
-/// 查询全球封禁记录（代理 API，解决 CORS 问题，带缓存）
+/// 查询全球封禁记录（优先从本地 global_bans 表查，本地无则代理第三方 API，带缓存）
 pub(crate) async fn get_global_bans(
     State(ctx): State<AppCtx>,
     Path(steamid64): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    // 检查缓存（缓存30分钟，减少外部 API 调用）
+    // 优先从本地 global_bans 表查询（全球封禁同步功能维护）
+    let local_bans: Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+        r#"SELECT kzt_ban_id, ban_type, notes, stats, expires_on, created_on, player_name
+           FROM global_bans WHERE steam_id64 = $1 AND is_expired = false"#
+    ).bind(&steamid64).fetch_all(&ctx.db.pool).await.unwrap_or_default();
+
+    if !local_bans.is_empty() {
+        let ban_items: Vec<serde_json::Value> = local_bans.into_iter().map(|(id, ban_type, notes, stats, expires_on, created_on, player_name)| {
+            serde_json::json!({
+                "id": id,
+                "ban_type": ban_type,
+                "notes": notes,
+                "stats": stats,
+                "expires_on": expires_on,
+                "created_on": created_on,
+                "player_name": player_name,
+                "steamid64": steamid64.clone(),
+            })
+        }).collect();
+        return Ok(Json(serde_json::json!(ban_items)));
+    }
+
+    // 本地无数据 → 检查缓存，再回退到第三方 API
     {
         let cache = ctx.global_bans_cache.read().await;
         if let Some((data, timestamp)) = cache.get(&steamid64) {
@@ -270,20 +292,42 @@ pub(crate) async fn get_global_bans_batch(
     let mut results: HashMap<String, serde_json::Value> = HashMap::new();
     let mut to_fetch: Vec<String> = Vec::new();
 
-    // 先检查缓存
-    {
-        let cache = ctx.global_bans_cache.read().await;
-        for steamid64 in &steamids {
+    // 优先从本地 global_bans 表查询（全球封禁同步功能维护的数据）
+    for steamid64 in &steamids {
+        let local_bans: Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+            r#"SELECT kzt_ban_id, ban_type, notes, stats, expires_on, created_on, player_name
+               FROM global_bans WHERE steam_id64 = $1 AND is_expired = false"#
+        ).bind(steamid64).fetch_all(&ctx.db.pool).await.unwrap_or_default();
+
+        if !local_bans.is_empty() {
+            // 本地有数据 → 直接使用，不请求第三方 API
+            let ban_items: Vec<serde_json::Value> = local_bans.into_iter().map(|(id, ban_type, notes, stats, expires_on, created_on, player_name)| {
+                serde_json::json!({
+                    "id": id,
+                    "ban_type": ban_type,
+                    "notes": notes,
+                    "stats": stats,
+                    "expires_on": expires_on,
+                    "created_on": created_on,
+                    "player_name": player_name,
+                    "steamid64": steamid64,
+                })
+            }).collect();
+            results.insert(steamid64.clone(), serde_json::json!(ban_items));
+            continue;
+        }
+
+        // 本地无数据 → 检查缓存，再回退到第三方 API
+        {
+            let cache = ctx.global_bans_cache.read().await;
             if let Some((data, timestamp)) = cache.get(steamid64) {
                 if chrono::Utc::now() - *timestamp < chrono::Duration::minutes(30) {
                     results.insert(steamid64.clone(), data.clone());
-                } else {
-                    to_fetch.push(steamid64.clone());
+                    continue;
                 }
-            } else {
-                to_fetch.push(steamid64.clone());
             }
         }
+        to_fetch.push(steamid64.clone());
     }
 
     // 批量请求（限制并发数，最多同时 10 个 SteamID 查询）

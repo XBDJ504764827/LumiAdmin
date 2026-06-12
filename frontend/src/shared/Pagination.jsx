@@ -1,6 +1,8 @@
 
 export function Pagination({ page, pageSize, total, onChange }) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  // 总页数 <= 1 时不显示分页控件（当前页已能完整展示所有数据）
+  if (totalPages <= 1) return null;
   const current = Math.min(page, totalPages);
 
   const pages = [];

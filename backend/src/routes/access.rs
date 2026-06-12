@@ -56,26 +56,28 @@ pub(crate) async fn check_plugin_access(
     .await
     .map_err(invalid_request)?;
 
-    // 允许进服时记录日志
-    if result.allowed {
-        if let Ok(Some(server)) = ctx.server_config_cache.get_by_token_port(&ctx.db, &body.report_token, body.port).await {
-            let access_method_str = result.access_method.clone().unwrap_or_else(|| "unknown".to_string());
-            let community_name = community_service::find_group_name(&ctx.db, server.community_id).await.ok();
-            let _ = access_log_service::create_access_log(
-                &ctx.db,
-                &body.steam_id64,
-                body.player.as_deref(),
-                body.ip_address.as_deref(),
-                server.id,
-                &server.name,
-                server.port,
-                server.community_id,
-                community_name.as_deref(),
-                &access_log_service::AccessMethod::from_str(&access_method_str),
-                result.rating,
-                result.steam_level,
-            ).await;
-        }
+    // 记录进服日志（无论成功/失败）
+    if let Ok(Some(server)) = ctx.server_config_cache.get_by_token_port(&ctx.db, &body.report_token, body.port).await {
+        let access_method_str = result.access_method.clone().unwrap_or_else(|| "unknown".to_string());
+        let community_name = community_service::find_group_name(&ctx.db, server.community_id).await.ok();
+        let access_method = access_log_service::AccessMethod::from_str(&access_method_str);
+        let reject_reason = if result.allowed { None } else { Some(result.message.as_str()) };
+        let _ = access_log_service::create_access_log(
+            &ctx.db,
+            &body.steam_id64,
+            body.player.as_deref(),
+            body.ip_address.as_deref(),
+            server.id,
+            &server.name,
+            server.port,
+            server.community_id,
+            community_name.as_deref(),
+            result.allowed,
+            &access_method,
+            reject_reason,
+            result.rating,
+            result.steam_level,
+        ).await;
     }
 
     Ok(Json(serde_json::json!({ "result": result })))
@@ -275,6 +277,7 @@ pub(crate) async fn list_access_logs(
         server_id: body.get("server_id").and_then(|v| v.as_str().and_then(|s| Uuid::parse_str(s).ok())),
         community_id: body.get("community_id").and_then(|v| v.as_str().and_then(|s| Uuid::parse_str(s).ok())),
         access_method: body.get("access_method").and_then(|v| v.as_str().map(String::from)),
+        allowed: body.get("allowed").and_then(|v| v.as_bool()),
         search: body.get("search").and_then(|v| v.as_str().map(String::from)),
         page: Some(page),
         page_size: Some(page_size),

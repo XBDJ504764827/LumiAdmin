@@ -184,7 +184,9 @@ pub(super) async fn migrate_player_access_cache_extended(&self) -> anyhow::Resul
           server_port INTEGER NOT NULL,
           community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
           community_name TEXT,
+          allowed BOOLEAN NOT NULL DEFAULT true,
           access_method TEXT NOT NULL,
+          reject_reason TEXT,
           rating INTEGER,
           steam_level INTEGER,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -192,6 +194,19 @@ pub(super) async fn migrate_player_access_cache_extended(&self) -> anyhow::Resul
     )
     .execute(&self.pool)
     .await?;
+    // 兼容旧表：如果缺少新列则添加
+    let new_columns = [
+        ("allowed", "BOOLEAN NOT NULL DEFAULT true"),
+        ("reject_reason", "TEXT"),
+    ];
+    for (col, ty) in new_columns {
+        sqlx::query(&format!(
+            r#"ALTER TABLE player_access_logs ADD COLUMN IF NOT EXISTS {} {}"#,
+            col, ty
+        ))
+        .execute(&self.pool)
+        .await?;
+    }
     sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_player_access_logs_steamid64 ON player_access_logs (steam_id64)"#)
         .execute(&self.pool).await?;
     sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_player_access_logs_server_id ON player_access_logs (server_id)"#)
@@ -199,6 +214,8 @@ pub(super) async fn migrate_player_access_cache_extended(&self) -> anyhow::Resul
     sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_player_access_logs_community_id ON player_access_logs (community_id)"#)
         .execute(&self.pool).await?;
     sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_player_access_logs_access_method ON player_access_logs (access_method)"#)
+        .execute(&self.pool).await?;
+    sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_player_access_logs_allowed ON player_access_logs (allowed)"#)
         .execute(&self.pool).await?;
     sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_player_access_logs_created_at ON player_access_logs (created_at DESC)"#)
         .execute(&self.pool).await?;

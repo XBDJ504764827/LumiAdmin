@@ -88,7 +88,7 @@ pub async fn check_access(
         Err(error) => {
             warn!(%error, "live access check failed, trying snapshot fallback");
             let Some(snapshot) = snapshot_store.read_snapshot().await? else {
-                return Ok(reject("访问控制服务暂时不可用，请稍后再试。"));
+                return Ok(reject_with_method("访问控制服务暂时不可用，请稍后再试。", "snapshot_fallback"));
             };
             let decision = access_snapshot_service::evaluate_access_snapshot(
                 &snapshot,
@@ -162,7 +162,7 @@ async fn check_access_live(
             ),
             None => format!("你已被永久封禁，原因：{}", ban.reason),
         };
-        return Ok(reject(&message));
+        return Ok(reject_with_method(&message, "banned"));
     }
 
     // 2. 检查玩家进服权限规则（优先级最高）
@@ -174,8 +174,9 @@ async fn check_access_live(
     )
     .await?;
     if !access_allowed {
-        return Ok(reject(
+        return Ok(reject_with_method(
             access_reason.as_deref().unwrap_or("您被禁止进入该服务器"),
+            "custom_rule_rejected"
         ));
     }
     // 如果自定义规则明确放行，记录为 custom_rule（直接跳过后续白名单/限制检查）
@@ -214,7 +215,7 @@ async fn check_access_live(
                 None,
             ))
         } else {
-            Ok(reject("你尚未通过白名单审核，无法进入服务器。"))
+            Ok(reject_with_method("你尚未通过白名单审核，无法进入服务器。", "whitelist_rejected"))
         };
     }
 
@@ -222,7 +223,7 @@ async fn check_access_live(
     if !effective_whitelist && effective_restriction {
         return match load_player_profile(db, config, steam_id64).await? {
             Some(profile) => evaluate_restriction(&server, &profile),
-            None => Ok(reject("无法验证您的进入资格，请稍后再试。")),
+            None => Ok(reject_with_method("无法验证您的进入资格，请稍后再试。", "restriction_rejected")),
         };
     }
 
@@ -249,7 +250,7 @@ async fn check_access_live(
                     None,
                 ))
             } else {
-                Ok(reject("你的 GOKZ rating 未达到服务器最低要求。"))
+                Ok(reject_with_method("你的 GOKZ rating 未达到服务器最低要求。", "restriction_rejected"))
             }
         }
     }
@@ -262,10 +263,10 @@ fn evaluate_restriction(
     let min_rating = server.effective_min_rating();
     let min_steam_level = server.effective_min_steam_level();
     if profile.rating < min_rating {
-        return Ok(reject("你的 GOKZ rating 未达到服务器最低要求。"));
+        return Ok(reject_with_method("你的 GOKZ rating 未达到服务器最低要求。", "restriction_rejected"));
     }
     if profile.steam_level < min_steam_level {
-        return Ok(reject("你的 Steam 等级未达到服务器最低要求。"));
+        return Ok(reject_with_method("你的 Steam 等级未达到服务器最低要求。", "restriction_rejected"));
     }
     Ok(allow_with_data(
         "已满足服务器进入限制，允许进入服务器。",
@@ -431,7 +432,7 @@ fn access_result_from_snapshot_decision(
     AccessCheckResult {
         allowed: decision.allowed,
         message: decision.message,
-        access_method: if decision.allowed { Some("snapshot_fallback".to_string()) } else { None },
+        access_method: Some(if decision.allowed { "snapshot_fallback".to_string() } else { "snapshot_fallback".to_string() }),
         rating: None,
         steam_level: None,
     }
@@ -452,11 +453,11 @@ pub(crate) fn allow_with_data(
     }
 }
 
-fn reject(message: &str) -> AccessCheckResult {
+fn reject_with_method(message: &str, access_method: &str) -> AccessCheckResult {
     AccessCheckResult {
         allowed: false,
         message: message.to_string(),
-        access_method: None,
+        access_method: Some(access_method.to_string()),
         rating: None,
         steam_level: None,
     }

@@ -122,6 +122,10 @@ async fn main() -> anyhow::Result<()> {
     let request_timeout = Duration::from_secs(config.request_timeout_secs);
     let cors_origin = config.cors_origin.clone();
     let steam_resolver = services::steam_service::SteamResolver::new(&config);
+    // 初始化统一 GOKZ 缓存管理器
+    let gokz_cache = Arc::new(services::gokz_cache::GokzCacheManager::new(db.clone()));
+    gokz_cache.clone().start_cleanup_task(config.session_cleanup_interval_secs);
+
     let app = routes::router(
         config,
         db,
@@ -130,6 +134,7 @@ async fn main() -> anyhow::Result<()> {
         active_ban_cache,
         whitelist_cache,
         steam_resolver,
+        gokz_cache,
     )
     .layer(axum::middleware::from_fn(
         request_log_middleware::request_log_middleware,

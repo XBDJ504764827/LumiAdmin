@@ -4,7 +4,9 @@ use crate::{
     db::Database,
     services::{
         access_cache::{ActiveBanCache, WhitelistCache},
-        access_snapshot_service::SnapshotStore, server_config_cache::ServerConfigCache,
+        access_snapshot_service::SnapshotStore,
+        gokz_cache::GokzCacheManager,
+        server_config_cache::ServerConfigCache,
         steam_service::SteamResolver,
     },
 };
@@ -53,6 +55,7 @@ impl TestApp {
 fn test_app(config: Config, db: Database) -> TestApp {
     let whitelist_cache = Arc::new(WhitelistCache::new());
     let ban_cache = Arc::new(ActiveBanCache::new());
+    let gokz_cache = Arc::new(GokzCacheManager::new(db.clone()));
     let router = router(
         config.clone(),
         db,
@@ -61,6 +64,7 @@ fn test_app(config: Config, db: Database) -> TestApp {
         ban_cache.clone(),
         whitelist_cache.clone(),
         SteamResolver::new(&config),
+        gokz_cache,
     );
     TestApp { router, whitelist_cache, ban_cache }
 }

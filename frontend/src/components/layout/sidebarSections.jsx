@@ -37,11 +37,13 @@ export function sidebarSections(role) {
   const canReviewReports = ['developer', 'admin'].includes(role);
 
   const systemItems = canSeeLogs ? [
-    { path: '/player-access', label: '玩家进服设置', icon: icons.playerAccess },
+    { path: '/player-access', label: '进服设置', icon: icons.playerAccess },
+    { path: '/access-logs', label: '进服监控', icon: icons.logs },
     {
       label: '日志与审计',
       icon: icons.logFolder,
       children: [
+        { path: '/access-logs', label: '进服监控', icon: icons.logs },
         { path: '/audit', label: '审计日志', icon: icons.audit },
         { path: '/logs', label: '操作日志', icon: icons.logs },
       ],
@@ -58,7 +60,8 @@ export function sidebarSections(role) {
     { path: '/external-servers', label: '外部服务器', icon: icons.externalServer },
     { path: '/map-sync', label: '地图同步', icon: icons.mapSync },
   ] : [
-    { path: '/player-access', label: '玩家进服设置', icon: icons.playerAccess },
+    { path: '/player-access', label: '进服设置', icon: icons.playerAccess },
+    { path: '/access-logs', label: '进服监控', icon: icons.logs },
     { path: '/audit', label: '审计日志', icon: icons.audit },
     { path: '/external-servers', label: '外部服务器', icon: icons.externalServer },
     { path: '/map-sync', label: '地图同步', icon: icons.mapSync },

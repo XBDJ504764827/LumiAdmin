@@ -1,4 +1,5 @@
 pub mod access_cache;
+pub mod access_log_service;
 pub mod access_service;
 pub mod access_snapshot_service;
 pub mod audit_service;
@@ -12,6 +13,7 @@ pub mod dashboard_service;
 pub mod docs_service;
 pub mod external_ban_api_service;
 pub mod external_server_service;
+pub mod gokz_cache;
 pub mod log_service;
 pub mod map_sync_service;
 pub mod map_tier_service;

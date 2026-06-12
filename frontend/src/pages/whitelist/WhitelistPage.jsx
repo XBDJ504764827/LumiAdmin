@@ -174,6 +174,15 @@ export function WhitelistPage() {
     return () => { cancelled = true; };
   }, [tab, data?.items]);
 
+  // 批量预加载 GOKZ 统计数据
+  useEffect(() => {
+    if (!data?.items) return;
+    const steamid64s = data.items.map(item => item.steamid64).filter(id => id);
+    if (steamid64s.length === 0) return;
+    // 并发预加载（不阻塞 UI）
+    api.preloadGokzStats(steamid64s).catch(() => { /* 静默失败 */ });
+  }, [tab, data?.items]);
+
   // ---------------------------------------------------------------------------
   // 操作处理
   // ---------------------------------------------------------------------------

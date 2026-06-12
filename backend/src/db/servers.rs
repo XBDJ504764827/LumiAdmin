@@ -33,12 +33,16 @@ pub(super) async fn migrate_servers_schema(&self) -> anyhow::Result<()> {
         .execute(&self.pool)
         .await?;
 
-    // player_access_cache 表 + 索引
+    // player_access_cache 表 + 索引（扩展为通用 GOKZ 缓存）
     sqlx::query(
         r#"CREATE TABLE IF NOT EXISTS player_access_cache (
           steamid64 TEXT PRIMARY KEY,
-          rating INTEGER NOT NULL,
-          steam_level INTEGER NOT NULL,
+          rating INTEGER NOT NULL DEFAULT 0,
+          steam_level INTEGER NOT NULL DEFAULT 0,
+          kzt_data JSONB,
+          skz_data JSONB,
+          vnl_data JSONB,
+          ovr_data JSONB,
           expires_at TIMESTAMPTZ NOT NULL,
           updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )"#,
@@ -140,4 +144,65 @@ pub(super) async fn migrate_server_data(&self) -> anyhow::Result<()> {
 }
 
 // 白名单表字段扩充 + 旧数据迁移
+}
+
+impl Database {
+/// 扩展 player_access_cache 表以支持 GOKZ 详细数据缓存
+pub(super) async fn migrate_player_access_cache_extended(&self) -> anyhow::Result<()> {
+    // 添加 JSONB 扩展列（如果不存在）
+    let columns = [
+        ("kzt_data", "JSONB"),
+        ("skz_data", "JSONB"),
+        ("vnl_data", "JSONB"),
+        ("ovr_data", "JSONB"),
+    ];
+    for (col, ty) in columns {
+        sqlx::query(&format!(
+            r#"ALTER TABLE player_access_cache ADD COLUMN IF NOT EXISTS {} {}"#,
+            col, ty
+        ))
+        .execute(&self.pool)
+        .await?;
+    }
+    // rating 和 steam_level 设置默认值（兼容旧数据）
+    sqlx::query(r#"ALTER TABLE player_access_cache ALTER COLUMN rating SET DEFAULT 0"#)
+        .execute(&self.pool)
+        .await?;
+    sqlx::query(r#"ALTER TABLE player_access_cache ALTER COLUMN steam_level SET DEFAULT 0"#)
+        .execute(&self.pool)
+        .await?;
+
+    // player_access_logs 进服记录表
+    sqlx::query(
+        r#"CREATE TABLE IF NOT EXISTS player_access_logs (
+          id UUID PRIMARY KEY,
+          steam_id64 TEXT NOT NULL,
+          player_name TEXT,
+          ip_address TEXT,
+          server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+          server_name TEXT NOT NULL,
+          server_port INTEGER NOT NULL,
+          community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+          community_name TEXT,
+          access_method TEXT NOT NULL,
+          rating INTEGER,
+          steam_level INTEGER,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )"#,
+    )
+    .execute(&self.pool)
+    .await?;
+    sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_player_access_logs_steamid64 ON player_access_logs (steam_id64)"#)
+        .execute(&self.pool).await?;
+    sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_player_access_logs_server_id ON player_access_logs (server_id)"#)
+        .execute(&self.pool).await?;
+    sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_player_access_logs_community_id ON player_access_logs (community_id)"#)
+        .execute(&self.pool).await?;
+    sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_player_access_logs_access_method ON player_access_logs (access_method)"#)
+        .execute(&self.pool).await?;
+    sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_player_access_logs_created_at ON player_access_logs (created_at DESC)"#)
+        .execute(&self.pool).await?;
+
+    Ok(())
+}
 }

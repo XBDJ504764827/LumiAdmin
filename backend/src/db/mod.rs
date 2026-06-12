@@ -74,6 +74,7 @@ impl Database {
         self.migrate_player_reports_schema().await?;
         self.migrate_player_internal_notes_schema().await?;
         self.migrate_adds_missing_constraints_and_indexes().await?;
+        self.migrate_player_access_cache_extended().await?;
         Ok(())
     }
 

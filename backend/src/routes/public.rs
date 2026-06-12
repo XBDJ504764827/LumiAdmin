@@ -473,60 +473,23 @@ async fn fetch_global_bans_from_api(steamid64: &str) -> Result<serde_json::Value
 
 // ---------------------------------------------------------------------------
 // gokz.top 玩家统计代理（前端无法直接访问 gokz API，需要后端代理绕过 CORS）
+// 使用统一的 GokzCacheManager 进行缓存管理（PostgreSQL + 内存二级缓存）
 // ---------------------------------------------------------------------------
 
+use crate::services::gokz_cache::{GokzModeStats, GokzStats};
+
 const GOKZ_SCOPES: [&str; 4] = ["KZT", "SKZ", "VNL", "OVR"];
-const GOKZ_CACHE_TTL_MINUTES: i64 = 60;
-const GOKZ_CACHE_MAX_ENTRIES: usize = 500;
 
 #[derive(serde::Deserialize)]
 pub(crate) struct GokzPlayerStatsQuery {
     scope: String,
 }
 
-/// 查询 gokz 缓存，命中则返回数据
-async fn gokz_cache_get(
-    cache: &crate::routes::GokzStatsCache,
-    key: &str,
-) -> Option<serde_json::Value> {
-    let cache = cache.read().await;
-    if let Some((data, ts)) = cache.get(key) {
-        if chrono::Utc::now() - *ts < chrono::Duration::minutes(GOKZ_CACHE_TTL_MINUTES) {
-            return Some(data.clone());
-        }
-    }
-    None
-}
-
-/// 写入 gokz 缓存并执行淘汰
-async fn gokz_cache_put(
-    cache: &crate::routes::GokzStatsCache,
-    key: String,
-    data: serde_json::Value,
-) {
-    let mut cache = cache.write().await;
-    cache.insert(key, (data, chrono::Utc::now()));
-    let now = chrono::Utc::now();
-    cache.retain(|_, (_, ts)| now - *ts < chrono::Duration::minutes(GOKZ_CACHE_TTL_MINUTES));
-    if cache.len() > GOKZ_CACHE_MAX_ENTRIES {
-        let mut entries: Vec<_> = cache
-            .keys()
-            .cloned()
-            .zip(cache.values().map(|(_, ts)| *ts))
-            .collect();
-        entries.sort_by_key(|(_, ts)| *ts);
-        let to_remove = cache.len() - (GOKZ_CACHE_MAX_ENTRIES - 100);
-        for (k, _) in entries.into_iter().take(to_remove) {
-            cache.remove(&k);
-        }
-    }
-}
-
 /// 从 gokz.top 获取单个 scope 的排行榜数据
 async fn fetch_gokz_scope(
     steamid64: &str,
     scope: &str,
-) -> Option<serde_json::Value> {
+) -> Option<GokzModeStats> {
     use crate::http_client;
 
     let url = format!(
@@ -534,7 +497,7 @@ async fn fetch_gokz_scope(
         steamid64, scope
     );
 
-    tokio::time::timeout(Duration::from_secs(8), async {
+    let data = tokio::time::timeout(Duration::from_secs(8), async {
         let response = http_client::http_client().get(&url).send().await.ok()?;
         if !response.status().is_success() {
             return None;
@@ -543,7 +506,10 @@ async fn fetch_gokz_scope(
     })
     .await
     .ok()
-    .flatten()
+    .flatten()?;
+
+    // 解析 GOKZ API 响应格式
+    serde_json::from_value(data).ok()
 }
 
 /// 代理 gokz.top 排行榜接口，获取玩家 KZ 统计（带缓存）
@@ -559,17 +525,39 @@ pub(crate) async fn get_gokz_player_stats(
         ));
     }
 
-    let cache_key = format!("{}:{}", steamid64, params.scope);
-
-    if let Some(data) = gokz_cache_get(&ctx.gokz_stats_cache, &cache_key).await {
-        return Ok(Json(data));
+    // 尝试从缓存获取
+    if let Some(stats) = ctx.gokz_cache.get(&steamid64).await {
+        let mode_stats = match params.scope.to_uppercase().as_str() {
+            "KZT" => &stats.kzt,
+            "SKZ" => &stats.skz,
+            "VNL" => &stats.vnl,
+            "OVR" => &stats.ovr,
+            _ => &None,
+        };
+        let mut obj = serde_json::Map::new();
+        obj.insert(params.scope.to_uppercase(), serde_json::to_value(mode_stats).unwrap_or(serde_json::Value::Null));
+        return Ok(Json(serde_json::Value::Object(obj)));
     }
 
-    let data = fetch_gokz_scope(&steamid64, &params.scope).await.unwrap_or(serde_json::json!(null));
+    // 缓存未命中，从 gokz.top 获取
+    let data = fetch_gokz_scope(&steamid64, &params.scope).await;
 
-    gokz_cache_put(&ctx.gokz_stats_cache, cache_key, data.clone()).await;
+    // 如果获取成功，写入缓存
+    if let Some(mode_stats) = &data {
+        let mut stats = GokzStats::default();
+        match params.scope.to_uppercase().as_str() {
+            "KZT" => stats.kzt = Some(mode_stats.clone()),
+            "SKZ" => stats.skz = Some(mode_stats.clone()),
+            "VNL" => stats.vnl = Some(mode_stats.clone()),
+            "OVR" => stats.ovr = Some(mode_stats.clone()),
+            _ => {}
+        }
+        ctx.gokz_cache.set(&steamid64, &stats).await;
+    }
 
-    Ok(Json(data))
+    let mut obj = serde_json::Map::new();
+    obj.insert(params.scope.to_uppercase(), serde_json::to_value(&data).unwrap_or(serde_json::Value::Null));
+    Ok(Json(serde_json::Value::Object(obj)))
 }
 
 #[derive(serde::Deserialize)]
@@ -583,60 +571,121 @@ pub(crate) async fn get_gokz_player_stats_batch(
     Json(body): Json<GokzBatchBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let steamid64 = body.steamid64;
-    let mut results = serde_json::Map::new();
-    let mut uncached_scopes: Vec<&str> = Vec::new();
 
-    // 第一轮：查缓存
-    {
-        let cache = ctx.gokz_stats_cache.read().await;
-        for scope in &GOKZ_SCOPES {
-            let cache_key = format!("{}:{}", steamid64, scope);
-            if let Some((data, ts)) = cache.get(&cache_key) {
-                if chrono::Utc::now() - *ts < chrono::Duration::minutes(GOKZ_CACHE_TTL_MINUTES) {
-                    results.insert(scope.to_string(), data.clone());
-                    continue;
-                }
-            }
-            uncached_scopes.push(scope);
-        }
+    // 尝试从缓存获取（包含所有 4 个 scope）
+    if let Some(stats) = ctx.gokz_cache.get(&steamid64).await {
+        return Ok(Json(serde_json::json!({
+            "KZT": stats.kzt,
+            "SKZ": stats.skz,
+            "VNL": stats.vnl,
+            "OVR": stats.ovr,
+        })));
     }
 
-    // 第二轮：并发请求未命中缓存的 scope
-    if !uncached_scopes.is_empty() {
-        let fetches: Vec<_> = uncached_scopes
+    // 缓存未命中，并发请求所有 4 个 scope
+    let fetches: Vec<_> = GOKZ_SCOPES
+        .iter()
+        .map(|scope| fetch_gokz_scope(&steamid64, scope))
+        .collect();
+
+    let results = futures::future::join_all(fetches).await;
+
+    // 构建统计数据
+    let mut stats = GokzStats::default();
+    if let Some(s) = results.get(0).and_then(|r| r.clone()) {
+        stats.kzt = Some(s);
+    }
+    if let Some(s) = results.get(1).and_then(|r| r.clone()) {
+        stats.skz = Some(s);
+    }
+    if let Some(s) = results.get(2).and_then(|r| r.clone()) {
+        stats.vnl = Some(s);
+    }
+    if let Some(s) = results.get(3).and_then(|r| r.clone()) {
+        stats.ovr = Some(s);
+    }
+
+    // 写入缓存
+    ctx.gokz_cache.set(&steamid64, &stats).await;
+
+    Ok(Json(serde_json::json!({
+        "KZT": stats.kzt,
+        "SKZ": stats.skz,
+        "VNL": stats.vnl,
+        "OVR": stats.ovr,
+    })))
+}
+
+/// 批量预加载多个玩家的 GOKZ 统计数据
+#[derive(serde::Deserialize)]
+pub(crate) struct GokzBatchPreloadBody {
+    steamid64s: Vec<String>,
+}
+
+pub(crate) async fn preload_gokz_stats(
+    State(ctx): State<AppCtx>,
+    Json(body): Json<GokzBatchPreloadBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if body.steamid64s.is_empty() {
+        return Ok(Json(serde_json::json!({})));
+    }
+
+    // 获取批量缓存
+    let cached = ctx.gokz_cache.get_batch(&body.steamid64s).await;
+
+    // 对于未缓存的玩家，并发请求并写入缓存
+    let uncached: Vec<String> = body.steamid64s
+        .iter()
+        .filter(|s| !cached.contains_key(*s))
+        .cloned()
+        .collect();
+
+    if !uncached.is_empty() {
+        let fetches: Vec<_> = uncached
             .iter()
-            .map(|scope| fetch_gokz_scope(&steamid64, scope))
+            .flat_map(|sid| {
+                GOKZ_SCOPES
+                    .iter()
+                    .map(|scope| fetch_gokz_scope(sid, scope))
+                    .collect::<Vec<_>>()
+            })
             .collect();
 
-        let fetched = futures::future::join_all(fetches).await;
+        let results = futures::future::join_all(fetches).await;
 
-        // 写入缓存并收集结果
-        let mut cache = ctx.gokz_stats_cache.write().await;
-        for (scope, result) in uncached_scopes.iter().zip(fetched) {
-            let data = result.unwrap_or(serde_json::json!(null));
-            let cache_key = format!("{}:{}", steamid64, scope);
-            cache.insert(cache_key, (data.clone(), chrono::Utc::now()));
-            results.insert(scope.to_string(), data);
-        }
-
-        // 淘汰过期和超限条目
-        let now = chrono::Utc::now();
-        cache.retain(|_, (_, ts)| now - *ts < chrono::Duration::minutes(GOKZ_CACHE_TTL_MINUTES));
-        if cache.len() > GOKZ_CACHE_MAX_ENTRIES {
-            let mut entries: Vec<_> = cache
-                .keys()
-                .cloned()
-                .zip(cache.values().map(|(_, ts)| *ts))
-                .collect();
-            entries.sort_by_key(|(_, ts)| *ts);
-            let to_remove = cache.len() - (GOKZ_CACHE_MAX_ENTRIES - 100);
-            for (k, _) in entries.into_iter().take(to_remove) {
-                cache.remove(&k);
+        // 按玩家分组写入缓存
+        for (i, sid) in uncached.iter().enumerate() {
+            let base = i * 4;
+            let mut stats = GokzStats::default();
+            if let Some(s) = results.get(base).and_then(|r| r.clone()) {
+                stats.kzt = Some(s);
             }
+            if let Some(s) = results.get(base + 1).and_then(|r| r.clone()) {
+                stats.skz = Some(s);
+            }
+            if let Some(s) = results.get(base + 2).and_then(|r| r.clone()) {
+                stats.vnl = Some(s);
+            }
+            if let Some(s) = results.get(base + 3).and_then(|r| r.clone()) {
+                stats.ovr = Some(s);
+            }
+            ctx.gokz_cache.set(sid, &stats).await;
         }
     }
 
-    Ok(Json(serde_json::Value::Object(results)))
+    // 返回所有玩家的缓存数据
+    let final_cached = ctx.gokz_cache.get_batch(&body.steamid64s).await;
+    let mut response = serde_json::Map::new();
+    for (steamid64, stats) in final_cached {
+        response.insert(steamid64, serde_json::json!({
+            "KZT": stats.kzt,
+            "SKZ": stats.skz,
+            "VNL": stats.vnl,
+            "OVR": stats.ovr,
+        }));
+    }
+
+    Ok(Json(serde_json::Value::Object(response)))
 }
 
 /// 上传申诉辅助文件（录像、图片、录音）到 R2

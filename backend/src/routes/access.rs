@@ -12,7 +12,7 @@ use crate::routes::{
 };
 use crate::services::rate_limit_service::extract_client_ip;
 use crate::services::{
-    access_service, access_snapshot_service, log_service, permission_service,
+    access_service, access_log_service, access_snapshot_service, log_service, permission_service,
     player_access_rule_service,
 };
 
@@ -44,16 +44,40 @@ pub(crate) async fn check_plugin_access(
         &ctx.active_ban_cache,
         &ctx.whitelist_cache,
         access_service::AccessCheckInput {
-            report_token: body.report_token,
+            report_token: body.report_token.clone(),
             port: body.port,
-            steam_id64: body.steam_id64,
-            ip_address: body.ip_address,
-            player: body.player,
+            steam_id64: body.steam_id64.clone(),
+            ip_address: body.ip_address.clone(),
+            player: body.player.clone(),
             server_port: body.server_port,
         },
     )
     .await
     .map_err(invalid_request)?;
+
+    // 允许进服时记录日志
+    if result.allowed {
+        // 获取服务器信息
+        if let Ok(Some(server)) = ctx.server_config_cache.get_by_token_port(&ctx.db, &body.report_token, body.port).await {
+            let access_method_str = result.access_method.clone().unwrap_or_else(|| "unknown".to_string());
+            // 记录进服日志
+            let _ = crate::services::access_log_service::create_access_log(
+                &ctx.db,
+                &body.steam_id64,
+                body.player.as_deref(),
+                body.ip_address.as_deref(),
+                server.id,
+                &server.name,
+                server.port,
+                server.community_id,
+                None, // community_name 需要单独查询
+                &crate::services::access_log_service::AccessMethod::from_str(&access_method_str),
+                result.rating,
+                result.steam_level,
+            ).await;
+        }
+    }
+
     Ok(Json(serde_json::json!({ "result": result })))
 }
 
@@ -233,4 +257,37 @@ pub(crate) async fn delete_player_access_rule(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ------------------------------------------------------------------------
+// 进服记录查询
+// ------------------------------------------------------------------------
+
+pub(crate) async fn list_access_logs(
+    State(ctx): State<AppCtx>,
+    Json(body): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let page = body.get("page").and_then(|v| v.as_i64()).unwrap_or(1).max(1);
+    let page_size = body.get("page_size").and_then(|v| v.as_i64()).unwrap_or(20).clamp(1, 100);
+    let steam_id64 = body.get("steam_id64").and_then(|v| v.as_str().map(String::from));
+    let server_id = body.get("server_id").and_then(|v| v.as_str().and_then(|s| Uuid::parse_str(s).ok()));
+
+    match access_log_service::list_logs_simple(&ctx.db, page, page_size, steam_id64, server_id).await {
+        Ok((items, total)) => Json(serde_json::json!({
+            "items": items,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        })),
+        Err(e) => {
+            tracing::error!(%e, "查询进服记录失败");
+            Json(serde_json::json!({
+                "error": "查询进服记录失败",
+                "items": [],
+                "total": 0,
+                "page": page,
+                "page_size": page_size,
+            }))
+        }
+    }
 }

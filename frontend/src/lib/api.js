@@ -133,6 +133,7 @@ export const api = {
   createPlayerAccessRule: (token, body) => request('/api/player-access/rules', { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   updatePlayerAccessRule: (token, id, body) => request(`/api/player-access/rules/${id}`, { method: 'PUT', headers: withAuth(token), body: JSON.stringify(body) }),
   deletePlayerAccessRule: (token, id) => request(`/api/player-access/rules/${id}`, { method: 'DELETE', headers: withAuth(token) }),
+  accessLogs: (token, body) => request('/api/player-access/logs', { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   publicWhitelist: (params = {}) => request(`/api/public/whitelist${buildQueryString(params)}`),
   publicBans: (params = {}) => request(`/api/public/bans${buildQueryString(params)}`),
   submitWhitelist: (body) => request('/api/public/whitelist', { method: 'POST', body: JSON.stringify(body) }),
@@ -156,6 +157,9 @@ export const api = {
   approveBanAppeal: (token, id, body = {}) => request(`/api/ban-appeals/${id}/approve`, { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   rejectBanAppeal: (token, id, body = {}) => request(`/api/ban-appeals/${id}/reject`, { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   auditLogs: (token, params = {}) => request(`/api/audit/logs${buildQueryString(params)}`, { headers: withAuth(token) }),
+  // GOKZ Stats
+  preloadGokzStats: (steamid64s) => request('/api/public/gokz/player-stats/preload', { method: 'POST', body: JSON.stringify({ steamid64s }) }),
+
   // Notifications
   notifications: (token, params = {}) => request(`/api/notifications${buildQueryString(params)}`, { headers: withAuth(token) }),
   notificationUnreadCount: (token) => request('/api/notifications/unread-count', { headers: withAuth(token) }),

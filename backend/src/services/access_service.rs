@@ -27,6 +27,12 @@ pub struct AccessCheckInput {
 pub struct AccessCheckResult {
     pub allowed: bool,
     pub message: String,
+    /// 进服方式
+    pub access_method: Option<String>,
+    /// 玩家 GOKZ rating
+    pub rating: Option<i32>,
+    /// 玩家 Steam 等级
+    pub steam_level: Option<i32>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -391,6 +397,9 @@ fn access_result_from_snapshot_decision(
     AccessCheckResult {
         allowed: decision.allowed,
         message: decision.message,
+        access_method: Some("snapshot_fallback".to_string()),
+        rating: None,
+        steam_level: None,
     }
 }
 
@@ -398,6 +407,24 @@ fn allow(message: &str) -> AccessCheckResult {
     AccessCheckResult {
         allowed: true,
         message: message.to_string(),
+        access_method: Some("unrestricted".to_string()),
+        rating: None,
+        steam_level: None,
+    }
+}
+
+fn allow_with_data(
+    message: &str,
+    access_method: &str,
+    rating: Option<i32>,
+    steam_level: Option<i32>,
+) -> AccessCheckResult {
+    AccessCheckResult {
+        allowed: true,
+        message: message.to_string(),
+        access_method: Some(access_method.to_string()),
+        rating,
+        steam_level,
     }
 }
 
@@ -405,6 +432,9 @@ fn reject(message: &str) -> AccessCheckResult {
     AccessCheckResult {
         allowed: false,
         message: message.to_string(),
+        access_method: None,
+        rating: None,
+        steam_level: None,
     }
 }
 

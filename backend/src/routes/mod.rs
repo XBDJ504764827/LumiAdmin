@@ -49,8 +49,9 @@ use crate::{
 // Shared context
 // ---------------------------------------------------------------------------
 
+use crate::services::gokz_cache::GokzCacheManager;
+
 type GlobalBansCache = Arc<RwLock<HashMap<String, (serde_json::Value, chrono::DateTime<Utc>)>>>;
-type GokzStatsCache = Arc<RwLock<HashMap<String, (serde_json::Value, chrono::DateTime<Utc>)>>>;
 
 #[derive(Clone)]
 pub struct AppCtx {
@@ -58,7 +59,7 @@ pub struct AppCtx {
     pub db: Database,
     pub access_snapshot: SnapshotStore,
     pub global_bans_cache: GlobalBansCache,
-    pub gokz_stats_cache: GokzStatsCache,
+    pub gokz_cache: Arc<GokzCacheManager>, // 统一 GOKZ 缓存管理器
     pub server_config_cache: Arc<ServerConfigCache>,
     pub active_ban_cache: Arc<ActiveBanCache>,
     pub whitelist_cache: Arc<WhitelistCache>,
@@ -116,7 +117,7 @@ pub struct PaginatedResponse<T: serde::Serialize> {
 
 // ---------------------------------------------------------------------------
 // Router
-// ---------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 
 pub fn router(
     config: Config,
@@ -126,6 +127,7 @@ pub fn router(
     active_ban_cache: Arc<ActiveBanCache>,
     whitelist_cache: Arc<WhitelistCache>,
     steam_resolver: SteamResolver,
+    gokz_cache: Arc<GokzCacheManager>,
 ) -> Router {
     Router::new()
         .route("/health", get(misc::health_check))
@@ -423,6 +425,11 @@ pub fn router(
             "/api/player-access/rules/:id",
             put(access::update_player_access_rule).delete(access::delete_player_access_rule),
         )
+        // -- player access logs --
+        .route(
+            "/api/player-access/logs",
+            post(access::list_access_logs),
+        )
         // -- notifications --
         .route("/api/notifications", get(notification::list_notifications))
         .route(
@@ -491,12 +498,16 @@ pub fn router(
             "/api/public/gokz/player-stats/batch",
             post(public::get_gokz_player_stats_batch),
         )
+        .route(
+            "/api/public/gokz/player-stats/preload",
+            post(public::preload_gokz_stats),
+        )
         .with_state(AppCtx {
             config: config.clone(),
             db,
             access_snapshot,
             global_bans_cache: Arc::new(RwLock::new(HashMap::new())),
-            gokz_stats_cache: Arc::new(RwLock::new(HashMap::new())),
+            gokz_cache,
             server_config_cache,
             active_ban_cache,
             whitelist_cache,

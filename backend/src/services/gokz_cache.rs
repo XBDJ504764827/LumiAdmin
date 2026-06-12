@@ -205,36 +205,6 @@ impl GokzCacheManager {
         results
     }
 
-    /// 获取用于进服权限检查的 rating（从 KZT mode 取）
-    pub async fn get_rating(&self, steamid64: &str) -> Option<i32> {
-        // 优先从内存缓存获取
-        {
-            let cache = self.memory_cache.read().await;
-            if let Some((stats, ts)) = cache.get(steamid64) {
-                if Utc::now() - *ts < Duration::hours(CACHE_TTL_HOURS) {
-                    return stats.kzt.as_ref().and_then(|k| k.rating).map(|r| r as i32);
-                }
-            }
-        }
-
-        // 从 PG 获取
-        let row: Option<(Option<serde_json::Value>,)> = sqlx::query_as(
-            r#"SELECT kzt_data FROM player_access_cache WHERE steamid64 = $1 AND expires_at > now()"#,
-        )
-        .bind(steamid64)
-        .fetch_optional(&self.db.pool)
-        .await
-        .ok()
-        .flatten();
-
-        if let Some((Some(kzt_data),)) = row {
-            if let Ok(mode_stats) = serde_json::from_value::<GokzModeStats>(kzt_data) {
-                return mode_stats.rating.map(|r| r as i32);
-            }
-        }
-        None
-    }
-
     /// 清理过期缓存
     pub async fn cleanup(&self) -> anyhow::Result<u64> {
         let result = sqlx::query(r#"DELETE FROM player_access_cache WHERE expires_at < now()"#)

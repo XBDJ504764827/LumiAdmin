@@ -666,6 +666,9 @@ pub(crate) fn internal_error(error: anyhow::Error) -> StatusCode {
 
 /// 应用统一错误类型，所有路由 handler 应使用此类型返回错误。
 /// 自动实现 `IntoResponse`，保证所有错误响应均为 `{"error": "..."}` JSON 格式。
+///
+/// TODO: 逐步迁移现有 handler 从 `(StatusCode, Json)` 改为使用 AppError
+#[allow(dead_code)]
 pub(crate) enum AppError {
     /// 401 未授权
     Unauthorized(String),
@@ -679,6 +682,7 @@ pub(crate) enum AppError {
     Internal(String),
 }
 
+#[allow(dead_code)]
 impl AppError {
     /// 构造 403 权限不足错误
     pub(crate) fn forbidden() -> Self {

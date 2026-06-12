@@ -25,33 +25,3 @@ pub const REMOVED_BY_DISPLAY_JOIN: &str = r#"LEFT JOIN LATERAL (
     ORDER BY CASE WHEN u.username = br.removed_by THEN 0 WHEN u.display_name = br.removed_by THEN 1 ELSE 2 END
     LIMIT 1
 ) removed_user ON true"#;
-
-/// 白名单审核操作员的 LEFT JOIN LATERAL 片段
-pub fn approved_by_display_join(field: &str) -> String {
-    format!(
-        r#"LEFT JOIN LATERAL (
-            SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
-            FROM users u
-            WHERE u.username = wr.{field}
-               OR u.display_name = wr.{field}
-               OR NULLIF(u.remark, '') = wr.{field}
-            ORDER BY CASE WHEN u.username = wr.{field} THEN 0 WHEN u.display_name = wr.{field} THEN 1 ELSE 2 END
-            LIMIT 1
-        ) approved_user ON true"#
-    )
-}
-
-/// 白名单拒绝操作员的 LEFT JOIN LATERAL 片段
-pub fn rejected_by_display_join(field: &str) -> String {
-    format!(
-        r#"LEFT JOIN LATERAL (
-            SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
-            FROM users u
-            WHERE u.username = wr.{field}
-               OR u.display_name = wr.{field}
-               OR NULLIF(u.remark, '') = wr.{field}
-            ORDER BY CASE WHEN u.username = wr.{field} THEN 0 WHEN u.display_name = wr.{field} THEN 1 ELSE 2 END
-            LIMIT 1
-        ) rejected_user ON true"#
-    )
-}

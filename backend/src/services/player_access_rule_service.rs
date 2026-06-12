@@ -179,39 +179,39 @@ pub async fn delete_rule(db: &Database, id: Uuid) -> anyhow::Result<()> {
 }
 
 /// 检查玩家是否可以进入指定服务器
-/// 返回 (是否允许, 拒绝原因)
+/// 返回 (是否允许, 拒绝原因, 是否被自定义规则明确放行)
 pub async fn check_player_access(
     db: &Database,
     steamid64: &str,
     server_id: Uuid,
     community_id: Uuid,
-) -> anyhow::Result<(bool, Option<String>)> {
+) -> anyhow::Result<(bool, Option<String>, bool)> {
     // 查找玩家的特殊规则
     let rule = find_rule_by_steamid64(db, steamid64).await?;
 
     let Some(rule) = rule else {
-        // 没有特殊规则，默认允许
-        return Ok((true, None));
+        // 没有特殊规则，默认允许（但不是由自定义规则放行）
+        return Ok((true, None, false));
     };
 
     // 检查服务器级别（优先级最高）
     if rule.allowed_servers.contains(&server_id) {
-        return Ok((true, None));
+        return Ok((true, None, true));
     }
     if rule.blocked_servers.contains(&server_id) {
-        return Ok((false, Some("您被禁止进入该服务器".to_string())));
+        return Ok((false, Some("您被禁止进入该服务器".to_string()), false));
     }
 
     // 检查社区级别
     if rule.allowed_communities.contains(&community_id) {
-        return Ok((true, None));
+        return Ok((true, None, true));
     }
     if rule.blocked_communities.contains(&community_id) {
-        return Ok((false, Some("您被禁止进入该社区的所有服务器".to_string())));
+        return Ok((false, Some("您被禁止进入该社区的所有服务器".to_string()), false));
     }
 
-    // 默认允许
-    Ok((true, None))
+    // 有规则但没有匹配到 allow/block，默认允许（视为规则放行）
+    Ok((true, None, true))
 }
 
 fn map_row_to_rule(row: PlayerAccessRuleRow) -> PlayerAccessRule {
@@ -334,7 +334,7 @@ mod tests {
             )
             .await?;
 
-            let (allowed, reason) =
+            let (allowed, reason, _has_rule) =
                 check_player_access(&db, "76561198000000002", server_id, community_id).await?;
             assert!(!allowed);
             assert!(reason.is_some());

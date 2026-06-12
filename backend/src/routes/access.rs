@@ -12,7 +12,8 @@ use crate::routes::{
 };
 use crate::services::rate_limit_service::extract_client_ip;
 use crate::services::{
-    access_service, access_log_service, access_snapshot_service, log_service, permission_service,
+    access_log_service, access_service, access_snapshot_service,
+    community_service, log_service, permission_service,
     player_access_rule_service,
 };
 
@@ -57,11 +58,10 @@ pub(crate) async fn check_plugin_access(
 
     // 允许进服时记录日志
     if result.allowed {
-        // 获取服务器信息
         if let Ok(Some(server)) = ctx.server_config_cache.get_by_token_port(&ctx.db, &body.report_token, body.port).await {
             let access_method_str = result.access_method.clone().unwrap_or_else(|| "unknown".to_string());
-            // 记录进服日志
-            let _ = crate::services::access_log_service::create_access_log(
+            let community_name = community_service::find_group_name(&ctx.db, server.community_id).await.ok();
+            let _ = access_log_service::create_access_log(
                 &ctx.db,
                 &body.steam_id64,
                 body.player.as_deref(),
@@ -70,8 +70,8 @@ pub(crate) async fn check_plugin_access(
                 &server.name,
                 server.port,
                 server.community_id,
-                None, // community_name 需要单独查询
-                &crate::services::access_log_service::AccessMethod::from_str(&access_method_str),
+                community_name.as_deref(),
+                &access_log_service::AccessMethod::from_str(&access_method_str),
                 result.rating,
                 result.steam_level,
             ).await;
@@ -269,10 +269,18 @@ pub(crate) async fn list_access_logs(
 ) -> Json<serde_json::Value> {
     let page = body.get("page").and_then(|v| v.as_i64()).unwrap_or(1).max(1);
     let page_size = body.get("page_size").and_then(|v| v.as_i64()).unwrap_or(20).clamp(1, 100);
-    let steam_id64 = body.get("steam_id64").and_then(|v| v.as_str().map(String::from));
-    let server_id = body.get("server_id").and_then(|v| v.as_str().and_then(|s| Uuid::parse_str(s).ok()));
 
-    match access_log_service::list_logs_simple(&ctx.db, page, page_size, steam_id64, server_id).await {
+    let params = access_log_service::AccessLogQueryParams {
+        steam_id64: body.get("steam_id64").and_then(|v| v.as_str().map(String::from)),
+        server_id: body.get("server_id").and_then(|v| v.as_str().and_then(|s| Uuid::parse_str(s).ok())),
+        community_id: body.get("community_id").and_then(|v| v.as_str().and_then(|s| Uuid::parse_str(s).ok())),
+        access_method: body.get("access_method").and_then(|v| v.as_str().map(String::from)),
+        search: body.get("search").and_then(|v| v.as_str().map(String::from)),
+        page: Some(page),
+        page_size: Some(page_size),
+    };
+
+    match access_log_service::query_access_logs(&ctx.db, &params).await {
         Ok((items, total)) => Json(serde_json::json!({
             "items": items,
             "total": total,

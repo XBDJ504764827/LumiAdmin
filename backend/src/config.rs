@@ -225,15 +225,6 @@ fn env_u64(key: &str, default: u64) -> u64 {
     }
 }
 
-/// 带范围校验的 u64 环境变量读取
-fn env_u64_clamped(key: &str, default: u64, min: u64, max: u64) -> u64 {
-    let val = env_u64(key, default);
-    if val < min || val > max {
-        tracing::warn!(key = key, value = val, min = min, max = max, "环境变量超出范围，已自动修正");
-    }
-    val.clamp(min, max)
-}
-
 /// 带范围校验的 u32 环境变量读取
 fn env_u32_clamped(key: &str, default: u32, min: u32, max: u32) -> u32 {
     match std::env::var(key) {

@@ -166,7 +166,7 @@ async fn check_access_live(
     }
 
     // 2. 检查玩家进服权限规则（优先级最高）
-    let (access_allowed, access_reason) = player_access_rule_service::check_player_access(
+    let (access_allowed, access_reason, has_custom_rule) = player_access_rule_service::check_player_access(
         db,
         steam_id64,
         server.id,
@@ -178,6 +178,15 @@ async fn check_access_live(
             access_reason.as_deref().unwrap_or("您被禁止进入该服务器"),
         ));
     }
+    // 如果自定义规则明确放行，记录为 custom_rule（直接跳过后续白名单/限制检查）
+    if has_custom_rule {
+        return Ok(allow_with_data(
+            "已通过自定义权限规则，允许进入服务器。",
+            "custom_rule",
+            None,
+            None,
+        ));
+    }
 
     // 3. 检查服务器访问模式
     let effective_restriction = server.effective_access_restriction_enabled();
@@ -185,7 +194,12 @@ async fn check_access_live(
 
     // 都没开 → 无限制放行
     if !effective_whitelist && !effective_restriction {
-        return Ok(allow("允许进入服务器。"));
+        return Ok(allow_with_data(
+            "允许进入服务器。",
+            "unrestricted",
+            None,
+            None,
+        ));
     }
 
     let whitelist_approved = wl_cache.contains(steam_id64).await;
@@ -193,7 +207,12 @@ async fn check_access_live(
     // 仅白名单模式：必须通过白名单才能进
     if effective_whitelist && !effective_restriction {
         return if whitelist_approved {
-            Ok(allow("已通过白名单审核，允许进入服务器。"))
+            Ok(allow_with_data(
+                "已通过白名单审核，允许进入服务器。",
+                "whitelist",
+                None,
+                None,
+            ))
         } else {
             Ok(reject("你尚未通过白名单审核，无法进入服务器。"))
         };
@@ -213,12 +232,22 @@ async fn check_access_live(
             if profile.rating >= server.effective_min_rating()
                 && profile.steam_level >= server.effective_min_steam_level() =>
         {
-            Ok(allow("已满足服务器进入限制，允许进入服务器。"))
+            Ok(allow_with_data(
+                "已满足服务器进入限制，允许进入服务器。",
+                "restriction",
+                Some(profile.rating),
+                Some(profile.steam_level),
+            ))
         }
         _ => {
             // 不满足限制，检查白名单
             if whitelist_approved {
-                Ok(allow("已通过白名单审核，允许进入服务器。"))
+                Ok(allow_with_data(
+                    "已通过白名单审核，允许进入服务器。",
+                    "whitelist",
+                    None,
+                    None,
+                ))
             } else {
                 Ok(reject("你的 GOKZ rating 未达到服务器最低要求。"))
             }
@@ -238,7 +267,12 @@ fn evaluate_restriction(
     if profile.steam_level < min_steam_level {
         return Ok(reject("你的 Steam 等级未达到服务器最低要求。"));
     }
-    Ok(allow("已满足服务器进入限制，允许进入服务器。"))
+    Ok(allow_with_data(
+        "已满足服务器进入限制，允许进入服务器。",
+        "restriction",
+        Some(profile.rating),
+        Some(profile.steam_level),
+    ))
 }
 
 async fn active_ban(
@@ -397,23 +431,13 @@ fn access_result_from_snapshot_decision(
     AccessCheckResult {
         allowed: decision.allowed,
         message: decision.message,
-        access_method: Some("snapshot_fallback".to_string()),
+        access_method: if decision.allowed { Some("snapshot_fallback".to_string()) } else { None },
         rating: None,
         steam_level: None,
     }
 }
 
-fn allow(message: &str) -> AccessCheckResult {
-    AccessCheckResult {
-        allowed: true,
-        message: message.to_string(),
-        access_method: Some("unrestricted".to_string()),
-        rating: None,
-        steam_level: None,
-    }
-}
-
-fn allow_with_data(
+pub(crate) fn allow_with_data(
     message: &str,
     access_method: &str,
     rating: Option<i32>,

@@ -93,9 +93,14 @@ async fn fetch_active_kzt_bans(offset: i64, limit: i64) -> anyhow::Result<Vec<KZ
         "https://kztimerglobal.com/api/v2.0/bans?isExpired=false&limit={}&offset={}",
         limit, offset
     );
-    let resp = client.get(&url).send().await?;
+    let resp = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        client.get(&url).send(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("KZTimer API 请求超时 (30s): offset={}", offset))??;
     if !resp.status().is_success() {
-        anyhow::bail!("KZTimer API 请求失败: status={}", resp.status());
+        anyhow::bail!("KZTimer API 请求失败: status={}, offset={}", resp.status(), offset);
     }
     let bans: Vec<KZTBan> = resp.json().await?;
     Ok(bans)
@@ -156,16 +161,62 @@ pub async fn fetch_live_global_bans(
 pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
     let mut result = SyncResult::default();
 
-    // 1) 拉取 KZTimer 所有活跃封禁（isExpired=false，分页，最多 10000 条）
+    // 1) 拉取 KZTimer 所有活跃封禁（isExpired=false，分页）
+    //    单页失败时重试最多 2 次，全部失败则中止（避免空数据覆盖本地）
     let mut all_bans: Vec<KZTBan> = Vec::new();
-    for offset in (0..10000).step_by(500) {
-        let bans = fetch_active_kzt_bans(offset, 500).await?;
-        let len = bans.len();
-        all_bans.extend(bans);
-        if len < 500 {
-            break;
+    let mut had_any_success = false;
+    let mut reached_end = false; // 是否成功拉取到最后一页
+    let mut last_error: Option<String> = None;
+
+    for offset in (0..50000).step_by(500) {
+        let mut page_bans: Option<Vec<KZTBan>> = None;
+        for attempt in 0..3 {
+            match fetch_active_kzt_bans(offset, 500).await {
+                Ok(bans) => {
+                    had_any_success = true;
+                    page_bans = Some(bans);
+                    break;
+                }
+                Err(e) => {
+                    let err_str = e.to_string();
+                    tracing::warn!(
+                        offset,
+                        attempt = attempt + 1,
+                        error = %err_str,
+                        "KZTimer API 请求失败"
+                    );
+                    last_error = Some(err_str);
+                    if attempt < 2 {
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    }
+                }
+            }
+        }
+
+        match page_bans {
+            Some(bans) => {
+                let len = bans.len();
+                all_bans.extend(bans);
+                if len < 500 {
+                    reached_end = true;
+                    break; // 最后一页，无需继续
+                }
+            }
+            None => {
+                // 单页彻底失败，停止拉取（使用已获取的数据继续同步）
+                tracing::warn!(offset, "KZTimer API 单页 3 次重试均失败，停止拉取");
+                break;
+            }
         }
     }
+
+    if !had_any_success {
+        anyhow::bail!(
+            "KZTimer API 全部请求失败，无法同步全球封禁。最近错误: {}",
+            last_error.unwrap_or_default()
+        );
+    }
+
     result.total_fetched = all_bans.len() as i64;
 
     // 2) 收集 API 返回的所有 kzt_ban_id，用于后续检测过期
@@ -266,26 +317,30 @@ pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
     }
 
     // 4) 标记本地已不再出现在 API 中的封禁为过期
-    //    重要：local_ban_id 保留（不置 NULL），指向 status='inactive' 的 ban_records，
-    //    这样下次同步时即使 API 延迟返回该封禁，也不会误创建新的本地封禁
-    let locally_active: Vec<(Uuid, i64, Option<Uuid>)> = sqlx::query_as(
-        "SELECT id, kzt_ban_id, local_ban_id FROM global_bans WHERE is_expired = false",
-    )
-    .fetch_all(&db.pool)
-    .await?;
+    //    仅在成功拉取到 API 最后一页时执行过期检测，
+    //    避免因中途请求失败导致未获取的封禁被误标记为过期
+    if reached_end {
+        let locally_active: Vec<(Uuid, i64, Option<Uuid>)> = sqlx::query_as(
+            "SELECT id, kzt_ban_id, local_ban_id FROM global_bans WHERE is_expired = false",
+        )
+        .fetch_all(&db.pool)
+        .await?;
 
-    for (gid, kzt_id, local_id) in locally_active {
-        if !api_ban_ids.contains(&kzt_id) {
-            sqlx::query("UPDATE global_bans SET is_expired = true, synced_at = now() WHERE id = $1")
-                .bind(gid)
-                .execute(&db.pool)
-                .await?;
-            if let Some(lid) = local_id {
-                // 仅解除 global_ban 来源的封禁，不影响 LumiAdmin 中其他来源的封禁
-                unban_local(db, lid).await.ok();
+        for (gid, kzt_id, local_id) in locally_active {
+            if !api_ban_ids.contains(&kzt_id) {
+                sqlx::query("UPDATE global_bans SET is_expired = true, synced_at = now() WHERE id = $1")
+                    .bind(gid)
+                    .execute(&db.pool)
+                    .await?;
+                if let Some(lid) = local_id {
+                    // 仅解除 global_ban 来源的封禁，不影响 LumiAdmin 中其他来源的封禁
+                    unban_local(db, lid).await.ok();
+                }
+                result.expired += 1;
             }
-            result.expired += 1;
         }
+    } else {
+        tracing::warn!("未完整拉取所有页面，跳过过期检测以避免误判");
     }
 
     Ok(result)

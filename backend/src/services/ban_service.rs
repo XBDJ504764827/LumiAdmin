@@ -374,7 +374,7 @@ pub async fn delete_ban(db: &Database, id: Uuid) -> anyhow::Result<()> {
     if let Some((_, ref source)) = ban_info {
         if source == "global_ban" {
             if let Err(e) =
-                crate::services::global_ban_service::mark_ban_unbanned_by_local_ban_id(&db, id).await
+                crate::services::global_ban_service::mark_ban_unbanned_by_local_ban_id(db, id).await
             {
                 tracing::warn!(%e, "标记全球封禁记录为已解封失败");
             }
@@ -431,7 +431,7 @@ pub async fn unban(db: &Database, id: Uuid, removed_by: &str) -> anyhow::Result<
     // 仅标记这一条全球封禁记录，不影响该玩家后续的新全球封禁（不同 kzt_ban_id）
     if row.source == "global_ban" {
         if let Err(e) =
-            crate::services::global_ban_service::mark_ban_unbanned_by_local_ban_id(&db, id).await
+            crate::services::global_ban_service::mark_ban_unbanned_by_local_ban_id(db, id).await
         {
             tracing::warn!(%e, "标记全球封禁记录为已解封失败");
         }

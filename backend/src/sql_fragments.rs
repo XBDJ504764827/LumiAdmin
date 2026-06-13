@@ -1,8 +1,8 @@
-/// 共享的 SQL 片段，用于将操作员的显示名解析为管理员优先显示。
-///
-/// 匹配逻辑：优先匹配 username，其次 display_name，最后 remark。
-/// 结果通过 COALESCE 在 SELECT 中使用：
-/// `COALESCE(operator_user.display_name, br.operator_name) AS operator_name`
+//! 共享的 SQL 片段，用于将操作员的显示名解析为管理员优先显示。
+//!
+//! 匹配逻辑：优先匹配 username，其次 display_name，最后 remark。
+//! 结果通过 COALESCE 在 SELECT 中使用：
+//! `COALESCE(operator_user.display_name, br.operator_name) AS operator_name`
 
 /// 操作员的 LEFT JOIN LATERAL 片段（用于 operator_name 字段）
 pub const OPERATOR_DISPLAY_JOIN: &str = r#"LEFT JOIN LATERAL (

@@ -76,7 +76,6 @@ pub(super) async fn migrate_servers_schema(&self) -> anyhow::Result<()> {
 }
 
 /// 玩家 API 分发配置表
-
 pub(super) async fn migrate_server_data(&self) -> anyhow::Result<()> {
     // players: text → text[]
     sqlx::query(

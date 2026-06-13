@@ -636,7 +636,7 @@ pub(crate) async fn get_gokz_player_stats_batch(
 
     // 构建统计数据
     let mut stats = GokzStats::default();
-    if let Some(s) = results.get(0).and_then(|r| r.clone()) {
+    if let Some(s) = results.first().and_then(|r| r.clone()) {
         stats.kzt = Some(s);
     }
     if let Some(s) = results.get(1).and_then(|r| r.clone()) {

@@ -221,8 +221,6 @@ export function ExternalServerPage() {
                           }}>
                             {server.players.map((name, idx) => (
                               <span key={idx} className="tag-badge muted">
-                                border: '1px solid var(--border)',
-                              }}>
                                 {name}
                               </span>
                             ))}

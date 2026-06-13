@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useApiQuery } from '../../shared/useApiQuery.js';
 import { useAuth } from '../../state/auth.jsx';
@@ -66,7 +66,7 @@ const COL_COUNT = 11;
 
 export function AccessLogPage() {
   const { session } = useAuth();
-  const token = session?.token ?? null;
+  const _token = session?.token ?? null;
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState({
     steam_id64: '',

@@ -612,6 +612,7 @@ async fn fetch_online_records(db: &Database, steamid64: &str) -> anyhow::Result<
 /// 查询玩家使用过的 IP 地址历史，包括：
 /// - 每个 IP 登录过哪些服务器
 /// - 每个 IP 关联的其他账号（同 IP 不同 SteamID64）
+///
 /// 数据来源：player_access_logs + server_online_players + ban_records
 async fn fetch_ip_history(
     db: &Database,
@@ -722,6 +723,7 @@ async fn fetch_ip_history(
     }
 
     // 按 last_seen 降序排列
+    #[allow(clippy::unnecessary_sort_by)]
     entries.sort_by(|a, b| b.last_seen.cmp(&a.last_seen));
     Ok(entries)
 }

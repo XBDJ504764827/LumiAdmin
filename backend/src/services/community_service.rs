@@ -778,7 +778,8 @@ pub async fn find_server_info(db: &Database, server_id: Uuid) -> Option<String> 
 
 #[cfg(test)]
 mod tests {
-    use super::{test_server_input, ServerInput};
+    use super::ServerInput;
+    use crate::services::community_rcon::test_server_input;
     use std::io::ErrorKind;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;

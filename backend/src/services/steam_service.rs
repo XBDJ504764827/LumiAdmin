@@ -83,7 +83,7 @@ fn evict_oldest_if_needed<T>(cache: &mut HashMap<String, CacheEntry<T>>, max_siz
         .collect();
 
     // 按创建时间排序（最旧的在前）
-    entries.sort_by(|a, b| a.1.cmp(&b.1));
+    entries.sort_by_key(|a| a.1);
 
     // 删除最旧的条目
     for (key, _) in entries.into_iter().take(to_remove) {

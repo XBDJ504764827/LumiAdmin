@@ -104,10 +104,10 @@ impl GokzCacheManager {
             .unwrap_or(0);
         let steam_level = 0i32; // steam_level 由 access_service 单独管理
 
-        let kzt_json = stats.kzt.as_ref().map(|s| serde_json::to_value(s).ok()).flatten();
-        let skz_json = stats.skz.as_ref().map(|s| serde_json::to_value(s).ok()).flatten();
-        let vnl_json = stats.vnl.as_ref().map(|s| serde_json::to_value(s).ok()).flatten();
-        let ovr_json = stats.ovr.as_ref().map(|s| serde_json::to_value(s).ok()).flatten();
+        let kzt_json = stats.kzt.as_ref().and_then(|s| serde_json::to_value(s).ok());
+        let skz_json = stats.skz.as_ref().and_then(|s| serde_json::to_value(s).ok());
+        let vnl_json = stats.vnl.as_ref().and_then(|s| serde_json::to_value(s).ok());
+        let ovr_json = stats.ovr.as_ref().and_then(|s| serde_json::to_value(s).ok());
 
         let expires_at = Utc::now() + Duration::hours(CACHE_TTL_HOURS);
 

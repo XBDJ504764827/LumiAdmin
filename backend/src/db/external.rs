@@ -53,7 +53,6 @@ pub(super) async fn migrate_external_servers_schema(&self) -> anyhow::Result<()>
 }
 
 /// 外部封禁 API（GOKZ.TOP Bans 接入）
-
 pub(super) async fn migrate_external_ban_api_schema(&self) -> anyhow::Result<()> {
     sqlx::query(
         r#"CREATE TABLE IF NOT EXISTS external_ban_api_config (
@@ -189,7 +188,6 @@ SteamID64: {steam_id}
 }
 
 /// 封禁管理对外接入 API Key
-
 pub(super) async fn migrate_ban_api_keys_schema(&self) -> anyhow::Result<()> {
     sqlx::query(
         r#"CREATE TABLE IF NOT EXISTS ban_api_keys (

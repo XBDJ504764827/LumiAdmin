@@ -27,7 +27,6 @@ pub(super) async fn migrate_ban_records_schema(&self) -> anyhow::Result<()> {
 }
 
 /// users 和 communities 补充列
-
 pub(super) async fn migrate_ban_files_schema(&self) -> anyhow::Result<()> {
     sqlx::query(
         r#"CREATE TABLE IF NOT EXISTS ban_files (

@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { PublicPageShell } from './PublicPageShell.jsx';
+import { formatChinaDateTime } from '../../shared/time.js';
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
 const ALLOWED_VIDEO = '.mp4,.avi,.mov,.webm,.mkv';
@@ -33,17 +34,6 @@ function formatFileSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function formatChinaDateTime(iso, opts) {
-  if (!iso) return '';
-  try {
-    const d = new Date(iso);
-    const pad = (n) => String(n).padStart(2, '0');
-    const base = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    if (opts?.seconds !== false) return `${base}:${pad(d.getSeconds())}`;
-    return base;
-  } catch { return iso; }
 }
 
 function uploadWithProgress(reportId, formData, uploadToken, onProgress) {

@@ -67,6 +67,25 @@ export function DashboardPage() {
     { enabled: true }
   );
 
+  if (metrics.isLoading) {
+    return (
+      <div id="dashboard" className="content-section active">
+        <div className="breadcrumb"><span>首页</span><span className="sep">›</span><span className="current">仪表盘</span></div>
+        <div className="dash-hero">
+          <div className="dash-hero-text">
+            <div className="dash-hero-title">{greeting()}，{session?.displayName ?? 'Alex'}</div>
+            <div className="dash-hero-sub">{formatToday()} — 服务器状态与管理概览</div>
+          </div>
+        </div>
+        <div className="card">
+          <div className="card-body" style={{ textAlign: 'center', padding: 40 }}>
+            <div className="loading-state"><div className="loading-spinner" />正在加载仪表盘数据...</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (metrics.error) {
     return (
       <div id="dashboard" className="content-section active">

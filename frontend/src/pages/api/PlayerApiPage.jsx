@@ -3,6 +3,7 @@ import { api } from '../../lib/api.js';
 import { useAsync } from '../../shared/useAsync.js';
 import { useAuth } from '../../state/auth.jsx';
 import { useToast, ToastContainer } from '../../shared/Toast.jsx';
+import { TableLoading, TableEmpty } from '../../shared/TableState.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import {
   buildPlayerApiConfigPayload,
@@ -234,7 +235,7 @@ export function PlayerApiPage() {
 
       {/* 在线玩家数据 */}
       <div className="card">
-        <div className="card-header" style={{ borderBottom: 'none' }}>
+        <div className="card-header">
           <div>
             <div className="card-title">在线玩家数据</div>
             <div className="card-sub">当前通过插件上报的实时在线玩家信息</div>
@@ -242,7 +243,7 @@ export function PlayerApiPage() {
         </div>
         <div className="card-body p-0">
           {playersState.error ? (
-            <div style={{ padding: 20, textAlign: 'center', color: 'var(--accent)' }}>{playersState.error.message}</div>
+            <div className="table-state-cell"><div className="table-state-inner table-state-inner--error">{playersState.error.message}</div></div>
           ) : (
             <div className="table-responsive">
               <table className="data-table">
@@ -257,9 +258,9 @@ export function PlayerApiPage() {
                 </thead>
                 <tbody>
                   {playersState.loading ? (
-                    <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text3)' }}>加载中...</td></tr>
+                    <TableLoading colSpan={5} text="正在加载在线玩家..." />
                   ) : rows.length === 0 ? (
-                    <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text3)' }}>暂无在线玩家数据</td></tr>
+                    <TableEmpty colSpan={5} text="暂无在线玩家数据" />
                   ) : (
                     rows.map((row, idx) => (
                       <tr key={`${row.serverName}-${row.steamId}-${idx}`}>
@@ -294,25 +295,25 @@ export function PlayerApiPage() {
           </div>
           <div className="card-body">
             {/* 全局参数 */}
-            <div style={{ display: 'flex', gap: 16, marginBottom: 20, flexWrap: 'wrap' }}>
-              <div style={{ flex: '1 1 200px', maxWidth: 260 }}>
-                <label style={{ display: 'block', fontSize: 12, fontWeight: 500, marginBottom: 6, color: 'var(--text2)' }}>最大端点数量</label>
+            <div className="form-row-inline">
+              <div className="form-group">
+                <label>最大端点数量</label>
                 <input
                   type="number" min="0" className="form-control"
                   value={form.maxApiCount}
                   onChange={(e) => setForm((prev) => ({ ...prev, maxApiCount: e.target.value }))}
                 />
               </div>
-              <div style={{ flex: '1 1 200px', maxWidth: 260 }}>
-                <label style={{ display: 'block', fontSize: 12, fontWeight: 500, marginBottom: 6, color: 'var(--text2)' }}>分发周期（秒，仅推送到外部地址时生效）</label>
+              <div className="form-group">
+                <label>分发周期（秒，仅推送到外部地址时生效）</label>
                 <input
                   type="number" min="1" className="form-control"
                   value={form.intervalSeconds}
                   onChange={(e) => setForm((prev) => ({ ...prev, intervalSeconds: e.target.value }))}
                 />
               </div>
-              <div style={{ flex: '1 1 200px', maxWidth: 260 }}>
-                <label style={{ display: 'block', fontSize: 12, fontWeight: 500, marginBottom: 6, color: 'var(--text2)' }}>当前端点</label>
+              <div className="form-group">
+                <label>当前端点</label>
                 <div style={{ padding: '9px 0', fontSize: 14, fontWeight: 600 }}>
                   {form.items.length} / {form.maxApiCount}
                 </div>
@@ -320,19 +321,14 @@ export function PlayerApiPage() {
             </div>
 
             {/* 端点列表 */}
-            <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+            <div className="divider-top">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <span style={{ fontSize: 13, fontWeight: 600 }}>端点列表</span>
+                <span className="fw-600" style={{ fontSize: 13 }}>端点列表</span>
                 <button className="action-btn" onClick={openCreateWebhook}>+ 添加</button>
               </div>
 
               {form.items.length === 0 ? (
-                <div style={{
-                  padding: 30, textAlign: 'center', color: 'var(--text3)', fontSize: 13,
-                  background: 'var(--surface2)', borderRadius: 'var(--r-md)',
-                }}>
-                  暂无 API 端点，点击上方"添加"按钮创建。
-                </div>
+                <div className="empty-card">暂无 API 端点，点击上方"添加"按钮创建。</div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {form.items.map((item, index) => {
@@ -340,19 +336,14 @@ export function PlayerApiPage() {
                       ? '全部服务器'
                       : item.serverIds.map((id) => serverOptions.find((s) => s.id === id)?.label ?? id.slice(0, 8)).join('、');
                     return (
-                      <div key={`${item.publicPath}-${index}`} style={{
-                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                        padding: '12px 16px', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
-                        background: 'var(--surface)', gap: 12,
-                        opacity: item.enabled ? 1 : 0.6,
-                      }}>
+                      <div key={`${item.publicPath}-${index}`} className={`list-item-card${item.enabled ? '' : ' disabled'}`}>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                            <span style={{ fontWeight: 600, fontSize: 13 }}>{item.publicPath}</span>
-                            {!item.enabled && <span style={{ fontSize: 11, color: 'var(--text3)', background: 'var(--surface2)', padding: '1px 6px', borderRadius: 3 }}>已禁用</span>}
-                            {item.enabled && item.publicAccess && <span style={{ fontSize: 11, color: '#22c55e', background: 'rgba(34,197,94,0.1)', padding: '1px 6px', borderRadius: 3 }}>公开</span>}
-                            {item.enabled && !item.publicAccess && item.secret && <span style={{ fontSize: 11, color: '#f59e0b', background: 'rgba(245,158,11,0.1)', padding: '1px 6px', borderRadius: 3 }}>密钥验证</span>}
-                            {item.enabled && !item.publicAccess && !item.secret && <span style={{ fontSize: 11, color: 'var(--accent)', background: 'rgba(239,68,68,0.1)', padding: '1px 6px', borderRadius: 3 }}>未设置密钥</span>}
+                            <span className="fw-600" style={{ fontSize: 13 }}>{item.publicPath}</span>
+                            {!item.enabled && <span className="tag-badge muted">已禁用</span>}
+                            {item.enabled && item.publicAccess && <span className="tag-badge success">公开</span>}
+                            {item.enabled && !item.publicAccess && item.secret && <span className="tag-badge warning">密钥验证</span>}
+                            {item.enabled && !item.publicAccess && !item.secret && <span className="tag-badge danger">未设置密钥</span>}
                           </div>
                           <div style={{ fontSize: 11.5, color: 'var(--text3)', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
                             <span>{window.location.origin}/webhook/{item.publicPath}</span>
@@ -392,10 +383,7 @@ export function PlayerApiPage() {
               <span style={{ cursor: 'pointer', color: 'var(--text3)', fontSize: 18 }} onClick={closeWebhookModal}>&#10005;</span>
             </div>
             <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <div style={{
-                padding: '10px 14px', borderRadius: 'var(--r-sm)',
-                background: 'var(--info-bg)', fontSize: 12.5, color: 'var(--info-text)', lineHeight: 1.6,
-              }}>
+              <div className="info-box info">
                 配置完成后，通过 <strong>{window.location.origin}/webhook/后缀</strong> 即可获取在线玩家数据。
                 {draftWebhook.publicPath.trim() && (
                   <div className="mt-4">当前地址：<strong>{window.location.origin}/webhook/{draftWebhook.publicPath.trim()}</strong></div>
@@ -520,22 +508,11 @@ export function PlayerApiPage() {
                         onDragEnter={() => handleDragEnter(index)}
                         onDragEnd={handleDragEnd}
                         onDragOver={(e) => e.preventDefault()}
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: 10,
-                          padding: '8px 12px', background: 'var(--surface)',
-                          border: '1px solid var(--border)', borderRadius: 4,
-                          cursor: 'grab', fontSize: 13,
-                          transition: 'background 0.15s',
-                        }}
+                        className="drag-item"
                       >
-                        <span style={{ color: 'var(--text3)', cursor: 'grab', fontSize: 14, userSelect: 'none' }}>&#9776;</span>
+                        <span className="drag-handle">&#9776;</span>
                         <span className="fw-500">{server.name}</span>
-                        <span style={{
-                          fontSize: 11, color: 'var(--text3)', background: 'var(--surface2)',
-                          padding: '1px 6px', borderRadius: 3,
-                        }}>
-                          {server.group}
-                        </span>
+                        <span className="tag-badge muted">{server.group}</span>
                       </div>
                     ))}
                   </div>

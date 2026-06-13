@@ -261,6 +261,12 @@ export function WhitelistPage() {
   }
 
   async function handleRestore(item) {
+    const confirmed = await confirm({
+      title: '恢复白名单',
+      message: `确定恢复 ${item.nickname} 的白名单吗？恢复后该玩家可正常进入服务器。`,
+      confirmText: '确认恢复',
+    });
+    if (!confirmed) return;
     try {
       setSubmitting(true);
       await api.restoreWhitelist(token, item.id);
@@ -275,7 +281,8 @@ export function WhitelistPage() {
   async function handleRevoke(item) {
     const confirmed = await confirm({
       title: '删除白名单审核',
-      message: '确定删除该玩家的白名单审核吗？删除后玩家需要重新申请。',
+      message: `确定删除 ${item.nickname} 的白名单审核吗？删除后玩家需要重新申请。`,
+      confirmText: '确认删除',
     });
     if (!confirmed) return;
     try {

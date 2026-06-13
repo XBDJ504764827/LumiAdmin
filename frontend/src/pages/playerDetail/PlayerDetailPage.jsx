@@ -202,6 +202,58 @@ function OnlinePanel({ records }) {
   );
 }
 
+function IpHistoryPanel({ entries }) {
+  if (!entries || entries.length === 0) return <EmptyBlock>暂无 IP 登录记录。</EmptyBlock>;
+
+  return (
+    <div className="ip-history-list">
+      {entries.map((entry) => (
+        <div className="ip-history-item" key={entry.ip}>
+          <div className="ip-history-header">
+            <code className="ip-history-ip">{entry.ip}</code>
+            <span className="ip-history-time">
+              {entry.last_seen ? formatChinaDateTime(entry.last_seen, { seconds: false }) : '-'}
+            </span>
+          </div>
+
+          {/* 登录过的服务器 */}
+          {entry.servers.length > 0 && (
+            <div className="ip-history-section">
+              <div className="ip-history-section-label">登录服务器（{entry.servers.length}）</div>
+              <div className="ip-history-tags">
+                {entry.servers.map((srv, idx) => (
+                  <span className="tag-badge info" key={idx} title={`${srv.source}: ${srv.player_name || '-'}`}>
+                    {srv.server_name}{srv.server_port ? `:${srv.server_port}` : ''}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 同 IP 关联账号 */}
+          {entry.linked_accounts.length > 0 && (
+            <div className="ip-history-section">
+              <div className="ip-history-section-label ip-history-section-label--warn">
+                ⚠ 关联账号（{entry.linked_accounts.length}）
+              </div>
+              <div className="ip-history-linked">
+                {entry.linked_accounts.map((acc) => (
+                  <div className="ip-history-linked-item" key={acc.steam_id64}>
+                    <span className="ip-history-linked-name">{acc.player_name || '-'}</span>
+                    <code className="ip-history-linked-id">{acc.steam_id64}</code>
+                    {acc.server_name ? <span className="tag-badge muted">{acc.server_name}</span> : null}
+                    <span className="ip-history-linked-time">{acc.last_seen ? formatChinaDateTime(acc.last_seen, { seconds: false }) : '-'}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function InternalProfilePanel({ profile, canEdit, saving, onSave }) {
   const [note, setNote] = useState('');
   const [tagsText, setTagsText] = useState('');
@@ -826,6 +878,15 @@ export function PlayerDetailPage() {
                   </div>
                 </div>
                 <div className="card-body"><OnlinePanel records={detail.online_records} /></div>
+              </div>
+              <div className="card">
+                <div className="card-header">
+                  <div>
+                    <div className="card-title">IP 登录历史</div>
+                    <div className="card-sub">{detail.ip_history?.length || 0} 个 IP · 含同 IP 关联账号</div>
+                  </div>
+                </div>
+                <div className="card-body"><IpHistoryPanel entries={detail.ip_history || []} /></div>
               </div>
               <div className="card">
                 <div className="card-header">

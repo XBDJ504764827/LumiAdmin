@@ -657,9 +657,6 @@ pub(crate) fn internal_error(error: anyhow::Error) -> StatusCode {
 
 /// 应用统一错误类型，所有路由 handler 应使用此类型返回错误。
 /// 自动实现 `IntoResponse`，保证所有错误响应均为 `{"error": "..."}` JSON 格式。
-///
-/// TODO: 逐步迁移现有 handler 从 `(StatusCode, Json)` 改为使用 AppError
-#[allow(dead_code)]
 pub(crate) enum AppError {
     /// 401 未授权
     Unauthorized(String),
@@ -673,7 +670,6 @@ pub(crate) enum AppError {
     Internal(String),
 }
 
-#[allow(dead_code)]
 impl AppError {
     /// 构造 403 权限不足错误
     pub(crate) fn forbidden() -> Self {
@@ -692,6 +688,7 @@ impl AppError {
     }
 
     /// 构造 404 错误
+    #[allow(dead_code)]
     pub(crate) fn not_found(msg: impl Into<String>) -> Self {
         Self::NotFound(msg.into())
     }
@@ -707,5 +704,24 @@ impl IntoResponse for AppError {
             Self::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
         (status, Json(serde_json::json!({ "error": message }))).into_response()
+    }
+}
+
+/// 允许旧的 `(StatusCode, Json<serde_json::Value>)` 错误类型自动转换为 `AppError`，
+/// 以便逐步迁移 handler 而不需要一次性重构所有路由。
+impl From<(StatusCode, Json<serde_json::Value>)> for AppError {
+    fn from((status, json): (StatusCode, Json<serde_json::Value>)) -> Self {
+        let message = json
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("请求失败")
+            .to_string();
+        match status.as_u16() {
+            401 => Self::Unauthorized(message),
+            403 => Self::Forbidden,
+            404 => Self::NotFound(message),
+            400 => Self::BadRequest(message),
+            _ => Self::Internal(message),
+        }
     }
 }

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { api } from '../../lib/api.js';
 import { PublicPageShell } from './PublicPageShell.jsx';
+import { formatChinaDateTime } from '../../shared/time.js';
 
 const FEEDBACK_TYPES = [
   {
@@ -31,17 +32,6 @@ const STATUS_MAP = {
   resolved: { label: '已处理', icon: '✅', color: '#22c55e', bg: '#dcfce7' },
   rejected: { label: '已驳回', icon: '❌', color: '#ef4444', bg: '#fee2e2' },
 };
-
-function formatChinaDateTime(iso, opts) {
-  if (!iso) return '';
-  try {
-    const d = new Date(iso);
-    const pad = (n) => String(n).padStart(2, '0');
-    const base = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    if (opts?.seconds !== false) return `${base}:${pad(d.getSeconds())}`;
-    return base;
-  } catch { return iso; }
-}
 
 export function PublicMapFeedbackPage() {
   const [feedbackType, setFeedbackType] = useState('');

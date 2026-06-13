@@ -125,11 +125,6 @@ pub struct OnlinePlayersResponse {
 }
 
 #[derive(Serialize)]
-pub struct RconTestResult {
-    pub ok: bool,
-    pub message: String,
-    pub players: Vec<String>,
-}
 
 #[derive(sqlx::FromRow)]
 struct CommunityRow {
@@ -292,7 +287,7 @@ pub async fn create_server(
     community_id: Uuid,
     input: ServerInput,
 ) -> anyhow::Result<ServerItem> {
-    let tested = test_rcon_connection(&input).await?;
+    let tested = crate::services::community_rcon::test_rcon_connection(&input).await?;
     anyhow::ensure!(tested.ok, "RCON 测试未通过，无法保存服务器");
 
     let id = Uuid::new_v4();
@@ -378,7 +373,7 @@ pub async fn update_server(
 
     let changing_password = !password.is_empty();
     let players_for_status = if changing_password {
-        let tested = test_rcon_connection(&input).await?;
+        let tested = crate::services::community_rcon::test_rcon_connection(&input).await?;
         anyhow::ensure!(tested.ok, "RCON 测试未通过，无法保存服务器");
         tested.players
     } else {
@@ -649,51 +644,7 @@ pub async fn list_online_players(
     Ok(OnlinePlayersResponse { players, details })
 }
 
-pub async fn test_server_input(input: ServerInput) -> anyhow::Result<RconTestResult> {
-    test_rcon_connection(&input).await
-}
 
-async fn test_rcon_connection(input: &ServerInput) -> anyhow::Result<RconTestResult> {
-    let name = input.name.trim();
-    let ip = input.ip.trim();
-    let password = input.rcon_password.trim();
-
-    anyhow::ensure!(!name.is_empty(), "服务器名称不能为空");
-    anyhow::ensure!(!ip.is_empty(), "服务器 IP 不能为空");
-    anyhow::ensure!(!password.is_empty(), "RCON 密码不能为空");
-
-    let address = format!("{}:{}", ip, input.port);
-
-    match crate::rcon::RconConnection::connect(&address, password, 3).await {
-        Ok(mut conn) => {
-            let players = conn
-                .execute("listplayers")
-                .await
-                .map(|response| parse_players_from_response(&response))
-                .unwrap_or_default();
-
-            Ok(RconTestResult {
-                ok: true,
-                message: "RCON 连接测试成功".to_string(),
-                players,
-            })
-        }
-        Err(error) => Ok(RconTestResult {
-            ok: false,
-            message: error,
-            players: Vec::new(),
-        }),
-    }
-}
-
-fn parse_players_from_response(response: &str) -> Vec<String> {
-    response
-        .split(',')
-        .map(str::trim)
-        .filter(|player| !player.is_empty())
-        .map(ToString::to_string)
-        .collect()
-}
 
 fn normalize_online_player(
     player: OnlinePlayerInput,
@@ -798,86 +749,7 @@ pub fn start_stale_cleanup_loop(db: Database) {
     });
 }
 
-/// 验证 RCON 命令安全性，阻止破坏性命令
-fn validate_rcon_command(command: &str) -> anyhow::Result<()> {
-    // 移除前导分号和空格后检查
-    let cleaned = command.trim().trim_start_matches(';').trim();
-    let cmd = cleaned.to_lowercase();
-    anyhow::ensure!(!cmd.is_empty(), "命令不能为空");
 
-    // 按分号和空格分割，检查每个 token
-    let keywords: Vec<&str> = cmd
-        .split(|c: char| c == ';' || c.is_whitespace())
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    const BLOCKED_COMMANDS: &[&str] = &[
-        "quit",
-        "exit",
-        "rcon_password",
-        "sv_password",
-        "servercfgfile",
-        "writeid",
-        "writeip",
-        "banid",
-        "removeid",
-        "removeip",
-        "exec",
-        "alias",
-        "sm_rcon",
-        "changelevel",
-        "map",
-        "kickid",
-        "banip",
-        "_restart",
-        "restart",
-    ];
-
-    for keyword in &keywords {
-        anyhow::ensure!(
-            !BLOCKED_COMMANDS.contains(keyword),
-            "命令 \"{}\" 被禁止执行",
-            keyword
-        );
-    }
-
-    Ok(())
-}
-
-/// Execute a RCON command on a specific server
-pub async fn execute_rcon_command(
-    db: &Database,
-    server_id: Uuid,
-    command: &str,
-) -> anyhow::Result<String> {
-    validate_rcon_command(command)?;
-
-    #[derive(sqlx::FromRow)]
-    struct ServerRconInfo {
-        ip: String,
-        port: i32,
-        rcon_password: String,
-    }
-
-    let server: ServerRconInfo =
-        sqlx::query_as(r#"SELECT ip, port, rcon_password FROM servers WHERE id = $1"#)
-            .bind(server_id)
-            .fetch_optional(&db.pool)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("服务器不存在"))?;
-
-    let address = format!("{}:{}", server.ip, server.port);
-    let mut conn = crate::rcon::RconConnection::connect(&address, &server.rcon_password, 3)
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-    let response = conn
-        .execute(command)
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-    Ok(response)
-}
 
 /// 根据社区组 ID 获取社区组名称（用于日志记录）
 pub async fn find_group_name(db: &Database, group_id: Uuid) -> anyhow::Result<String> {

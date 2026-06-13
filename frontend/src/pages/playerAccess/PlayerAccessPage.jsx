@@ -6,6 +6,7 @@ import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { useToast, ToastContainer } from '../../shared/Toast.jsx';
 import { formatChinaDate } from '../../shared/time.js';
 import { InternalNoteInline, InternalNoteBadge } from '../../shared/InternalNote.jsx';
+import { TableLoading, TableEmpty } from '../../shared/TableState.jsx';
 
 export function PlayerAccessPage() {
   const { session } = useAuth();
@@ -284,12 +285,12 @@ export function PlayerAccessPage() {
     return (
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
         {allowed.map((id) => (
-          <span key={id} className="status-pill" style={{ background: 'var(--success-bg)', color: 'var(--success-text)', padding: '2px 8px', borderRadius: 12, fontSize: 11, fontWeight: 500 }}>
+          <span key={id} className="tag-badge success">
             {idNameMap.get(id)?.name ?? id.slice(0, 8)}
           </span>
         ))}
         {blocked.map((id) => (
-          <span key={id} className="status-pill" style={{ background: 'var(--danger-bg)', color: 'var(--danger-text)', padding: '2px 8px', borderRadius: 12, fontSize: 11, fontWeight: 500 }}>
+          <span key={id} className="tag-badge danger">
             {idNameMap.get(id)?.name ?? id.slice(0, 8)}
           </span>
         ))}
@@ -351,11 +352,11 @@ export function PlayerAccessPage() {
         </div>
         <div className="card-body p-0">
           {isLoading ? (
-            <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>加载中...</div>
+            <TableLoading colSpan={4} text="正在加载..." />
           ) : error ? (
-            <div style={{ padding: 40, textAlign: 'center', color: 'var(--accent)' }}>{error.message}</div>
+            <tr><td colSpan={4} className="table-state-cell"><div className="table-state-inner table-state-inner--error">{error.message}</div></td></tr>
           ) : rules.length === 0 ? (
-            <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>暂无特殊权限配置，所有白名单玩家默认可进入所有服务器。</div>
+            <TableEmpty colSpan={4} text="暂无特殊权限配置，所有白名单玩家默认可进入所有服务器。" />
           ) : (
             <div className="table-responsive">
               <table className="data-table">
@@ -476,10 +477,7 @@ export function PlayerAccessPage() {
               </div>
 
               {/* ── 优先级说明 ── */}
-              <div style={{
-                marginBottom: 16, padding: '10px 14px', borderRadius: 'var(--r-sm)',
-                background: 'var(--info-bg)', fontSize: 12.5, color: 'var(--info-text)', lineHeight: 1.6,
-              }}>
+              <div className="info-box info mb-16">
                 优先级：<strong>服务器级 &gt; 社区级 &gt; 全局默认</strong>。未做任何配置时，该玩家可进入所有服务器。
               </div>
 

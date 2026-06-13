@@ -7,7 +7,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::routes::{current_operator, forbidden, invalid_request, AppCtx};
-use crate::services::{community_service, log_service, permission_service, rate_limit_service::extract_client_ip};
+use crate::services::{community_rcon, community_service, log_service, permission_service, rate_limit_service::extract_client_ip};
 
 #[derive(Deserialize)]
 pub(crate) struct RconCommandBody {
@@ -167,7 +167,7 @@ pub(crate) async fn test_server_rcon(
     if !permission_service::can_manage_community_mutation(&actor) {
         return Err(forbidden());
     }
-    let result = community_service::test_server_input(body)
+    let result = community_rcon::test_server_input(body)
         .await
         .map_err(invalid_request)?;
     Ok(Json(serde_json::json!({"result": result})))
@@ -320,7 +320,7 @@ pub(crate) async fn execute_rcon(
         return Err(forbidden());
     }
 
-    let response = community_service::execute_rcon_command(&ctx.db, server_id, &body.command)
+    let response = community_rcon::execute_rcon_command(&ctx.db, server_id, &body.command)
         .await
         .map_err(invalid_request)?;
     if let Err(e) = log_service::create_log(

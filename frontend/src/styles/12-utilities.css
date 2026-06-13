@@ -593,3 +593,106 @@
   font-size: 12px;
   letter-spacing: 0.3px;
 }
+
+/* ── 通用信息框 / 提示框 ── */
+.info-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.info-box.info    { background: var(--info-bg);    color: var(--info-text); }
+.info-box.success { background: var(--success-bg); color: var(--success-text); }
+.info-box.warning { background: var(--warning-bg); color: var(--warning-text); }
+.info-box.danger  { background: var(--danger-bg);  color: var(--danger-text); }
+.info-box strong { font-weight: 600; }
+
+/* ── 通用标签徽章 ── */
+.tag-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.tag-badge.success { background: var(--success-bg); color: var(--success-text); }
+.tag-badge.danger  { background: var(--danger-bg);  color: var(--danger-text); }
+.tag-badge.warning { background: var(--warning-bg); color: var(--warning-text); }
+.tag-badge.info    { background: var(--info-bg);    color: var(--info-text); }
+.tag-badge.muted   { background: var(--surface2);   color: var(--text3); }
+
+/* ── 通用空状态卡片 ── */
+.empty-card {
+  padding: 30px;
+  text-align: center;
+  color: var(--text3);
+  font-size: 13px;
+  background: var(--surface2);
+  border-radius: var(--r-md);
+}
+
+/* ── 通用表单行（标签 + 输入） ── */
+.form-row-inline {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.form-row-inline > .form-group {
+  flex: 1 1 200px;
+  max-width: 260px;
+  margin-bottom: 0;
+}
+
+/* ── 通用分隔线 ── */
+.divider-top {
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+/* ── 列表项卡片（端点、规则等） ── */
+.list-item-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  gap: 12px;
+  transition: border-color 0.15s;
+}
+.list-item-card:hover {
+  border-color: var(--border2);
+}
+.list-item-card.disabled {
+  opacity: 0.6;
+}
+
+/* ── 通用可拖拽排序项 ── */
+.drag-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: grab;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+.drag-item:hover {
+  background: var(--surface2);
+}
+.drag-handle {
+  color: var(--text3);
+  cursor: grab;
+  font-size: 14px;
+  user-select: none;
+}

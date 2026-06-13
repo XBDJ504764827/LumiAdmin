@@ -19,6 +19,7 @@ pub struct PlayerDetail {
     pub appeals: Vec<PlayerAppealRecord>,
     pub reports: Vec<PlayerReportRecord>,
     pub online_records: Vec<OnlineRecord>,
+    pub ip_history: Vec<IpHistoryEntry>,
     pub admin_actions: Vec<AdminAction>,
     pub audit_logs: Vec<PlayerAuditLog>,
     pub evidence_files: Vec<EvidenceFile>,
@@ -149,6 +150,40 @@ pub struct OnlineRecord {
     pub reported_at: DateTime<Utc>,
 }
 
+/// IP 登录历史条目（玩家使用某 IP 登录的服务器列表 + 该 IP 关联的其他账号）
+#[derive(Debug, Clone, Serialize)]
+pub struct IpHistoryEntry {
+    /// IP 地址
+    pub ip: String,
+    /// 该玩家使用此 IP 登录的服务器列表
+    pub servers: Vec<IpServerRecord>,
+    /// 该玩家使用此 IP 的最早时间
+    pub first_seen: Option<DateTime<Utc>>,
+    /// 该玩家使用此 IP 的最近时间
+    pub last_seen: Option<DateTime<Utc>>,
+    /// 使用过同一 IP 的其他账号（不同 steam_id64）
+    pub linked_accounts: Vec<LinkedAccount>,
+}
+
+/// 某个 IP 在某台服务器上的登录记录
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct IpServerRecord {
+    pub server_name: String,
+    pub server_port: Option<i32>,
+    pub player_name: Option<String>,
+    pub last_seen: Option<DateTime<Utc>>,
+    pub source: String,
+}
+
+/// 使用同一 IP 的关联账号
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct LinkedAccount {
+    pub steam_id64: String,
+    pub player_name: Option<String>,
+    pub server_name: Option<String>,
+    pub last_seen: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct AdminAction {
     pub operator_name: String,
@@ -252,6 +287,7 @@ pub async fn get_player_detail(
     let appeals = fetch_appeal_records(db, &steamid64).await?;
     let reports = fetch_report_records(db, &steamid64).await?;
     let online_records = fetch_online_records(db, &steamid64).await?;
+    let ip_history = fetch_ip_history(db, &steamid64).await?;
     let evidence_files = fetch_evidence_files(db, r2, &bans, &appeals, &reports).await?;
     let internal_profile = fetch_internal_profile(db, &steamid64).await?;
 
@@ -305,6 +341,7 @@ pub async fn get_player_detail(
         appeals,
         reports,
         online_records,
+        ip_history,
         admin_actions,
         audit_logs,
         evidence_files,
@@ -570,6 +607,123 @@ async fn fetch_online_records(db: &Database, steamid64: &str) -> anyhow::Result<
     .fetch_all(&db.pool)
     .await?;
     Ok(rows)
+}
+
+/// 查询玩家使用过的 IP 地址历史，包括：
+/// - 每个 IP 登录过哪些服务器
+/// - 每个 IP 关联的其他账号（同 IP 不同 SteamID64）
+/// 数据来源：player_access_logs + server_online_players + ban_records
+async fn fetch_ip_history(
+    db: &Database,
+    steamid64: &str,
+) -> anyhow::Result<Vec<IpHistoryEntry>> {
+    // 1) 收集该玩家所有使用过的 IP（来源：player_access_logs + server_online_players + ban_records）
+    //    使用 UNION 去重后获取唯一的 IP 列表
+    let ip_rows: Vec<(String,)> = sqlx::query_as(
+        r#"SELECT DISTINCT ip FROM (
+            SELECT ip_address AS ip FROM player_access_logs
+            WHERE steam_id64 = $1 AND ip_address IS NOT NULL AND btrim(ip_address) <> ''
+            UNION
+            SELECT ip FROM server_online_players
+            WHERE steam_id64 = $1 AND ip IS NOT NULL AND btrim(ip) <> ''
+            UNION
+            SELECT ip_address AS ip FROM ban_records
+            WHERE steam_id = $1 AND ip_address IS NOT NULL AND btrim(ip_address) <> ''
+        ) AS ips
+        WHERE btrim(ip) <> '' AND ip <> 'unknown'
+        LIMIT 50"#,
+    )
+    .bind(steamid64)
+    .fetch_all(&db.pool)
+    .await?;
+
+    let player_ips: Vec<String> = ip_rows.into_iter().map(|(ip,)| ip).collect();
+    if player_ips.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut entries = Vec::with_capacity(player_ips.len());
+    for ip in &player_ips {
+        // 2) 查询该 IP 在哪些服务器上登录过（该玩家自己的记录）
+        let server_rows: Vec<IpServerRecord> = sqlx::query_as::<_, IpServerRecord>(
+            r#"SELECT * FROM (
+                SELECT server_name, server_port::INTEGER AS server_port, player_name,
+                       max(created_at) AS last_seen, 'access_log' AS source
+                FROM player_access_logs
+                WHERE ip_address = $1 AND steam_id64 = $2
+                GROUP BY server_name, server_port, player_name
+                UNION ALL
+                SELECT s.name AS server_name, sop.server_port::INTEGER AS server_port,
+                       sop.name AS player_name, max(sop.reported_at) AS last_seen,
+                       'online_report' AS source
+                FROM server_online_players sop
+                JOIN servers s ON s.id = sop.server_id
+                WHERE sop.ip = $1 AND sop.steam_id64 = $2
+                GROUP BY s.name, sop.server_port, sop.name
+            ) AS combined
+            ORDER BY last_seen DESC
+            LIMIT 50"#,
+        )
+        .bind(ip)
+        .bind(steamid64)
+        .fetch_all(&db.pool)
+        .await?;
+
+        // 3) 计算该玩家使用此 IP 的最早/最晚时间
+        let times: Option<(Option<DateTime<Utc>>, Option<DateTime<Utc>>)> = sqlx::query_as(
+            r#"SELECT min(ts) AS first_seen, max(ts) AS last_seen FROM (
+                SELECT created_at AS ts FROM player_access_logs WHERE ip_address = $1 AND steam_id64 = $2
+                UNION ALL
+                SELECT reported_at AS ts FROM server_online_players WHERE ip = $1 AND steam_id64 = $2
+                UNION ALL
+                SELECT created_at AS ts FROM ban_records WHERE ip_address = $1 AND steam_id = $2
+            ) AS times"#,
+        )
+        .bind(ip)
+        .bind(steamid64)
+        .fetch_optional(&db.pool)
+        .await?;
+        let (first_seen, last_seen) = times.unwrap_or((None, None));
+
+        // 4) 查询使用过同一 IP 的其他账号（不同 SteamID64）
+        let linked_rows: Vec<LinkedAccount> = sqlx::query_as::<_, LinkedAccount>(
+            r#"SELECT * FROM (
+                SELECT DISTINCT ON (steam_id64) steam_id64, player_name, server_name, last_seen FROM (
+                    SELECT steam_id64, player_name, server_name, created_at AS last_seen
+                    FROM player_access_logs
+                    WHERE ip_address = $1 AND steam_id64 <> $2
+                    UNION ALL
+                    SELECT sop.steam_id64, sop.name AS player_name, s.name AS server_name, sop.reported_at AS last_seen
+                    FROM server_online_players sop
+                    JOIN servers s ON s.id = sop.server_id
+                    WHERE sop.ip = $1 AND sop.steam_id64 <> $2
+                    UNION ALL
+                    SELECT steam_id AS steam_id64, player AS player_name, NULL::TEXT AS server_name, created_at AS last_seen
+                    FROM ban_records
+                    WHERE ip_address = $1 AND steam_id <> $2
+                ) AS combined
+                ORDER BY steam_id64, last_seen DESC
+            ) AS unique_accounts
+            ORDER BY last_seen DESC
+            LIMIT 30"#,
+        )
+        .bind(ip)
+        .bind(steamid64)
+        .fetch_all(&db.pool)
+        .await?;
+
+        entries.push(IpHistoryEntry {
+            ip: ip.clone(),
+            servers: server_rows,
+            first_seen,
+            last_seen,
+            linked_accounts: linked_rows,
+        });
+    }
+
+    // 按 last_seen 降序排列
+    entries.sort_by(|a, b| b.last_seen.cmp(&a.last_seen));
+    Ok(entries)
 }
 
 async fn fetch_evidence_files(

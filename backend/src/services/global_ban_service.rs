@@ -268,16 +268,16 @@ pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
         rows.into_iter().map(|r| r.0).collect()
     };
 
-    // 5) 处理新封禁（本地不存在的 kzt_ban_id）
-    for ban in &all_bans {
-        if existing_ids.contains(&ban.id) {
-            continue; // 已存在，跳过
-        }
+    // 5) 批量处理新封禁（INSERT global_bans + 按需创建 ban_records）
+    //    分批批量 INSERT，避免逐条 N+1
+    let new_bans: Vec<&KZTBan> = all_bans
+        .iter()
+        .filter(|b| !existing_ids.contains(&b.id))
+        .collect();
 
-        // 检查这条全球封禁是否被管理员解封过（per-ban 标记）
+    let mut new_ban_local_ids: Vec<(i64, Option<Uuid>)> = Vec::new();
+    for ban in &new_bans {
         let is_ban_unbanned = unbanned_kzt_ids.contains(&ban.id);
-
-        // 检查该封禁是否在 sync_since 之后新增（部署这版后端之前的老封禁不创建本地封禁）
         let ban_created = ban
             .created_on
             .as_deref()
@@ -285,7 +285,6 @@ pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
         let is_before_sync_since = ban_created.map(|dt| dt < sync_since).unwrap_or(true);
 
         let local_id = if is_ban_unbanned || is_before_sync_since {
-            // 该条封禁已被管理员解封，或早于同步起始时间 → 不创建本地封禁
             None
         } else {
             create_local_ban(
@@ -299,7 +298,42 @@ pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
             )
             .await
             .ok()
+            .flatten()
         };
+
+        if local_id.is_some() {
+            result.new_bans += 1;
+        }
+        new_ban_local_ids.push((ban.id, local_id));
+    }
+
+    // 建立 kzt_ban_id → local_ban_id 的快速查询映射
+    let local_id_map: std::collections::HashMap<i64, Option<Uuid>> =
+        new_ban_local_ids.into_iter().collect();
+
+    // 批量 INSERT global_bans（每批 500 条）
+    for chunk in new_bans.chunks(500) {
+        if chunk.is_empty() { continue; }
+        let ids: Vec<Uuid> = (0..chunk.len()).map(|_| Uuid::new_v4()).collect();
+        let kzt_ids: Vec<i64> = chunk.iter().map(|b| b.id).collect();
+        let steam_id64s: Vec<&str> = chunk.iter().map(|b| b.steamid64.as_str()).collect();
+        let player_names: Vec<Option<&str>> = chunk.iter().map(|b| b.player_name.as_deref()).collect();
+        let steam_ids: Vec<Option<&str>> = chunk.iter().map(|b| b.steam_id.as_deref()).collect();
+        let ban_types: Vec<&str> = chunk.iter().map(|b| b.ban_type.as_str()).collect();
+        let notes_vec: Vec<Option<&str>> = chunk.iter().map(|b| b.notes.as_deref()).collect();
+        let stats_vec: Vec<Option<&str>> = chunk.iter().map(|b| b.stats.as_deref()).collect();
+        let server_ids: Vec<Option<i64>> = chunk.iter().map(|b| b.server_id).collect();
+        let expires_vec: Vec<Option<&str>> = chunk.iter().map(|b| b.expires_on.as_deref()).collect();
+        let created_vec: Vec<Option<&str>> = chunk.iter().map(|b| b.created_on.as_deref()).collect();
+        let updated_vec: Vec<Option<&str>> = chunk.iter().map(|b| b.updated_on.as_deref()).collect();
+        let local_ids: Vec<Option<Uuid>> = chunk.iter().map(|b| local_id_map.get(&b.id).copied().unwrap_or(None)).collect();
+        let manual_flags: Vec<bool> = chunk.iter().map(|b| {
+            unbanned_kzt_ids.contains(&b.id)
+                || b.created_on.as_deref()
+                    .and_then(|c| parse_kzt_datetime(c).ok())
+                    .map(|dt| dt < sync_since)
+                    .unwrap_or(true)
+        }).collect();
 
         sqlx::query(
             r#"INSERT INTO global_bans (
@@ -307,49 +341,67 @@ pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
                 notes, stats, server_id, expires_on, created_on, updated_on,
                 is_expired, local_ban_id, manual_unbanned, synced_at
                )
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, false, $13, $14, now())
+               SELECT u.id, u.kzt_ban_id, u.steam_id64, u.player_name, u.steam_id, u.ban_type,
+                      u.notes, u.stats, u.server_id, u.expires_on, u.created_on, u.updated_on,
+                      false, u.local_ban_id, u.manual_unbanned, now()
+               FROM UNNEST($1::UUID[], $2::INTEGER[], $3::TEXT[], $4::TEXT[], $5::TEXT[], $6::TEXT[],
+                           $7::TEXT[], $8::TEXT[], $9::INTEGER[], $10::TEXT[], $11::TEXT[], $12::TEXT[],
+                           $13::UUID[], $14::BOOLEAN[])
+                    AS u(id, kzt_ban_id, steam_id64, player_name, steam_id, ban_type,
+                         notes, stats, server_id, expires_on, created_on, updated_on,
+                         local_ban_id, manual_unbanned)
                ON CONFLICT (kzt_ban_id) DO NOTHING"#,
         )
-        .bind(Uuid::new_v4())
-        .bind(ban.id)
-        .bind(&ban.steamid64)
-        .bind(&ban.player_name)
-        .bind(&ban.steam_id)
-        .bind(&ban.ban_type)
-        .bind(&ban.notes)
-        .bind(&ban.stats)
-        .bind(ban.server_id)
-        .bind(&ban.expires_on)
-        .bind(&ban.created_on)
-        .bind(&ban.updated_on)
-        .bind(local_id)
-        .bind(is_ban_unbanned || is_before_sync_since) // 被解封或早于起始时间的封禁标记为 manual_unbanned=true（不创建本地封禁）
+        .bind(&ids)
+        .bind(&kzt_ids)
+        .bind(&steam_id64s)
+        .bind(&player_names)
+        .bind(&steam_ids)
+        .bind(&ban_types)
+        .bind(&notes_vec)
+        .bind(&stats_vec)
+        .bind(&server_ids)
+        .bind(&expires_vec)
+        .bind(&created_vec)
+        .bind(&updated_vec)
+        .bind(&local_ids)
+        .bind(&manual_flags)
         .execute(&db.pool)
         .await?;
-
-        if local_id.is_some() {
-            result.new_bans += 1;
-        }
     }
 
-    // 6) 更新已存在记录的元数据（仅更新名称/备注等，不改 ban_records 状态）
-    for ban in &all_bans {
-        if !existing_ids.contains(&ban.id) {
-            continue;
-        }
+    // 6) 批量更新已存在记录的元数据
+    let existing_bans: Vec<&KZTBan> = all_bans
+        .iter()
+        .filter(|b| existing_ids.contains(&b.id))
+        .collect();
+
+    for chunk in existing_bans.chunks(500) {
+        if chunk.is_empty() { continue; }
+        let kzt_ids: Vec<i64> = chunk.iter().map(|b| b.id).collect();
+        let player_names: Vec<Option<&str>> = chunk.iter().map(|b| b.player_name.as_deref()).collect();
+        let ban_types: Vec<&str> = chunk.iter().map(|b| b.ban_type.as_str()).collect();
+        let notes_vec: Vec<Option<&str>> = chunk.iter().map(|b| b.notes.as_deref()).collect();
+        let stats_vec: Vec<Option<&str>> = chunk.iter().map(|b| b.stats.as_deref()).collect();
+        let expires_vec: Vec<Option<&str>> = chunk.iter().map(|b| b.expires_on.as_deref()).collect();
+        let updated_vec: Vec<Option<&str>> = chunk.iter().map(|b| b.updated_on.as_deref()).collect();
+
         sqlx::query(
-            r#"UPDATE global_bans SET
-                player_name = $2, ban_type = $3, notes = $4, stats = $5,
-                expires_on = $6, updated_on = $7, synced_at = now()
-              WHERE kzt_ban_id = $1"#,
+            r#"UPDATE global_bans gb
+               SET player_name = u.player_name, ban_type = u.ban_type, notes = u.notes,
+                   stats = u.stats, expires_on = u.expires_on, updated_on = u.updated_on,
+                   synced_at = now()
+               FROM UNNEST($1::INTEGER[], $2::TEXT[], $3::TEXT[], $4::TEXT[], $5::TEXT[], $6::TEXT[], $7::TEXT[])
+                    AS u(kzt_ban_id, player_name, ban_type, notes, stats, expires_on, updated_on)
+               WHERE gb.kzt_ban_id = u.kzt_ban_id"#,
         )
-        .bind(ban.id)
-        .bind(&ban.player_name)
-        .bind(&ban.ban_type)
-        .bind(&ban.notes)
-        .bind(&ban.stats)
-        .bind(&ban.expires_on)
-        .bind(&ban.updated_on)
+        .bind(&kzt_ids)
+        .bind(&player_names)
+        .bind(&ban_types)
+        .bind(&notes_vec)
+        .bind(&stats_vec)
+        .bind(&expires_vec)
+        .bind(&updated_vec)
         .execute(&db.pool)
         .await?;
     }

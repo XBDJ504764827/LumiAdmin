@@ -3,6 +3,7 @@ import { api } from '../../lib/api.js';
 import { useAuth } from '../../state/auth.jsx';
 import { useToast, ToastContainer } from '../../shared/Toast.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
+import { TableLoading, TableEmpty } from '../../shared/TableState.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 
@@ -254,10 +255,10 @@ export function ExternalBanApiPage() {
                 </tr>
               </thead>
               <tbody>
-                {loading ? <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text2)' }}>正在加载外部 API...</td></tr> : null}
-                {!loading && loadError ? <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--danger)' }}>{loadError}</td></tr> : null}
+                {loading ? <TableLoading colSpan={6} text="正在加载外部封禁 API..." /> : null}
+                {!loading && loadError ? <tr><td colSpan={6} className="table-state-cell"><div className="table-state-inner table-state-inner--error">{loadError}</div></td></tr> : null}
                 {!loading && !loadError && targets.length === 0 ? (
-                  <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text2)' }}>暂无外部 API，点击右上角添加。</td></tr>
+                  <TableEmpty colSpan={6} text="暂无外部 API，点击右上角添加。" />
                 ) : null}
                 {targets.map((target) => (
                   <tr key={target.id}>

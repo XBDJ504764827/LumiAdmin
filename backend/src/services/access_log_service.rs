@@ -139,6 +139,7 @@ pub struct AccessLogQueryParams {
     pub access_method: Option<String>,
     pub allowed: Option<bool>,
     pub failure_code: Option<String>,
+    pub ip_address: Option<String>,
     pub search: Option<String>,
     pub page: Option<i64>,
     pub page_size: Option<i64>,
@@ -193,6 +194,14 @@ fn push_filters(builder: &mut QueryBuilder<'_, Postgres>, params: &AccessLogQuer
     if let Some(v) = params.failure_code.as_ref().filter(|v| !v.trim().is_empty()) {
         push_filter_prefix(builder, &mut has_where);
         builder.push("failure_code = ").push_bind(v.trim().to_string());
+    }
+    if let Some(v) = params.ip_address.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        let pattern = format!("%{}%", v.replace('%', "\\%").replace('_', "\\_"));
+        push_filter_prefix(builder, &mut has_where);
+        builder
+            .push("ip_address ILIKE ")
+            .push_bind(pattern)
+            .push(" ESCAPE '\\'");
     }
     if let Some(v) = params.search.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
         let pattern = format!("%{}%", v.replace('%', "\\%").replace('_', "\\_"));

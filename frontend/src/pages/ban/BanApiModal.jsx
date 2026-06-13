@@ -1,12 +1,14 @@
 import React, { useCallback, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useToast } from '../../shared/Toast.jsx';
+import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { useAuth } from '../../state/auth.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 
 export function BanApiModal({ open, onClose }) {
   const { session } = useAuth();
   const { toast } = useToast();
+  const { confirm, dialog } = useConfirmDialog();
   const token = session?.token ?? null;
 
   const [apiKeys, setApiKeys] = useState([]);
@@ -57,6 +59,12 @@ export function BanApiModal({ open, onClose }) {
   }
 
   async function handleDeleteApiKey(item) {
+    const confirmed = await confirm({
+      title: '删除 API 密钥',
+      message: `确定删除密钥「${item.name || item.key_prefix || item.id}」吗？删除后该密钥将无法使用。`,
+      confirmText: '确认删除',
+    });
+    if (!confirmed) return;
     try {
       await api.deleteBanApiKey(token, item.id);
       loadApiKeys();
@@ -128,6 +136,7 @@ export function BanApiModal({ open, onClose }) {
           </div>
         </div>
       </div>
+      {dialog}
     </div>
   );
 }

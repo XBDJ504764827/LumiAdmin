@@ -3,6 +3,7 @@ import { api } from '../../lib/api.js';
 import { useAsync } from '../../shared/useAsync.js';
 import { useAuth } from '../../state/auth.jsx';
 import { useToast, ToastContainer } from '../../shared/Toast.jsx';
+import { TableLoading, TableEmpty } from '../../shared/TableState.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { formatChinaMonthDayTime } from '../../shared/time.js';
 
@@ -105,7 +106,7 @@ export function ExternalServerPage() {
   async function handleDelete(server) {
     const confirmed = await confirm({
       title: '删除外部服务器',
-      message: `确定要删除「${server.name}」吗？`,
+      message: `确定要删除「${server.name}」吗?`,
       confirmText: '确认删除',
     });
     if (!confirmed) return;
@@ -144,7 +145,7 @@ export function ExternalServerPage() {
       <div className="page-header">
         <div>
           <div className="page-title">外部服务器管理</div>
-          <div className="page-sub">管理外部服务器，通过 A2S 协议自动查询信息，可选配置 RCON 密码获取更多详情。</div>
+          <div className="page-sub">管理外部服务器,通过 A2S 协议自动查询信息,可选配置 RCON 密码获取更多详情。</div>
         </div>
         <button className="btn btn-primary" onClick={openCreate}>添加服务器</button>
       </div>
@@ -166,15 +167,15 @@ export function ExternalServerPage() {
                 </tr>
               </thead>
               <tbody>
-                {serversState.loading && <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--text3)' }}>加载中...</td></tr>}
-                {serversState.error && <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--accent)' }}>{serversState.error.message}</td></tr>}
+                {serversState.loading && <TableLoading colSpan={8} text="正在加载外部服务器..." />}
+                {serversState.error && <tr><td colSpan={8} className="table-state-cell"><div className="table-state-inner table-state-inner--error">{serversState.error.message}</div></td></tr>}
                 {!serversState.loading && !serversState.error && servers.length === 0 && (
-                  <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--text3)' }}>暂无外部服务器，点击上方"添加服务器"按钮创建。</td></tr>
+                  <TableEmpty colSpan={8} text="暂无外部服务器，点击上方“添加服务器”按钮创建。" />
                 )}
                 {servers.map((server) => (
                   <React.Fragment key={server.id}>
                     <tr>
-                      <td className="fw-600">{server.name}{!server.enabled && <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--text3)' }}>已禁用</span>}</td>
+                      <td className="fw-600">{server.name}{!server.enabled && <span className="tag-badge muted" style={{ marginLeft: 8 }}>已禁用</span>}</td>
                       <td className="steam-id">{server.ip}:{server.port}</td>
                       <td>
                         {server.statusQueriedAt
@@ -219,12 +220,7 @@ export function ExternalServerPage() {
                             borderTop: '1px solid var(--border)',
                           }}>
                             {server.players.map((name, idx) => (
-                              <span key={idx} style={{
-                                fontSize: 12,
-                                color: 'var(--text2)',
-                                background: 'var(--bg)',
-                                padding: '2px 8px',
-                                borderRadius: 4,
+                              <span key={idx} className="tag-badge muted">
                                 border: '1px solid var(--border)',
                               }}>
                                 {name}
@@ -268,12 +264,12 @@ export function ExternalServerPage() {
 
               <div className="form-group">
                 <label>RCON 密码</label>
-                <input type="password" className="form-control" value={form.rconPassword} onChange={(e) => setForm((p) => ({ ...p, rconPassword: e.target.value }))} placeholder={editingId ? '留空保持不变' : '可选，留空仅使用 A2S 查询'} />
+                <input type="password" className="form-control" value={form.rconPassword} onChange={(e) => setForm((p) => ({ ...p, rconPassword: e.target.value }))} placeholder={editingId ? '留空保持不变' : '可选,留空仅使用 A2S 查询'} />
                 <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>配置后可通过 RCON 获取更多服务器详情</div>
               </div>
 
               <div className="form-group">
-                <label>轮询间隔（秒）</label>
+                <label>轮询间隔(秒)</label>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <input
                     type="number"
@@ -284,7 +280,7 @@ export function ExternalServerPage() {
                     value={form.pollInterval}
                     onChange={(e) => setForm((p) => ({ ...p, pollInterval: e.target.value }))}
                   />
-                  <span style={{ fontSize: 13, color: 'var(--text3)' }}>范围 5 - 3600 秒，默认 30 秒</span>
+                  <span style={{ fontSize: 13, color: 'var(--text3)' }}>范围 5 - 3600 秒,默认 30 秒</span>
                 </div>
               </div>
 

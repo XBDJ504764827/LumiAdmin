@@ -75,6 +75,7 @@ export function AccessLogPage() {
     access_method: '',
     allowed: '',
     failure_code: '',
+    ip_address: '',
     search: '',
   });
 
@@ -86,6 +87,7 @@ export function AccessLogPage() {
   if (filters.access_method) queryParams.access_method = filters.access_method;
   if (filters.allowed !== '') queryParams.allowed = filters.allowed === 'true';
   if (filters.failure_code) queryParams.failure_code = filters.failure_code;
+  if (filters.ip_address.trim()) queryParams.ip_address = filters.ip_address.trim();
   if (filters.search.trim()) queryParams.search = filters.search.trim();
 
   const { data, isLoading, error } = useApiQuery(
@@ -104,7 +106,7 @@ export function AccessLogPage() {
   }
 
   function clearFilters() {
-    setFilters({ steam_id64: '', server_id: '', community_id: '', access_method: '', allowed: '', failure_code: '', search: '' });
+    setFilters({ steam_id64: '', server_id: '', community_id: '', access_method: '', allowed: '', failure_code: '', ip_address: '', search: '' });
     setPage(1);
   }
 
@@ -152,6 +154,13 @@ export function AccessLogPage() {
             placeholder="社区组 ID"
             value={filters.community_id}
             onChange={(e) => setFilters((f) => ({ ...f, community_id: e.target.value }))}
+          />
+          <input
+            className="search-bar-input"
+            style={{ maxWidth: 160 }}
+            placeholder="IP 地址"
+            value={filters.ip_address}
+            onChange={(e) => setFilters((f) => ({ ...f, ip_address: e.target.value }))}
           />
           <select
             className="filter-select"

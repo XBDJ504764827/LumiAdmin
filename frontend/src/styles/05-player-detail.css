@@ -524,6 +524,91 @@
   line-height: 1.5;
 }
 
+/* ── IP History Panel ── */
+.ip-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ip-history-item {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface2);
+}
+.ip-history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.ip-history-ip {
+  font-family: var(--mono);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--accent2);
+  background: var(--info-bg);
+  padding: 3px 10px;
+  border-radius: 6px;
+}
+.ip-history-time {
+  font-size: 11.5px;
+  color: var(--text3);
+}
+.ip-history-section {
+  margin-bottom: 8px;
+}
+.ip-history-section:last-child {
+  margin-bottom: 0;
+}
+.ip-history-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-bottom: 6px;
+}
+.ip-history-section-label--warn {
+  color: var(--warning-text);
+}
+.ip-history-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.ip-history-linked {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ip-history-linked-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12.5px;
+  flex-wrap: wrap;
+}
+.ip-history-linked-name {
+  font-weight: 600;
+  color: var(--text);
+}
+.ip-history-linked-id {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text2);
+}
+.ip-history-linked-time {
+  font-size: 11px;
+  color: var(--text3);
+  margin-left: auto;
+}
+
 /* ── Evidence Panel ── */
 .player-evidence-filters {
   display: grid;

@@ -271,6 +271,21 @@ pub(super) async fn migrate_player_access_cache_extended(&self) -> anyhow::Resul
            ON ban_records (steam_id) WHERE source = 'global_ban' AND status = 'active'"#
     ).execute(&self.pool).await?;
 
+    // 全球封禁同步配置（单行表）
+    // sync_since 记录部署这版后端的时间，只有该时间之后新增的全球封禁才会被同步到 LumiAdmin
+    sqlx::query(
+        r#"CREATE TABLE IF NOT EXISTS global_ban_config (
+          id BOOLEAN PRIMARY KEY DEFAULT true,
+          sync_since TIMESTAMPTZ NOT NULL DEFAULT now(),
+          CONSTRAINT global_ban_config_single_row CHECK (id)
+        )"#
+    ).execute(&self.pool).await?;
+    sqlx::query(
+        r#"INSERT INTO global_ban_config (id, sync_since)
+           VALUES (true, now())
+           ON CONFLICT (id) DO NOTHING"#
+    ).execute(&self.pool).await?;
+
     Ok(())
 }
 }

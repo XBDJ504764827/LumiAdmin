@@ -6,7 +6,6 @@ import { formatChinaDateTime } from '../../shared/time.js';
 import { StatusPill } from '../../shared/StatusPill.jsx';
 import { Modal } from '../../shared/Modal.jsx';
 import { TableLoading, TableEmpty } from '../../shared/TableState.jsx';
-import { Pagination } from '../../shared/Pagination.jsx';
 
 const BAN_TYPE_MAP = {
   bhop_hack: '连跳作弊',
@@ -122,8 +121,9 @@ export function GlobalBanPage() {
   );
 
   const items = data?.items || [];
-  const total = data?.total || 0;
   const hasMore = data?.has_more || false;
+  const canPrev = page > 1;
+  const canNext = hasMore;
 
   async function handleSync() {
     if (syncing) return;
@@ -131,7 +131,7 @@ export function GlobalBanPage() {
     setSyncResult(null);
     try {
       const result = await api.syncGlobalBans(token);
-      setSyncResult(result);
+      setSyncResult(result.result || result);
       refetch();
     } catch (e) {
       setSyncResult({ error: e.message });
@@ -163,17 +163,14 @@ export function GlobalBanPage() {
           {syncResult.error ? (
             <span>同步失败: {syncResult.error}</span>
           ) : (
-            <span>同步完成 — 获取 {syncResult.total_fetched} 条，新增 {syncResult.new_bans} 条，过期 {syncResult.expired} 条，重新封禁 {syncResult.re_banned} 条</span>
+            <span>同步完成 — 获取 {syncResult.total_fetched ?? 0} 条，新增 {syncResult.new_bans ?? 0} 条</span>
           )}
           <button className="btn btn-sm" onClick={() => setSyncResult(null)}>关闭</button>
         </div>
       )}
 
-      {isLoading && <div className="loading-state"><div className="loading-spinner" />正在加载...</div>}
-      {error && <div className="empty-state"><div className="empty-state-title">加载失败</div><div className="empty-state-desc">{error.message}</div></div>}
-
-      {!isLoading && !error ? (
-        <>
+      <div className="card">
+        <div className="card-body p-0">
           <div className="table-responsive">
             <table className="data-table">
               <thead>
@@ -189,7 +186,13 @@ export function GlobalBanPage() {
                 </tr>
               </thead>
               <tbody>
-                {items.length === 0 ? (
+                {isLoading ? (
+                  <TableLoading colSpan={8} text="正在加载全球封禁列表..." />
+                ) : error ? (
+                  <tr><td colSpan={8} className="table-state-cell">
+                    <div className="table-state-inner table-state-inner--error">加载失败: {error.message}</div>
+                  </td></tr>
+                ) : items.length === 0 ? (
                   <TableEmpty colSpan={8} text="暂无全球封禁记录" />
                 ) : (
                   items.map((item) => {
@@ -229,15 +232,27 @@ export function GlobalBanPage() {
               </tbody>
             </table>
           </div>
-          {total > 0 ? (
-            <Pagination page={page} pageSize={pageSize} total={total} onChange={setPage} />
-          ) : (
-            <div className="pagination">
-              <span className="pagination-info">共 0 条</span>
-            </div>
-          )}
-        </>
-      ) : null}
+        </div>
+      </div>
+
+      {/* 分页：使用 has_more 实现上一页/下一页（KZTimer API 不返回 total） */}
+      <div className="pagination">
+        <button
+          className="pagination-btn"
+          disabled={!canPrev}
+          onClick={() => setPage((p) => Math.max(1, p - 1))}
+        >
+          上一页
+        </button>
+        <span className="pagination-info">第 {page} 页</span>
+        <button
+          className="pagination-btn"
+          disabled={!canNext}
+          onClick={() => setPage((p) => p + 1)}
+        >
+          下一页
+        </button>
+      </div>
 
       {detailItem && (
         <BanDetailModal

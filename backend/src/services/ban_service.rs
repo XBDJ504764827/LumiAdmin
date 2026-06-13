@@ -361,10 +361,31 @@ pub async fn update_ban(
 }
 
 pub async fn delete_ban(db: &Database, id: Uuid) -> anyhow::Result<()> {
+    // 先查询记录信息（如果是 global_ban 来源，需要在删除前标记对应 global_bans 记录）
+    let ban_info: Option<(String, String)> = sqlx::query_as(
+        "SELECT steam_id, source FROM ban_records WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&db.pool)
+    .await?;
+
+    // 如果是全球封禁来源，先标记对应的 global_bans 记录为 manual_unbanned=true
+    // 必须在 DELETE 之前执行，因为 global_bans.local_ban_id 指向这条 ban_records
+    if let Some((_, ref source)) = ban_info {
+        if source == "global_ban" {
+            if let Err(e) =
+                crate::services::global_ban_service::mark_ban_unbanned_by_local_ban_id(&db, id).await
+            {
+                tracing::warn!(%e, "标记全球封禁记录为已解封失败");
+            }
+        }
+    }
+
     sqlx::query(r#"DELETE FROM ban_records WHERE id = $1"#)
         .bind(id)
         .execute(&db.pool)
         .await?;
+
     Ok(())
 }
 
@@ -405,6 +426,16 @@ pub async fn unban(db: &Database, id: Uuid, removed_by: &str) -> anyhow::Result<
     .bind(removed_by)
     .fetch_one(&db.pool)
     .await?;
+
+    // 如果解封的是全球封禁来源的记录，标记对应 global_bans 记录为 manual_unbanned=true
+    // 仅标记这一条全球封禁记录，不影响该玩家后续的新全球封禁（不同 kzt_ban_id）
+    if row.source == "global_ban" {
+        if let Err(e) =
+            crate::services::global_ban_service::mark_ban_unbanned_by_local_ban_id(&db, id).await
+        {
+            tracing::warn!(%e, "标记全球封禁记录为已解封失败");
+        }
+    }
 
     Ok(row_to_item(row))
 }

@@ -9,6 +9,7 @@ mod core;
 mod external;
 mod indexes;
 mod logs;
+mod map_feedback;
 mod notifications;
 mod player_api;
 mod player_reports;
@@ -70,6 +71,7 @@ impl Database {
         self.migrate_appeal_files_schema().await?;
         self.migrate_ban_files_schema().await?;
         self.migrate_player_reports_schema().await?;
+        self.migrate_map_feedback_schema().await?;
         self.migrate_player_internal_notes_schema().await?;
         self.migrate_adds_missing_constraints_and_indexes().await?;
         self.migrate_player_access_cache_extended().await?;

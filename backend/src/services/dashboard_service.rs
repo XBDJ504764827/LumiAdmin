@@ -53,6 +53,7 @@ pub struct ReviewCounts {
     pub whitelist: i64,
     pub ban_appeal: i64,
     pub player_report: i64,
+    pub map_feedback: i64,
 }
 
 pub async fn get_review_counts(
@@ -60,11 +61,12 @@ pub async fn get_review_counts(
     include_reports: bool,
 ) -> anyhow::Result<ReviewCounts> {
     if include_reports {
-        let counts: (i64, i64, i64) = sqlx::query_as(
+        let counts: (i64, i64, i64, i64) = sqlx::query_as(
             r#"SELECT
                 (SELECT COUNT(*) FROM whitelist_requests WHERE status = 'pending') AS whitelist,
                 (SELECT COUNT(*) FROM ban_appeals WHERE status = 'pending') AS ban_appeal,
-                (SELECT COUNT(*) FROM player_reports WHERE status = 'pending') AS player_report"#,
+                (SELECT COUNT(*) FROM player_reports WHERE status = 'pending') AS player_report,
+                (SELECT COUNT(*) FROM map_feedback WHERE status = 'pending') AS map_feedback"#,
         )
         .fetch_one(&db.pool)
         .await?;
@@ -73,17 +75,22 @@ pub async fn get_review_counts(
             whitelist: counts.0,
             ban_appeal: counts.1,
             player_report: counts.2,
+            map_feedback: counts.3,
         });
     }
 
-    let whitelist: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM whitelist_requests WHERE status = 'pending'")
-            .fetch_one(&db.pool)
-            .await?;
+    let counts: (i64, i64) = sqlx::query_as(
+        r#"SELECT
+            (SELECT COUNT(*) FROM whitelist_requests WHERE status = 'pending') AS whitelist,
+            (SELECT COUNT(*) FROM map_feedback WHERE status = 'pending') AS map_feedback"#,
+    )
+    .fetch_one(&db.pool)
+    .await?;
     Ok(ReviewCounts {
-        whitelist,
+        whitelist: counts.0,
         ban_appeal: 0,
         player_report: 0,
+        map_feedback: counts.1,
     })
 }
 

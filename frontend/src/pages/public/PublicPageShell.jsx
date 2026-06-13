@@ -28,6 +28,11 @@ const navItems = [
       <path d="M12 9v4" /><path d="M12 17h.01" />
     </svg>
   )},
+  { path: '/public/map-feedback', label: '地图反馈', icon: (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 20l-5.45-2.73a1 1 0 0 1-.55-.9V4.38a1 1 0 0 1 1.45-.9L9 6m0 14V6m0 14l6-3m0-11L9 6m6 11l4.55 2.27a1 1 0 0 0 1.45-.9V5.18a1 1 0 0 0-.55-.9L15 2M15 17V2m0 15l-6-3" />
+    </svg>
+  )},
 ];
 
 export function PublicPageShell({ children }) {

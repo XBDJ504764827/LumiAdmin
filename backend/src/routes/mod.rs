@@ -7,6 +7,7 @@ pub mod community;
 pub mod external_ban_api;
 pub mod external_server;
 pub mod global_ban;
+pub mod map_feedback;
 pub mod misc;
 pub mod notification;
 pub mod player_detail;
@@ -453,6 +454,24 @@ pub fn router(
         .route(
             "/api/public/player-reports/query",
             post(player_report::query_report_status),
+        )
+        // -- public: map feedback --
+        .route(
+            "/api/public/map-feedback",
+            post(map_feedback::submit_feedback),
+        )
+        .route(
+            "/api/public/map-feedback/query",
+            post(map_feedback::query_feedback_status),
+        )
+        // -- admin: map feedback --
+        .route(
+            "/api/map-feedback",
+            get(map_feedback::list_feedback),
+        )
+        .route(
+            "/api/map-feedback/:id/review",
+            post(map_feedback::review_feedback),
         )
         .route(
             "/api/public/global-bans/:steamid64",

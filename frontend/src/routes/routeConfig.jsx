@@ -18,6 +18,7 @@ const ExternalServerPage = lazy(() => import('../pages/external/ExternalServerPa
 const PlayerAccessPage = lazy(() => import('../pages/playerAccess/PlayerAccessPage.jsx').then(m => ({ default: m.PlayerAccessPage })));
 const AccessLogPage = lazy(() => import('../pages/accessLog/AccessLogPage.jsx').then(m => ({ default: m.AccessLogPage })));
 const GlobalBanPage = lazy(() => import('../pages/globalBan/GlobalBanPage.jsx').then(m => ({ default: m.GlobalBanPage })));
+const MapFeedbackPage = lazy(() => import('../pages/mapFeedback/MapFeedbackPage.jsx').then(m => ({ default: m.MapFeedbackPage })));
 const PlayerDetailPage = lazy(() => import('../pages/playerDetail/PlayerDetailPage.jsx').then(m => ({ default: m.PlayerDetailPage })));
 const AuditPage = lazy(() => import('../pages/audit/AuditPage.jsx').then(m => ({ default: m.AuditPage })));
 const NotificationPage = lazy(() => import('../pages/notifications/NotificationPage.jsx').then(m => ({ default: m.NotificationPage })));
@@ -26,6 +27,7 @@ const PublicWhitelistPage = lazy(() => import('../pages/public/PublicWhitelistPa
 const PublicBanPage = lazy(() => import('../pages/public/PublicBanPage.jsx').then(m => ({ default: m.PublicBanPage })));
 const PublicBanAppealPage = lazy(() => import('../pages/public/PublicBanAppealPage.jsx').then(m => ({ default: m.PublicBanAppealPage })));
 const PublicPlayerReportPage = lazy(() => import('../pages/public/PublicPlayerReportPage.jsx').then(m => ({ default: m.PublicPlayerReportPage })));
+const PublicMapFeedbackPage = lazy(() => import('../pages/public/PublicMapFeedbackPage.jsx').then(m => ({ default: m.PublicMapFeedbackPage })));
 const _NotFoundPage = lazy(() => import('../pages/notFound/NotFoundPage.jsx').then(m => ({ default: m.NotFoundPage })));
 
 function Lazy({ children }) {
@@ -49,6 +51,7 @@ export const protectedRoutes = [
   { path: '/player-access', element: <Lazy><PlayerAccessPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },
   { path: '/access-logs', element: <Lazy><AccessLogPage /></Lazy>, roles: ['admin', 'developer'] },
   { path: '/global-bans', element: <Lazy><GlobalBanPage /></Lazy>, roles: ['admin', 'developer'] },
+  { path: '/map-feedback', element: <Lazy><MapFeedbackPage /></Lazy>, roles: ['admin', 'developer'] },
   { path: '/audit', element: <Lazy><AuditPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },
   { path: '/notifications', element: <Lazy><NotificationPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },
   { path: '/logs', element: <Lazy><LogsPage /></Lazy>, roles: ['admin', 'developer'] },
@@ -64,4 +67,5 @@ export const publicRoutes = [
   { path: '/public/ban', element: <Lazy><PublicBanPage /></Lazy>, roles: ['guest', 'admin', 'developer', 'normal'] },
   { path: '/public/ban-appeal', element: <Lazy><PublicBanAppealPage /></Lazy>, roles: ['guest', 'admin', 'developer', 'normal'] },
   { path: '/public/player-report', element: <Lazy><PublicPlayerReportPage /></Lazy>, roles: ['guest', 'admin', 'developer', 'normal'] },
+  { path: '/public/map-feedback', element: <Lazy><PublicMapFeedbackPage /></Lazy>, roles: ['guest', 'admin', 'developer', 'normal'] },
 ];

@@ -129,6 +129,7 @@ export const api = {
   accessLogs: (token, params = {}) => request(`/api/player-access/logs${buildQueryString(params)}`, { headers: withAuth(token) }),
   // Global Bans
   globalBans: (token, params = {}) => request(`/api/global-bans${buildQueryString(params)}`, { headers: withAuth(token) }),
+  searchGlobalBans: (token, body) => request('/api/global-bans', { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   unbanGlobalBan: (token, kztBanId) => request(`/api/global-bans/${kztBanId}/unban`, { method: 'POST', headers: withAuth(token), body: JSON.stringify({}) }),
   syncGlobalBans: (token) => request('/api/global-bans/sync', { method: 'POST', headers: withAuth(token), body: JSON.stringify({}) }),
   publicWhitelist: (params = {}) => request(`/api/public/whitelist${buildQueryString(params)}`),

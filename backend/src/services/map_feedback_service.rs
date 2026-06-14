@@ -7,7 +7,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct MapFeedbackItem {
     pub id: Uuid,
     pub feedback_type: String,

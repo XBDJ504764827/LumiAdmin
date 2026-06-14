@@ -1,6 +1,7 @@
 use crate::{
     db::Database,
     services::{
+        map_feedback_service::{MapFeedbackItem, query_feedback_by_steam_id},
         r2_storage::R2Storage,
         steam_service::{ParsedSteamIdentity, SteamResolver},
     },
@@ -23,6 +24,7 @@ pub struct PlayerDetail {
     pub admin_actions: Vec<AdminAction>,
     pub audit_logs: Vec<PlayerAuditLog>,
     pub evidence_files: Vec<EvidenceFile>,
+    pub map_feedback: Vec<MapFeedbackItem>,
     pub internal_profile: Option<PlayerInternalProfile>,
     pub timeline: Vec<TimelineEvent>,
 }
@@ -175,13 +177,18 @@ pub struct IpServerRecord {
     pub source: String,
 }
 
-/// 使用同一 IP 的关联账号
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+/// 使用同一 IP 的关联账号（含封禁状态和登录服务器）
+#[derive(Debug, Clone, Serialize)]
 pub struct LinkedAccount {
     pub steam_id64: String,
     pub player_name: Option<String>,
-    pub server_name: Option<String>,
     pub last_seen: Option<DateTime<Utc>>,
+    /// 是否有当前系统中的活跃封禁
+    pub has_local_ban: bool,
+    /// 该账号登录过的服务器列表
+    pub servers: Vec<String>,
+    /// 使用该 IP 的次数（近似）
+    pub access_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -279,8 +286,8 @@ pub async fn get_player_detail(
     r2: Option<&R2Storage>,
     steam_input: &str,
 ) -> anyhow::Result<PlayerDetail> {
-    let identity = resolver.resolve(steam_input).await?;
-    let steamid64 = identity.steamid64.clone();
+    let steamid64 = resolve_player_input(db, resolver, steam_input).await?;
+    let identity = resolver.resolve(&steamid64).await?;
 
     let whitelists = fetch_whitelist_records(db, &steamid64).await?;
     let bans = fetch_ban_records(db, &steamid64).await?;
@@ -289,6 +296,7 @@ pub async fn get_player_detail(
     let online_records = fetch_online_records(db, &steamid64).await?;
     let ip_history = fetch_ip_history(db, &steamid64).await?;
     let evidence_files = fetch_evidence_files(db, r2, &bans, &appeals, &reports).await?;
+    let map_feedback = query_feedback_by_steam_id(db, &steamid64).await.unwrap_or_default();
     let internal_profile = fetch_internal_profile(db, &steamid64).await?;
 
     let search_terms = build_search_terms(
@@ -345,9 +353,80 @@ pub async fn get_player_detail(
         admin_actions,
         audit_logs,
         evidence_files,
+        map_feedback,
         internal_profile,
         timeline,
     })
+}
+
+/// 解析玩家输入：支持 SteamID64/2/3、Steam 主页链接、玩家名称、IP 地址
+/// 返回 SteamID64
+async fn resolve_player_input(
+    db: &Database,
+    resolver: &SteamResolver,
+    input: &str,
+) -> anyhow::Result<String> {
+    let trimmed = input.trim();
+    anyhow::ensure!(!trimmed.is_empty(), "查询内容不能为空");
+
+    // 1) 先尝试作为 SteamID / 主页链接解析
+    if let Ok(identity) = resolver.resolve(trimmed).await {
+        return Ok(identity.steamid64);
+    }
+
+    // 2) 尝试作为 IP 地址查询
+    if is_likely_ip(trimmed) {
+        if let Some(steam_id) = lookup_steamid_by_ip(db, trimmed).await? {
+            return Ok(steam_id);
+        }
+    }
+
+    // 3) 尝试作为玩家名称查询
+    if let Some(steam_id) = lookup_steamid_by_name(db, trimmed).await? {
+        return Ok(steam_id);
+    }
+
+    anyhow::bail!("未找到匹配的玩家，请检查输入的 SteamID、IP 或玩家名称是否正确")
+}
+
+fn is_likely_ip(input: &str) -> bool {
+    let parts: Vec<&str> = input.split('.').collect();
+    parts.len() == 4 && parts.iter().all(|p| p.parse::<u8>().is_ok())
+}
+
+async fn lookup_steamid_by_ip(db: &Database, ip: &str) -> anyhow::Result<Option<String>> {
+    let row: Option<(String,)> = sqlx::query_as(
+        r#"SELECT steam_id64 FROM (
+            SELECT steam_id64 FROM player_access_logs WHERE ip_address = $1
+            UNION
+            SELECT steam_id64 FROM server_online_players WHERE ip = $1
+            UNION
+            SELECT steam_id AS steam_id64 FROM ban_records WHERE ip_address = $1
+        ) AS ids LIMIT 1"#,
+    )
+    .bind(ip)
+    .fetch_optional(&db.pool)
+    .await?;
+    Ok(row.map(|(s,)| s))
+}
+
+async fn lookup_steamid_by_name(db: &Database, name: &str) -> anyhow::Result<Option<String>> {
+    let pattern = format!("%{}%", name.replace('%', "\\%").replace('_', "\\_"));
+    let row: Option<(String,)> = sqlx::query_as(
+        r#"SELECT steam_id64 FROM (
+            SELECT steamid64 AS steam_id64 FROM whitelist_requests WHERE nickname ILIKE $1 OR steam_persona_name ILIKE $1
+            UNION
+            SELECT steam_id AS steam_id64 FROM ban_records WHERE player ILIKE $1
+            UNION
+            SELECT steam_id64 FROM player_access_logs WHERE player_name ILIKE $1
+            UNION
+            SELECT steam_id64 FROM server_online_players WHERE name ILIKE $1
+        ) AS ids LIMIT 1"#,
+    )
+    .bind(&pattern)
+    .fetch_optional(&db.pool)
+    .await?;
+    Ok(row.map(|(s,)| s))
 }
 
 pub async fn upsert_player_internal_profile(
@@ -687,38 +766,107 @@ async fn fetch_ip_history(
         let (first_seen, last_seen) = times.unwrap_or((None, None));
 
         // 4) 查询使用过同一 IP 的其他账号（不同 SteamID64）
-        let linked_rows: Vec<LinkedAccount> = sqlx::query_as::<_, LinkedAccount>(
-            r#"SELECT * FROM (
-                SELECT DISTINCT ON (steam_id64) steam_id64, player_name, server_name, last_seen FROM (
-                    SELECT steam_id64, player_name, server_name, created_at AS last_seen
-                    FROM player_access_logs
-                    WHERE ip_address = $1 AND steam_id64 <> $2
-                    UNION ALL
-                    SELECT sop.steam_id64, sop.name AS player_name, s.name AS server_name, sop.reported_at AS last_seen
-                    FROM server_online_players sop
-                    JOIN servers s ON s.id = sop.server_id
-                    WHERE sop.ip = $1 AND sop.steam_id64 <> $2
-                    UNION ALL
-                    SELECT steam_id AS steam_id64, player AS player_name, NULL::TEXT AS server_name, created_at AS last_seen
-                    FROM ban_records
-                    WHERE ip_address = $1 AND steam_id <> $2
-                ) AS combined
-                ORDER BY steam_id64, last_seen DESC
-            ) AS unique_accounts
-            ORDER BY last_seen DESC
-            LIMIT 30"#,
+        //    包含：是否有本地封禁、登录过哪些服务器、访问次数
+        let linked_steam_ids: Vec<(String,)> = sqlx::query_as(
+            r#"SELECT DISTINCT steam_id FROM (
+                SELECT steam_id64 AS steam_id FROM player_access_logs WHERE ip_address = $1 AND steam_id64 <> $2
+                UNION
+                SELECT steam_id64 AS steam_id FROM server_online_players WHERE ip = $1 AND steam_id64 <> $2
+                UNION
+                SELECT steam_id AS steam_id FROM ban_records WHERE ip_address = $1 AND steam_id <> $2
+            ) AS ids LIMIT 30"#,
         )
         .bind(ip)
         .bind(steamid64)
         .fetch_all(&db.pool)
         .await?;
 
+        let linked_ids: Vec<String> = linked_steam_ids.into_iter().map(|(s,)| s).collect();
+        let mut linked_accounts = Vec::with_capacity(linked_ids.len());
+
+        for linked_id in &linked_ids {
+            // 查询玩家名
+            let name_row: Option<(Option<String>,)> = sqlx::query_as(
+                r#"SELECT player_name FROM (
+                    (SELECT player_name FROM player_access_logs WHERE steam_id64 = $1 ORDER BY created_at DESC LIMIT 1)
+                    UNION ALL
+                    (SELECT name AS player_name FROM server_online_players WHERE steam_id64 = $1 ORDER BY reported_at DESC LIMIT 1)
+                    UNION ALL
+                    (SELECT player AS player_name FROM ban_records WHERE steam_id = $1 ORDER BY created_at DESC LIMIT 1)
+                    UNION ALL
+                    (SELECT nickname AS player_name FROM whitelist_requests WHERE steamid64 = $1 ORDER BY COALESCE(updated_at, applied_at) DESC LIMIT 1)
+                ) AS names WHERE player_name IS NOT NULL LIMIT 1"#,
+            )
+            .bind(linked_id)
+            .fetch_optional(&db.pool)
+            .await?;
+
+            // 是否有活跃封禁
+            let ban_row: Option<(i64,)> = sqlx::query_as(
+                r#"SELECT COUNT(*) FROM ban_records WHERE steam_id = $1 AND status = 'active'"#,
+            )
+            .bind(linked_id)
+            .fetch_optional(&db.pool)
+            .await?;
+
+            // 登录过的服务器
+            let server_rows: Vec<(Option<String>,)> = sqlx::query_as(
+                r#"SELECT DISTINCT server_name FROM (
+                    SELECT server_name FROM player_access_logs WHERE steam_id64 = $1 AND server_name IS NOT NULL
+                    UNION
+                    SELECT s.name AS server_name FROM server_online_players sop JOIN servers s ON s.id = sop.server_id WHERE sop.steam_id64 = $1
+                ) AS servers LIMIT 20"#,
+            )
+            .bind(linked_id)
+            .fetch_all(&db.pool)
+            .await?;
+
+            // 最近活跃时间
+            let time_row: Option<(Option<DateTime<Utc>>,)> = sqlx::query_as(
+                r#"SELECT max(ts) FROM (
+                    SELECT created_at AS ts FROM player_access_logs WHERE steam_id64 = $1
+                    UNION ALL
+                    SELECT reported_at AS ts FROM server_online_players WHERE steam_id64 = $1
+                    UNION ALL
+                    SELECT created_at AS ts FROM ban_records WHERE steam_id = $1
+                ) AS times"#,
+            )
+            .bind(linked_id)
+            .fetch_optional(&db.pool)
+            .await?;
+
+            // 访问次数
+            let count_row: (i64,) = sqlx::query_as(
+                r#"SELECT COUNT(*) FROM (
+                    SELECT 1 FROM player_access_logs WHERE steam_id64 = $1
+                    UNION ALL
+                    SELECT 1 FROM server_online_players WHERE steam_id64 = $1
+                ) AS cnt"#,
+            )
+            .bind(linked_id)
+            .fetch_one(&db.pool)
+            .await?;
+
+            linked_accounts.push(LinkedAccount {
+                steam_id64: linked_id.clone(),
+                player_name: name_row.and_then(|(n,)| n),
+                last_seen: time_row.and_then(|(t,)| t),
+                has_local_ban: ban_row.map(|(c,)| c > 0).unwrap_or(false),
+                servers: server_rows.into_iter().filter_map(|(s,)| s).collect(),
+                access_count: count_row.0,
+            });
+        }
+
+        // 按最近活跃时间降序
+        #[allow(clippy::unnecessary_sort_by)]
+        linked_accounts.sort_by(|a, b| b.last_seen.cmp(&a.last_seen));
+
         entries.push(IpHistoryEntry {
             ip: ip.clone(),
             servers: server_rows,
             first_seen,
             last_seen,
-            linked_accounts: linked_rows,
+            linked_accounts: linked_accounts,
         });
     }
 

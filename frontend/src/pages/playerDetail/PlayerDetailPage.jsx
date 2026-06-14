@@ -1,957 +1,429 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../../lib/api.js';
 import { useAuth } from '../../state/auth.jsx';
 import { useToast, ToastContainer } from '../../shared/Toast.jsx';
 import { StatusPill } from '../../shared/StatusPill.jsx';
-import { FileItem, fileActionLabel } from '../../shared/FilePreview.jsx';
+import { Modal } from '../../shared/Modal.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 
-const CATEGORY_FILTERS = [
-  { value: 'all', label: '全部' },
-  { value: 'ban', label: '封禁' },
-  { value: 'whitelist', label: '白名单' },
-  { value: 'appeal', label: '申诉' },
-  { value: 'report', label: '举报' },
-  { value: 'online', label: '在线' },
-  { value: 'admin', label: '操作' },
-  { value: 'audit', label: '审计' },
-  { value: 'evidence', label: '证据' },
-];
+const STATUS_LABELS = { active:'生效中', inactive:'已失效', pending:'待审核', approved:'已通过', rejected:'已驳回', revoked:'已撤销', resolved:'已解决', online:'在线', success:'成功', failed:'失败' };
+function stKind(s,c){if(s==='active'||c==='ban')return s==='inactive'?'offline':'danger';if(s==='online'||s==='approved'||s==='success'||s==='resolved')return'success';if(s==='pending')return'warning';if(s==='failed'||s==='rejected')return'danger';if(s==='revoked'||s==='inactive')return'offline';return'default'}
+function stLabel(s){return STATUS_LABELS[s]||s||'-'}
+function durLabel(m){const v=Number(m);if(!Number.isFinite(v))return'-';if(v===0)return'永久';if(v<60)return`${v} 分钟`;if(v%1440===0)return`${v/1440} 天`;if(v%60===0)return`${v/60} 小时`;return`${v} 分钟`}
+function tagsToText(t=[]){return t.join(', ')}
+function textToTags(v){return v.split(/[,，\n]/).map(t=>t.trim().replace(/^#/,'')).filter(Boolean).filter((t,i,a)=>a.findIndex(n=>n.toLowerCase()===t.toLowerCase())===i)}
+function Empty({children}){return<div className="player-detail-empty">{children}</div>}
+function feedbackTypeLabel(t){const m={missing:'地图缺失',broken:'地图损坏',request:'地图请求'};return m[t]||t||'-'}
 
-const CATEGORY_LABELS = {
-  ban: '封禁',
-  whitelist: '白名单',
-  appeal: '申诉',
-  report: '举报',
-  online: '在线',
-  admin: '操作',
-  audit: '审计',
-  evidence: '证据',
-};
+// ── Ban Detail Popup ──
+function BanDetailPopup({item, onClose, onAction, token, toast}) {
+  const [acting, setActing] = useState(false);
+  if (!item) return null;
+  const isActive = item.status === 'active';
 
-const STATUS_LABELS = {
-  active: '生效中',
-  inactive: '已失效',
-  pending: '待审核',
-  approved: '已通过',
-  rejected: '已驳回',
-  revoked: '已撤销',
-  online: '在线',
-  success: '成功',
-  failed: '失败',
-  image: '图片',
-  video: '录像',
-  audio: '录音',
-  other: '文件',
-};
+  async function doUnban() { if(acting)return;setActing(true);try{await api.unban(token,item.id);toast({title:'解封成功'});onAction();onClose();}catch(e){toast({title:'操作失败',message:e.message,tone:'danger'})}finally{setActing(false)} }
+  async function doDelete() { if(acting||!confirm(`确定删除封禁记录吗？`))return;setActing(true);try{await api.deleteBan(token,item.id);toast({title:'删除成功'});onAction();onClose();}catch(e){toast({title:'操作失败',message:e.message,tone:'danger'})}finally{setActing(false)} }
 
-const SOURCE_LABELS = {
-  public: '公开提交',
-  manual: '手动',
-  web: '网站',
-  game_plugin: '游戏插件',
-  offline_sync: '离线同步',
-  server_online_players: '在线上报',
-  admin_logs: '管理日志',
-  ban: '封禁',
-  appeal: '申诉',
-  report: '举报',
-};
-
-function statusKind(status, category) {
-  if (status === 'active' || category === 'ban') return status === 'inactive' ? 'offline' : 'danger';
-  if (status === 'online' || status === 'approved' || status === 'success') return 'success';
-  if (status === 'pending') return 'warning';
-  if (status === 'failed' || status === 'rejected') return 'danger';
-  if (status === 'revoked' || status === 'inactive') return 'offline';
-  if (category === 'audit') return status === 'failed' ? 'danger' : 'success';
-  return 'default';
-}
-
-function statusLabel(status) {
-  return STATUS_LABELS[status] || status || '-';
-}
-
-function sourceLabel(source) {
-  return SOURCE_LABELS[source] || source || '-';
-}
-
-function tagsToText(tags = []) {
-  return tags.join(', ');
-}
-
-function textToTags(value) {
-  return value
-    .split(/[,，\n]/)
-    .map((item) => item.trim().replace(/^#/, ''))
-    .filter(Boolean)
-    .filter((item, index, arr) => arr.findIndex((next) => next.toLowerCase() === item.toLowerCase()) === index);
-}
-
-function durationLabel(minutes) {
-  const value = Number(minutes);
-  if (!Number.isFinite(value)) return '-';
-  if (value === 0) return '永久';
-  if (value < 60) return `${value} 分钟`;
-  if (value % 1440 === 0) return `${value / 1440} 天`;
-  if (value % 60 === 0) return `${value / 60} 小时`;
-  return `${value} 分钟`;
-}
-
-function displayName(detail) {
-  return detail?.profile?.display_name || detail?.profile?.steamid64 || '未选择玩家';
-}
-
-function shortDescription(text, max = 90) {
-  if (!text) return '';
-  return text.length > max ? `${text.slice(0, max)}...` : text;
-}
-
-function Metric({ label, value, sub }) {
-  return (
-    <div className="player-metric">
-      <div className="player-metric-label">{label}</div>
-      <div className="player-metric-value">{value}</div>
-      {sub ? <div className="player-metric-sub">{sub}</div> : null}
+  return (<Modal open={true} title="封禁详情" onClose={onClose} footer={<><button className="btn btn-outline" onClick={onClose}>关闭</button>{isActive&&<><button className="action-btn action-btn-success" onClick={doUnban} disabled={acting}>解封</button><button className="action-btn action-btn-danger" onClick={doDelete} disabled={acting}>删除</button></>}</>} >
+    <div className="detail-grid">
+      <span className="detail-label">状态</span><span className="detail-value"><StatusPill kind={stKind(item.status,'ban')}>{stLabel(item.status)}</StatusPill></span>
+      <span className="detail-label">玩家</span><span className="detail-value fw-600">{item.player||'-'}</span>
+      <span className="detail-label">SteamID64</span><span className="detail-value mono">{item.steam_id}</span>
+      {item.ip_address&&<><span className="detail-label">IP</span><span className="detail-value mono">{item.ip_address}</span></>}
+      {item.server_name&&<><span className="detail-label">服务器</span><span className="detail-value">{item.server_name}</span></>}
+      <span className="detail-label">封禁类型</span><span className="detail-value">{item.ban_type==='ip'?'IP 封禁':'Steam 账号封禁'}</span>
+      <span className="detail-label">时长</span><span className="detail-value">{durLabel(item.duration_minutes)}</span>
+      <span className="detail-label">理由</span><span className="detail-value pre">{item.reason}</span>
+      <span className="detail-label">操作人</span><span className="detail-value">{item.operator_name||'-'}</span>
+      <span className="detail-label">封禁时间</span><span className="detail-value">{formatChinaDateTime(item.created_at)}</span>
+      {item.removed_at&&<><span className="detail-label">解封时间</span><span className="detail-value">{formatChinaDateTime(item.removed_at)} {item.removed_by?`(${item.removed_by})`:''}</span></>}
     </div>
-  );
+  </Modal>);
 }
 
-function EmptyBlock({ children }) {
-  return <div className="player-detail-empty">{children}</div>;
-}
+// ── Whitelist Detail Popup ──
+function WhitelistDetailPopup({item, onClose, onAction, token, toast}) {
+  const [acting, setActing] = useState(false);
+  const [reason, setReason] = useState('');
+  if (!item) return null;
+  const isPending = item.status === 'pending';
+  const isApproved = item.status === 'approved';
+  const isRejected = item.status === 'rejected' || item.status === 'revoked';
 
-function Timeline({ items }) {
-  if (items.length === 0) {
-    return <EmptyBlock>暂无匹配时间线。</EmptyBlock>;
-  }
+  async function doAction(action) { if(acting)return;setActing(true);
+    try{
+      if(action==='reject'){
+        if(!reason.trim()){toast({title:'请填写拒绝理由',tone:'warning'});setActing(false);return;}
+        await api.rejectWhitelist(token,item.id,{reason:reason.trim()});
+      } else if(action==='approve'){
+        await api.approveWhitelist(token,item.id);
+      } else if(action==='revoke'){
+        await api.revokeWhitelist(token,item.id);
+      } else if(action==='restore'){
+        await api.restoreWhitelist(token,item.id);
+      }
+      toast({title:'操作成功'});onAction();onClose();
+    }catch(e){toast({title:'操作失败',message:e.message,tone:'danger'})}finally{setActing(false)} }
 
-  return (
-    <div className="player-timeline">
-      {items.map((item, index) => (
-        <div className="player-timeline-item" key={`${item.event_type}-${item.related_id || index}-${item.occurred_at}`}>
-          <div className={`player-timeline-dot player-timeline-dot-${item.category}`} />
-          <div className="player-timeline-body">
-            <div className="player-timeline-head">
-              <div>
-                <div className="player-timeline-title">{item.title}</div>
-                <div className="player-timeline-time">{formatChinaDateTime(item.occurred_at, { seconds: false })}</div>
-              </div>
-              <div className="player-timeline-tags">
-                <span className="player-category-tag">{CATEGORY_LABELS[item.category] || item.category}</span>
-                {item.status ? (
-                  <StatusPill kind={statusKind(item.status, item.category)}>{statusLabel(item.status)}</StatusPill>
-                ) : null}
-              </div>
-            </div>
-            {item.description ? <div className="player-timeline-desc">{item.description}</div> : null}
-            <div className="player-timeline-meta">
-              {item.actor ? <span>操作人: {item.actor}</span> : null}
-              {item.source ? <span>来源: {sourceLabel(item.source)}</span> : null}
-            </div>
-          </div>
-        </div>
-      ))}
+  return (<Modal open={true} title="白名单详情" onClose={onClose} footer={<><button className="btn btn-outline" onClick={onClose}>关闭</button>
+    {isPending&&<><button className="action-btn action-btn-success" onClick={()=>doAction('approve')} disabled={acting}>通过</button><button className="action-btn action-btn-danger" onClick={()=>doAction('reject')} disabled={acting||!reason.trim()}>拒绝</button></>}
+    {isApproved&&<button className="action-btn action-btn-danger" onClick={()=>doAction('revoke')} disabled={acting}>撤销</button>}
+    {isRejected&&<button className="action-btn action-btn-success" onClick={()=>doAction('restore')} disabled={acting}>恢复</button>}
+  </>} >
+    {isPending&&<div className="form-group" style={{marginBottom:12}}><label>拒绝理由（必填）</label><textarea className="form-control" rows={2} value={reason} onChange={e=>setReason(e.target.value)} placeholder="请输入拒绝理由" style={{resize:'vertical',minHeight:50}}/></div>}
+    <div className="detail-grid">
+      <span className="detail-label">状态</span><span className="detail-value"><StatusPill kind={stKind(item.status,'whitelist')}>{stLabel(item.status)}</StatusPill></span>
+      <span className="detail-label">昵称</span><span className="detail-value fw-600">{item.nickname}</span>
+      <span className="detail-label">SteamID64</span><span className="detail-value mono">{item.steamid64}</span>
+      {item.steam_persona_name&&<><span className="detail-label">Steam 名称</span><span className="detail-value">{item.steam_persona_name}</span></>}
+      <span className="detail-label">申请时间</span><span className="detail-value">{formatChinaDateTime(item.applied_at)}</span>
+      {item.approved_at&&<><span className="detail-label">通过时间</span><span className="detail-value">{formatChinaDateTime(item.approved_at)} ({item.approved_by||'-'})</span></>}
+      {item.rejected_at&&<><span className="detail-label">拒绝时间</span><span className="detail-value">{formatChinaDateTime(item.rejected_at)} ({item.rejected_by||'-'})<br/>{item.rejection_reason||''}</span></>}
+      {item.revoked_at&&<><span className="detail-label">撤销时间</span><span className="detail-value">{formatChinaDateTime(item.revoked_at)} ({item.revoked_by||'-'})</span></>}
+      {item.approval_reason&&<><span className="detail-label">通过理由</span><span className="detail-value pre">{item.approval_reason}</span></>}
     </div>
-  );
+  </Modal>);
 }
 
-function WhitelistPanel({ records }) {
-  const latest = records[0];
-  if (!latest) return <EmptyBlock>暂无白名单记录。</EmptyBlock>;
-
-  return (
-    <div className="player-side-stack">
-      <div className="player-side-row">
-        <span>状态</span>
-        <StatusPill kind={statusKind(latest.status, 'whitelist')}>{statusLabel(latest.status)}</StatusPill>
-      </div>
-      <div className="player-side-row"><span>昵称</span><strong>{latest.nickname}</strong></div>
-      <div className="player-side-row"><span>申请时间</span><strong>{formatChinaDateTime(latest.applied_at, { seconds: false })}</strong></div>
-      <div className="player-side-row"><span>审核人</span><strong>{latest.approved_by || latest.rejected_by || latest.revoked_by || '-'}</strong></div>
-      {(latest.approval_reason || latest.rejection_reason) ? (
-        <div className="player-detail-note">{latest.approval_reason || latest.rejection_reason}</div>
-      ) : null}
-    </div>
-  );
-}
-
-function OnlinePanel({ records }) {
-  if (records.length === 0) return <EmptyBlock>暂无当前在线上报。</EmptyBlock>;
-
-  return (
-    <div className="player-online-list">
-      {records.map((item) => (
-        <div className="player-online-item" key={`${item.server_id}-${item.reported_at}`}>
-          <div className="player-online-head">
-            <strong>{item.server_name}</strong>
-            <StatusPill kind="success">在线</StatusPill>
-          </div>
-          <div className="player-online-meta">
-            <span>{item.current_map || '-'}</span>
-            <span>Ping {item.ping}</span>
-            <span>{formatChinaDateTime(item.reported_at, { seconds: false })}</span>
-          </div>
-          <div className="player-online-meta">
-            <span>{item.name}</span>
-            <span>{item.ip}</span>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function IpHistoryPanel({ entries }) {
-  if (!entries || entries.length === 0) return <EmptyBlock>暂无 IP 登录记录。</EmptyBlock>;
-
-  return (
-    <div className="ip-history-list">
-      {entries.map((entry) => (
-        <div className="ip-history-item" key={entry.ip}>
-          <div className="ip-history-header">
-            <code className="ip-history-ip">{entry.ip}</code>
-            <span className="ip-history-time">
-              {entry.last_seen ? formatChinaDateTime(entry.last_seen, { seconds: false }) : '-'}
-            </span>
-          </div>
-
-          {/* 登录过的服务器 */}
-          {entry.servers.length > 0 && (
-            <div className="ip-history-section">
-              <div className="ip-history-section-label">登录服务器（{entry.servers.length}）</div>
-              <div className="ip-history-tags">
-                {entry.servers.map((srv, idx) => (
-                  <span className="tag-badge info" key={idx} title={`${srv.source}: ${srv.player_name || '-'}`}>
-                    {srv.server_name}{srv.server_port ? `:${srv.server_port}` : ''}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* 同 IP 关联账号 */}
-          {entry.linked_accounts.length > 0 && (
-            <div className="ip-history-section">
-              <div className="ip-history-section-label ip-history-section-label--warn">
-                ⚠ 关联账号（{entry.linked_accounts.length}）
-              </div>
-              <div className="ip-history-linked">
-                {entry.linked_accounts.map((acc) => (
-                  <div className="ip-history-linked-item" key={acc.steam_id64}>
-                    <span className="ip-history-linked-name">{acc.player_name || '-'}</span>
-                    <code className="ip-history-linked-id">{acc.steam_id64}</code>
-                    {acc.server_name ? <span className="tag-badge muted">{acc.server_name}</span> : null}
-                    <span className="ip-history-linked-time">{acc.last_seen ? formatChinaDateTime(acc.last_seen, { seconds: false }) : '-'}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function InternalProfilePanel({ profile, canEdit, saving, onSave }) {
+// ── Appeal Detail Popup ──
+function AppealDetailPopup({item, onClose, onAction, token, toast}) {
+  const [acting, setActing] = useState(false);
   const [note, setNote] = useState('');
-  const [tagsText, setTagsText] = useState('');
+  if (!item) return null;
+  const isPending = item.status === 'pending';
 
-  useEffect(() => {
-    React.startTransition(() => {
-      setNote(profile?.note ?? '');
-      setTagsText(tagsToText(profile?.tags ?? []));
-    });
-  }, [profile]);
+  async function doReview(status) { if(acting)return;setActing(true);
+    try{await api.rejectBanAppeal(token,item.id,{status,review_note:note.trim()||null});toast({title:'审核成功'});onAction();onClose();}catch(e){toast({title:'操作失败',message:e.message,tone:'danger'})}finally{setActing(false)} }
 
-  if (!canEdit) {
-    if (!profile || (!profile.note && (!profile.tags || profile.tags.length === 0))) {
-      return <EmptyBlock>暂无内部备注。</EmptyBlock>;
-    }
-    return (
-      <div className="player-side-stack">
-        {profile.tags?.length ? (
-          <div className="player-tag-list">
-            {profile.tags.map((tag) => <span className="player-tag" key={tag}>{tag}</span>)}
-          </div>
-        ) : null}
-        {profile.note ? <div className="player-detail-note">{profile.note}</div> : null}
-        <div className="player-detail-muted">
-          {profile.updated_by ? `${profile.updated_by} · ` : ''}{formatChinaDateTime(profile.updated_at, { seconds: false })}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="player-internal-editor">
-      <textarea
-        className="form-control player-internal-note"
-        value={note}
-        onChange={(event) => setNote(event.target.value)}
-        placeholder="内部备注"
-        rows={4}
-      />
-      <input
-        className="form-control"
-        value={tagsText}
-        onChange={(event) => setTagsText(event.target.value)}
-        placeholder="标签，用逗号分隔"
-      />
-      <button
-        className="btn btn-primary"
-        type="button"
-        disabled={saving}
-        onClick={() => onSave({ note, tags: textToTags(tagsText) })}
-      >
-        {saving ? '保存中...' : '保存备注'}
-      </button>
+  return (<Modal open={true} title="申诉详情" onClose={onClose} footer={<><button className="btn btn-outline" onClick={onClose}>关闭</button>
+    {isPending&&<><button className="action-btn action-btn-success" onClick={()=>doReview('approved')} disabled={acting}>通过</button>
+    <button className="action-btn action-btn-danger" onClick={()=>doReview('rejected')} disabled={acting}>驳回</button></>}
+  </>} >
+    {isPending&&<div className="form-group" style={{marginBottom:12}}><label>审核备注（选填）</label><textarea className="form-control" rows={2} value={note} onChange={e=>setNote(e.target.value)} placeholder="可选，向玩家说明处理结果" style={{resize:'vertical',minHeight:50}}/></div>}
+    <div className="detail-grid">
+      <span className="detail-label">状态</span><span className="detail-value"><StatusPill kind={stKind(item.status,'appeal')}>{stLabel(item.status)}</StatusPill></span>
+      <span className="detail-label">玩家</span><span className="detail-value fw-600">{item.player_name}</span>
+      <span className="detail-label">申诉理由</span><span className="detail-value pre">{item.appeal_reason}</span>
+      {item.ban_reason&&<><span className="detail-label">关联封禁</span><span className="detail-value">{item.ban_reason}</span></>}
+      <span className="detail-label">提交时间</span><span className="detail-value">{formatChinaDateTime(item.created_at)}</span>
+      {item.reviewed_by&&<><span className="detail-label">审核人</span><span className="detail-value">{item.reviewed_by}</span></>}
+      {item.review_note&&<><span className="detail-label">审核备注</span><span className="detail-value pre">{item.review_note}</span></>}
     </div>
-  );
+  </Modal>);
 }
 
-function EvidenceEditor({ file, onSave, saving }) {
-  const [editing, setEditing] = useState(false);
-  const [note, setNote] = useState(file.note || '');
-  const [tagsText, setTagsText] = useState(tagsToText(file.tags ?? []));
+// ── Report Detail Popup ──
+function ReportDetailPopup({item, onClose, onAction, token, toast}) {
+  const [acting, setActing] = useState(false);
+  const [note, setNote] = useState('');
+  if (!item) return null;
+  const isPending = item.status === 'pending';
 
-  useEffect(() => {
-    React.startTransition(() => {
-      setNote(file.note || '');
-      setTagsText(tagsToText(file.tags ?? []));
-    });
-  }, [file]);
+  async function doReview(status) { if(acting)return;setActing(true);
+    try{await api.reviewPlayerReport(token,item.id,{status,review_note:note.trim()||null});toast({title:'审核成功'});onAction();onClose();}catch(e){toast({title:'操作失败',message:e.message,tone:'danger'})}finally{setActing(false)} }
 
-  if (!editing) {
-    return (
-      <button className="action-btn" type="button" onClick={() => setEditing(true)}>
-        编辑
-      </button>
-    );
-  }
-
-  return (
-    <div className="player-evidence-editor">
-      <input
-        className="form-control"
-        value={tagsText}
-        onChange={(event) => setTagsText(event.target.value)}
-        placeholder="标签，用逗号分隔"
-      />
-      <textarea
-        className="form-control"
-        value={note}
-        onChange={(event) => setNote(event.target.value)}
-        placeholder="证据备注"
-        rows={2}
-      />
-      <div className="player-evidence-editor-actions">
-        <button
-          className="action-btn"
-          type="button"
-          disabled={saving}
-          onClick={async () => {
-            const saved = await onSave(file, { note, tags: textToTags(tagsText) });
-            if (saved !== false) setEditing(false);
-          }}
-        >
-          {saving ? '保存中...' : '保存'}
-        </button>
-        <button className="action-btn" type="button" disabled={saving} onClick={() => setEditing(false)}>
-          取消
-        </button>
-      </div>
+  return (<Modal open={true} title="举报详情" onClose={onClose} footer={<><button className="btn btn-outline" onClick={onClose}>关闭</button>
+    {isPending&&<><button className="action-btn action-btn-success" onClick={()=>doReview('approved')} disabled={acting}>通过（封禁）</button><button className="action-btn action-btn-danger" onClick={()=>doReview('rejected')} disabled={acting}>驳回</button></>}
+  </>} >
+    {isPending&&<div className="form-group" style={{marginBottom:12}}><label>审核备注（选填）</label><textarea className="form-control" rows={2} value={note} onChange={e=>setNote(e.target.value)} placeholder="可选，审核备注" style={{resize:'vertical',minHeight:50}}/></div>}
+    <div className="detail-grid">
+      <span className="detail-label">状态</span><span className="detail-value"><StatusPill kind={stKind(item.status,'report')}>{stLabel(item.status)}</StatusPill></span>
+      <span className="detail-label">被举报玩家</span><span className="detail-value fw-600">{item.target_player_name||'-'}</span>
+      <span className="detail-label">举报理由</span><span className="detail-value pre">{item.report_reason}</span>
+      {item.reporter_contact&&<><span className="detail-label">举报人联系方式</span><span className="detail-value">{item.reporter_contact}</span></>}
+      <span className="detail-label">提交时间</span><span className="detail-value">{formatChinaDateTime(item.created_at)}</span>
+      {item.reviewed_by&&<><span className="detail-label">审核人</span><span className="detail-value">{item.reviewed_by}</span></>}
+      {item.review_note&&<><span className="detail-label">审核备注</span><span className="detail-value pre">{item.review_note}</span></>}
     </div>
-  );
+  </Modal>);
 }
 
-function EvidencePanel({ files, typeFilter, tagFilter, onTypeFilterChange, onTagFilterChange, onSave, savingFileId, canEdit }) {
-  const allTags = useMemo(() => {
-    const tags = new Set();
-    files.forEach((file) => (file.tags ?? []).forEach((tag) => tags.add(tag)));
-    return Array.from(tags).sort((a, b) => a.localeCompare(b));
-  }, [files]);
+// ── Map Feedback Detail Popup ──
+function MapFeedbackDetailPopup({item, onClose, onAction, token, toast}) {
+  const [acting, setActing] = useState(false);
+  const [note, setNote] = useState('');
+  if (!item) return null;
+  const isPending = item.status === 'pending';
 
-  const filteredFiles = useMemo(() => files.filter((file) => {
-    if (typeFilter !== 'all' && file.category !== typeFilter && file.source_type !== typeFilter) return false;
-    if (tagFilter !== 'all' && !(file.tags ?? []).includes(tagFilter)) return false;
-    return true;
-  }), [files, typeFilter, tagFilter]);
+  async function doReview(status) { if(acting)return;setActing(true);
+    try{await api.reviewMapFeedback(token,item.id,{status,review_note:note.trim()||null});toast({title:'审核成功'});onAction();onClose();}catch(e){toast({title:'操作失败',message:e.message,tone:'danger'})}finally{setActing(false)} }
 
-  if (files.length === 0) return <EmptyBlock>暂无附件证据。</EmptyBlock>;
-
-  return (
-    <div className="player-evidence-list">
-      <div className="player-evidence-filters">
-        <select className="filter-select" value={typeFilter} onChange={(event) => onTypeFilterChange(event.target.value)}>
-          <option value="all">全部证据</option>
-          <option value="video">录像</option>
-          <option value="image">图片</option>
-          <option value="audio">录音</option>
-          <option value="ban">封禁证据</option>
-          <option value="appeal">申诉证据</option>
-          <option value="report">举报证据</option>
-        </select>
-        <select className="filter-select" value={tagFilter} onChange={(event) => onTagFilterChange(event.target.value)}>
-          <option value="all">全部标签</option>
-          {allTags.map((tag) => <option value={tag} key={tag}>{tag}</option>)}
-        </select>
-      </div>
-      {filteredFiles.slice(0, 10).map((file) => (
-        <FileItem key={`${file.source_type}-${file.id}`} file={file}>
-          <div className="player-evidence-side">
-            <div className="player-evidence-actions">
-              {file.url ? (
-                <a className="action-btn" href={file.url} target="_blank" rel="noopener noreferrer">
-                  {fileActionLabel(file.category)}
-                </a>
-              ) : (
-                <span className="ban-file-unavailable">文件服务未配置</span>
-              )}
-              {canEdit ? (
-                <EvidenceEditor
-                  file={file}
-                  onSave={onSave}
-                  saving={savingFileId === file.id}
-                />
-              ) : null}
-            </div>
-            {(file.tags?.length || file.note) ? (
-              <div className="player-evidence-meta">
-                {file.tags?.length ? (
-                  <div className="player-tag-list">
-                    {file.tags.map((tag) => <span className="player-tag" key={tag}>{tag}</span>)}
-                  </div>
-                ) : null}
-                {file.note ? <div className="player-evidence-note">{file.note}</div> : null}
-              </div>
-            ) : null}
-          </div>
-        </FileItem>
-      ))}
-      {filteredFiles.length === 0 ? <EmptyBlock>没有符合筛选条件的证据。</EmptyBlock> : null}
-      {filteredFiles.length > 10 ? <div className="player-detail-muted">还有 {filteredFiles.length - 10} 个附件未显示。</div> : null}
+  return (<Modal open={true} title="地图反馈详情" onClose={onClose} footer={<><button className="btn btn-outline" onClick={onClose}>关闭</button>
+    {isPending&&<><button className="action-btn action-btn-success" onClick={()=>doReview('resolved')} disabled={acting}>已解决</button><button className="action-btn action-btn-danger" onClick={()=>doReview('rejected')} disabled={acting}>驳回</button></>}
+  </>} >
+    {isPending&&<div className="form-group" style={{marginBottom:12}}><label>回复备注（选填）</label><textarea className="form-control" rows={2} value={note} onChange={e=>setNote(e.target.value)} placeholder="可选，向玩家说明处理结果" style={{resize:'vertical',minHeight:50}}/></div>}
+    <div className="detail-grid">
+      <span className="detail-label">状态</span><span className="detail-value"><StatusPill kind={stKind(item.status)}>{stLabel(item.status)}</StatusPill></span>
+      <span className="detail-label">反馈类型</span><span className="detail-value">{feedbackTypeLabel(item.feedback_type)}</span>
+      <span className="detail-label">详细内容</span><span className="detail-value pre">{item.detail}</span>
+      {item.steam_persona_name&&<><span className="detail-label">玩家昵称</span><span className="detail-value fw-600">{item.steam_persona_name}</span></>}
+      {item.contact&&<><span className="detail-label">联系方式</span><span className="detail-value">{item.contact}</span></>}
+      <span className="detail-label">提交时间</span><span className="detail-value">{formatChinaDateTime(item.created_at)}</span>
+      {item.reviewed_by&&<><span className="detail-label">审核人</span><span className="detail-value">{item.reviewed_by}</span></>}
+      {item.review_note&&<><span className="detail-label">回复备注</span><span className="detail-value pre">{item.review_note}</span></>}
+      {item.reviewed_at&&<><span className="detail-label">审核时间</span><span className="detail-value">{formatChinaDateTime(item.reviewed_at)}</span></>}
     </div>
-  );
+  </Modal>);
 }
 
-function BansTable({ items }) {
-  if (items.length === 0) return <EmptyBlock>暂无封禁历史。</EmptyBlock>;
-  return (
-    <div className="table-responsive">
-      <table className="data-table player-record-table">
-        <thead>
-          <tr>
-            <th>状态</th>
-            <th>原因</th>
-            <th>时长</th>
-            <th>服务器</th>
-            <th>操作人</th>
-            <th>创建时间</th>
-            <th>解封时间</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((item) => (
-            <tr key={item.id}>
-              <td><StatusPill kind={statusKind(item.status, 'ban')}>{statusLabel(item.status)}</StatusPill></td>
-              <td className="text-ellipsis text-ellipsis-280" title={item.reason}>{item.reason}</td>
-              <td>{durationLabel(item.duration_minutes)}</td>
-              <td>{item.server_name || '-'}</td>
-              <td>{item.operator_name || '-'}</td>
-              <td>{formatChinaDateTime(item.created_at, { seconds: false })}</td>
-              <td>{item.removed_at ? formatChinaDateTime(item.removed_at, { seconds: false }) : '-'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+// ── Global Ban Popup ──
+function GlobalBanPopup({items, onClose}) {
+  if (!items||items.length===0) return null;
+  function banTypeLabel(t){const m={bhop_hack:'连跳作弊',cheat:'作弊',tool_assist:'辅助工具',other:'其他'};return m[t]||t||'-'}
+  function isPerma(e){return e&&e.startsWith('9999')}
+  function expLabel(e){if(!e)return'永久';if(isPerma(e))return'永久';return formatChinaDateTime(e,{seconds:false})}
+  return (<Modal open={true} title={`全球封禁详情 (${items.length} 条)`} onClose={onClose} wide footer={<button className="btn btn-outline" onClick={onClose}>关闭</button>}>
+    <div className="table-responsive"><table className="data-table"><thead><tr><th>类型</th><th>到期</th><th>备注</th><th>封禁时间</th><th>本地状态</th></tr></thead><tbody>
+      {items.map(item=>{const ban=item.ban;return(<tr key={ban.id}>
+        <td><StatusPill kind="danger">{banTypeLabel(ban.ban_type)}</StatusPill></td>
+        <td style={{whiteSpace:'nowrap'}}>{isPerma(ban.expires_on)?<span className="permanent-ban">永久</span>:expLabel(ban.expires_on)}</td>
+        <td className="text-ellipsis" style={{maxWidth:200}} title={ban.notes||''}>{ban.notes||'-'}</td>
+        <td style={{whiteSpace:'nowrap'}}>{formatChinaDateTime(ban.created_on,{seconds:false})}</td>
+        <td>{item.manual_unbanned?<StatusPill kind="default">已解封</StatusPill>:item.local_ban_id?<StatusPill kind="danger">已封禁</StatusPill>:<StatusPill kind="success">未封禁</StatusPill>}</td>
+      </tr>)})}
+    </tbody></table></div>
+  </Modal>);
 }
 
-function AppealsTable({ items }) {
-  if (items.length === 0) return <EmptyBlock>暂无申诉记录。</EmptyBlock>;
-  return (
-    <div className="table-responsive">
-      <table className="data-table player-record-table">
-        <thead>
-          <tr>
-            <th>状态</th>
-            <th>申诉理由</th>
-            <th>关联封禁</th>
-            <th>审核人</th>
-            <th>提交时间</th>
-            <th>处理时间</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((item) => (
-            <tr key={item.id}>
-              <td><StatusPill kind={statusKind(item.status, 'appeal')}>{statusLabel(item.status)}</StatusPill></td>
-              <td className="text-ellipsis text-ellipsis-260" title={item.appeal_reason}>{item.appeal_reason}</td>
-              <td className="text-ellipsis" style={{ maxWidth: 220 }} title={item.ban_reason || ''}>{item.ban_reason || '-'}</td>
-              <td>{item.reviewed_by || '-'}</td>
-              <td>{formatChinaDateTime(item.created_at, { seconds: false })}</td>
-              <td>{item.reviewed_at ? formatChinaDateTime(item.reviewed_at, { seconds: false }) : '-'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+// ── Tabs ──
+function StatusTab({detail, token, onRefresh, toast}) {
+  const [popup, setPopup] = useState(null);
+  return <>
+    <div className="card"><div className="card-header"><div><div className="card-title">历史封禁履历表</div><div className="card-sub">点击行查看详情并操作。</div></div></div><div className="card-body p-0">
+      {detail.bans.length===0?<Empty>暂无封禁记录。</Empty>:<div className="table-responsive"><table className="data-table player-record-table"><thead><tr><th>执行时间</th><th>封禁维度</th><th>时长</th><th>封禁理由</th><th>操作人</th><th>状态</th></tr></thead><tbody>
+        {detail.bans.map(item=><tr key={item.id} style={{cursor:'pointer'}} onClick={()=>setPopup({type:'ban',item})}>
+          <td style={{fontFamily:'var(--mono)',fontSize:'12px',whiteSpace:'nowrap'}}>{formatChinaDateTime(item.created_at,{seconds:false})}</td>
+          <td>{item.ban_type==='ip'?'账号+IP':'账号'}</td>
+          <td style={{color:item.status==='active'?'var(--danger-text)':'var(--text2)'}}>{durLabel(item.duration_minutes)}</td>
+          <td className="text-ellipsis" style={{maxWidth:240}} title={item.reason}>{item.reason}</td>
+          <td>{item.operator_name||'-'}</td>
+          <td><StatusPill kind={stKind(item.status,'ban')}>{stLabel(item.status)}</StatusPill></td>
+        </tr>)}
+      </tbody></table></div>}
+    </div></div>
+    <div className="card"><div className="card-header"><div><div className="card-title">社区白名单记录</div><div className="card-sub">点击行查看详情并审核。</div></div></div><div className="card-body p-0">
+      {detail.whitelist.length===0?<Empty>暂无白名单记录。</Empty>:<div className="table-responsive"><table className="data-table player-record-table"><thead><tr><th>提交时间</th><th>昵称</th><th>审核人</th><th>审核意见</th><th>状态</th></tr></thead><tbody>
+        {detail.whitelist.map(item=><tr key={item.id} style={{cursor:'pointer'}} onClick={()=>setPopup({type:'whitelist',item})}>
+          <td style={{fontFamily:'var(--mono)',fontSize:'12px',whiteSpace:'nowrap'}}>{formatChinaDateTime(item.applied_at,{seconds:false})}</td>
+          <td className="fw-600">{item.nickname}</td>
+          <td>{item.approved_by||item.rejected_by||item.revoked_by||'-'}</td>
+          <td className="text-ellipsis" style={{maxWidth:160}}>{item.approval_reason||item.rejection_reason||'-'}</td>
+          <td><StatusPill kind={stKind(item.status,'whitelist')}>{stLabel(item.status)}</StatusPill></td>
+        </tr>)}
+      </tbody></table></div>}
+    </div></div>
+    {popup?.type==='ban'&&<BanDetailPopup item={popup.item} onClose={()=>setPopup(null)} onAction={onRefresh} token={token} toast={toast}/>}
+    {popup?.type==='whitelist'&&<WhitelistDetailPopup item={popup.item} onClose={()=>setPopup(null)} onAction={onRefresh} token={token} toast={toast}/>}
+  </>;
 }
 
-function ReportsTable({ items }) {
-  if (items.length === 0) return <EmptyBlock>暂无举报记录。</EmptyBlock>;
-  return (
-    <div className="table-responsive">
-      <table className="data-table player-record-table">
-        <thead>
-          <tr>
-            <th>状态</th>
-            <th>举报理由</th>
-            <th>联系方式</th>
-            <th>审核人</th>
-            <th>提交时间</th>
-            <th>处理时间</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((item) => (
-            <tr key={item.id}>
-              <td><StatusPill kind={statusKind(item.status, 'report')}>{statusLabel(item.status)}</StatusPill></td>
-              <td className="text-ellipsis" style={{ maxWidth: 300 }} title={item.report_reason}>{item.report_reason}</td>
-              <td className="text-ellipsis" style={{ maxWidth: 180 }} title={item.reporter_contact || ''}>{item.reporter_contact || '-'}</td>
-              <td>{item.reviewed_by || '-'}</td>
-              <td>{formatChinaDateTime(item.created_at, { seconds: false })}</td>
-              <td>{item.reviewed_at ? formatChinaDateTime(item.reviewed_at, { seconds: false }) : '-'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+function NetworkTab({detail}) {
+  const ipHistory = detail.ip_history || [];
+  const onlineRecords = detail.online_records || [];
+  return <>
+    <div className="card"><div className="card-header"><div><div className="card-title">深度 IP 交叉与设备追踪表</div><div className="card-sub"><strong style={{color:'var(--accent)'}}>逆向检索同 IP 的关联 Steam 账号</strong>，打击小号。</div></div></div><div className="card-body p-0">
+      {ipHistory.length===0?<Empty>暂无 IP 登录记录。</Empty>:<div className="table-responsive"><table className="data-table tree-table"><thead><tr><th>IP</th><th>首次/最后活跃</th><th>服务器</th><th>关联账号</th></tr></thead><tbody>
+        {ipHistory.map(entry=>{const lb=entry.linked_accounts?.filter(a=>a.has_local_ban).length||0;return <React.Fragment key={entry.ip}>
+          <tr><td><code className="steam-id" style={{fontWeight:700,fontSize:'13px'}}>{entry.ip}</code></td>
+          <td style={{fontFamily:'var(--mono)',color:'var(--text2)',fontSize:'12px'}}>首:{entry.first_seen?formatChinaDateTime(entry.first_seen,{seconds:false}):'-'}<br/>末:{entry.last_seen?formatChinaDateTime(entry.last_seen,{seconds:false}):'-'}</td>
+          <td style={{color:'var(--text2)'}}>{entry.servers?.map(s=>`${s.server_name}${s.server_port?`:${s.server_port}`:''}`).join(', ')||'-'}</td>
+          <td>{entry.linked_accounts?.length>0?<span style={{color:lb>0?'var(--danger-text)':'var(--text2)',fontWeight:600}}>⚠ {entry.linked_accounts.length}个关联{lb>0?`（${lb}个封禁）`:''}</span>:<span style={{color:'var(--text3)'}}>无</span>}</td></tr>
+          {entry.linked_accounts?.map(acc=><tr key={acc.steam_id64}><td className="nested">└─关联</td><td style={{fontSize:'11px',color:'var(--text3)'}}>访问 {acc.access_count||0}次</td><td>{acc.servers?.join(', ')||'-'}</td>
+          <td><span style={{fontWeight:600}}>{acc.player_name||'(未知)'}</span> <code className="steam-id" style={{fontSize:'11px'}}>{acc.steam_id64}</code>{acc.has_local_ban&&<StatusPill kind="danger" style={{marginLeft:4,padding:'2px 6px'}}>有封禁</StatusPill>}</td></tr>)}
+        </React.Fragment>})}
+      </tbody></table></div>}
+    </div></div>
+    <div className="card"><div className="card-header"><div><div className="card-title">服务器会话与在线记录</div></div></div><div className="card-body p-0">
+      {onlineRecords.length===0?<Empty>暂无在线记录。</Empty>:<div className="table-responsive"><table className="data-table player-record-table"><thead><tr><th>服务器</th><th>上报时间</th><th>IP</th><th>Ping</th><th>地图</th></tr></thead><tbody>
+        {onlineRecords.map((item,i)=><tr key={`${item.server_id}-${item.reported_at}-${i}`}>
+          <td className="fw-600">{item.server_name}</td><td style={{fontFamily:'var(--mono)',fontSize:'12px',whiteSpace:'nowrap'}}>{formatChinaDateTime(item.reported_at,{seconds:false})}</td>
+          <td className="steam-id">{item.ip}</td><td>{item.ping}</td><td>{item.current_map||'-'}</td></tr>)}
+      </tbody></table></div>}
+    </div></div>
+  </>;
 }
 
-function AdminActionsTable({ adminActions, auditLogs }) {
-  const rows = [
-    ...adminActions.map((item) => ({
-      key: `admin-${item.module}-${item.action}-${item.created_at}`,
-      type: '管理日志',
-      title: `${item.module} / ${item.action}`,
-      detail: item.target_detail,
-      actor: item.operator_name,
-      source: 'admin_logs',
-      status: '',
-      time: item.created_at,
-    })),
-    ...auditLogs.map((item) => ({
-      key: `audit-${item.id}`,
-      type: '审计日志',
-      title: item.operation,
-      detail: item.message || item.reason || item.player_name || item.target,
-      actor: item.operator_name,
-      source: item.source,
-      status: item.success ? 'success' : 'failed',
-      time: item.created_at,
-    })),
-  ].sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
-
-  if (rows.length === 0) return <EmptyBlock>暂无管理员操作历史。</EmptyBlock>;
-
-  return (
-    <div className="table-responsive">
-      <table className="data-table player-record-table">
-        <thead>
-          <tr>
-            <th>类型</th>
-            <th>操作</th>
-            <th>详情</th>
-            <th>操作人</th>
-            <th>来源</th>
-            <th>时间</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((item) => (
-            <tr key={item.key}>
-              <td>{item.type}</td>
-              <td>{item.title}</td>
-              <td className="text-ellipsis" style={{ maxWidth: 320 }} title={item.detail}>{shortDescription(item.detail)}</td>
-              <td>{item.actor || '-'}</td>
-              <td>
-                {item.status ? (
-                  <StatusPill kind={statusKind(item.status, 'audit')}>{sourceLabel(item.source)}</StatusPill>
-                ) : sourceLabel(item.source)}
-              </td>
-              <td>{formatChinaDateTime(item.time, { seconds: false })}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+function BehaviorTab({detail, token, onRefresh, toast}) {
+  const [popup, setPopup] = useState(null);
+  const mf = detail.map_feedback || [];
+  return <>
+    <div className="lower-grid">
+      <div className="card"><div className="card-header"><div><div className="card-title">玩家自主申诉记录</div><div className="card-sub">点击行查看详情并审核。</div></div></div><div className="card-body p-0">
+        {detail.appeals.length===0?<Empty>暂无申诉记录。</Empty>:<div className="table-responsive"><table className="data-table player-record-table"><thead><tr><th>提交时间</th><th>申诉理由</th><th>关联封禁</th><th>审核人</th><th>状态</th></tr></thead><tbody>
+          {detail.appeals.map(item=><tr key={item.id} style={{cursor:'pointer'}} onClick={()=>setPopup({type:'appeal',item})}>
+            <td style={{fontFamily:'var(--mono)',fontSize:'12px',whiteSpace:'nowrap'}}>{formatChinaDateTime(item.created_at,{seconds:false})}</td>
+            <td className="text-ellipsis" style={{maxWidth:180}} title={item.appeal_reason}>{item.appeal_reason}</td>
+            <td className="text-ellipsis" style={{maxWidth:140}} title={item.ban_reason||''}>{item.ban_reason||'-'}</td>
+            <td>{item.reviewed_by||'-'}</td>
+            <td><StatusPill kind={stKind(item.status,'appeal')}>{stLabel(item.status)}</StatusPill></td>
+          </tr>)}
+        </tbody></table></div>}
+      </div></div>
+      <div className="card"><div className="card-header"><div><div className="card-title">玩家被举报记录</div><div className="card-sub">点击行查看详情并审核。</div></div></div><div className="card-body p-0">
+        {detail.reports.length===0?<Empty>暂无举报记录。</Empty>:<table className="data-table"><thead><tr><th>举报时间</th><th>理由</th><th>状态</th></tr></thead><tbody>
+          {detail.reports.map(item=><tr key={item.id} style={{cursor:'pointer'}} onClick={()=>setPopup({type:'report',item})}>
+            <td style={{fontFamily:'var(--mono)',fontSize:'12px',whiteSpace:'nowrap'}}>{formatChinaDateTime(item.created_at,{seconds:false})}</td>
+            <td className="text-ellipsis" style={{maxWidth:180}}>{item.report_reason}</td>
+            <td><StatusPill kind={stKind(item.status,'report')}>{stLabel(item.status)}</StatusPill></td>
+          </tr>)}
+        </tbody></table>}
+      </div></div>
     </div>
-  );
+    <div className="card"><div className="card-header"><div><div className="card-title">地图反馈记录</div><div className="card-sub">点击行查看详情并快捷回复。</div></div></div><div className="card-body p-0">
+      {mf.length===0?<Empty>暂无地图反馈记录。</Empty>:<div className="table-responsive"><table className="data-table player-record-table"><thead><tr><th>提交时间</th><th>反馈类型</th><th>详细内容</th><th>审核人</th><th>状态</th></tr></thead><tbody>
+        {mf.map(item=><tr key={item.id} style={{cursor:'pointer'}} onClick={()=>setPopup({type:'feedback',item})}>
+          <td style={{fontFamily:'var(--mono)',fontSize:'12px',whiteSpace:'nowrap'}}>{formatChinaDateTime(item.created_at,{seconds:false})}</td>
+          <td><StatusPill kind={item.feedback_type==='broken'?'danger':item.feedback_type==='missing'?'warning':'default'}>{feedbackTypeLabel(item.feedback_type)}</StatusPill></td>
+          <td className="text-ellipsis" style={{maxWidth:240}} title={item.detail}>{item.detail}</td>
+          <td>{item.reviewed_by||'-'}</td>
+          <td><StatusPill kind={stKind(item.status)}>{stLabel(item.status)}</StatusPill></td>
+        </tr>)}
+      </tbody></table></div>}
+    </div></div>
+    <div className="card"><div className="card-header"><div><div className="card-title">物理证据文件与媒体库</div></div></div><div className="card-body">
+      {detail.evidence_files.length===0?<Empty>暂无附件证据。</Empty>:<div className="table-responsive"><table className="data-table"><thead><tr><th>文件名称</th><th>归属</th><th>尺寸</th><th>上传时间</th></tr></thead><tbody>
+        {detail.evidence_files.map(file=><tr key={`${file.source_type}-${file.id}`}>
+          <td style={{fontFamily:'var(--mono)',fontWeight:600,fontSize:'12px'}}>{file.file_name}</td><td>{file.source_label}</td>
+          <td style={{fontFamily:'var(--mono)'}}>{(file.file_size/1024/1024).toFixed(1)} MB</td>
+          <td style={{fontFamily:'var(--mono)',fontSize:'12px'}}>{formatChinaDateTime(file.uploaded_at,{seconds:false})}</td>
+        </tr>)}
+      </tbody></table></div>}
+    </div></div>
+    {popup?.type==='appeal'&&<AppealDetailPopup item={popup.item} onClose={()=>setPopup(null)} onAction={onRefresh} token={token} toast={toast}/>}
+    {popup?.type==='report'&&<ReportDetailPopup item={popup.item} onClose={()=>setPopup(null)} onAction={onRefresh} token={token} toast={toast}/>}
+    {popup?.type==='feedback'&&<MapFeedbackDetailPopup item={popup.item} onClose={()=>setPopup(null)} onAction={onRefresh} token={token} toast={toast}/>}
+  </>;
 }
+
+function AuditTab({detail}) {
+  const aa = detail.admin_actions || [];
+  const al = detail.audit_logs || [];
+  return <div className="lower-grid">
+    <div className="card"><div className="card-header"><div><div className="card-title">玩家 Web 端操作日志</div></div></div><div className="card-body">
+      {aa.length===0?<Empty>暂无操作日志。</Empty>:<div className="log-timeline">{aa.slice(0,20).map((item,i)=><div className="log-item" key={`admin-${i}`}><div className="log-meta"><span>{formatChinaDateTime(item.created_at,{seconds:false})}</span><span>IP: {item.ip_address||'-'}</span></div><div className="log-content">{item.module}/{item.action}: {item.target_detail}</div></div>)}</div>}
+    </div></div>
+    <div className="card"><div className="card-header"><div><div className="card-title">管理员审计记录</div></div></div><div className="card-body">
+      {al.length===0?<Empty>暂无审计记录。</Empty>:<div className="log-timeline">{al.slice(0,20).map((item,i)=><div className={`log-item ${!item.success?'critical':''}`} key={`audit-${item.id||i}`}><div className="log-meta"><span>{formatChinaDateTime(item.created_at,{seconds:false})}</span><span style={{color:'var(--text)'}}>操作人: {item.operator_name||'-'}</span></div><div className="log-content" style={!item.success?{borderLeft:'3px solid var(--danger-dot)'}:undefined}><strong>{item.operation}</strong>{item.message?`: ${item.message}`:''}</div></div>)}</div>}
+    </div></div>
+  </div>;
+}
+
+const TABS = [{key:'status',label:'封禁与白名单'},{key:'network',label:'IP网络与在线轨迹'},{key:'behavior',label:'申诉、举报与反馈'},{key:'audit',label:'全站双向审计'}];
 
 export function PlayerDetailPage() {
   const { session } = useAuth();
-  const { toast, toasts, dismiss: dismissToast } = useToast();
+  const { toast, toasts, dismiss } = useToast();
+  const queryClient = useQueryClient();
   const token = session?.token ?? null;
+  const canEdit = session?.role === 'developer' || session?.role === 'admin';
   const [steamInput, setSteamInput] = useState('');
   const [lastQuery, setLastQuery] = useState('');
+  const lastQueryRef = useRef('');
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [category, setCategory] = useState('all');
+  const [tab, setTab] = useState('status');
   const [internalSaving, setInternalSaving] = useState(false);
-  const [evidenceTypeFilter, setEvidenceTypeFilter] = useState('all');
-  const [evidenceTagFilter, setEvidenceTagFilter] = useState('all');
-  const [savingEvidenceId, setSavingEvidenceId] = useState(null);
-  const canManageInternal = session?.role === 'developer' || session?.role === 'admin';
+  const [globalBans, setGlobalBans] = useState(null);
+  const [showGlobalBans, setShowGlobalBans] = useState(false);
 
-  async function loadDetail(input) {
-    const query = input.trim();
-    if (!query) {
-      setError('请输入 SteamID。');
-      return;
-    }
-    try {
-      setLoading(true);
-      setError('');
-      const result = await api.playerDetail(token, query);
-      setDetail(result.data);
-      setLastQuery(query);
-      setCategory('all');
-      setEvidenceTypeFilter('all');
-      setEvidenceTagFilter('all');
-    } catch (requestError) {
-      setDetail(null);
-      setError(requestError.message || '加载玩家详情失败');
-    } finally {
-      setLoading(false);
-    }
+  // 加载玩家详情
+  async function loadDetail(input, resetTab = true) {
+    const q = input.trim(); if(!q){setError('请输入 SteamID。');return;}
+    try{setLoading(true);setError('');const r=await api.playerDetail(token,q);setDetail(r.data);setLastQuery(q);lastQueryRef.current=q;if(resetTab)setTab('status');}catch(e){setDetail(null);setError(e.message||'加载失败');}finally{setLoading(false);}
+  }
+  function refreshDetail() { const q = lastQueryRef.current || lastQuery; if(q) loadDetail(q, false); queryClient.invalidateQueries({queryKey:['whitelist']}); queryClient.invalidateQueries({queryKey:['bans']}); queryClient.invalidateQueries({queryKey:['banAppeals']}); queryClient.invalidateQueries({queryKey:['playerReports']}); queryClient.invalidateQueries({queryKey:['mapFeedback']}); }
+  // 内部备注
+  async function handleSaveInternal(body) {
+    if(!detail)return;try{setInternalSaving(true);const r=await api.updatePlayerInternalProfile(token,detail.profile.steamid64,body);setDetail(p=>p?{...p,internal_profile:r.item}:p);toast({title:'保存成功'});}catch(e){toast({title:'保存失败',message:e.message,tone:'danger'});}finally{setInternalSaving(false);}
   }
 
-  async function handleSaveInternalProfile(body) {
-    if (!detail) return;
-    try {
-      setInternalSaving(true);
-      setError('');
-      const result = await api.updatePlayerInternalProfile(token, detail.profile.steamid64, body);
-      setDetail((prev) => prev ? { ...prev, internal_profile: result.item } : prev);
-      toast({ title: '保存成功', message: '内部备注已更新。' });
-    } catch (requestError) {
-      toast({ title: '保存失败', message: requestError.message || '保存内部备注失败', tone: 'danger' });
-    } finally {
-      setInternalSaving(false);
-    }
-  }
+  // 查询全球封禁
+  useEffect(()=>{
+    if(!detail?.profile?.steamid64){React.startTransition(()=>setGlobalBans(null));return;}
+    let c=false;(async()=>{try{const r=await api.searchGlobalBans(token,{steam_input:detail.profile.steamid64});if(!c)setGlobalBans(r.items||[]);}catch{if(!c)setGlobalBans(null);}})();
+    return ()=>{c=true;};
+  },[detail?.profile?.steamid64,token]);
 
-  async function handleSaveEvidence(file, body) {
-    try {
-      setSavingEvidenceId(file.id);
-      setError('');
-      const result = await api.updateEvidenceMetadata(token, file.source_type, file.id, body);
-      setDetail((prev) => {
-        if (!prev) return prev;
-        const evidenceFiles = prev.evidence_files.map((item) => (
-          item.id === file.id && item.source_type === file.source_type
-            ? { ...item, tags: result.item.tags ?? [], note: result.item.note ?? '' }
-            : item
-        ));
-        return { ...prev, evidence_files: evidenceFiles };
-      });
-      return true;
-    } catch (requestError) {
-      setError(requestError.message || '保存证据元数据失败');
-      return false;
-    } finally {
-      setSavingEvidenceId(null);
-    }
-  }
+  const profile = detail?.profile;
+  const summary = detail?.summary;
+  const hasActiveGlobal = globalBans?.some(i=>{const e=i.ban.expires_on;if(!e||e.startsWith('9999'))return true;const d=new Date(e);return !isNaN(d.getTime())&&d>new Date();});
+  const hasExpiredGlobal = globalBans&&!hasActiveGlobal&&globalBans.length>0;
 
-  function handleSubmit(event) {
-    event.preventDefault();
-    loadDetail(steamInput);
-  }
+  return (<div id="player-detail" className="content-section active">
+    <div className="breadcrumb"><span>核心管理</span><span className="sep">›</span><span className="current">玩家全息档案</span></div>
+    <div className="page-header"><div><div className="page-title">玩家全息档案矩阵</div><div className="page-sub">封禁履历、IP交叉网络、操作留痕及所有证据工单。</div></div></div>
 
-  const filteredTimeline = useMemo(() => {
-    const items = detail?.timeline ?? [];
-    if (category === 'all') return items;
-    return items.filter((item) => item.category === category);
-  }, [detail, category]);
-
-  const activeBanText = detail ? `${detail.summary.active_ban_count}/${detail.summary.ban_count}` : '-';
-  const playerName = displayName(detail);
-
-  return (
-    <div id="player-detail" className="content-section active">
-      <div className="breadcrumb"><span>核心管理</span><span className="sep">›</span><span className="current">玩家详情</span></div>
-      <div className="page-header">
-        <div>
-          <div className="page-title">玩家详情</div>
-          <div className="page-sub">按 SteamID 聚合封禁、白名单、申诉、举报、在线上报、审计和附件证据。</div>
+    <div className="card player-search-card">
+      <form className="player-detail-search" onSubmit={e=>{e.preventDefault();loadDetail(steamInput);}}>
+        <div className="search-bar-box" style={{maxWidth:380}}>
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" width="15" height="15" style={{flexShrink:0,color:'var(--text3)'}}><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+          <input type="text" placeholder="SteamID64 / SteamID2 / SteamID3 / 主页/ 名称 / IP..." value={steamInput} onChange={e=>setSteamInput(e.target.value)}/>
         </div>
-      </div>
-
-      <div className="card player-search-card">
-        <form className="player-detail-search" onSubmit={handleSubmit}>
-          <input
-            className="form-control"
-            value={steamInput}
-            onChange={(event) => setSteamInput(event.target.value)}
-            placeholder="SteamID64 / STEAM_0 / [U:1] / Steam 主页链接"
-          />
-          <button className="btn btn-primary" type="submit" disabled={loading}>
-            {loading ? '查询中...' : '查询'}
-          </button>
-          {lastQuery ? (
-            <button className="btn btn-outline" type="button" disabled={loading} onClick={() => loadDetail(lastQuery)}>
-              刷新
-            </button>
-          ) : null}
-        </form>
-        {error ? <div className="player-detail-error">{error}</div> : null}
-      </div>
-
-      {!detail && !loading ? (
-        <div className="player-welcome-card">
-          <div className="player-welcome-inner">
-            <div className="player-welcome-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="28" height="28">
-                <circle cx="9" cy="7" r="4" />
-                <path d="M2 21v-2a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v2" />
-                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-                <path d="M21 21v-2a4 4 0 0 0-3-3.87" />
-              </svg>
-            </div>
-            <div className="player-welcome-title">查询玩家信息</div>
-            <div className="player-welcome-desc">在上方输入 SteamID，即可查看该玩家的封禁记录、白名单状态、申诉举报、在线记录和附件证据等完整信息。</div>
-            <div className="player-welcome-formats">
-              <div className="player-welcome-format-label">支持的输入格式</div>
-              <div className="player-welcome-format-list">
-                <span className="player-welcome-format-tag">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="13" height="13"><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg>
-                  SteamID64
-                </span>
-                <span className="player-welcome-format-tag">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="13" height="13"><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg>
-                  STEAM_0:0:xxxxx
-                </span>
-                <span className="player-welcome-format-tag">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="13" height="13"><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg>
-                  [U:1:xxxxx]
-                </span>
-                <span className="player-welcome-format-tag">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="13" height="13"><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg>
-                  Steam 个人主页链接
-                </span>
-              </div>
-            </div>
-            <div className="player-welcome-features">
-              <div className="player-welcome-feature">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="18" height="18"><circle cx="12" cy="12" r="10" /><path d="M4.93 4.93l14.14 14.14" /></svg>
-                <div className="player-welcome-feature-text">
-                  <strong>封禁查询</strong>
-                  <span>活跃/历史封禁记录</span>
-                </div>
-              </div>
-              <div className="player-welcome-feature">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="18" height="18"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>
-                <div className="player-welcome-feature-text">
-                  <strong>白名单状态</strong>
-                  <span>申请与审核状态</span>
-                </div>
-              </div>
-              <div className="player-welcome-feature">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="18" height="18"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>
-                <div className="player-welcome-feature-text">
-                  <strong>申诉举报</strong>
-                  <span>完整的申诉与举报历史</span>
-                </div>
-              </div>
-              <div className="player-welcome-feature">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="18" height="18"><rect x="2" y="3" width="20" height="14" rx="2" ry="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" /></svg>
-                <div className="player-welcome-feature-text">
-                  <strong>在线记录</strong>
-                  <span>当前/最近在线上报</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {detail ? (
-        <>
-          <section className="player-profile-panel">
-            <div className="player-profile-main">
-              <div className={`player-profile-avatar ${detail.summary.active_ban_count > 0 ? 'is-banned' : ''}`}>
-                {playerName.slice(0, 2).toUpperCase()}
-              </div>
-              <div className="player-profile-info">
-                <div className="player-profile-name">{playerName}</div>
-                <div className="player-profile-ids">
-                  <code>{detail.profile.steamid64}</code>
-                  {detail.profile.steamid ? <code>{detail.profile.steamid}</code> : null}
-                  {detail.profile.steamid3 ? <code>{detail.profile.steamid3}</code> : null}
-                </div>
-              </div>
-            </div>
-            <div className="player-profile-actions">
-              {detail.profile.profile_url ? (
-                <a className="btn btn-outline" href={detail.profile.profile_url} target="_blank" rel="noopener noreferrer">Steam 主页</a>
-              ) : null}
-              <StatusPill kind={detail.summary.active_ban_count > 0 ? 'danger' : 'success'}>
-                {detail.summary.active_ban_count > 0 ? '存在活跃封禁' : '无活跃封禁'}
-              </StatusPill>
-            </div>
-          </section>
-
-          <div className="player-detail-metrics">
-            <Metric label="封禁" value={activeBanText} sub="活跃 / 全部" />
-            <Metric label="白名单" value={statusLabel(detail.summary.whitelist_status)} />
-            <Metric label="申诉" value={detail.summary.appeal_count} />
-            <Metric label="举报" value={detail.summary.report_count} />
-            <Metric label="在线记录" value={detail.summary.online_server_count} sub={detail.summary.last_seen_at ? formatChinaDateTime(detail.summary.last_seen_at, { seconds: false }) : '无上报'} />
-            <Metric label="附件证据" value={detail.summary.evidence_file_count} />
-            <Metric label="操作日志" value={detail.summary.admin_action_count} />
-          </div>
-
-          <div className="player-detail-layout">
-            <section className="card player-timeline-card">
-              <div className="card-header">
-                <div>
-                  <div className="card-title">事件时间线</div>
-                  <div className="card-sub">{filteredTimeline.length} 条记录</div>
-                </div>
-              </div>
-              <div className="card-body">
-                <div className="tabs player-detail-tabs">
-                  {CATEGORY_FILTERS.map((filter) => (
-                    <button
-                      key={filter.value}
-                      className={`tab ${category === filter.value ? 'active' : ''}`}
-                      onClick={() => setCategory(filter.value)}
-                      type="button"
-                    >
-                      {filter.label}
-                    </button>
-                  ))}
-                </div>
-                <Timeline items={filteredTimeline} />
-              </div>
-            </section>
-
-            <aside className="player-detail-side">
-              <div className="card">
-                <div className="card-header">
-                  <div>
-                    <div className="card-title">内部备注</div>
-                    <div className="card-sub">后台可见</div>
-                  </div>
-                </div>
-                <div className="card-body">
-                  <InternalProfilePanel
-                    profile={detail.internal_profile}
-                    canEdit={canManageInternal}
-                    saving={internalSaving}
-                    onSave={handleSaveInternalProfile}
-                  />
-                </div>
-              </div>
-              <div className="card">
-                <div className="card-header">
-                  <div>
-                    <div className="card-title">白名单状态</div>
-                    <div className="card-sub">{detail.whitelist.length} 条记录</div>
-                  </div>
-                </div>
-                <div className="card-body"><WhitelistPanel records={detail.whitelist} /></div>
-              </div>
-              <div className="card">
-                <div className="card-header">
-                  <div>
-                    <div className="card-title">当前在线</div>
-                    <div className="card-sub">当前/最近上报</div>
-                  </div>
-                </div>
-                <div className="card-body"><OnlinePanel records={detail.online_records} /></div>
-              </div>
-              <div className="card">
-                <div className="card-header">
-                  <div>
-                    <div className="card-title">IP 登录历史</div>
-                    <div className="card-sub">{detail.ip_history?.length || 0} 个 IP · 含同 IP 关联账号</div>
-                  </div>
-                </div>
-                <div className="card-body"><IpHistoryPanel entries={detail.ip_history || []} /></div>
-              </div>
-              <div className="card">
-                <div className="card-header">
-                  <div>
-                    <div className="card-title">附件证据</div>
-                    <div className="card-sub">{detail.evidence_files.length} 个文件</div>
-                  </div>
-                </div>
-                <div className="card-body">
-                  <EvidencePanel
-                    files={detail.evidence_files}
-                    typeFilter={evidenceTypeFilter}
-                    tagFilter={evidenceTagFilter}
-                    onTypeFilterChange={setEvidenceTypeFilter}
-                    onTagFilterChange={setEvidenceTagFilter}
-                    onSave={handleSaveEvidence}
-                    savingFileId={savingEvidenceId}
-                    canEdit={canManageInternal}
-                  />
-                </div>
-              </div>
-            </aside>
-          </div>
-
-          <div className="player-records-grid">
-            <section className="card">
-              <div className="card-header">
-                <div>
-                  <div className="card-title">封禁历史</div>
-                  <div className="card-sub">{detail.bans.length} 条记录</div>
-                </div>
-              </div>
-              <div className="card-body p-0"><BansTable items={detail.bans} /></div>
-            </section>
-            <section className="card">
-              <div className="card-header">
-                <div>
-                  <div className="card-title">申诉记录</div>
-                  <div className="card-sub">{detail.appeals.length} 条记录</div>
-                </div>
-              </div>
-              <div className="card-body p-0"><AppealsTable items={detail.appeals} /></div>
-            </section>
-            <section className="card">
-              <div className="card-header">
-                <div>
-                  <div className="card-title">举报记录</div>
-                  <div className="card-sub">{detail.reports.length} 条记录</div>
-                </div>
-              </div>
-              <div className="card-body p-0"><ReportsTable items={detail.reports} /></div>
-            </section>
-            <section className="card">
-              <div className="card-header">
-                <div>
-                  <div className="card-title">管理员操作历史</div>
-                  <div className="card-sub">{detail.admin_actions.length + detail.audit_logs.length} 条记录</div>
-                </div>
-              </div>
-              <div className="card-body p-0"><AdminActionsTable adminActions={detail.admin_actions} auditLogs={detail.audit_logs} /></div>
-            </section>
-          </div>
-        </>
-      ) : null}
-      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+        <button className="btn btn-primary" type="submit" disabled={loading}>{loading?'检索中...':'检索档案'}</button>
+        {lastQuery&&<button className="btn btn-outline" type="button" disabled={loading} onClick={refreshDetail}>刷新</button>}
+      </form>
+      {error&&<div className="player-detail-error">{error}</div>}
     </div>
-  );
+
+    {!detail&&!loading?(<div className="player-welcome-card"><div className="player-welcome-inner"><div className="player-welcome-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" width="28" height="28"><circle cx="9" cy="7" r="4"/><path d="M2 21v-2a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v2"/></svg></div><div className="player-welcome-title">查询玩家全息档案</div><div className="player-welcome-desc">输入 SteamID 查询玩家的完整信息档案。</div></div></div>):null}
+
+    {detail?<>
+      <div className="profile-header-card">
+        <div className="avatar" style={{width:64,height:64,fontSize:24,flexShrink:0,background:summary.active_ban_count>0?'linear-gradient(135deg,var(--danger-text),#ff708f)':'linear-gradient(135deg,var(--accent),#f0a07a)',color:'#fff'}}>
+          {(profile.display_name||profile.steamid64).slice(0,2).toUpperCase()}
+        </div>
+        <div className="profile-main-info">
+          <div className="profile-name-row">
+            <div className="profile-name">{profile.display_name||profile.steamid64}</div>
+            {detail.internal_profile?.note&&<span className="badge-tag">⚠ {detail.internal_profile.note}</span>}
+            {canEdit&&<InternalBtn key={detail.profile.steamid64} detail={detail} onSave={handleSaveInternal} saving={internalSaving}/>}
+          </div>
+          {hasActiveGlobal&&<div className="status-banner" style={{background:'var(--danger-bg)',color:'var(--danger-text)',borderColor:'var(--danger-text)',cursor:'pointer'}} onClick={()=>setShowGlobalBans(true)}>
+            ⚠ 该玩家存在<strong>活跃的</strong>全球封禁记录 ({globalBans.length}条) — 点击查看详情
+          </div>}
+          {hasExpiredGlobal&&<div className="status-banner offline" style={{cursor:'pointer'}} onClick={()=>setShowGlobalBans(true)}>
+            ℹ 该玩家存在<strong>已过期的</strong>全球封禁记录 — 点击查看详情
+          </div>}
+          <div className={`status-banner offline`}>
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" style={{width:14,height:14}}><circle cx="8" cy="8" r="6"/><path d="M8 4v4l2 2"/></svg>
+            {summary.last_seen_at?`最后活跃: ${formatChinaDateTime(summary.last_seen_at,{seconds:false})}`:'暂无在线记录'}
+            {summary.active_ban_count>0?` · 存在 ${summary.active_ban_count} 条活跃封禁`:' · 无活跃封禁'}
+          </div>
+          <div className="id-grid">
+            <div className="id-item"><span className="id-label">SteamID64</span><code className="steam-id" style={{fontSize:'13px',fontWeight:600}}>{profile.steamid64}</code></div>
+            {profile.steamid&&<div className="id-item"><span className="id-label">SteamID2</span><code className="steam-id" style={{color:'var(--text2)'}}>{profile.steamid}</code></div>}
+            {profile.steamid3&&<div className="id-item"><span className="id-label">SteamID3</span><code className="steam-id" style={{color:'var(--text2)'}}>{profile.steamid3}</code></div>}
+          </div>
+        </div>
+      </div>
+
+      <div className="profile-tabs">{TABS.map(t=><button key={t.key} className={`profile-tab ${tab===t.key?'active':''}`} onClick={()=>setTab(t.key)} type="button">{t.label}</button>)}</div>
+      <div className="profile-tab-pane active">
+        {tab==='status'&&<StatusTab detail={detail} token={token} onRefresh={refreshDetail} toast={toast}/>}
+        {tab==='network'&&<NetworkTab detail={detail}/>}
+        {tab==='behavior'&&<BehaviorTab detail={detail} token={token} onRefresh={refreshDetail} toast={toast}/>}
+        {tab==='audit'&&<AuditTab detail={detail}/>}
+      </div>
+    </>:null}
+
+    {showGlobalBans&&<GlobalBanPopup items={globalBans||[]} onClose={()=>setShowGlobalBans(false)}/>}
+    <ToastContainer toasts={toasts} onDismiss={dismiss}/>
+  </div>);
+}
+
+function InternalBtn({detail, onSave, saving}) {
+  const [open, setOpen] = useState(false);
+  const [note, setNote] = useState(detail.internal_profile?.note??'');
+  const [tt, setTt] = useState(tagsToText(detail.internal_profile?.tags??[]));
+  if(!open)return <button className="btn btn-outline" style={{padding:'4px 10px',fontSize:'11.5px',marginLeft:'auto'}} onClick={()=>setOpen(true)}>✎ 编辑备注</button>;
+  return <div style={{marginLeft:'auto',display:'flex',flexDirection:'column',gap:6,width:'100%',maxWidth:400}}>
+    <input className="form-control" value={note} onChange={e=>setNote(e.target.value)} placeholder="内部备注" style={{fontSize:'12.5px'}}/>
+    <div style={{display:'flex',gap:6}}>
+      <input className="form-control" value={tt} onChange={e=>setTt(e.target.value)} placeholder="标签" style={{fontSize:'12.5px',flex:1}}/>
+      <button className="btn btn-primary btn-sm" disabled={saving} onClick={()=>{onSave({note,tags:textToTags(tt)});setOpen(false);}}>{saving?'保存中...':'保存'}</button>
+      <button className="btn btn-outline btn-sm" onClick={()=>setOpen(false)}>取消</button>
+    </div>
+  </div>;
 }

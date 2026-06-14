@@ -400,7 +400,7 @@ pub fn router(
             get(access::list_access_logs),
         )
         // -- global bans --
-        .route("/api/global-bans", get(global_ban::list_global_bans))
+        .route("/api/global-bans", get(global_ban::list_global_bans).post(global_ban::search_player_bans))
         .route("/api/global-bans/sync", post(global_ban::trigger_sync))
         .route("/api/global-bans/:kzt_ban_id/unban", post(global_ban::manual_unban_global_ban))
         // -- notifications --

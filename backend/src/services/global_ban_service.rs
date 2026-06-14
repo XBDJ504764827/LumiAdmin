@@ -198,6 +198,96 @@ pub async fn fetch_live_global_bans(
     })
 }
 
+/// 按 SteamID 搜索玩家全球封禁
+/// 先查本地 global_bans 表（缓存），再查 KZTimer API（实时）
+/// 返回结果合并，并标记数据来源
+#[derive(Debug, Serialize)]
+pub struct PlayerBanSearchResult {
+    pub items: Vec<LiveBanItem>,
+    /// 数据来源：cached=本地缓存, live=实时API, both=两者都有
+    pub source: String,
+}
+
+pub async fn search_player_bans(
+    db: &Database,
+    resolver: &crate::services::steam_service::SteamResolver,
+    steam_input: &str,
+) -> anyhow::Result<PlayerBanSearchResult> {
+    let identity = resolver.resolve(steam_input).await?;
+    let steamid64 = &identity.steamid64;
+
+    let mut items: Vec<LiveBanItem> = Vec::new();
+    let source: String;
+
+    // 1) 先查本地 global_bans 表（缓存，快速返回）
+    let local_rows: Vec<(i32, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<i32>, Option<Uuid>, bool)> = sqlx::query_as(
+        r#"SELECT kzt_ban_id, ban_type, notes, stats, expires_on, created_on, updated_on, server_id, local_ban_id, manual_unbanned
+           FROM global_bans WHERE steam_id64 = $1 ORDER BY created_on DESC LIMIT 100"#,
+    )
+    .bind(steamid64)
+    .fetch_all(&db.pool)
+    .await?;
+
+    // 2) 同时查 KZTimer API 获取最新数据（后台查询，确保数据新鲜）
+    let kzt_url = format!(
+        "https://kztimerglobal.com/api/v2.0/bans?steamid64={}&limit=100&offset=0",
+        steamid64
+    );
+    let kzt_result = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        crate::http_client::http_client().get(&kzt_url).send(),
+    )
+    .await;
+
+    let kzt_bans: Vec<KZTBan> = match kzt_result {
+        Ok(Ok(resp)) if resp.status().is_success() => resp.json().await.unwrap_or_default(),
+        _ => Vec::new(),
+    };
+
+    if !kzt_bans.is_empty() {
+        // 有实时数据 → 以 KZTimer API 为主，合并本地状态
+        source = if !local_rows.is_empty() { "both" } else { "live" }.to_string();
+        for ban in &kzt_bans {
+            let local = local_rows.iter().find(|(kzt_id, _, _, _, _, _, _, _, _, _)| *kzt_id as i64 == ban.id);
+            let (local_ban_id, manual_unbanned) = match local {
+                Some((_, _, _, _, _, _, _, _, lid, mu)) => (*lid, *mu),
+                None => (None, false),
+            };
+            items.push(LiveBanItem {
+                ban: ban.clone(),
+                local_ban_id,
+                manual_unbanned,
+            });
+        }
+    } else if !local_rows.is_empty() {
+        // KZTimer API 超时或失败 → 使用本地缓存
+        source = "cached".to_string();
+        for (kzt_ban_id, ban_type, notes, stats, expires_on, created_on, updated_on, server_id, local_ban_id, manual_unbanned) in &local_rows {
+            items.push(LiveBanItem {
+                ban: KZTBan {
+                    id: *kzt_ban_id as i64,
+                    ban_type: ban_type.clone(),
+                    notes: notes.clone(),
+                    stats: stats.clone(),
+                    steamid64: steamid64.clone(),
+                    player_name: None,
+                    steam_id: None,
+                    expires_on: expires_on.clone(),
+                    created_on: created_on.clone(),
+                    updated_on: updated_on.clone(),
+                    server_id: server_id.map(|v| v as i64),
+                },
+                local_ban_id: *local_ban_id,
+                manual_unbanned: *manual_unbanned,
+            });
+        }
+    } else {
+        source = "none".to_string();
+    }
+
+    Ok(PlayerBanSearchResult { items, source })
+}
+
 // =====================================================
 // 后台同步逻辑（只同步增量）
 // =====================================================

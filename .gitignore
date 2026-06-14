@@ -48,3 +48,6 @@ access_snapshot.json
 # ----- 日志 & 临时文件 -----
 *.log
 *.tmp
+
+# ----- 其他 -----
+index.html

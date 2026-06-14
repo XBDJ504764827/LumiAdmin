@@ -34,6 +34,36 @@ pub(crate) async fn list_global_bans(
     })))
 }
 
+/// 按 SteamID 搜索玩家全球封禁
+pub(crate) async fn search_player_bans(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Json(body): Json<SearchBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let _actor = current_operator(&ctx, &headers).await?;
+    if !permission_service::can_view_access_logs(&_actor) {
+        return Err(AppError::forbidden());
+    }
+
+    let result = global_ban_service::search_player_bans(
+        &ctx.db,
+        &ctx.steam_resolver,
+        &body.steam_input,
+    )
+    .await
+    .map_err(AppError::internal)?;
+
+    Ok(Json(serde_json::json!({
+        "items": result.items,
+        "source": result.source,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct SearchBody {
+    pub steam_input: String,
+}
+
 /// 手动解封：解除全球封禁对应的本地封禁（不影响 KZTimer 全球封禁）
 pub(crate) async fn manual_unban_global_ban(
     State(ctx): State<AppCtx>,

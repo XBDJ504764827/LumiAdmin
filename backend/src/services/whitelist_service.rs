@@ -423,7 +423,7 @@ pub async fn revoke_whitelist(
             updated_at = now()
         WHERE id = $1
         RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
-                  applied_at, approved_at, approved_by,
+                  applied_at, approved_at, approved_by, approval_reason,
                   rejected_at, rejected_by, rejection_reason
         "#,
     )

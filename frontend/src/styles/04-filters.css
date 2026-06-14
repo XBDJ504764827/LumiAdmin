@@ -11,12 +11,43 @@
 .filter-bar .searchbar,
 .filter-bar .search-box,
 .filter-bar .search-bar {
-  flex: 1;
-  min-width: 200px;
   margin-bottom: 0;
   display: flex;
   align-items: center;
 }
+
+/* 模板版搜索框（带图标 + 圆角） */
+.search-bar-box {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  max-width: 380px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 7px 14px;
+  transition: all 0.2s;
+  min-width: 0;
+}
+.search-bar-box:focus-within {
+  border-color: var(--accent);
+  background: var(--focus-bg);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+.search-bar-box input {
+  border: none;
+  background: transparent;
+  font-family: var(--font);
+  font-size: 13.5px;
+  color: var(--text);
+  outline: none;
+  width: 100%;
+}
+.search-bar-box input::placeholder {
+  color: var(--text3);
+}
+
 .filter-bar .search-bar-input {
   max-width: none;
   height: 38px;

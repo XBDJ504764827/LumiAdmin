@@ -20,23 +20,28 @@ export function SearchBar({ value, onChange, placeholder = '搜索...', statusOp
   }, [onChange, debounceMs]);
 
   return (
-    <div className="search-bar">
-      <input
-        type="text"
-        className="form-control search-bar-input"
-        placeholder={placeholder}
-        value={local}
-        onChange={handleChange}
-      />
+    <div className="search-bar" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+      <div className="search-bar-box">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" width="15" height="15" style={{ flexShrink: 0, color: 'var(--text3)' }}>
+          <circle cx="7" cy="7" r="4.5" />
+          <path d="M10.5 10.5L14 14" />
+        </svg>
+        <input
+          type="text"
+          placeholder={placeholder}
+          value={local}
+          onChange={handleChange}
+        />
+      </div>
       {statusOptions && statusOptions.length > 0 ? (
         <select
-          className="form-control search-bar-select"
+          className="filter-select"
           value={statusValue ?? ''}
           onChange={(e) => onStatusChange?.(e.target.value || undefined)}
         >
           <option value="">全部状态</option>
           {statusOptions.map((opt) => (
-            <option key={opt.value} value={opt.value}>{opt.label}</option>
+            <option key={opt.value ?? '__empty__'} value={opt.value}>{opt.label}</option>
           ))}
         </select>
       ) : null}

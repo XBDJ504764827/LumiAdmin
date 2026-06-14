@@ -2,6 +2,21 @@ use crate::{db::Database, routes::ListQuery};
 use serde::Serialize;
 use uuid::Uuid;
 
+/// 记录操作日志，失败时仅告警不中断业务。
+/// 消除各路由中重复的 `if let Err(e) = create_log(...).await { tracing::warn!(...) }` 样板。
+pub async fn log_action(
+    db: &Database,
+    operator_name: &str,
+    module: &str,
+    action: &str,
+    target_detail: &str,
+    ip_address: &str,
+) {
+    if let Err(e) = create_log(db, operator_name, module, action, target_detail, ip_address).await {
+        tracing::warn!(%e, "日志写入失败");
+    }
+}
+
 #[derive(Serialize)]
 pub struct LogItem {
     pub operator_name: String,

@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useApiQuery } from '../../shared/useApiQuery.js';
 import { useAuth } from '../../state/auth.jsx';
-import { useToast, ToastContainer } from '../../shared/Toast.jsx';
+import { useToast } from '../../shared/Toast.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { InternalNoteBadge, InternalNoteInline } from '../../shared/InternalNote.jsx';
 import { Modal } from '../../shared/Modal.jsx';
@@ -47,7 +47,7 @@ const STATUS_FILTERS = [
 export function BanAppealPage() {
   const { session } = useAuth();
   const { confirm, dialog } = useConfirmDialog();
-  const { toast, toasts, dismiss: dismissToast } = useToast();
+  const { toast } = useToast();
   const { counts: pendingCounts } = usePendingReviewIndicators();
   const token = session?.token ?? null;
 
@@ -517,7 +517,6 @@ export function BanAppealPage() {
       </Modal>
 
       {dialog}
-      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

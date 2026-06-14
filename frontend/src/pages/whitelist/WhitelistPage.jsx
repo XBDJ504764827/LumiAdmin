@@ -3,7 +3,7 @@ import { api } from '../../lib/api.js';
 import { useApiQuery } from '../../shared/useApiQuery.js';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { useAuth } from '../../state/auth.jsx';
-import { useToast, ToastContainer } from '../../shared/Toast.jsx';
+import { useToast } from '../../shared/Toast.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
@@ -78,7 +78,7 @@ function rowClassName(item, globalBans) {
 export function WhitelistPage() {
   const { session } = useAuth();
   const { confirm, dialog } = useConfirmDialog();
-  const { toast, toasts, dismiss: dismissToast } = useToast();
+  const { toast } = useToast();
   const { counts: pendingCounts } = usePendingReviewIndicators();
   const token = session?.token ?? null;
   function getSavedTab() {
@@ -568,7 +568,6 @@ export function WhitelistPage() {
       />
 
       {dialog}
-      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

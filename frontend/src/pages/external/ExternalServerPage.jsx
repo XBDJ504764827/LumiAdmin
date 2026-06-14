@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useAsync } from '../../shared/useAsync.js';
 import { useAuth } from '../../state/auth.jsx';
-import { useToast, ToastContainer } from '../../shared/Toast.jsx';
+import { useToast } from '../../shared/Toast.jsx';
 import { TableLoading, TableEmpty } from '../../shared/TableState.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { formatChinaMonthDayTime } from '../../shared/time.js';
@@ -32,7 +32,7 @@ const defaultForm = { name: '', ip: '', port: 27015, rconPassword: '', enabled: 
 export function ExternalServerPage() {
   const { session } = useAuth();
   const { confirm, dialog } = useConfirmDialog();
-  const { toast, toasts, dismiss } = useToast();
+  const { toast } = useToast();
   const token = session?.token ?? null;
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -301,7 +301,6 @@ export function ExternalServerPage() {
       )}
 
       {dialog}
-      <ToastContainer toasts={toasts} onDismiss={dismiss} />
     </div>
   );
 }

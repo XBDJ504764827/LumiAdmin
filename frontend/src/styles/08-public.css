@@ -303,8 +303,10 @@
 .toast-icon { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; flex-shrink: 0; margin-top: 1px; }
 .toast-success .toast-icon { background: var(--success-bg); color: var(--success-text); }
 .toast-danger .toast-icon { background: var(--danger-bg); color: var(--danger-text); }
+.toast-warning .toast-icon { background: var(--warning-bg); color: var(--warning-text); }
 .toast-success { border-left: 3px solid var(--success-dot); }
 .toast-danger { border-left: 3px solid var(--danger-dot); }
+.toast-warning { border-left: 3px solid var(--warning-text); }
 .toast-content { flex: 1; min-width: 0; }
 .toast-title { font-size: 13.5px; font-weight: 600; color: var(--text); }
 .toast-message { font-size: 12.5px; color: var(--text2); margin-top: 3px; line-height: 1.5; }

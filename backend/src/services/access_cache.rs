@@ -50,6 +50,7 @@ impl ActiveBanCache {
     }
 
     pub async fn refresh(&self, db: &Database) -> anyhow::Result<()> {
+        #[allow(clippy::type_complexity)]
         let rows: Vec<(Option<String>, Option<String>, Uuid, String, Option<DateTime<Utc>>)> =
             sqlx::query_as(
                 r#"SELECT steam_id, ip_address, id, reason, expires_at

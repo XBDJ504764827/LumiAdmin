@@ -120,6 +120,7 @@ pub struct PaginatedResponse<T: serde::Serialize> {
 // Router
 // ----------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 pub fn router(
     config: Config,
     db: Database,

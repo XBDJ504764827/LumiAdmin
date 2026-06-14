@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from './state/auth.jsx';
 import { ThemeProvider } from './state/theme.jsx';
+import { ToastProvider } from './shared/Toast.jsx';
 import { AppShell } from './components/layout/AppShell.jsx';
 import { publicRoutes, protectedRoutes } from './routes/routeConfig.jsx';
 import { NotFoundPage } from './pages/notFound/NotFoundPage.jsx';
@@ -24,7 +25,9 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <AuthProvider>
-          <AppRoutes />
+          <ToastProvider>
+            <AppRoutes />
+          </ToastProvider>
         </AuthProvider>
       </ThemeProvider>
     </QueryClientProvider>

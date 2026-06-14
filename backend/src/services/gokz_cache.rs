@@ -28,11 +28,18 @@ pub struct GokzModeStats {
 const CACHE_TTL_HOURS: i64 = 24;
 const CACHE_MAX_ENTRIES: usize = 10000;
 
+/// GOKZ 内存缓存条目类型
+type GokzMemoryCache = HashMap<String, (GokzStats, DateTime<Utc>)>;
+/// GOKZ 数据库缓存行类型（kzt/skz/vnl/ovr + 时间戳）
+type GokzDbRow = (Option<serde_json::Value>, Option<serde_json::Value>, Option<serde_json::Value>, Option<serde_json::Value>, DateTime<Utc>);
+/// GOKZ 批量数据库行类型（含 steamid64）
+type GokzBatchRow = (String, Option<serde_json::Value>, Option<serde_json::Value>, Option<serde_json::Value>, Option<serde_json::Value>);
+
 /// 统一 GOKZ 缓存管理器
 /// 使用 PostgreSQL 作为持久化缓存，同时维护内存缓存加速读取
 pub struct GokzCacheManager {
     /// 内存缓存：用于加速热点数据读取
-    memory_cache: Arc<RwLock<HashMap<String, (GokzStats, DateTime<Utc>)>>>,
+    memory_cache: Arc<RwLock<GokzMemoryCache>>,
     db: Database,
 }
 
@@ -69,7 +76,7 @@ impl GokzCacheManager {
 
     /// 从 PG 获取缓存
     async fn get_from_db(&self, steamid64: &str) -> Option<GokzStats> {
-        let row: Option<(Option<serde_json::Value>, Option<serde_json::Value>, Option<serde_json::Value>, Option<serde_json::Value>, DateTime<Utc>)> = sqlx::query_as(
+        let row: Option<GokzDbRow> = sqlx::query_as(
             r#"SELECT kzt_data, skz_data, vnl_data, ovr_data, expires_at
                FROM player_access_cache
                WHERE steamid64 = $1 AND expires_at > now()"#,
@@ -178,7 +185,7 @@ impl GokzCacheManager {
         }
 
         // 2. 从 PG 批量获取未命中内存的
-        let rows: Vec<(String, Option<serde_json::Value>, Option<serde_json::Value>, Option<serde_json::Value>, Option<serde_json::Value>)> = sqlx::query_as(
+        let rows: Vec<GokzBatchRow> = sqlx::query_as(
             r#"SELECT steamid64, kzt_data, skz_data, vnl_data, ovr_data
                FROM player_access_cache
                WHERE steamid64 = ANY($1) AND expires_at > now()"#,

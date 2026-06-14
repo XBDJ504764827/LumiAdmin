@@ -220,6 +220,7 @@ pub async fn search_player_bans(
     let source: String;
 
     // 1) 先查本地 global_bans 表（缓存，快速返回）
+    #[allow(clippy::type_complexity)]
     let local_rows: Vec<(i32, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<i32>, Option<Uuid>, bool)> = sqlx::query_as(
         r#"SELECT kzt_ban_id, ban_type, notes, stats, expires_on, created_on, updated_on, server_id, local_ban_id, manual_unbanned
            FROM global_bans WHERE steam_id64 = $1 ORDER BY created_on DESC LIMIT 100"#,

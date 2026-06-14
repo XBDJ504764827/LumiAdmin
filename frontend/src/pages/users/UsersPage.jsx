@@ -3,7 +3,7 @@ import { api } from '../../lib/api.js';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { Modal } from '../../shared/Modal.jsx';
 import { useAuth } from '../../state/auth.jsx';
-import { useToast, ToastContainer } from '../../shared/Toast.jsx';
+import { useToast } from '../../shared/Toast.jsx';
 import { useApiQuery, useApiMutation } from '../../shared/useApiQuery.js';
 import { buildCreateUserPayload, buildUpdateUserPayload, validateCreateUserForm } from './userForm.js';
 import { SearchBar } from '../../shared/SearchBar.jsx';
@@ -34,7 +34,7 @@ function roleClass(role) {
 export function UsersPage() {
   const { session } = useAuth();
   const { confirm, dialog } = useConfirmDialog();
-  const { toast, toasts, dismiss: dismissToast } = useToast();
+  const { toast } = useToast();
   const _token = session?.token ?? null;
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -373,7 +373,6 @@ export function UsersPage() {
         <div className="form-group"><label>确认密码</label><input type="password" className="form-control" value={passwordForm.confirmPassword} onChange={(event) => setPasswordForm((prev) => ({ ...prev, confirmPassword: event.target.value }))} /></div>
       </Modal>
       {dialog}
-      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

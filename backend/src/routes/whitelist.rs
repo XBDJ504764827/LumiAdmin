@@ -1,13 +1,12 @@
 use axum::{
     extract::{Path, Query, State},
     http::HeaderMap,
-    http::StatusCode,
     Json,
 };
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::routes::{current_operator, forbidden, invalid_request, AppCtx, ListQuery};
+use crate::routes::{current_operator, AppCtx, AppError, ListQuery};
 use crate::services::rate_limit_service::extract_client_ip;
 use crate::services::{log_service, permission_service, whitelist_service};
 
@@ -42,18 +41,11 @@ pub(crate) async fn whitelist(
     State(ctx): State<AppCtx>,
     headers: HeaderMap,
     Query(query): Query<ListQuery>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, AppError> {
     let _actor = current_operator(&ctx, &headers).await?;
-
     let result = whitelist_service::list_whitelist(&ctx.db, &query)
         .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "加载白名单列表失败");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "加载白名单列表失败" })),
-            )
-        })?;
+        .map_err(AppError::internal)?;
     Ok(Json(
         serde_json::json!({ "items": result.items, "total": result.total, "page": result.page, "page_size": result.page_size }),
     ))
@@ -63,10 +55,10 @@ pub(crate) async fn create_whitelist(
     State(ctx): State<AppCtx>,
     headers: HeaderMap,
     Json(body): Json<WhitelistBody>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), AppError> {
     let actor = current_operator(&ctx, &headers).await?;
     if !permission_service::can_manage_whitelist_manually(&actor) {
-        return Err(forbidden());
+        return Err(AppError::forbidden());
     }
     let operator_name = actor.display_name.clone();
     let resolver = &ctx.steam_resolver;
@@ -80,8 +72,8 @@ pub(crate) async fn create_whitelist(
         resolver,
     )
     .await
-    .map_err(invalid_request)?;
-    if let Err(e) = log_service::create_log(
+    .map_err(AppError::bad_request)?;
+    log_service::log_action(
         &ctx.db,
         &operator_name,
         "白名单管理",
@@ -89,11 +81,8 @@ pub(crate) async fn create_whitelist(
         &item.nickname,
         &extract_client_ip(&headers),
     )
-    .await
-    {
-        tracing::warn!(%e, "日志写入失败");
-    }
-    Ok((StatusCode::CREATED, Json(serde_json::json!({"item": item}))))
+    .await;
+    Ok((axum::http::StatusCode::CREATED, Json(serde_json::json!({"item": item}))))
 }
 
 pub(crate) async fn approve_whitelist_request(
@@ -101,17 +90,17 @@ pub(crate) async fn approve_whitelist_request(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
     Json(body): Json<WhitelistActionBody>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, AppError> {
     let actor = current_operator(&ctx, &headers).await?;
     if !permission_service::can_review_whitelist(&actor) {
-        return Err(forbidden());
+        return Err(AppError::forbidden());
     }
     let operator_name = actor.display_name.clone();
     let item =
         whitelist_service::approve_whitelist(&ctx.db, id, &operator_name, body.reason.as_deref())
             .await
-            .map_err(invalid_request)?;
-    if let Err(e) = log_service::create_log(
+            .map_err(AppError::bad_request)?;
+    log_service::log_action(
         &ctx.db,
         &operator_name,
         "白名单管理",
@@ -119,10 +108,7 @@ pub(crate) async fn approve_whitelist_request(
         &item.nickname,
         &extract_client_ip(&headers),
     )
-    .await
-    {
-        tracing::warn!(%e, "日志写入失败");
-    }
+    .await;
     Ok(Json(serde_json::json!({"item": item})))
 }
 
@@ -131,16 +117,16 @@ pub(crate) async fn reject_whitelist_request(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
     Json(body): Json<RejectWhitelistBody>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, AppError> {
     let actor = current_operator(&ctx, &headers).await?;
     if !permission_service::can_review_whitelist(&actor) {
-        return Err(forbidden());
+        return Err(AppError::forbidden());
     }
     let operator_name = actor.display_name.clone();
     let item = whitelist_service::reject_whitelist(&ctx.db, id, &body.reason, &operator_name)
         .await
-        .map_err(invalid_request)?;
-    if let Err(e) = log_service::create_log(
+        .map_err(AppError::bad_request)?;
+    log_service::log_action(
         &ctx.db,
         &operator_name,
         "白名单管理",
@@ -148,10 +134,7 @@ pub(crate) async fn reject_whitelist_request(
         &item.nickname,
         &extract_client_ip(&headers),
     )
-    .await
-    {
-        tracing::warn!(%e, "日志写入失败");
-    }
+    .await;
     Ok(Json(serde_json::json!({"item": item})))
 }
 
@@ -160,16 +143,16 @@ pub(crate) async fn restore_whitelist_request(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
     Json(_body): Json<WhitelistActionBody>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, AppError> {
     let actor = current_operator(&ctx, &headers).await?;
     if !permission_service::can_review_whitelist(&actor) {
-        return Err(forbidden());
+        return Err(AppError::forbidden());
     }
     let operator_name = actor.display_name.clone();
     let item = whitelist_service::restore_whitelist(&ctx.db, id, &operator_name)
         .await
-        .map_err(invalid_request)?;
-    if let Err(e) = log_service::create_log(
+        .map_err(AppError::bad_request)?;
+    log_service::log_action(
         &ctx.db,
         &operator_name,
         "白名单管理",
@@ -177,10 +160,7 @@ pub(crate) async fn restore_whitelist_request(
         &item.nickname,
         &extract_client_ip(&headers),
     )
-    .await
-    {
-        tracing::warn!(%e, "日志写入失败");
-    }
+    .await;
     Ok(Json(serde_json::json!({"item": item})))
 }
 
@@ -189,16 +169,16 @@ pub(crate) async fn revoke_whitelist_request(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
     Json(_body): Json<WhitelistActionBody>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, AppError> {
     let actor = current_operator(&ctx, &headers).await?;
     if !permission_service::can_revoke_whitelist(&actor) {
-        return Err(forbidden());
+        return Err(AppError::forbidden());
     }
     let operator_name = actor.display_name.clone();
     let item = whitelist_service::revoke_whitelist(&ctx.db, id, &operator_name)
         .await
-        .map_err(invalid_request)?;
-    if let Err(e) = log_service::create_log(
+        .map_err(AppError::bad_request)?;
+    log_service::log_action(
         &ctx.db,
         &operator_name,
         "白名单管理",
@@ -206,10 +186,7 @@ pub(crate) async fn revoke_whitelist_request(
         &item.nickname,
         &extract_client_ip(&headers),
     )
-    .await
-    {
-        tracing::warn!(%e, "日志写入失败");
-    }
+    .await;
     Ok(Json(serde_json::json!({"item": item})))
 }
 
@@ -218,15 +195,15 @@ pub(crate) async fn refresh_single_steam_name(
     State(ctx): State<AppCtx>,
     headers: HeaderMap,
     Path(id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, AppError> {
     let actor = current_operator(&ctx, &headers).await?;
     if !permission_service::can_review_whitelist(&actor) {
-        return Err(forbidden());
+        return Err(AppError::forbidden());
     }
     let resolver = &ctx.steam_resolver;
     let steam_name = whitelist_service::update_steam_persona_name(&ctx.db, id, resolver)
         .await
-        .map_err(invalid_request)?;
+        .map_err(AppError::bad_request)?;
     Ok(Json(
         serde_json::json!({ "steam_persona_name": steam_name }),
     ))
@@ -237,10 +214,10 @@ pub(crate) async fn refresh_all_steam_names(
     State(ctx): State<AppCtx>,
     headers: HeaderMap,
     Json(body): Json<RefreshSteamNamesBody>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, AppError> {
     let actor = current_operator(&ctx, &headers).await?;
     if !permission_service::can_review_whitelist(&actor) {
-        return Err(forbidden());
+        return Err(AppError::forbidden());
     }
     let resolver = &ctx.steam_resolver;
     let updated_count = whitelist_service::refresh_all_steam_persona_names(
@@ -249,9 +226,9 @@ pub(crate) async fn refresh_all_steam_names(
         body.status.as_deref(),
     )
     .await
-    .map_err(invalid_request)?;
+    .map_err(AppError::bad_request)?;
     let operator_name = actor.display_name.clone();
-    if let Err(e) = log_service::create_log(
+    log_service::log_action(
         &ctx.db,
         &operator_name,
         "白名单管理",
@@ -259,9 +236,6 @@ pub(crate) async fn refresh_all_steam_names(
         &format!("更新了{}条记录", updated_count),
         &extract_client_ip(&headers),
     )
-    .await
-    {
-        tracing::warn!(%e, "日志写入失败");
-    }
+    .await;
     Ok(Json(serde_json::json!({ "updated_count": updated_count })))
 }

@@ -206,6 +206,7 @@ pub(crate) async fn get_global_bans(
     Path(steamid64): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     // 优先从本地 global_bans 表查询（全球封禁同步功能维护）
+    #[allow(clippy::type_complexity)]
     let local_bans: Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
         r#"SELECT kzt_ban_id, ban_type, notes, stats, expires_on, created_on, player_name
            FROM global_bans WHERE steam_id64 = $1 AND is_expired = false"#
@@ -294,6 +295,7 @@ pub(crate) async fn get_global_bans_batch(
 
     // 优先从本地 global_bans 表查询（全球封禁同步功能维护的数据）
     for steamid64 in &steamids {
+        #[allow(clippy::type_complexity)]
         let local_bans: Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
             r#"SELECT kzt_ban_id, ban_type, notes, stats, expires_on, created_on, player_name
                FROM global_bans WHERE steam_id64 = $1 AND is_expired = false"#

@@ -2,7 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../../lib/api.js';
 import { useAuth } from '../../state/auth.jsx';
-import { useToast, ToastContainer } from '../../shared/Toast.jsx';
+import { useToast } from '../../shared/Toast.jsx';
+import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { StatusPill } from '../../shared/StatusPill.jsx';
 import { Modal } from '../../shared/Modal.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
@@ -17,15 +18,18 @@ function Empty({children}){return<div className="player-detail-empty">{children}
 function feedbackTypeLabel(t){const m={missing:'地图缺失',broken:'地图损坏',request:'地图请求'};return m[t]||t||'-'}
 
 // ── Ban Detail Popup ──
-function BanDetailPopup({item, onClose, onAction, token, toast}) {
+function BanDetailPopup({item, onClose, onAction, token}) {
+  const { toast } = useToast();
+  const { confirm } = useConfirmDialog();
   const [acting, setActing] = useState(false);
   if (!item) return null;
   const isActive = item.status === 'active';
 
   async function doUnban() { if(acting)return;setActing(true);try{await api.unban(token,item.id);toast({title:'解封成功'});onAction();onClose();}catch(e){toast({title:'操作失败',message:e.message,tone:'danger'})}finally{setActing(false)} }
-  async function doDelete() { if(acting||!confirm(`确定删除封禁记录吗？`))return;setActing(true);try{await api.deleteBan(token,item.id);toast({title:'删除成功'});onAction();onClose();}catch(e){toast({title:'操作失败',message:e.message,tone:'danger'})}finally{setActing(false)} }
+  async function doDelete() { if(acting)return; const ok = await confirm({ title: '删除封禁记录', message: '确定删除这条封禁记录吗？此操作不可恢复。', tone: 'danger', confirmText: '确认删除' }); if(!ok)return;setActing(true);try{await api.deleteBan(token,item.id);toast({title:'删除成功'});onAction();onClose();}catch(e){toast({title:'操作失败',message:e.message,tone:'danger'})}finally{setActing(false)} }
 
-  return (<Modal open={true} title="封禁详情" onClose={onClose} footer={<><button className="btn btn-outline" onClick={onClose}>关闭</button>{isActive&&<><button className="action-btn action-btn-success" onClick={doUnban} disabled={acting}>解封</button><button className="action-btn action-btn-danger" onClick={doDelete} disabled={acting}>删除</button></>}</>} >
+  return (<>
+    <Modal open={true} title="封禁详情" onClose={onClose} footer={<><button className="btn btn-outline" onClick={onClose}>关闭</button>{isActive&&<><button className="action-btn action-btn-success" onClick={doUnban} disabled={acting}>解封</button><button className="action-btn action-btn-danger" onClick={doDelete} disabled={acting}>删除</button></>}</>} >
     <div className="detail-grid">
       <span className="detail-label">状态</span><span className="detail-value"><StatusPill kind={stKind(item.status,'ban')}>{stLabel(item.status)}</StatusPill></span>
       <span className="detail-label">玩家</span><span className="detail-value fw-600">{item.player||'-'}</span>
@@ -39,11 +43,14 @@ function BanDetailPopup({item, onClose, onAction, token, toast}) {
       <span className="detail-label">封禁时间</span><span className="detail-value">{formatChinaDateTime(item.created_at)}</span>
       {item.removed_at&&<><span className="detail-label">解封时间</span><span className="detail-value">{formatChinaDateTime(item.removed_at)} {item.removed_by?`(${item.removed_by})`:''}</span></>}
     </div>
-  </Modal>);
+  </Modal>
+  {dialog}
+  </>);
 }
 
 // ── Whitelist Detail Popup ──
-function WhitelistDetailPopup({item, onClose, onAction, token, toast}) {
+function WhitelistDetailPopup({item, onClose, onAction, token}) {
+  const { toast } = useToast();
   const [acting, setActing] = useState(false);
   const [reason, setReason] = useState('');
   if (!item) return null;
@@ -87,7 +94,8 @@ function WhitelistDetailPopup({item, onClose, onAction, token, toast}) {
 }
 
 // ── Appeal Detail Popup ──
-function AppealDetailPopup({item, onClose, onAction, token, toast}) {
+function AppealDetailPopup({item, onClose, onAction, token}) {
+  const { toast } = useToast();
   const [acting, setActing] = useState(false);
   const [note, setNote] = useState('');
   if (!item) return null;
@@ -114,7 +122,8 @@ function AppealDetailPopup({item, onClose, onAction, token, toast}) {
 }
 
 // ── Report Detail Popup ──
-function ReportDetailPopup({item, onClose, onAction, token, toast}) {
+function ReportDetailPopup({item, onClose, onAction, token}) {
+  const { toast } = useToast();
   const [acting, setActing] = useState(false);
   const [note, setNote] = useState('');
   if (!item) return null;
@@ -140,7 +149,8 @@ function ReportDetailPopup({item, onClose, onAction, token, toast}) {
 }
 
 // ── Map Feedback Detail Popup ──
-function MapFeedbackDetailPopup({item, onClose, onAction, token, toast}) {
+function MapFeedbackDetailPopup({item, onClose, onAction, token}) {
+  const { toast } = useToast();
   const [acting, setActing] = useState(false);
   const [note, setNote] = useState('');
   if (!item) return null;
@@ -187,7 +197,7 @@ function GlobalBanPopup({items, onClose}) {
 }
 
 // ── Tabs ──
-function StatusTab({detail, token, onRefresh, toast}) {
+function StatusTab({detail, token, onRefresh}) {
   const [popup, setPopup] = useState(null);
   return <>
     <div className="card"><div className="card-header"><div><div className="card-title">历史封禁履历表</div><div className="card-sub">点击行查看详情并操作。</div></div></div><div className="card-body p-0">
@@ -213,8 +223,8 @@ function StatusTab({detail, token, onRefresh, toast}) {
         </tr>)}
       </tbody></table></div>}
     </div></div>
-    {popup?.type==='ban'&&<BanDetailPopup item={popup.item} onClose={()=>setPopup(null)} onAction={onRefresh} token={token} toast={toast}/>}
-    {popup?.type==='whitelist'&&<WhitelistDetailPopup item={popup.item} onClose={()=>setPopup(null)} onAction={onRefresh} token={token} toast={toast}/>}
+    {popup?.type==='ban'&&<BanDetailPopup item={popup.item} onClose={()=>setPopup(null)} onAction={onRefresh} token={token}/>}
+    {popup?.type==='whitelist'&&<WhitelistDetailPopup item={popup.item} onClose={()=>setPopup(null)} onAction={onRefresh} token={token}/>}
   </>;
 }
 
@@ -244,7 +254,7 @@ function NetworkTab({detail}) {
   </>;
 }
 
-function BehaviorTab({detail, token, onRefresh, toast}) {
+function BehaviorTab({detail, token, onRefresh}) {
   const [popup, setPopup] = useState(null);
   const mf = detail.map_feedback || [];
   return <>
@@ -290,9 +300,9 @@ function BehaviorTab({detail, token, onRefresh, toast}) {
         </tr>)}
       </tbody></table></div>}
     </div></div>
-    {popup?.type==='appeal'&&<AppealDetailPopup item={popup.item} onClose={()=>setPopup(null)} onAction={onRefresh} token={token} toast={toast}/>}
-    {popup?.type==='report'&&<ReportDetailPopup item={popup.item} onClose={()=>setPopup(null)} onAction={onRefresh} token={token} toast={toast}/>}
-    {popup?.type==='feedback'&&<MapFeedbackDetailPopup item={popup.item} onClose={()=>setPopup(null)} onAction={onRefresh} token={token} toast={toast}/>}
+    {popup?.type==='appeal'&&<AppealDetailPopup item={popup.item} onClose={()=>setPopup(null)} onAction={onRefresh} token={token}/>}
+    {popup?.type==='report'&&<ReportDetailPopup item={popup.item} onClose={()=>setPopup(null)} onAction={onRefresh} token={token}/>}
+    {popup?.type==='feedback'&&<MapFeedbackDetailPopup item={popup.item} onClose={()=>setPopup(null)} onAction={onRefresh} token={token}/>}
   </>;
 }
 
@@ -313,7 +323,7 @@ const TABS = [{key:'status',label:'封禁与白名单'},{key:'network',label:'IP
 
 export function PlayerDetailPage() {
   const { session } = useAuth();
-  const { toast, toasts, dismiss } = useToast();
+  const { toast } = useToast();
   const queryClient = useQueryClient();
   const token = session?.token ?? null;
   const canEdit = session?.role === 'developer' || session?.role === 'admin';
@@ -401,15 +411,14 @@ export function PlayerDetailPage() {
 
       <div className="profile-tabs">{TABS.map(t=><button key={t.key} className={`profile-tab ${tab===t.key?'active':''}`} onClick={()=>setTab(t.key)} type="button">{t.label}</button>)}</div>
       <div className="profile-tab-pane active">
-        {tab==='status'&&<StatusTab detail={detail} token={token} onRefresh={refreshDetail} toast={toast}/>}
+        {tab==='status'&&<StatusTab detail={detail} token={token} onRefresh={refreshDetail}/>}
         {tab==='network'&&<NetworkTab detail={detail}/>}
-        {tab==='behavior'&&<BehaviorTab detail={detail} token={token} onRefresh={refreshDetail} toast={toast}/>}
+        {tab==='behavior'&&<BehaviorTab detail={detail} token={token} onRefresh={refreshDetail}/>}
         {tab==='audit'&&<AuditTab detail={detail}/>}
       </div>
     </>:null}
 
     {showGlobalBans&&<GlobalBanPopup items={globalBans||[]} onClose={()=>setShowGlobalBans(false)}/>}
-    <ToastContainer toasts={toasts} onDismiss={dismiss}/>
   </div>);
 }
 

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useAuth } from '../../state/auth.jsx';
-import { useToast, ToastContainer } from '../../shared/Toast.jsx';
+import { useToast } from '../../shared/Toast.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { TableLoading, TableEmpty } from '../../shared/TableState.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
@@ -64,7 +64,7 @@ function targetPayload(form) {
 
 export function ExternalBanApiPage() {
   const { session } = useAuth();
-  const { toast, toasts, dismiss } = useToast();
+  const { toast } = useToast();
   const { confirm, dialog } = useConfirmDialog();
   const token = session?.token ?? null;
 
@@ -437,7 +437,6 @@ export function ExternalBanApiPage() {
       ) : null}
 
       {dialog}
-      <ToastContainer toasts={toasts} onDismiss={dismiss} />
     </div>
   );
 }

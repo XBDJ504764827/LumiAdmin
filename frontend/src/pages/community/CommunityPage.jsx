@@ -26,7 +26,7 @@ import { onlinePlayerKey, buildKickCommand } from './onlinePlayers.js';
 import { OnlinePlayerCard, ToggleSwitch, FormSectionCard, ServerRconFeedback } from './CommunityComponents.jsx';
 import { COMMAND_CATEGORIES } from '../rcon/RconPage.jsx';
 import { useAuth } from '../../state/auth.jsx';
-import { useToast, ToastContainer } from '../../shared/Toast.jsx';
+import { useToast } from '../../shared/Toast.jsx';
 
 const emptyGroupForm = { name: '' };
 const emptyServerForm = {
@@ -43,7 +43,7 @@ const emptyServerForm = {
 export function CommunityPage() {
   const { session } = useAuth();
   const { confirm, dialog } = useConfirmDialog();
-  const { toast, toasts, dismiss: dismissToast } = useToast();
+  const { toast } = useToast();
   const token = session?.token ?? null;
   const canMutate = session?.role === 'developer' || session?.role === 'admin';
   const isDeveloper = session?.role === 'developer';
@@ -844,7 +844,6 @@ export function CommunityPage() {
         </div>
       </Modal>
       {dialog}
-      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

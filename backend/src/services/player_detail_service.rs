@@ -289,15 +289,19 @@ pub async fn get_player_detail(
     let steamid64 = resolve_player_input(db, resolver, steam_input).await?;
     let identity = resolver.resolve(&steamid64).await?;
 
-    let whitelists = fetch_whitelist_records(db, &steamid64).await?;
-    let bans = fetch_ban_records(db, &steamid64).await?;
-    let appeals = fetch_appeal_records(db, &steamid64).await?;
-    let reports = fetch_report_records(db, &steamid64).await?;
-    let online_records = fetch_online_records(db, &steamid64).await?;
-    let ip_history = fetch_ip_history(db, &steamid64).await?;
+    // 并行查询互不依赖的数据（8 个独立查询同时进行）
+    let (whitelists, bans, appeals, reports, online_records, ip_history, map_feedback, internal_profile) = tokio::try_join!(
+        fetch_whitelist_records(db, &steamid64),
+        fetch_ban_records(db, &steamid64),
+        fetch_appeal_records(db, &steamid64),
+        fetch_report_records(db, &steamid64),
+        fetch_online_records(db, &steamid64),
+        fetch_ip_history(db, &steamid64),
+        async { Ok::<_, anyhow::Error>(query_feedback_by_steam_id(db, &steamid64).await.unwrap_or_default()) },
+        fetch_internal_profile(db, &steamid64),
+    )?;
+    // evidence_files 依赖 bans/appeals/reports，需在第一批完成后执行
     let evidence_files = fetch_evidence_files(db, r2, &bans, &appeals, &reports).await?;
-    let map_feedback = query_feedback_by_steam_id(db, &steamid64).await.unwrap_or_default();
-    let internal_profile = fetch_internal_profile(db, &steamid64).await?;
 
     let search_terms = build_search_terms(
         &identity,
@@ -307,8 +311,10 @@ pub async fn get_player_detail(
         &reports,
         &online_records,
     );
-    let admin_actions = fetch_admin_actions(db, &search_terms).await?;
-    let audit_logs = fetch_audit_logs(db, &search_terms).await?;
+    let (admin_actions, audit_logs) = tokio::try_join!(
+        fetch_admin_actions(db, &search_terms),
+        fetch_audit_logs(db, &search_terms),
+    )?;
 
     let display_name = display_name(&whitelists, &bans, &appeals, &reports, &online_records);
     let profile = PlayerProfile {
@@ -750,6 +756,7 @@ async fn fetch_ip_history(
         .await?;
 
         // 3) 计算该玩家使用此 IP 的最早/最晚时间
+        #[allow(clippy::type_complexity)]
         let times: Option<(Option<DateTime<Utc>>, Option<DateTime<Utc>>)> = sqlx::query_as(
             r#"SELECT min(ts) AS first_seen, max(ts) AS last_seen FROM (
                 SELECT created_at AS ts FROM player_access_logs WHERE ip_address = $1 AND steam_id64 = $2
@@ -866,7 +873,7 @@ async fn fetch_ip_history(
             servers: server_rows,
             first_seen,
             last_seen,
-            linked_accounts: linked_accounts,
+            linked_accounts,
         });
     }
 
@@ -927,7 +934,7 @@ async fn fetch_evidence_files(
         ));
     }
 
-    files.sort_by(|a, b| b.uploaded_at.cmp(&a.uploaded_at));
+    files.sort_by_key(|b| std::cmp::Reverse(b.uploaded_at));
     Ok(files)
 }
 
@@ -1163,12 +1170,14 @@ fn display_name(
         .or_else(|| {
             whitelists
                 .iter()
-                .find_map(|item| Some(item.nickname.clone()))
+                .map(|item| item.nickname.clone())
+                .next()
         })
         .or_else(|| {
             online_records
                 .iter()
-                .find_map(|item| Some(item.name.clone()))
+                .map(|item| item.name.clone())
+                .next()
         })
         .or_else(|| bans.iter().find_map(|item| item.player.clone()))
         .or_else(|| {
@@ -1179,7 +1188,8 @@ fn display_name(
         .or_else(|| {
             appeals
                 .iter()
-                .find_map(|item| Some(item.player_name.clone()))
+                .map(|item| item.player_name.clone())
+                .next()
         })
 }
 
@@ -1193,6 +1203,7 @@ fn is_active_ban(ban: &PlayerBanRecord) -> bool {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_timeline(
     whitelists: &[WhitelistRecord],
     bans: &[PlayerBanRecord],
@@ -1399,7 +1410,7 @@ fn build_timeline(
         });
     }
 
-    events.sort_by(|a, b| b.occurred_at.cmp(&a.occurred_at));
+    events.sort_by_key(|b| std::cmp::Reverse(b.occurred_at));
     events.truncate(250);
     events
 }

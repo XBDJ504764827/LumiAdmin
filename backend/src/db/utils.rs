@@ -1,6 +1,7 @@
 use super::Database;
 
 impl Database {
+    #[allow(dead_code)]
     pub(super) async fn pg_trgm_schema(&self) -> Option<String> {
         if let Err(error) = sqlx::query("CREATE EXTENSION IF NOT EXISTS pg_trgm")
             .execute(&self.pool)

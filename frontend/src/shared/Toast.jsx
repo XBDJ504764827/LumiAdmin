@@ -1,22 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useRef, useState } from 'react';
 
 let toastId = 0;
 
-export function useToast() {
-  const [toasts, setToasts] = useState([]);
+const ToastContext = createContext(null);
 
-  const show = useCallback((options) => {
-    const id = ++toastId;
-    const toast = {
-      id,
-      title: options.title ?? '提示',
-      message: options.message ?? '',
-      tone: options.tone ?? 'success',
-      duration: options.duration ?? 3000,
-    };
-    setToasts((prev) => [...prev, toast]);
-    return id;
-  }, []);
+/**
+ * Toast Provider：在应用根节点渲染一次，持有唯一的 toast 队列。
+ * 子组件通过 useToast() 消费，调用 toast() 即可全局弹出通知。
+ */
+export function ToastProvider({ children }) {
+  const [toasts, setToasts] = useState([]);
 
   const dismiss = useCallback((id) => {
     setToasts((prev) => prev.map((t) => (t.id === id ? { ...t, exiting: true } : t)));
@@ -26,13 +19,39 @@ export function useToast() {
   }, []);
 
   const toast = useCallback((options) => {
-    const id = show(options);
-    const duration = options.duration ?? 3000;
-    setTimeout(() => dismiss(id), duration);
+    const id = ++toastId;
+    const item = {
+      id,
+      title: options.title ?? '提示',
+      message: options.message ?? '',
+      tone: options.tone ?? 'success',
+      duration: options.duration ?? 3000,
+    };
+    setToasts((prev) => [...prev, item]);
+    setTimeout(() => dismiss(id), item.duration);
     return id;
-  }, [show, dismiss]);
+  }, [dismiss]);
 
-  return { toast, toasts, dismiss };
+  const value = { toast, dismiss };
+
+  return (
+    <ToastContext.Provider value={value}>
+      {children}
+      <ToastContainer toasts={toasts} onDismiss={dismiss} />
+    </ToastContext.Provider>
+  );
+}
+
+/**
+ * 消费全局 toast。返回 { toast, dismiss }。
+ * toast(options) 弹出通知；dismiss(id) 手动关闭。
+ */
+export function useToast() {
+  const ctx = useContext(ToastContext);
+  if (!ctx) {
+    throw new Error('useToast 必须在 <ToastProvider> 内部使用');
+  }
+  return { toast: ctx.toast, dismiss: ctx.dismiss };
 }
 
 function ToastItem({ data, onDismiss }) {
@@ -41,37 +60,26 @@ function ToastItem({ data, onDismiss }) {
   const remainingRef = useRef(data.duration);
   const startRef = useRef(0);
 
-  useEffect(() => {
-    startRef.current = Date.now();
-  }, []);
-
-  useEffect(() => {
-    timerRef.current = setTimeout(() => onDismiss(data.id), data.duration);
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-  }, [data.duration, data.id, onDismiss]);
-
-  function handleMouseEnter() {
+  const onMouseEnter = () => {
     if (timerRef.current) clearTimeout(timerRef.current);
     pausedRef.current = true;
     remainingRef.current -= Date.now() - startRef.current;
-  }
+  };
 
-  function handleMouseLeave() {
+  const onMouseLeave = () => {
     pausedRef.current = false;
     startRef.current = Date.now();
     timerRef.current = setTimeout(() => onDismiss(data.id), remainingRef.current);
-  }
+  };
 
-  const toneClass = data.tone === 'danger' ? 'toast-danger' : 'toast-success';
-  const icon = data.tone === 'danger' ? '✕' : '✓';
+  const toneClass = data.tone === 'danger' ? 'toast-danger' : data.tone === 'warning' ? 'toast-warning' : 'toast-success';
+  const icon = data.tone === 'danger' ? '✕' : data.tone === 'warning' ? '!' : '✓';
 
   return (
     <div
       className={`toast-item ${toneClass}${data.exiting ? ' toast-exiting' : ''}`}
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
     >
       <span className="toast-icon">{icon}</span>
       <div className="toast-content">

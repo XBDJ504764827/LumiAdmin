@@ -67,7 +67,7 @@ export function GlobalBanPage() {
     try{setSearching(true);setSearchResult(null);setSearchSource('');
       const result=await api.searchGlobalBans(token,{steam_input:searchInput.trim()});
       setSearchResult(result.items||[]);setSearchSource(result.source||'');
-    }catch(err){setSearchResult([]);setSearchSource('error');}
+    }catch{setSearchResult([]);setSearchSource('error');}
     finally{setSearching(false);}
   }
 

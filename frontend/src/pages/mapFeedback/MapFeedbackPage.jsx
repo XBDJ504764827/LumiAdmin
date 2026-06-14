@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useApiQuery } from '../../shared/useApiQuery.js';
 import { useAuth } from '../../state/auth.jsx';
-import { useToast, ToastContainer } from '../../shared/Toast.jsx';
+import { useToast } from '../../shared/Toast.jsx';
 import { notifyPendingReviewsUpdated } from '../../hooks/usePendingReviewIndicators.js';
 import { Modal } from '../../shared/Modal.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
@@ -33,7 +33,7 @@ const STATUS_FILTERS = [
 export function MapFeedbackPage() {
   const { session } = useAuth();
   const token = session?.token ?? null;
-  const { toast, toasts, dismiss } = useToast();
+  const { toast } = useToast();
 
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState(undefined);
@@ -281,7 +281,6 @@ export function MapFeedbackPage() {
         </Modal>
       ) : null}
 
-      <ToastContainer toasts={toasts} onDismiss={dismiss} />
     </div>
   );
 }

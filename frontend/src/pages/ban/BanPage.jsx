@@ -4,7 +4,7 @@ import { useApiQuery } from '../../shared/useApiQuery.js';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { InternalNoteInline } from '../../shared/InternalNote.jsx';
 import { useAuth } from '../../state/auth.jsx';
-import { useToast, ToastContainer } from '../../shared/Toast.jsx';
+import { useToast } from '../../shared/Toast.jsx';
 import { buildBanFormFromRecord } from './banForm.js';
 import { formatBanDuration, formatExpiresAt } from './banDisplay.js';
 import { SearchBar } from '../../shared/SearchBar.jsx';
@@ -30,7 +30,7 @@ function buildBanFormFromPlayerReport(report) {
 export function BanPage() {
   const { session } = useAuth();
   const { confirm, dialog } = useConfirmDialog();
-  const { toast, toasts, dismiss: dismissToast } = useToast();
+  const { toast } = useToast();
   const location = useLocation();
   const navigate = useNavigate();
   const token = session?.token ?? null;
@@ -258,7 +258,6 @@ export function BanPage() {
       />
 
       {dialog}
-      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

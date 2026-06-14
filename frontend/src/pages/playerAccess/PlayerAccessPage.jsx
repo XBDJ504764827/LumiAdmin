@@ -3,7 +3,7 @@ import { api } from '../../lib/api.js';
 import { useAuth } from '../../state/auth.jsx';
 import { useApiQuery, useApiMutation } from '../../shared/useApiQuery.js';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
-import { useToast, ToastContainer } from '../../shared/Toast.jsx';
+import { useToast } from '../../shared/Toast.jsx';
 import { formatChinaDate } from '../../shared/time.js';
 import { InternalNoteInline, InternalNoteBadge } from '../../shared/InternalNote.jsx';
 import { TableLoading, TableEmpty } from '../../shared/TableState.jsx';
@@ -11,7 +11,7 @@ import { TableLoading, TableEmpty } from '../../shared/TableState.jsx';
 export function PlayerAccessPage() {
   const { session } = useAuth();
   const { confirm, dialog } = useConfirmDialog();
-  const { toast, toasts, dismiss: dismissToast } = useToast();
+  const { toast } = useToast();
   const token = session?.token ?? null;
 
   // 弹窗状态
@@ -612,7 +612,6 @@ export function PlayerAccessPage() {
       )}
 
       {dialog}
-      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

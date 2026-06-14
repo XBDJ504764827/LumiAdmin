@@ -84,6 +84,7 @@ pub struct PlayerAccessLog {
 }
 
 /// 创建进服记录
+#[allow(clippy::too_many_arguments)]
 pub async fn create_access_log(
     db: &Database,
     steam_id64: &str,

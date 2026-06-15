@@ -50,6 +50,7 @@ pub(crate) struct SubmitAppealBody {
     pub ban_id: Uuid,
     pub steam_id: String,
     pub player_name: String,
+    pub contact: Option<String>,
     pub appeal_reason: String,
 }
 
@@ -402,6 +403,7 @@ pub(crate) async fn submit_ban_appeal(
             ban_id: body.ban_id,
             steam_id: body.steam_id,
             player_name: body.player_name,
+            contact: body.contact,
             appeal_reason: body.appeal_reason,
         },
     )

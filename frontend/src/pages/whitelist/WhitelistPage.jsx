@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../../lib/api.js';
 import { useApiQuery } from '../../shared/useApiQuery.js';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
@@ -80,7 +81,14 @@ export function WhitelistPage() {
   const { confirm, dialog } = useConfirmDialog();
   const { toast } = useToast();
   const { counts: pendingCounts } = usePendingReviewIndicators();
+  const queryClient = useQueryClient();
   const token = session?.token ?? null;
+
+  // 审核相关操作后，失效所有白名单查询（pending/approved/rejected 各 tab），
+  // 保证切换 tab 时能立即看到刚刚审核的玩家，而不需要刷新页面。
+  async function invalidateWhitelist() {
+    await queryClient.invalidateQueries({ queryKey: ['whitelist'] });
+  }
   function getSavedTab() {
     try { return localStorage.getItem('whitelist_tab') || 'pending'; } catch { return 'pending'; }
   }
@@ -113,7 +121,7 @@ export function WhitelistPage() {
   // 数据加载
   // ---------------------------------------------------------------------------
 
-  const { data, isLoading, error, refetch } = useApiQuery(
+  const { data, isLoading, error } = useApiQuery(
     ['whitelist', { tab, page, search }],
     (token) => api.whitelist(token, { page, page_size: 20, status: tab, ...(search ? { search } : {}) }),
   );
@@ -205,7 +213,7 @@ export function WhitelistPage() {
     try {
       setSubmitting(true);
       await api.approveWhitelist(token, item.id);
-      await refetch();
+      await invalidateWhitelist();
       notifyPendingReviewsUpdated({ source: 'whitelist', action: 'approve' });
       closeDetailModal();
       toast({ title: '审核通过', message: `${item.nickname} 的白名单申请已通过。` });
@@ -228,7 +236,7 @@ export function WhitelistPage() {
       setSubmitting(true);
       await api.approveWhitelist(token, approveModal.item.id, { reason: approveModal.reason.trim() });
       setApproveModal(emptyApproveModal());
-      await refetch();
+      await invalidateWhitelist();
       notifyPendingReviewsUpdated({ source: 'whitelist', action: 'approve' });
       closeDetailModal();
       toast({ title: '审核通过', message: `${approveModal.item.nickname} 的白名单申请已通过。` });
@@ -251,7 +259,7 @@ export function WhitelistPage() {
       setSubmitting(true);
       await api.rejectWhitelist(token, rejectModal.item.id, { reason: rejectModal.reason.trim() });
       setRejectModal({ open: false, item: null, reason: '', error: '' });
-      await refetch();
+      await invalidateWhitelist();
       notifyPendingReviewsUpdated({ source: 'whitelist', action: 'reject' });
       closeDetailModal();
       toast({ title: '已拒绝', message: `已拒绝 ${rejectModal.item.nickname} 的白名单申请。` });
@@ -270,7 +278,7 @@ export function WhitelistPage() {
     try {
       setSubmitting(true);
       await api.restoreWhitelist(token, item.id);
-      await refetch();
+      await invalidateWhitelist();
       notifyPendingReviewsUpdated({ source: 'whitelist', action: 'restore' });
       toast({ title: '恢复成功', message: `${item.nickname} 的白名单已恢复。` });
     } catch (actionError) {
@@ -288,7 +296,7 @@ export function WhitelistPage() {
     try {
       setSubmitting(true);
       await api.revokeWhitelist(token, item.id);
-      await refetch();
+      await invalidateWhitelist();
       notifyPendingReviewsUpdated({ source: 'whitelist', action: 'revoke' });
       toast({ title: '删除成功', message: `${item.nickname} 的白名单审核已删除。` });
     } catch (actionError) {
@@ -308,7 +316,7 @@ export function WhitelistPage() {
       });
       setManualModalOpen(false);
       setManualForm(emptyManualForm);
-      await refetch();
+      await invalidateWhitelist();
       notifyPendingReviewsUpdated({ source: 'whitelist', action: 'manual_create' });
       toast({ title: '添加成功', message: `已手动添加 ${manualForm.nickname.trim()} 的白名单。` });
     } catch (actionError) {
@@ -350,7 +358,7 @@ export function WhitelistPage() {
     try {
       setRefreshing(true);
       const result = await api.refreshSingleSteamName(token, item.id);
-      await refetch();
+      await invalidateWhitelist();
       toast({ title: '刷新成功', message: `Steam名称已更新为: ${result.steam_persona_name ?? '(未获取到)'}` });
     } catch (actionError) {
       toast({ title: '刷新失败', message: actionError.message, tone: 'danger' });
@@ -361,7 +369,7 @@ export function WhitelistPage() {
     try {
       setRefreshing(true);
       const result = await api.refreshAllSteamNames(token, tab);
-      await refetch();
+      await invalidateWhitelist();
       toast({ title: '批量刷新完成', message: `成功更新了 ${result.updated_count} 条记录的Steam名称。` });
     } catch (actionError) {
       toast({ title: '批量刷新失败', message: actionError.message, tone: 'danger' });

@@ -100,6 +100,7 @@ function uploadWithProgress(url, formData, uploadToken, onProgress) {
 export function PublicBanAppealPage() {
   const [steamInput, setSteamInput] = useState('');
   const [nickname, setNickname] = useState('');
+  const [contact, setContact] = useState('');
   const [resolving, setResolving] = useState(false);
   const [resolveError, setResolveError] = useState('');
   const [steamid64, setSteamid64] = useState('');
@@ -221,6 +222,7 @@ export function PublicBanAppealPage() {
         ban_id: selectedBanId,
         steam_id: steamid64,
         player_name: nickname.trim(),
+        contact: contact.trim() || null,
         appeal_reason: reason.trim(),
       });
       ({ appealId, uploadToken } = normalizeAppealCreateResponse(result));
@@ -347,6 +349,19 @@ export function PublicBanAppealPage() {
                 disabled={isSubmitting()}
               />
               <div className="form-hint">输入 Steam 标识符后将自动获取昵称</div>
+            </div>
+
+            {/* 联系方式（选填） */}
+            <div className="form-group">
+              <label>联系方式</label>
+              <input
+                type="text" className="form-control"
+                value={contact}
+                onChange={(e) => setContact(e.target.value)}
+                placeholder="可选，便于管理员联系您（QQ / Discord / 邮箱等）"
+                disabled={isSubmitting()}
+              />
+              <div className="form-hint">填写后管理员可在必要时与您取得联系，核实申诉信息。</div>
             </div>
 
             {/* 封禁记录选择 */}

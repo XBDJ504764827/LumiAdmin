@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-const APPEAL_FIELDS: &str = "id, ban_id, steam_id, player_name, appeal_reason, status, reviewed_by, review_note, reviewed_at, created_at";
+const APPEAL_FIELDS: &str = "id, ban_id, steam_id, player_name, contact, appeal_reason, status, reviewed_by, review_note, reviewed_at, created_at";
 
 #[derive(Serialize)]
 pub struct BanAppealItem {
@@ -12,6 +12,8 @@ pub struct BanAppealItem {
     pub ban_id: Uuid,
     pub steam_id: String,
     pub player_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contact: Option<String>,
     pub appeal_reason: String,
     pub status: String,
     pub reviewed_by: Option<String>,
@@ -33,6 +35,7 @@ struct AppealRow {
     ban_id: Uuid,
     steam_id: String,
     player_name: String,
+    contact: Option<String>,
     appeal_reason: String,
     status: String,
     reviewed_by: Option<String>,
@@ -47,6 +50,7 @@ struct AppealWithBanRow {
     ban_id: Uuid,
     steam_id: String,
     player_name: String,
+    contact: Option<String>,
     appeal_reason: String,
     status: String,
     reviewed_by: Option<String>,
@@ -64,6 +68,7 @@ pub struct CreateAppealInput {
     pub ban_id: Uuid,
     pub steam_id: String,
     pub player_name: String,
+    pub contact: Option<String>,
     pub appeal_reason: String,
 }
 
@@ -74,6 +79,7 @@ pub async fn create_appeal(
     let steam_id = input.steam_id.trim();
     let player_name = input.player_name.trim();
     let reason = input.appeal_reason.trim();
+    let contact = super::normalize_optional_string(input.contact);
     let upload_token = new_upload_token();
     let upload_token_hash = hash_upload_token(&upload_token);
 
@@ -104,14 +110,15 @@ pub async fn create_appeal(
     anyhow::ensure!(existing.is_none(), "该封禁记录已有待审核的申诉");
 
     let row = sqlx::query_as::<_, AppealRow>(&format!(
-        r#"INSERT INTO ban_appeals (id, ban_id, steam_id, player_name, appeal_reason, upload_token_hash)
-               VALUES ($1, $2, $3, $4, $5, $6)
+        r#"INSERT INTO ban_appeals (id, ban_id, steam_id, player_name, contact, appeal_reason, upload_token_hash)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)
                RETURNING {APPEAL_FIELDS}"#
     ))
     .bind(Uuid::new_v4())
     .bind(input.ban_id)
     .bind(steam_id)
     .bind(player_name)
+    .bind(contact)
     .bind(reason)
     .bind(upload_token_hash)
     .fetch_one(&db.pool)
@@ -140,6 +147,7 @@ pub async fn create_appeal(
         ban_id: row.ban_id,
         steam_id: row.steam_id,
         player_name: row.player_name,
+        contact: row.contact,
         appeal_reason: row.appeal_reason,
         status: row.status,
         reviewed_by: row.reviewed_by,
@@ -183,7 +191,7 @@ pub async fn list_appeals(
 
     let count_sql = format!("SELECT COUNT(*) FROM ban_appeals ba {where_clause}");
     let data_sql = format!(
-        r#"SELECT ba.id, ba.ban_id, ba.steam_id, ba.player_name, ba.appeal_reason,
+        r#"SELECT ba.id, ba.ban_id, ba.steam_id, ba.player_name, ba.contact, ba.appeal_reason,
                   ba.status, COALESCE(reviewer_user.display_name, ba.reviewed_by) AS reviewed_by, ba.review_note, ba.reviewed_at, ba.created_at,
                   br.reason AS ban_reason, br.ban_type, COALESCE(ban_operator_user.display_name, br.operator_name) AS ban_operator_name, br.server_name AS ban_server_name
            FROM ban_appeals ba
@@ -237,6 +245,7 @@ pub async fn list_appeals(
             ban_id: row.ban_id,
             steam_id: row.steam_id,
             player_name: row.player_name,
+            contact: row.contact,
             appeal_reason: row.appeal_reason,
             status: row.status,
             reviewed_by: row.reviewed_by,
@@ -321,6 +330,7 @@ pub async fn approve_appeal(
         ban_id: updated.ban_id,
         steam_id: updated.steam_id,
         player_name: updated.player_name,
+        contact: updated.contact,
         appeal_reason: updated.appeal_reason,
         status: updated.status,
         reviewed_by: updated.reviewed_by,
@@ -391,6 +401,7 @@ pub async fn reject_appeal(
         ban_id: updated.ban_id,
         steam_id: updated.steam_id,
         player_name: updated.player_name,
+        contact: updated.contact,
         appeal_reason: updated.appeal_reason,
         status: updated.status,
         reviewed_by: updated.reviewed_by,
@@ -414,7 +425,7 @@ pub async fn query_appeals_by_steam_id(
     anyhow::ensure!(!steam_id.is_empty(), "SteamID 不能为空");
 
     let rows = sqlx::query_as::<_, AppealWithBanRow>(
-        r#"SELECT ba.id, ba.ban_id, ba.steam_id, ba.player_name, ba.appeal_reason,
+        r#"SELECT ba.id, ba.ban_id, ba.steam_id, ba.player_name, ba.contact, ba.appeal_reason,
                   ba.status, COALESCE(reviewer_user.display_name, ba.reviewed_by) AS reviewed_by, ba.review_note, ba.reviewed_at, ba.created_at,
                   br.reason AS ban_reason, br.ban_type, COALESCE(ban_operator_user.display_name, br.operator_name) AS ban_operator_name, br.server_name AS ban_server_name
            FROM ban_appeals ba
@@ -451,6 +462,7 @@ pub async fn query_appeals_by_steam_id(
             ban_id: row.ban_id,
             steam_id: row.steam_id,
             player_name: row.player_name,
+            contact: row.contact,
             appeal_reason: row.appeal_reason,
             status: row.status,
             reviewed_by: row.reviewed_by,

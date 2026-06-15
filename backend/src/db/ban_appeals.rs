@@ -36,6 +36,9 @@ pub(super) async fn migrate_ban_appeals_schema(&self) -> anyhow::Result<()> {
     sqlx::query(r#"ALTER TABLE ban_appeals ADD COLUMN IF NOT EXISTS upload_token_hash TEXT"#)
         .execute(&self.pool)
         .await?;
+    sqlx::query(r#"ALTER TABLE ban_appeals ADD COLUMN IF NOT EXISTS contact TEXT"#)
+        .execute(&self.pool)
+        .await?;
     Ok(())
 }
 

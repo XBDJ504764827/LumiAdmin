@@ -284,6 +284,7 @@ export function BanAppealPage() {
               <div className="detail-field-value">
                 <div>名称：{detailItem.player_name}</div>
                 <div>SteamID64：{detailItem.steam_id}</div>
+                <div>联系方式：{detailItem.contact || '-'}</div>
               </div>
             </div>
             <div className="detail-field">
@@ -448,6 +449,7 @@ export function BanAppealPage() {
           <div className="flex-col gap-12">
             <div className="text-muted fs-13">
               <div><strong>玩家：</strong>{reviewItem.player_name}（{reviewItem.steam_id}）</div>
+              {reviewItem.contact ? <div><strong>联系方式：</strong>{reviewItem.contact}</div> : null}
               <div><strong>封禁原因：</strong>{reviewItem.ban_reason || '-'}</div>
               <div><strong>申诉理由：</strong>{reviewItem.appeal_reason}</div>
             </div>

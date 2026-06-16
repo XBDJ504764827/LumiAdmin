@@ -41,6 +41,9 @@ pub(crate) struct PluginBanBody {
 pub(crate) struct PluginBanPollBody {
     pub report_token: String,
     pub port: i32,
+    /// 可选：客户端上次收到的版本签名。命中时后端省略 items（向后兼容，旧客户端不传即可）。
+    #[serde(default)]
+    pub etag: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -710,16 +713,22 @@ pub(crate) async fn poll_plugin_bans(
     State(ctx): State<AppCtx>,
     Json(body): Json<PluginBanPollBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let items = plugin_ban_service::poll_active_bans(
+    let result = plugin_ban_service::poll_active_bans_versioned(
         &ctx.db,
         plugin_ban_service::PluginBanPollInput {
             report_token: body.report_token,
             port: body.port,
         },
+        body.etag,
     )
     .await
     .map_err(invalid_request)?;
-    Ok(Json(serde_json::json!({ "items": items })))
+    Ok(Json(serde_json::json!({
+        "items": result.items,
+        "etag": result.etag,
+        "total_count": result.total_count,
+        "not_modified": result.not_modified
+    })))
 }
 
 pub(crate) async fn poll_plugin_bans_incremental(

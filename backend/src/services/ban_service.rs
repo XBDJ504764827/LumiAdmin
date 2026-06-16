@@ -116,8 +116,10 @@ pub struct UpdateBanInput {
 }
 
 const BAN_DISPLAY_FIELDS: &str = "br.id, br.player, br.steam_id, br.ip_address, br.server_name, br.ban_type, br.duration_minutes, br.expires_at, br.reason, br.status, COALESCE(operator_user.display_name, br.operator_name) AS operator_name, br.source, br.server_id, br.server_port, br.removed_reason, COALESCE(removed_user.display_name, br.removed_by) AS removed_by, br.removed_at, br.created_at";
-const BAN_LIST_DISPLAY_FIELDS: &str = "br.id, br.player, br.steam_id, br.ip_address, br.ban_type, br.duration_minutes, br.expires_at, br.reason, br.status, COALESCE(operator_user.display_name, br.operator_name) AS operator_name, br.created_at";
-// 使用共享的 SQL 片段
+// 列表查询不再使用逐行 LATERAL JOIN 解析 operator_name，改为取原始值后在应用层批量解析。
+// 详见 services::display_name::resolve_display_names。
+const BAN_LIST_DISPLAY_FIELDS: &str = "br.id, br.player, br.steam_id, br.ip_address, br.ban_type, br.duration_minutes, br.expires_at, br.reason, br.status, br.operator_name, br.created_at";
+// 使用共享的 SQL 片段（仅单条详情查询仍在使用 LATERAL；列表查询已改为应用层解析）
 use crate::sql_fragments::{OPERATOR_DISPLAY_JOIN as BAN_OPERATOR_DISPLAY_JOIN, REMOVED_BY_DISPLAY_JOIN as BAN_REMOVED_BY_DISPLAY_JOIN};
 
 pub(crate) fn row_to_item(row: BanRow) -> BanItem {
@@ -186,9 +188,11 @@ pub async fn list_bans(
         format!("WHERE {}", conditions.join(" AND "))
     };
 
-    // 使用 COUNT(*) OVER() 窗口函数一次性获取总数和数据
+    // 使用 COUNT(*) OVER() 窗口函数一次性获取总数和数据。
+    // 注意：此处不再使用 {BAN_OPERATOR_DISPLAY_JOIN}，operator_name 取原始值，
+    // 由后续应用层批量解析，避免每行一次 LATERAL 子查询。
     let data_sql = format!(
-        "SELECT {BAN_LIST_DISPLAY_FIELDS}, COUNT(*) OVER() as total_count FROM ban_records br {BAN_OPERATOR_DISPLAY_JOIN} {where_clause} ORDER BY br.created_at DESC LIMIT ${param_idx} OFFSET ${}",
+        "SELECT {BAN_LIST_DISPLAY_FIELDS}, COUNT(*) OVER() as total_count FROM ban_records br {where_clause} ORDER BY br.created_at DESC LIMIT ${param_idx} OFFSET ${}",
         param_idx + 1
     );
 
@@ -207,9 +211,24 @@ pub async fn list_bans(
     let rows: Vec<BanListRowWithTotal> = data_query.fetch_all(&db.pool).await?;
 
     let total: i64 = rows.first().map(|r| r.total_count).unwrap_or(0);
+
+    // 应用层批量解析 operator_name -> 显示名（替代原先的逐行 LATERAL JOIN）
+    let operator_names: Vec<String> = rows
+        .iter()
+        .map(|r| r.base.operator_name.clone())
+        .collect();
+    let display_map = crate::services::display_name::resolve_display_names(db, &operator_names).await?;
+
     let items = rows
         .into_iter()
-        .map(|row_with_total| list_row_to_item(row_with_total.base))
+        .map(|row_with_total| {
+            let mut item = list_row_to_item(row_with_total.base);
+            // 解析成功则覆盖为显示名，否则保留原始 operator_name（与历史 COALESCE 行为一致）
+            if let Some(display) = display_map.get(&item.operator_name) {
+                item.operator_name = display.clone();
+            }
+            item
+        })
         .collect();
 
     Ok(crate::routes::PaginatedResponse {

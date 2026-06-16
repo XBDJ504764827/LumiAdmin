@@ -12,6 +12,7 @@ pub mod ban_service;
 pub mod community_rcon;
 pub mod community_service;
 pub mod dashboard_service;
+pub mod display_name;
 pub mod docs_service;
 pub mod external_ban_api_service;
 pub mod external_server_service;

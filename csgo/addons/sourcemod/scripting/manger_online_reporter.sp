@@ -45,6 +45,11 @@ int g_LastTickrate = 64;
 int g_ServerStartTime = 0;
 int g_UnbanAdminUserId = 0;
 
+// 服务端返回的封禁列表版本签名 etag。每次轮询时回传，命中后端版本检测时
+// items 为空，避免后端每次全量序列化最多 10000 条记录。
+// 注意：配置变更（端口/token）时需要重置，由 ResolvePluginApiConfig 路径负责。
+char g_BanPollEtag[96];
+
 public Plugin myinfo =
 {
     name = "Manger Online Reporter",
@@ -750,6 +755,11 @@ public Action Timer_PollBans(Handle timer)
     JSONObject payload = new JSONObject();
     payload.SetString("report_token", token);
     payload.SetInt("port", currentPort);
+    // 回传上次版本签名；首次请求或配置变更后为空，后端会返回完整列表
+    if (g_BanPollEtag[0] != '\0')
+    {
+        payload.SetString("etag", g_BanPollEtag);
+    }
 
     HTTPRequest request = new HTTPRequest(url);
     request.Post(payload, OnBanPollResponse);
@@ -777,6 +787,12 @@ public void OnBanPollResponse(HTTPResponse response, any value, const char[] err
     {
         LogError("Manger ban poll response data was null.");
         return;
+    }
+
+    // 记录服务端返回的版本签名，供下次轮询回传以启用增量检测
+    if (!data.IsNull("etag"))
+    {
+        data.GetString("etag", g_BanPollEtag, sizeof(g_BanPollEtag));
     }
 
     JSON rawItems = data.Get("items");

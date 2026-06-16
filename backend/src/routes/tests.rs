@@ -1620,6 +1620,83 @@ async fn plugin_can_poll_active_bans_for_server() {
         assert_eq!(payload["items"][0]["steam_id"], "76561197960290419");
         assert_eq!(payload["items"][0]["ip_address"], "192.168.1.30");
         assert_eq!(payload["items"][0]["reason"], "作弊");
+        // 版本签名与总数应随响应返回（向后兼容的新字段）
+        assert!(payload["etag"].as_str().unwrap().contains('1'));
+        assert_eq!(payload["total_count"], 1);
+        assert_eq!(payload["not_modified"], false);
+        Ok(())
+    })
+    .await;
+}
+
+/// 未携带 etag 时返回全部 items（向后兼容）；携带命中 etag 时省略 items。
+#[tokio::test]
+async fn plugin_ban_poll_skips_items_when_etag_matches() {
+    with_test_app(async |db, config| {
+        let (_, server_id) = insert_community_with_server(&db, "插件轮询 etag 服").await;
+        sqlx::query(
+            r#"INSERT INTO ban_records (
+                       id, player, steam_id, ip_address, server_name, ban_type,
+                       duration_minutes, expires_at, reason, status, operator_name, source,
+                       server_id, server_port
+                   )
+                   VALUES ($1, 'BadPlayer', '76561197960290419', '192.168.1.30', '一号服', 'steam',
+                           0, NULL, '作弊', 'active', 'Alex', 'manual', $2, 25575)"#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(server_id)
+        .execute(&db.pool)
+        .await?;
+
+        let app = test_app(config, db);
+
+        // 1) 首次请求（不带 etag）：返回全部 items 与当前 etag
+        let first = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/plugin/bans/poll")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({ "report_token": "plugin-token", "port": 25575 }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let bytes = to_bytes(first.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["items"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["not_modified"], false);
+        let etag = payload["etag"].as_str().unwrap().to_string();
+
+        // 2) 第二次请求回传相同 etag：未变化，items 应为空
+        let second = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/plugin/bans/poll")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "report_token": "plugin-token",
+                            "port": 25575,
+                            "etag": etag
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::OK);
+        let bytes = to_bytes(second.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["items"].as_array().unwrap().len(), 0);
+        assert_eq!(payload["not_modified"], true);
+        // total_count 仍返回真实值，便于客户端核对
+        assert_eq!(payload["total_count"], 1);
         Ok(())
     })
     .await;

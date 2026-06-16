@@ -133,6 +133,17 @@ test('edge sync retries transient failures and avoids concurrent syncs', () => {
   assert.match(source, /MarkOperationsRetryable\(ids, errorMsg\)/);
 });
 
+test('ban poll sends and stores server etag to skip unchanged payloads', () => {
+  const source = read(onlineSourcePath);
+
+  // 全局变量保存最近一次服务端返回的版本签名
+  assert.match(source, /char g_BanPollEtag\[96\];/);
+  // 请求体在上次有 etag 时回传
+  assert.match(source, /if \(g_BanPollEtag\[0\] != '\\0'\)[\s\S]*?payload\.SetString\("etag", g_BanPollEtag\);/);
+  // 响应体中取出服务端回传的 etag 并缓存
+  assert.match(source, /if \(!data\.IsNull\("etag"\)\)[\s\S]*?data\.GetString\("etag", g_BanPollEtag, sizeof\(g_BanPollEtag\)\);/);
+});
+
 test('compiled SourceMod plugins are present', () => {
   assert.ok(existsSync(onlinePluginPath), 'online reporter smx should exist');
   assert.ok(statSync(onlinePluginPath).size > 0, 'online reporter smx should not be empty');

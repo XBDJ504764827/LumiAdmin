@@ -329,11 +329,95 @@ pub async fn check_operator_privilege(
     }
 }
 
+/// 全量拉取活跃封禁（不含版本检测）。
+///
+/// 保留作为向后兼容的轻量封装；路由层现在使用 [`poll_active_bans_versioned`]，
+/// 通过 etag 检测在未变化时省略 items，避免每次全量序列化。
+#[allow(dead_code)]
 pub async fn poll_active_bans(
     db: &Database,
     input: PluginBanPollInput,
 ) -> anyhow::Result<Vec<BanItem>> {
+    Ok(poll_active_bans_versioned(db, input, None)
+        .await?
+        .items)
+}
+
+/// 全量轮询结果（含版本签名 etag 与总数）。
+///
+/// 设计：每次轮询以「活跃封禁计数 + 最近变更时间戳」生成一个轻量版本签名 etag。
+/// 当插件携带与上次相同的 etag 时，说明封禁列表未发生变化，
+/// 后端仅需一次聚合查询即可返回空 items，避免每次全量拉取并序列化最多 10000 条记录。
+/// 未携带 etag 的旧客户端行为完全不变（向后兼容）。
+#[derive(Serialize)]
+pub struct BanPollResult {
+    /// 封禁记录列表（未变化且客户端携带匹配 etag 时为空）
+    pub items: Vec<BanItem>,
+    /// 当前封禁集合的版本签名，客户端应在下次请求时回传
+    pub etag: String,
+    /// 当前活跃封禁总数（无论 items 是否为空都返回，便于客户端核对）
+    pub total_count: i64,
+    /// 本次是否因 etag 命中而省略了 items（true=未变化）
+    pub not_modified: bool,
+}
+
+/// 计算该服务器可见活跃封禁的版本签名：`count:latest_ms`，其中 latest_ms 为
+/// 「活跃集合最大 created_at」与「本服相关最大 removed_at」中的较大值的毫秒时间戳。
+/// 仅聚合查询，可命中 status='active' 部分索引，成本很低。
+///
+/// 说明：`ban_records` 表当前没有 `updated_at` 列，因此用 `MAX(created_at)`（新增封禁）
+/// 与 `MAX(removed_at)`（解封）共同构成变更指纹。这两类事件正是插件轮询关心的
+/// 主要变化；封禁字段编辑（update_ban）不改变活跃集合成员，对插件同步无影响。
+async fn compute_ban_poll_etag(db: &Database, server: &ServerAuth) -> anyhow::Result<(String, i64)> {
+    let row: (i64, Option<chrono::DateTime<chrono::Utc>>) = sqlx::query_as(
+        r#"SELECT
+                COUNT(*),
+                MAX(created_at)
+           FROM ban_records
+           WHERE status = 'active'
+             AND (expires_at IS NULL OR expires_at > now())
+             AND (server_id IS NULL OR server_id = $1 OR server_port = $2)"#,
+    )
+    .bind(server.id)
+    .bind(server.port)
+    .fetch_one(&db.pool)
+    .await?;
+    let (count, max_created) = row;
+    // 活跃集合的 created_at 作为“新增”指纹；解封（removed_at）发生在 status 已变为 inactive 的记录上，
+    // 需要在全表上额外取一次 MAX(removed_at)，以捕获“刚刚解封”这一变化。
+    let latest_removed: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+        r#"SELECT MAX(removed_at) FROM ban_records
+           WHERE (server_id IS NULL OR server_id = $1 OR server_port = $2)"#,
+    )
+    .bind(server.id)
+    .bind(server.port)
+    .fetch_one(&db.pool)
+    .await?;
+    let latest = max_created.max(latest_removed);
+    let ts_ms = latest.map(|t| t.timestamp_millis()).unwrap_or(0);
+    Ok((format!("{count}:{ts_ms}"), count))
+}
+
+pub async fn poll_active_bans_versioned(
+    db: &Database,
+    input: PluginBanPollInput,
+    client_etag: Option<String>,
+) -> anyhow::Result<BanPollResult> {
     let server = authenticate_server(db, input.port, &input.report_token).await?;
+    let (etag, total_count) = compute_ban_poll_etag(db, &server).await?;
+
+    // 客户端携带的 etag 与当前版本一致 → 封禁列表无变化，省略 items
+    if let Some(ref given) = client_etag {
+        if etag_eq(given, &etag) {
+            return Ok(BanPollResult {
+                items: Vec::new(),
+                etag,
+                total_count,
+                not_modified: true,
+            });
+        }
+    }
+
     let rows = sqlx::query_as::<_, super::ban_service::BanRow>(
         r#"SELECT id, player, steam_id, ip_address, server_name, ban_type,
                   duration_minutes, expires_at, reason, status, operator_name, source,
@@ -350,10 +434,29 @@ pub async fn poll_active_bans(
     .fetch_all(&db.pool)
     .await?;
 
-    Ok(rows
-        .into_iter()
-        .map(super::ban_service::row_to_item)
-        .collect())
+    Ok(BanPollResult {
+        items: rows
+            .into_iter()
+            .map(super::ban_service::row_to_item)
+            .collect(),
+        etag,
+        total_count,
+        not_modified: false,
+    })
+}
+
+/// 常量时间地比较客户端回传的 etag 与当前 etag，避免时序侧信道。
+fn etag_eq(client: &str, current: &str) -> bool {
+    let a = client.as_bytes();
+    let b = current.as_bytes();
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 /// 增量轮询封禁记录的结果
@@ -656,7 +759,9 @@ pub async fn complete_missing_ban_details(
 
 #[cfg(test)]
 mod tests {
-    use super::{expires_at, format_expires_at_for_display, kick_message, normalize_steam_id};
+    use super::{
+        etag_eq, expires_at, format_expires_at_for_display, kick_message, normalize_steam_id,
+    };
 
     #[test]
     fn zero_duration_has_no_expiry() {
@@ -695,6 +800,27 @@ mod tests {
         // 不应该包含时区信息
         assert!(!formatted.contains("+"));
         assert!(!formatted.contains("T"));
+    }
+
+    #[test]
+    fn etag_eq_matches_identical_strings() {
+        assert!(etag_eq("123:1700000000000", "123:1700000000000"));
+    }
+
+    #[test]
+    fn etag_eq_rejects_different_lengths() {
+        assert!(!etag_eq("1:1", "12:1"));
+        assert!(!etag_eq("12:1", "1:1"));
+    }
+
+    #[test]
+    fn etag_eq_rejects_different_content_same_length() {
+        assert!(!etag_eq("123:1700000000000", "123:1700000000001"));
+    }
+
+    #[test]
+    fn etag_eq_rejects_empty_client() {
+        assert!(!etag_eq("", "1:1"));
     }
 
     #[test]

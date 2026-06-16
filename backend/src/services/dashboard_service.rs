@@ -1,14 +1,16 @@
 use crate::{auth::session::role_label, db::Database};
 use serde::Serialize;
 #[cfg(not(test))]
-use std::sync::{Mutex, OnceLock};
+use std::sync::{RwLock, OnceLock};
 #[cfg(not(test))]
 use std::time::{Duration, Instant};
 
 #[cfg(not(test))]
 const DASHBOARD_CACHE_TTL: Duration = Duration::from_secs(10);
+/// 仪表盘缓存使用 RwLock：读多写少（所有管理员共享、每 30s 轮询一次），
+/// 读不阻塞读，避免 Mutex 在并发读时造成不必要的串行化。
 #[cfg(not(test))]
-static DASHBOARD_CACHE: OnceLock<Mutex<Option<(Instant, DashboardMetrics)>>> = OnceLock::new();
+static DASHBOARD_CACHE: OnceLock<RwLock<Option<(Instant, DashboardMetrics)>>> = OnceLock::new();
 
 #[derive(Clone, Serialize)]
 pub struct DashboardAdminPreview {
@@ -103,8 +105,8 @@ pub async fn get_metrics(db: &Database) -> anyhow::Result<DashboardMetrics> {
     let metrics = get_metrics_uncached(db).await?;
     #[cfg(not(test))]
     {
-        let cache = DASHBOARD_CACHE.get_or_init(|| Mutex::new(None));
-        if let Ok(mut guard) = cache.lock() {
+        let cache = DASHBOARD_CACHE.get_or_init(|| RwLock::new(None));
+        if let Ok(mut guard) = cache.write() {
             *guard = Some((Instant::now(), metrics.clone()));
         }
     }
@@ -113,8 +115,9 @@ pub async fn get_metrics(db: &Database) -> anyhow::Result<DashboardMetrics> {
 
 #[cfg(not(test))]
 fn cached_metrics() -> Option<DashboardMetrics> {
-    let cache = DASHBOARD_CACHE.get_or_init(|| Mutex::new(None));
-    let guard = cache.lock().ok()?;
+    let cache = DASHBOARD_CACHE.get_or_init(|| RwLock::new(None));
+    // 读锁：多个并发请求可同时读取，互不阻塞
+    let guard = cache.read().ok()?;
     let (created_at, metrics) = guard.as_ref()?;
     if created_at.elapsed() <= DASHBOARD_CACHE_TTL {
         return Some(metrics.clone());

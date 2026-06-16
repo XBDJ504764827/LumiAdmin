@@ -114,31 +114,15 @@ pub async fn list_whitelist(
         format!("WHERE {}", conditions.join(" AND "))
     };
 
-    // 使用 COUNT(*) OVER() 窗口函数一次性获取总数和数据
+    // 使用 COUNT(*) OVER() 窗口函数一次性获取总数和数据。
+    // 不再使用逐行 LATERAL JOIN 解析 approved_by/rejected_by，改为取原始值后在应用层批量解析。
+    // 详见 services::display_name::resolve_display_names。
     let data_sql = format!(
         r#"SELECT wr.id, wr.steamid64, wr.steamid, wr.steamid3, wr.profile_url, wr.nickname, wr.steam_persona_name, wr.status,
-                  wr.applied_at, wr.approved_at, COALESCE(approved_user.display_name, wr.approved_by) AS approved_by, wr.approval_reason,
-                  wr.rejected_at, COALESCE(rejected_user.display_name, wr.rejected_by) AS rejected_by, wr.rejection_reason,
+                  wr.applied_at, wr.approved_at, wr.approved_by, wr.approval_reason,
+                  wr.rejected_at, wr.rejected_by, wr.rejection_reason,
                   COUNT(*) OVER() as total_count
            FROM whitelist_requests wr
-           LEFT JOIN LATERAL (
-             SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
-             FROM users u
-             WHERE u.username = wr.approved_by
-                OR u.display_name = wr.approved_by
-                OR NULLIF(u.remark, '') = wr.approved_by
-             ORDER BY CASE WHEN u.username = wr.approved_by THEN 0 WHEN u.display_name = wr.approved_by THEN 1 ELSE 2 END
-             LIMIT 1
-           ) approved_user ON true
-           LEFT JOIN LATERAL (
-             SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
-             FROM users u
-             WHERE u.username = wr.rejected_by
-                OR u.display_name = wr.rejected_by
-                OR NULLIF(u.remark, '') = wr.rejected_by
-             ORDER BY CASE WHEN u.username = wr.rejected_by THEN 0 WHEN u.display_name = wr.rejected_by THEN 1 ELSE 2 END
-             LIMIT 1
-           ) rejected_user ON true
            {where_clause} ORDER BY wr.applied_at DESC LIMIT ${param_idx} OFFSET ${}"#,
         param_idx + 1
     );
@@ -158,9 +142,37 @@ pub async fn list_whitelist(
     let rows: Vec<WhitelistRowWithTotal> = data_query.fetch_all(&db.pool).await?;
 
     let total: i64 = rows.first().map(|r| r.total_count).unwrap_or(0);
+
+    // 应用层批量解析 approved_by / rejected_by -> 显示名（替代原先的两个逐行 LATERAL JOIN）
+    let reviewer_names: Vec<String> = rows
+        .iter()
+        .flat_map(|r| {
+            [r.base.approved_by.as_deref(), r.base.rejected_by.as_deref()]
+                .into_iter()
+                .flatten()
+                .map(|s| s.to_string())
+        })
+        .collect();
+    let display_map =
+        crate::services::display_name::resolve_display_names(db, &reviewer_names).await?;
+
     let items = rows
         .into_iter()
-        .map(|row_with_total| map_whitelist_row(row_with_total.base))
+        .map(|row_with_total| {
+            let mut item = map_whitelist_row(row_with_total.base);
+            // 解析成功则覆盖为显示名，否则保留原始值（与历史 COALESCE 行为一致）
+            if let Some(approved_by) = item.approved_by.as_ref() {
+                if let Some(display) = display_map.get(approved_by) {
+                    item.approved_by = Some(display.clone());
+                }
+            }
+            if let Some(rejected_by) = item.rejected_by.as_ref() {
+                if let Some(display) = display_map.get(rejected_by) {
+                    item.rejected_by = Some(display.clone());
+                }
+            }
+            item
+        })
         .collect();
 
     Ok(crate::routes::PaginatedResponse {

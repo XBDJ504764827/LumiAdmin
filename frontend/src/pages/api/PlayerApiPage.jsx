@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useAsync } from '../../shared/useAsync.js';
-import { useAuth } from '../../state/auth.jsx';
+import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
 import { TableLoading, TableEmpty } from '../../shared/TableState.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';

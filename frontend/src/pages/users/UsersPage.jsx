@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { Modal } from '../../shared/Modal.jsx';
-import { useAuth } from '../../state/auth.jsx';
+import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
 import { useApiQuery, useApiMutation } from '../../shared/useApiQuery.js';
 import { buildCreateUserPayload, buildUpdateUserPayload, validateCreateUserForm } from './userForm.js';

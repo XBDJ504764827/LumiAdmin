@@ -1,59 +1,24 @@
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { api } from '../lib/api.js';
-import { defaultSessionFromToken, normalizeSession, readStoredToken } from '../shared/authClient.js';
+import { createContext, useCallback, useContext, useEffect } from 'react';
+import { useAuthStore } from './store.js';
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [session, setSession] = useState(null);
-  const [bootstrapLoading, setBootstrapLoading] = useState(true);
-  const sessionRef = useRef(session);
-  useEffect(() => { sessionRef.current = session; });
+  // 订阅 Zustand store 的状态
+  const session = useAuthStore((s) => s.session);
+  const bootstrapLoading = useAuthStore((s) => s.bootstrapLoading);
 
+  // 首次挂载时初始化 auth store（从 localStorage 读取 token 并校验）
   useEffect(() => {
-    const token = readStoredToken(typeof window !== 'undefined' ? window.localStorage : null);
-    const initialSession = defaultSessionFromToken(token);
-    React.startTransition(() => { setSession(initialSession); });
-
-    if (!token) {
-      React.startTransition(() => { setBootstrapLoading(false); });
-      return;
-    }
-
-    api.me(token)
-      .then((payload) => {
-        setSession(normalizeSession(payload));
-      })
-      .catch(() => {
-        if (typeof window !== 'undefined') {
-          window.localStorage.removeItem('manger_token');
-        }
-        setSession(null);
-      })
-      .finally(() => {
-        setBootstrapLoading(false);
-      });
+    useAuthStore.getState().initialize();
   }, []);
 
   const login = useCallback(async (credentials) => {
-    const payload = await api.login(credentials);
-    const nextSession = normalizeSession(payload);
-    if (typeof window !== 'undefined' && nextSession?.token) {
-      window.localStorage.setItem('manger_token', nextSession.token);
-    }
-    setSession(nextSession);
-    return nextSession;
+    return useAuthStore.getState().login(credentials);
   }, []);
 
   const logout = useCallback(async () => {
-    const current = sessionRef.current;
-    if (current?.token) {
-      try { await api.logout(current.token); } catch {}
-    }
-    if (typeof window !== 'undefined') {
-      window.localStorage.removeItem('manger_token');
-    }
-    setSession(null);
+    return useAuthStore.getState().logout();
   }, []);
 
   return (

@@ -2,7 +2,7 @@ import React, { useCallback, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useToast } from '../../shared/Toast.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
-import { useAuth } from '../../state/auth.jsx';
+import { useAuth } from '../../state/store.js';
 import { formatChinaDateTime } from '../../shared/time.js';
 
 export function BanApiModal({ open, onClose }) {

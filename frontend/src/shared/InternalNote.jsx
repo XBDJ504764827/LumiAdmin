@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
-import { useAuth } from '../state/auth.jsx';
+import { useAuth } from '../state/store.js';
 
 /**
  * Hook to fetch a player's internal profile (notes + tags).

@@ -1,6 +1,6 @@
 import React, { createContext, createElement, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../lib/api.js';
-import { useAuth } from '../state/auth.jsx';
+import { useAuth } from '../state/store.js';
 
 const WS_BASE = (import.meta.env.VITE_WS_BASE ?? '').replace(/^http/, 'ws') ||
   `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const root = resolve(import.meta.dirname, '../../../../');
+const root = resolve(import.meta.dirname, '../');
 const onlineSourcePath = resolve(root, 'csgo/addons/sourcemod/scripting/manger_online_reporter.sp');
 const edgeSourcePath = resolve(root, 'csgo/addons/sourcemod/scripting/manger_edge_sync.sp');
 const onlinePluginPath = resolve(root, 'csgo/addons/sourcemod/plugins/manger_online_reporter.smx');

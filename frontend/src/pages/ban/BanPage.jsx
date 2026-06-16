@@ -3,7 +3,7 @@ import { api } from '../../lib/api.js';
 import { useApiQuery } from '../../shared/useApiQuery.js';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { InternalNoteInline } from '../../shared/InternalNote.jsx';
-import { useAuth } from '../../state/auth.jsx';
+import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
 import { buildBanFormFromRecord } from './banForm.js';
 import { formatBanDuration, formatExpiresAt } from './banDisplay.js';

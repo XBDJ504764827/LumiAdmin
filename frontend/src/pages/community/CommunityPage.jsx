@@ -25,7 +25,7 @@ import {
 import { onlinePlayerKey, buildKickCommand } from './onlinePlayers.js';
 import { OnlinePlayerCard, ToggleSwitch, FormSectionCard, ServerRconFeedback } from './CommunityComponents.jsx';
 import { COMMAND_CATEGORIES } from '../rcon/RconPage.jsx';
-import { useAuth } from '../../state/auth.jsx';
+import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
 
 const emptyGroupForm = { name: '' };

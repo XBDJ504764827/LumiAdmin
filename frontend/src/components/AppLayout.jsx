@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { useAuth } from '../state/auth.jsx';
+import { useAuth } from '../state/store.js';
 
 export function AppLayout({ navItems, children }) {
   const [collapsed, setCollapsed] = useState(false);

@@ -1,17 +1,11 @@
 /* ── LumiAdmin Styles ── */
-/* 样式按依赖顺序加载，请勿改变 @import 顺序 */
+/* 样式按逻辑分组合并，请勿改变 @import 顺序 */
 
-@import './styles/variables.css';
-@import './styles/01-dark-overrides.css';
-@import './styles/02-sidebar.css';
-@import './styles/03-layout.css';
-@import './styles/04-filters.css';
-@import './styles/05-player-detail.css';
-@import './styles/06-dashboard.css';
-@import './styles/07-forms.css';
-@import './styles/08-public.css';
-@import './styles/09-login.css';
-@import './styles/10-notifications.css';
-@import './styles/11-ban-components.css';
-@import './styles/12-utilities.css';
-@import './styles/13-datepicker.css';
+/* 基础：变量 / 重置 / 全局布局（侧边栏 + 顶栏 + 主体） */
+@import './styles/01-base-layout.css';
+/* 组件：按钮、卡片、表格、徽章、表单、搜索、标签、分页等 */
+@import './styles/02-components.css';
+/* 页面：公开页、登录、通知、封禁组件、404、日期选择器 */
+@import './styles/03-pages.css';
+/* 工具类：排版 / 间距 / Flex / 响应式断点 / 打印 */
+@import './styles/04-utilities.css';

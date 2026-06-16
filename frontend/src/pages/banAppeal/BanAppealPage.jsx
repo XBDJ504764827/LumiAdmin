@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useApiQuery } from '../../shared/useApiQuery.js';
-import { useAuth } from '../../state/auth.jsx';
+import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { InternalNoteBadge, InternalNoteInline } from '../../shared/InternalNote.jsx';

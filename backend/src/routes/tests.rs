@@ -614,7 +614,7 @@ async fn access_check_rejects_banned_player_before_other_rules() {
             let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
             let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(payload["result"]["allowed"], false);
-            assert_eq!(payload["result"]["message"], "你已被永久封禁，原因：作弊");
+            assert_eq!(payload["result"]["message"], "你已被该服务器封禁。\n如有异议可前往以下地址进行申诉。\n申诉地址:https://zzzxbdjbans.cngokz.com/public/ban-appeal");
             Ok(())
         }).await;
 }
@@ -694,7 +694,7 @@ async fn access_check_whitelist_mode_requires_approved_global_whitelist() {
             let body = to_bytes(rejected.into_body(), usize::MAX).await.unwrap();
             let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(payload["result"]["allowed"], false);
-            assert_eq!(payload["result"]["message"], "你尚未通过白名单审核，无法进入服务器。");
+            assert_eq!(payload["result"]["message"], "当前服务器开启了白名单模式。\n您可以通过申请白名单获取进入服务器资格。\n申请地址:https://zzzxbdjbans.cngokz.com/public/apply");
 
             insert_whitelist_for_steamid64(&db, "76561198000000003", "approved").await?;
             app.whitelist_cache.refresh(&db).await?;
@@ -763,7 +763,7 @@ async fn access_check_restriction_uses_success_cache_and_rejects_low_values() {
             let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
             let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(payload["result"]["allowed"], false);
-            assert_eq!(payload["result"]["message"], "你的 GOKZ rating 未达到服务器最低要求。");
+            assert_eq!(payload["result"]["message"], "你的GOKZ rating未达到进入服务器最低要求。\n您可以通过申请白名单获取进入服务器资格。\n申请地址:https://zzzxbdjbans.cngokz.com/public/apply");
             Ok(())
         }).await;
 }

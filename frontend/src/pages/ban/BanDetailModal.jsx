@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../lib/api.js';
-import { useAuth } from '../../state/auth.jsx';
+import { useAuth } from '../../state/store.js';
 import { formatBanDuration, formatBanSource, formatExpiresAt } from './banDisplay.js';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { InternalNoteBadge } from '../../shared/InternalNote.jsx';

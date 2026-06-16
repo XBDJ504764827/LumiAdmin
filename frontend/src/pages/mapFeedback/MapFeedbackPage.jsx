@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useApiQuery } from '../../shared/useApiQuery.js';
-import { useAuth } from '../../state/auth.jsx';
+import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
 import { notifyPendingReviewsUpdated } from '../../hooks/usePendingReviewIndicators.js';
 import { Modal } from '../../shared/Modal.jsx';

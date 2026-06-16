@@ -1,3 +1,9 @@
+/* ═══════════════════════════════════════════════════════════
+   LumiAdmin CSS — Utility Classes & Responsive Breakpoints
+   Consolidated from 1 source files
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── from: 12-utilities.css (698 lines) ── */
 /* ── 文本对齐 ── */
 .text-left { text-align: left !important; }
 .text-right { text-align: right !important; }
@@ -696,3 +702,4 @@
   font-size: 14px;
   user-select: none;
 }
+

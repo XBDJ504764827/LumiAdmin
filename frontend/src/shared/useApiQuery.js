@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useAuth } from '../state/auth.jsx';
+import { useAuth } from '../state/store.js';
 
 /**
  * 封装 React Query 的 Hook，自动注入 token

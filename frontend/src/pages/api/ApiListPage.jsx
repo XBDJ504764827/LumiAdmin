@@ -1,4 +1,4 @@
-import { useAuth } from '../../state/auth.jsx';
+import { useAuth } from '../../state/store.js';
 import { api } from '../../lib/api.js';
 import { useAsync } from '../../shared/useAsync.js';
 import { normalizeEndpointRows } from './apiPages.js';

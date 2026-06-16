@@ -177,7 +177,7 @@ function AppRoutes() {
   }, [logout, navigate]);
 
   if (bootstrapLoading) {
-    return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>正在加载登录状态...</div>;
+    return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: 'var(--bg)', color: 'var(--text3)', fontFamily: "'Inter','Noto Sans SC',sans-serif" }}>正在加载登录状态...</div>;
   }
 
   return (

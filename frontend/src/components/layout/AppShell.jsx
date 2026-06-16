@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useAuth } from '../../state/auth.jsx';
+import { useAuth } from '../../state/store.js';
 import { ThemeToggle } from '../../shared/ThemeToggle.jsx';
 import { PendingReviewProvider, usePendingReviewData } from '../../hooks/usePendingReviewIndicators.js';
 import { sidebarSections } from './sidebarSections.jsx';

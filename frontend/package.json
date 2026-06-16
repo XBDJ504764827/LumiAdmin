@@ -7,15 +7,17 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint src/",
-    "test": "find src -name '*.test.js' | xargs node --test || echo 'No tests found'",
+    "test": "find src csgo -name '*.test.js' 2>/dev/null | xargs node --test || echo 'No tests found'",
     "preview": "vite preview"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.0",
     "chart.js": "^4.5.1",
+    "immer": "^11.1.8",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.28.0"
+    "react-router-dom": "^6.28.0",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",

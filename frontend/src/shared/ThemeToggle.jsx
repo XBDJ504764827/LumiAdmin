@@ -1,4 +1,4 @@
-import { useTheme } from '../state/theme.jsx';
+import { useTheme } from '../state/store.js';
 
 export function ThemeToggle({ compact = false }) {
   const { theme, toggleTheme } = useTheme();

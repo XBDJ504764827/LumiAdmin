@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
-import { useAuth } from '../../state/auth.jsx';
+import { useAuth } from '../../state/store.js';
 import { useApiQuery, useApiMutation } from '../../shared/useApiQuery.js';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { useToast } from '../../shared/Toast.jsx';

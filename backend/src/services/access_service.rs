@@ -53,7 +53,9 @@ struct PlayerAccessProfile {
 #[derive(Debug, Clone)]
 struct ActiveBanInfo {
     id: uuid::Uuid,
+    #[allow(dead_code)]
     reason: String,
+    #[allow(dead_code)]
     expires_at: Option<DateTime<Utc>>,
 }
 
@@ -156,15 +158,11 @@ async fn check_access_live(
             input.server_port.unwrap_or(server.port),
         )
         .await?;
-        let message = match ban.expires_at {
-            Some(expires) => format!(
-                "你已被封禁，原因：{}，到期时间：{}",
-                ban.reason,
-                expires.format("%Y-%m-%d %H:%M")
-            ),
-            None => format!("你已被永久封禁，原因：{}", ban.reason),
-        };
-        return Ok(reject_with_method(&message, "banned", "banned"));
+        return Ok(reject_with_method(
+            "你已被该服务器封禁。\n如有异议可前往以下地址进行申诉。\n申诉地址:https://zzzxbdjbans.cngokz.com/public/ban-appeal",
+            "banned",
+            "banned",
+        ));
     }
 
     // 2. 检查玩家进服权限规则（优先级最高）
@@ -218,7 +216,7 @@ async fn check_access_live(
                 None,
             ))
         } else {
-            Ok(reject_with_method("你尚未通过白名单审核，无法进入服务器。", "whitelist_rejected", "not_whitelisted"))
+            Ok(reject_with_method("当前服务器开启了白名单模式。\n您可以通过申请白名单获取进入服务器资格。\n申请地址:https://zzzxbdjbans.cngokz.com/public/apply", "whitelist_rejected", "not_whitelisted"))
         };
     }
 
@@ -253,7 +251,7 @@ async fn check_access_live(
                     None,
                 ))
             } else {
-                Ok(reject_with_method("你的 GOKZ rating 未达到服务器最低要求。", "restriction_rejected", "low_rating"))
+                Ok(reject_with_method("你的GOKZ rating未达到进入服务器最低要求。\n您可以通过申请白名单获取进入服务器资格。\n申请地址:https://zzzxbdjbans.cngokz.com/public/apply", "restriction_rejected", "low_rating"))
             }
         }
     }
@@ -266,10 +264,10 @@ fn evaluate_restriction(
     let min_rating = server.effective_min_rating();
     let min_steam_level = server.effective_min_steam_level();
     if profile.rating < min_rating {
-        return Ok(reject_with_method("你的 GOKZ rating 未达到服务器最低要求。", "restriction_rejected", "low_rating"));
+        return Ok(reject_with_method("你的GOKZ rating未达到进入服务器最低要求。\n您可以通过申请白名单获取进入服务器资格。\n申请地址:https://zzzxbdjbans.cngokz.com/public/apply", "restriction_rejected", "low_rating"));
     }
     if profile.steam_level < min_steam_level {
-        return Ok(reject_with_method("你的 Steam 等级未达到服务器最低要求。", "restriction_rejected", "low_steam_level"));
+        return Ok(reject_with_method("你的steam等级未达到进入服务器最低要求。\n您可以通过申请白名单获取进入服务器资格。\n申请地址:https://zzzxbdjbans.cngokz.com/public/apply", "restriction_rejected", "low_steam_level"));
     }
     Ok(allow_with_data(
         "已满足服务器进入限制，允许进入服务器。",
@@ -573,7 +571,8 @@ mod tests {
         )
         .unwrap();
         assert!(!result.allowed);
-        assert_eq!(result.message, "你的 GOKZ rating 未达到服务器最低要求。");
+        assert!(result.message.contains("你的GOKZ rating未达到进入服务器最低要求"));
+        assert!(result.message.contains("申请地址:https://zzzxbdjbans.cngokz.com/public/apply"));
     }
 
     #[test]
@@ -587,7 +586,8 @@ mod tests {
         )
         .unwrap();
         assert!(!result.allowed);
-        assert_eq!(result.message, "你的 Steam 等级未达到服务器最低要求。");
+        assert!(result.message.contains("你的steam等级未达到进入服务器最低要求"));
+        assert!(result.message.contains("申请地址:https://zzzxbdjbans.cngokz.com/public/apply"));
     }
 
     #[test]

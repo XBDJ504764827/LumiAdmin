@@ -114,58 +114,52 @@ pub async fn refresh_steam_names(db: &Database, resolver: &SteamResolver) -> any
             .collect()
             .await;
 
+        // 收集本批次有更新的记录（任一字段非空即纳入），用一条批量 UPDATE 提交
+        let mut ids: Vec<uuid::Uuid> = Vec::new();
+        let mut persona_names: Vec<Option<String>> = Vec::new();
+        let mut steamids: Vec<Option<String>> = Vec::new();
+        let mut steamid3s: Vec<Option<String>> = Vec::new();
+        let mut profile_urls: Vec<Option<String>> = Vec::new();
+
         for (id, result) in results {
-            #[allow(unused_assignments)]
             if let Some(r) = result {
-                let mut updates = Vec::new();
-                let mut param_idx = 2u32;
-
-                if r.persona_name.is_some() {
-                    updates.push(format!("steam_persona_name = ${param_idx}"));
-                    param_idx += 1;
+                let has_update = r.persona_name.is_some()
+                    || r.steamid.is_some()
+                    || r.steamid3.is_some()
+                    || r.profile_url.is_some();
+                if has_update {
+                    ids.push(id);
+                    persona_names.push(r.persona_name);
+                    steamids.push(r.steamid);
+                    steamid3s.push(r.steamid3);
+                    profile_urls.push(r.profile_url);
                 }
-                if r.steamid.is_some() {
-                    updates.push(format!("steamid = ${param_idx}"));
-                    param_idx += 1;
-                }
-                if r.steamid3.is_some() {
-                    updates.push(format!("steamid3 = ${param_idx}"));
-                    param_idx += 1;
-                }
-                if r.profile_url.is_some() {
-                    updates.push(format!("profile_url = ${param_idx}"));
-                    param_idx += 1;
-                }
-
-                if updates.is_empty() {
-                    processed += 1;
-                    continue;
-                }
-
-                updates.push("updated_at = now()".to_string());
-                let sql = format!(
-                    "UPDATE whitelist_requests SET {} WHERE id = $1",
-                    updates.join(", ")
-                );
-
-                let mut query = sqlx::query(&sql).bind(id);
-                if let Some(ref name) = r.persona_name {
-                    query = query.bind(name);
-                }
-                if let Some(ref steamid) = r.steamid {
-                    query = query.bind(steamid);
-                }
-                if let Some(ref steamid3) = r.steamid3 {
-                    query = query.bind(steamid3);
-                }
-                if let Some(ref url) = r.profile_url {
-                    query = query.bind(url);
-                }
-
-                query.execute(&db.pool).await?;
-                updated_count += 1;
             }
             processed += 1;
+        }
+
+        if !ids.is_empty() {
+            // 缺失字段传 NULL，用 COALESCE 保留原值，语义等价于原“只 SET 有值的字段”
+            let affected = sqlx::query(
+                r#"UPDATE whitelist_requests AS w
+                   SET steam_persona_name = COALESCE(d.persona_name, w.steam_persona_name),
+                       steamid = COALESCE(d.steamid, w.steamid),
+                       steamid3 = COALESCE(d.steamid3, w.steamid3),
+                       profile_url = COALESCE(d.profile_url, w.profile_url),
+                       updated_at = now()
+                   FROM UNNEST($1::uuid[], $2::text[], $3::text[], $4::text[], $5::text[])
+                        AS d(id, persona_name, steamid, steamid3, profile_url)
+                   WHERE w.id = d.id"#,
+            )
+            .bind(&ids)
+            .bind(&persona_names)
+            .bind(&steamids)
+            .bind(&steamid3s)
+            .bind(&profile_urls)
+            .execute(&db.pool)
+            .await?
+            .rows_affected();
+            updated_count += affected as usize;
         }
 
         if processed < total {
@@ -249,18 +243,30 @@ pub async fn refresh_steam_names_by_status(
             .collect()
             .await;
 
+        // 收集本批次成功获取名称的记录，用一条批量 UPDATE 提交（替代逐条 UPDATE）
+        let mut ids: Vec<uuid::Uuid> = Vec::new();
+        let mut names: Vec<String> = Vec::new();
         for (id, persona_name) in results {
             if let Some(name) = persona_name {
-                sqlx::query(
-                    r#"UPDATE whitelist_requests SET steam_persona_name = $2, updated_at = now() WHERE id = $1"#,
-                )
-                .bind(id)
-                .bind(&name)
-                .execute(&db.pool)
-                .await?;
-                updated_count += 1;
+                ids.push(id);
+                names.push(name);
             }
             processed += 1;
+        }
+
+        if !ids.is_empty() {
+            let affected = sqlx::query(
+                r#"UPDATE whitelist_requests AS w
+                   SET steam_persona_name = d.name, updated_at = now()
+                   FROM UNNEST($1::uuid[], $2::text[]) AS d(id, name)
+                   WHERE w.id = d.id"#,
+            )
+            .bind(&ids)
+            .bind(&names)
+            .execute(&db.pool)
+            .await?
+            .rows_affected();
+            updated_count += affected as usize;
         }
 
         if processed < total {

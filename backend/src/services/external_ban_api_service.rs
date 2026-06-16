@@ -779,7 +779,8 @@ pub async fn resync_ban(
     .fetch_all(&db.pool)
     .await?;
 
-    // 2. Delete external bans and reset sync rows
+    // 2. Delete external bans and collect targets to reset
+    let mut reset_target_ids: Vec<Uuid> = Vec::with_capacity(records.len());
     for record in &records {
         if let Some(ref external_uuid) = record.external_uuid {
             if let Ok(target) = get_target_row(db, record.target_id).await {
@@ -792,17 +793,24 @@ pub async fn resync_ban(
                 }
             }
         }
-        // Reset sync row to pending
-        let _ = sqlx::query(
+        reset_target_ids.push(record.target_id);
+    }
+
+    // 批量重置同步行为 pending（原逐条 UPDATE）
+    if !reset_target_ids.is_empty() {
+        if let Err(e) = sqlx::query(
             r#"UPDATE external_ban_syncs
                SET status = 'pending', external_uuid = NULL, external_id = NULL,
                    synced_at = NULL, last_error = NULL, updated_at = now()
-               WHERE local_ban_id = $1 AND target_id = $2"#,
+               WHERE local_ban_id = $1 AND target_id = ANY($2)"#,
         )
         .bind(ban_id)
-        .bind(record.target_id)
+        .bind(&reset_target_ids)
         .execute(&db.pool)
-        .await;
+        .await
+        {
+            tracing::warn!(ban_id = %ban_id, %e, "failed to reset sync rows to pending");
+        }
     }
 
     // 3. Re-sync to all enabled targets
@@ -991,17 +999,20 @@ pub async fn retry_failed_syncs(db: &Database) -> anyhow::Result<ExternalBanSync
             continue;
         }
 
-        // Reset sync rows to pending before retrying
-        for tid in &target_ids {
-            let _ = sqlx::query(
+        // 批量重置该封禁在所有目标上的同步行为 pending（原逐条 UPDATE）
+        if !target_ids.is_empty() {
+            if let Err(e) = sqlx::query(
                 r#"UPDATE external_ban_syncs
                    SET status = 'pending', last_error = NULL, updated_at = now()
-                   WHERE local_ban_id = $1 AND target_id = $2"#,
+                   WHERE local_ban_id = $1 AND target_id = ANY($2)"#,
             )
             .bind(ban_id)
-            .bind(tid)
+            .bind(&target_ids)
             .execute(&db.pool)
-            .await;
+            .await
+            {
+                tracing::warn!(ban_id = %ban_id, %e, "failed to reset sync rows to pending");
+            }
         }
 
         let summary = sync_ban_to_targets(db, &targets, &ban).await;

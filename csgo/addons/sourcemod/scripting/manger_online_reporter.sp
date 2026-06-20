@@ -1,7 +1,7 @@
 #include <sourcemod>
 #include <adt_array>
-#include <adt_trie>
 #include <ripext>
+#include <manger_shared>
 
 // Edge Sync Agent Native函数声明
 native int EdgeSync_EnqueueOperation(const char[] operation, const char[] target, const char[] targetType, const char[] playerName, const char[] reason, const char[] operatorName, const char[] operatorSteamid, int durationMinutes);
@@ -14,24 +14,22 @@ native int EdgeSync_GetPendingCount();
 #define DEFAULT_STATUS_REPORT_INTERVAL "30.0"
 #define DEFAULT_DEBUG_LOG "0"
 #define ACCESS_SNAPSHOT_DB "manger_access_snapshot"
-#define MAX_REPORT_PAYLOAD 8192
-#define MAX_BAN_PAYLOAD 2048
-#define MAX_SERVER_CONFIGS 4096
 #define MAX_SERVER_TOKEN 256
-#define MAX_STATUS_PAYLOAD 1024
 
 ConVar g_ApiBaseUrl;
 ConVar g_ReportInterval;
 ConVar g_AccessSnapshotInterval;
 ConVar g_StatusReportInterval;
 ConVar g_DebugLog;
+ConVar g_CpuUsageCvar;
+ConVar g_HostPortCvar = null;
+ConVar g_TickrateCvar = null;
 Handle g_ReportTimer = null;
 Handle g_BanPollTimer = null;
 Handle g_AccessSnapshotTimer = null;
 Handle g_StatusReportTimer = null;
 Database g_AccessSnapshotDb = null;
 StringMap g_ServerTokenMap = null;
-ArrayList g_ServerPorts = null;
 char g_CachedReportToken[256];
 int g_CachedReportPort = -1;
 bool g_HasCachedReportToken = false;
@@ -55,7 +53,7 @@ public Plugin myinfo =
     name = "Manger Online Reporter",
     author = "XBDJ",
     description = "Reports CS:GO online players and server status to the Manger backend.",
-    version = "0.5.1",
+    version = "0.5.2",
     url = ""
 };
 
@@ -71,6 +69,11 @@ public void OnPluginStart()
     g_AccessSnapshotInterval = CreateConVar("manger_access_snapshot_interval", DEFAULT_ACCESS_SNAPSHOT_INTERVAL, "Access snapshot refresh interval in seconds.", _, true, 30.0);
     g_StatusReportInterval = CreateConVar("manger_status_report_interval", DEFAULT_STATUS_REPORT_INTERVAL, "Server status report interval in seconds.", _, true, 10.0);
     g_DebugLog = CreateConVar("manger_debug_log", DEFAULT_DEBUG_LOG, "Enable verbose Manger plugin debug logs.", _, true, 0.0, true, 1.0);
+
+    // sys_cpu_usage: SourceMod 内置的 CPU 使用率 ConVar（需要 csgo/csgo_8225 或更高游戏版本）
+    g_CpuUsageCvar = FindConVar("sys_cpu_usage");
+    g_HostPortCvar = FindConVar("hostport");
+    g_TickrateCvar = FindConVar("sv_maxupdaterate");
 
     HookConVarChange(g_ApiBaseUrl, OnPluginConfigChanged);
     HookConVarChange(g_ReportInterval, OnPluginConfigChanged);
@@ -90,15 +93,10 @@ public void OnPluginStart()
     {
         g_ServerTokenMap = new StringMap();
     }
-    if (g_ServerPorts == null)
-    {
-        g_ServerPorts = new ArrayList();
-    }
 
     g_ServerStartTime = GetTime();
     ResetServerTokenMappings();
-    LoadReporterConfig();
-    AutoExecConfig(false, "manger_online_reporter");
+    AutoExecConfig(true, "manger_online_reporter");
     InitAccessSnapshotDb();
     StartReportTimer();
     StartBanPollTimer();
@@ -125,6 +123,13 @@ public void OnMapEnd()
     StopBanPollTimer();
     StopAccessSnapshotTimer();
     StopStatusReportTimer();
+}
+
+public void OnClientDisconnect(int client)
+{
+    g_WaitingOwnReason[client] = false;
+    g_BanTarget[client] = 0;
+    g_BanTime[client] = 0;
 }
 
 public void OnPluginConfigChanged(ConVar convar, const char[] oldValue, const char[] newValue)
@@ -156,10 +161,6 @@ void ResetServerTokenMappings()
     {
         g_ServerTokenMap.Clear();
     }
-    if (g_ServerPorts != null)
-    {
-        g_ServerPorts.Clear();
-    }
 }
 
 void InvalidatePluginConfigCache()
@@ -167,6 +168,7 @@ void InvalidatePluginConfigCache()
     g_CachedReportToken[0] = '\0';
     g_CachedReportPort = -1;
     g_HasCachedReportToken = false;
+    g_BanPollEtag[0] = '\0';
 }
 
 void ResetPluginConfigLogState()
@@ -191,130 +193,12 @@ bool ShouldLogPluginConfigState(int state, int port, int entryIndex = -1)
 
 bool GetCurrentServerPort(int &port)
 {
-    port = GetConVarInt(FindConVar("hostport"));
+    if (g_HostPortCvar == null)
+    {
+        return false;
+    }
+    port = g_HostPortCvar.IntValue;
     return port > 0;
-}
-
-bool ParseConfigValueLine(const char[] line, const char[] key, char[] value, int maxLen)
-{
-    value[0] = '\0';
-    if (StrContains(line, key, false) != 0)
-    {
-        return false;
-    }
-
-    int firstQuote = FindCharInString(line, '"');
-    if (firstQuote < 0)
-    {
-        return false;
-    }
-
-    int secondQuote = FindCharInString(line[firstQuote + 1], '"');
-    if (secondQuote < 0)
-    {
-        return false;
-    }
-    secondQuote += firstQuote + 1;
-
-    int copyLength = secondQuote - firstQuote - 1;
-    if (copyLength >= maxLen)
-    {
-        copyLength = maxLen - 1;
-    }
-
-    for (int i = 0; i < copyLength; i++)
-    {
-        value[i] = line[firstQuote + 1 + i];
-    }
-    value[copyLength] = '\0';
-    return true;
-}
-
-void ApplyConfigConVarValue(const char[] name, const char[] value)
-{
-    if (StrEqual(name, "manger_api_base_url"))
-    {
-        g_ApiBaseUrl.SetString(value);
-        return;
-    }
-
-    if (StrEqual(name, "manger_report_interval"))
-    {
-        g_ReportInterval.SetString(value);
-        return;
-    }
-
-    if (StrEqual(name, "manger_access_snapshot_interval"))
-    {
-        g_AccessSnapshotInterval.SetString(value);
-        return;
-    }
-
-    if (StrEqual(name, "manger_status_report_interval"))
-    {
-        g_StatusReportInterval.SetString(value);
-        return;
-    }
-
-    if (StrEqual(name, "manger_debug_log"))
-    {
-        g_DebugLog.SetString(value);
-    }
-}
-
-void LoadReporterConfig()
-{
-    char path[PLATFORM_MAX_PATH];
-    BuildPath(Path_SM, path, sizeof(path), "../../cfg/sourcemod/manger_online_reporter.cfg");
-
-    File file = OpenFile(path, "r");
-    if (file == null)
-    {
-        LogError("Manger reporter config load failed: cannot open %s.", path);
-        InvalidatePluginConfigCache();
-        ResetPluginConfigLogState();
-        return;
-    }
-
-    char line[512];
-    while (!file.EndOfFile() && file.ReadLine(line, sizeof(line)))
-    {
-        TrimString(line);
-        if (line[0] == '\0' || (line[0] == '/' && line[1] == '/'))
-        {
-            continue;
-        }
-
-        char value[256];
-        if (ParseConfigValueLine(line, "manger_api_base_url", value, sizeof(value)))
-        {
-            ApplyConfigConVarValue("manger_api_base_url", value);
-            continue;
-        }
-        if (ParseConfigValueLine(line, "manger_report_interval", value, sizeof(value)))
-        {
-            ApplyConfigConVarValue("manger_report_interval", value);
-            continue;
-        }
-        if (ParseConfigValueLine(line, "manger_access_snapshot_interval", value, sizeof(value)))
-        {
-            ApplyConfigConVarValue("manger_access_snapshot_interval", value);
-            continue;
-        }
-        if (ParseConfigValueLine(line, "manger_status_report_interval", value, sizeof(value)))
-        {
-            ApplyConfigConVarValue("manger_status_report_interval", value);
-            continue;
-        }
-        if (ParseConfigValueLine(line, "manger_debug_log", value, sizeof(value)))
-        {
-            ApplyConfigConVarValue("manger_debug_log", value);
-        }
-    }
-
-    delete file;
-    // Server token mappings are loaded via manger_server commands in config
-    // by AutoExecConfig, no need to parse them here
 }
 
 Action CommandServerMapping(int args)
@@ -361,16 +245,6 @@ void RegisterServerTokenMapping(int port, const char[] token)
     char portKey[16];
     IntToString(port, portKey, sizeof(portKey));
 
-    char existingToken[MAX_SERVER_TOKEN];
-    if (g_ServerTokenMap.GetString(portKey, existingToken, sizeof(existingToken)))
-    {
-        LogMessage("Manger server mapping port %d overridden by later config row.", port);
-    }
-    else
-    {
-        g_ServerPorts.Push(port);
-    }
-
     g_ServerTokenMap.SetString(portKey, trimmedToken);
 }
 
@@ -391,11 +265,6 @@ public void OnPluginEnd()
         delete g_ServerTokenMap;
         g_ServerTokenMap = null;
     }
-    if (g_ServerPorts != null)
-    {
-        delete g_ServerPorts;
-        g_ServerPorts = null;
-    }
 }
 
 void InitAccessSnapshotDb()
@@ -413,6 +282,10 @@ void InitAccessSnapshotDb()
     SQL_FastQuery(g_AccessSnapshotDb, "CREATE TABLE IF NOT EXISTS bans (steam_id TEXT, ip_address TEXT, reason TEXT NOT NULL, expires_at INTEGER)");
     SQL_FastQuery(g_AccessSnapshotDb, "CREATE TABLE IF NOT EXISTS whitelist (steam_id TEXT PRIMARY KEY)");
     SQL_FastQuery(g_AccessSnapshotDb, "CREATE TABLE IF NOT EXISTS access_profiles (steam_id TEXT PRIMARY KEY, rating INTEGER NOT NULL, steam_level INTEGER NOT NULL, expires_at INTEGER NOT NULL)");
+
+    SQL_FastQuery(g_AccessSnapshotDb, "CREATE INDEX IF NOT EXISTS idx_bans_steam_id ON bans(steam_id)");
+    SQL_FastQuery(g_AccessSnapshotDb, "CREATE INDEX IF NOT EXISTS idx_bans_ip_address ON bans(ip_address)");
+    SQL_FastQuery(g_AccessSnapshotDb, "CREATE INDEX IF NOT EXISTS idx_bans_expires_at ON bans(expires_at)");
 }
 
 void StartAccessSnapshotTimer()
@@ -447,24 +320,23 @@ void RefreshAccessSnapshot()
 
     char token[256];
     char url[512];
-    JSONObject payload = new JSONObject();
     int currentPort = 0;
     if (!GetCurrentServerPort(currentPort))
     {
-        delete payload;
         return;
     }
 
     if (!ResolvePluginApiConfig(url, sizeof(url), "/access/snapshot", token, sizeof(token)))
     {
-        delete payload;
         return;
     }
 
+    JSONObject payload = new JSONObject();
     payload.SetString("report_token", token);
     payload.SetInt("port", currentPort);
 
     HTTPRequest request = new HTTPRequest(url);
+    request.Timeout = 10;
     request.Post(payload, OnAccessSnapshotResponse);
     delete payload;
 }
@@ -551,12 +423,22 @@ void SaveAccessSnapshot(JSONObject item)
         return;
     }
 
-    SQL_FastQuery(g_AccessSnapshotDb, "BEGIN IMMEDIATE TRANSACTION");
-    SQL_FastQuery(g_AccessSnapshotDb, "DELETE FROM metadata");
-    SQL_FastQuery(g_AccessSnapshotDb, "DELETE FROM server_rules");
-    SQL_FastQuery(g_AccessSnapshotDb, "DELETE FROM bans");
-    SQL_FastQuery(g_AccessSnapshotDb, "DELETE FROM whitelist");
-    SQL_FastQuery(g_AccessSnapshotDb, "DELETE FROM access_profiles");
+    if (!SQL_FastQuery(g_AccessSnapshotDb, "BEGIN IMMEDIATE TRANSACTION"))
+    {
+        LogError("Manger access snapshot: failed to BEGIN transaction.");
+        return;
+    }
+
+    if (!SQL_FastQuery(g_AccessSnapshotDb, "DELETE FROM metadata")
+        || !SQL_FastQuery(g_AccessSnapshotDb, "DELETE FROM server_rules")
+        || !SQL_FastQuery(g_AccessSnapshotDb, "DELETE FROM bans")
+        || !SQL_FastQuery(g_AccessSnapshotDb, "DELETE FROM whitelist")
+        || !SQL_FastQuery(g_AccessSnapshotDb, "DELETE FROM access_profiles"))
+    {
+        LogError("Manger access snapshot: cleanup failed, ROLLBACK.");
+        SQL_FastQuery(g_AccessSnapshotDb, "ROLLBACK");
+        return;
+    }
 
     char version[128];
     char generatedAt[64];
@@ -565,16 +447,26 @@ void SaveAccessSnapshot(JSONObject item)
     item.GetString("generated_at", generatedAt, sizeof(generatedAt));
     item.GetString("expires_at", expiresAt, sizeof(expiresAt));
 
-    InsertMetadata("version", version);
-    InsertMetadata("generated_at", generatedAt);
-    InsertMetadata("expires_at", expiresAt);
+    if (!InsertMetadata("version", version)
+        || !InsertMetadata("generated_at", generatedAt)
+        || !InsertMetadata("expires_at", expiresAt))
+    {
+        LogError("Manger access snapshot: metadata insert failed, ROLLBACK.");
+        SQL_FastQuery(g_AccessSnapshotDb, "ROLLBACK");
+        return;
+    }
 
     char generatedAtUnix[32];
     char expiresAtUnix[32];
     IntToString(item.GetInt("generated_at_unix"), generatedAtUnix, sizeof(generatedAtUnix));
     IntToString(item.GetInt("expires_at_unix"), expiresAtUnix, sizeof(expiresAtUnix));
-    InsertMetadata("generated_at_unix", generatedAtUnix);
-    InsertMetadata("expires_at_unix", expiresAtUnix);
+    if (!InsertMetadata("generated_at_unix", generatedAtUnix)
+        || !InsertMetadata("expires_at_unix", expiresAtUnix))
+    {
+        LogError("Manger access snapshot: metadata unix insert failed, ROLLBACK.");
+        SQL_FastQuery(g_AccessSnapshotDb, "ROLLBACK");
+        return;
+    }
 
     JSONObject server = view_as<JSONObject>(item.Get("server"));
     if (server != null)
@@ -586,22 +478,60 @@ void SaveAccessSnapshot(JSONObject item)
             server.GetBool("access_restriction_enabled") ? 1 : 0,
             server.GetInt("min_rating"),
             server.GetInt("min_steam_level"));
-        SQL_FastQuery(g_AccessSnapshotDb, query);
+        if (!SQL_FastQuery(g_AccessSnapshotDb, query))
+        {
+            LogError("Manger access snapshot: server_rules insert failed, ROLLBACK.");
+            SQL_FastQuery(g_AccessSnapshotDb, "ROLLBACK");
+            delete server;
+            return;
+        }
+        delete server;
     }
 
     JSONArray bans = view_as<JSONArray>(item.Get("bans"));
-    SaveSnapshotBans(bans);
+    bool bansSaved = SaveSnapshotBans(bans);
+    if (bans != null)
+    {
+        delete bans;
+    }
+    if (!bansSaved)
+    {
+        SQL_FastQuery(g_AccessSnapshotDb, "ROLLBACK");
+        return;
+    }
 
     JSONArray whitelist = view_as<JSONArray>(item.Get("whitelist"));
-    SaveSnapshotWhitelist(whitelist);
+    bool whitelistSaved = SaveSnapshotWhitelist(whitelist);
+    if (whitelist != null)
+    {
+        delete whitelist;
+    }
+    if (!whitelistSaved)
+    {
+        SQL_FastQuery(g_AccessSnapshotDb, "ROLLBACK");
+        return;
+    }
 
     JSONArray profiles = view_as<JSONArray>(item.Get("access_profiles"));
-    SaveSnapshotAccessProfiles(profiles);
+    bool profilesSaved = SaveSnapshotAccessProfiles(profiles);
+    if (profiles != null)
+    {
+        delete profiles;
+    }
+    if (!profilesSaved)
+    {
+        SQL_FastQuery(g_AccessSnapshotDb, "ROLLBACK");
+        return;
+    }
 
-    SQL_FastQuery(g_AccessSnapshotDb, "COMMIT");
+    if (!SQL_FastQuery(g_AccessSnapshotDb, "COMMIT"))
+    {
+        LogError("Manger access snapshot: COMMIT failed, ROLLBACK.");
+        SQL_FastQuery(g_AccessSnapshotDb, "ROLLBACK");
+    }
 }
 
-void InsertMetadata(const char[] key, const char[] value)
+bool InsertMetadata(const char[] key, const char[] value)
 {
     char escapedKey[128];
     char escapedValue[256];
@@ -609,14 +539,19 @@ void InsertMetadata(const char[] key, const char[] value)
     SQL_EscapeString(g_AccessSnapshotDb, key, escapedKey, sizeof(escapedKey));
     SQL_EscapeString(g_AccessSnapshotDb, value, escapedValue, sizeof(escapedValue));
     Format(query, sizeof(query), "INSERT INTO metadata (key, value) VALUES ('%s', '%s')", escapedKey, escapedValue);
-    SQL_FastQuery(g_AccessSnapshotDb, query);
+    if (!SQL_FastQuery(g_AccessSnapshotDb, query))
+    {
+        LogError("Manger access snapshot: metadata insert failed for key '%s'", key);
+        return false;
+    }
+    return true;
 }
 
-void SaveSnapshotBans(JSONArray bans)
+bool SaveSnapshotBans(JSONArray bans)
 {
     if (bans == null)
     {
-        return;
+        return true;
     }
 
     for (int i = 0; i < bans.Length; i++)
@@ -645,15 +580,23 @@ void SaveSnapshotBans(JSONArray bans)
 
         char query[1024];
         Format(query, sizeof(query), "INSERT INTO bans (steam_id, ip_address, reason, expires_at) VALUES ('%s', '%s', '%s', %d)", escapedSteamId, escapedIpAddress, escapedReason, StringToInt(expiresAtUnix));
-        SQL_FastQuery(g_AccessSnapshotDb, query);
+        if (!SQL_FastQuery(g_AccessSnapshotDb, query))
+        {
+            LogError("Manger access snapshot: bans insert failed at index %d", i);
+            delete ban;
+            return false;
+        }
+        delete ban;
     }
+
+    return true;
 }
 
-void SaveSnapshotWhitelist(JSONArray whitelist)
+bool SaveSnapshotWhitelist(JSONArray whitelist)
 {
     if (whitelist == null)
     {
-        return;
+        return true;
     }
 
     for (int i = 0; i < whitelist.Length; i++)
@@ -670,15 +613,23 @@ void SaveSnapshotWhitelist(JSONArray whitelist)
         char query[256];
         SQL_EscapeString(g_AccessSnapshotDb, steamId, escapedSteamId, sizeof(escapedSteamId));
         Format(query, sizeof(query), "INSERT OR REPLACE INTO whitelist (steam_id) VALUES ('%s')", escapedSteamId);
-        SQL_FastQuery(g_AccessSnapshotDb, query);
+        if (!SQL_FastQuery(g_AccessSnapshotDb, query))
+        {
+            LogError("Manger access snapshot: whitelist insert failed at index %d", i);
+            delete entry;
+            return false;
+        }
+        delete entry;
     }
+
+    return true;
 }
 
-void SaveSnapshotAccessProfiles(JSONArray profiles)
+bool SaveSnapshotAccessProfiles(JSONArray profiles)
 {
     if (profiles == null)
     {
-        return;
+        return true;
     }
 
     for (int i = 0; i < profiles.Length; i++)
@@ -700,8 +651,16 @@ void SaveSnapshotAccessProfiles(JSONArray profiles)
             profile.GetInt("rating"),
             profile.GetInt("steam_level"),
             profile.GetInt("expires_at_unix"));
-        SQL_FastQuery(g_AccessSnapshotDb, query);
+        if (!SQL_FastQuery(g_AccessSnapshotDb, query))
+        {
+            LogError("Manger access snapshot: access_profiles insert failed at index %d", i);
+            delete profile;
+            return false;
+        }
+        delete profile;
     }
+
+    return true;
 }
 
 void StartReportTimer()
@@ -762,6 +721,7 @@ public Action Timer_PollBans(Handle timer)
     }
 
     HTTPRequest request = new HTTPRequest(url);
+    request.Timeout = 10;
     request.Post(payload, OnBanPollResponse);
     delete payload;
 
@@ -810,19 +770,42 @@ public void OnBanPollResponse(HTTPResponse response, any value, const char[] err
         return;
     }
 
+    // 预构建在线玩家索引，避免 O(N×M) 遍历
+    StringMap steamMap = new StringMap();
+    StringMap ipMap = new StringMap();
+    for (int client = 1; client <= MaxClients; client++)
+    {
+        if (!IsClientInGame(client) || IsFakeClient(client))
+        {
+            continue;
+        }
+        char clientSteamId64[64];
+        char clientIp[64];
+        if (GetClientAuthId(client, AuthId_SteamID64, clientSteamId64, sizeof(clientSteamId64), true))
+        {
+            steamMap.SetValue(clientSteamId64, client);
+        }
+        if (GetClientIP(client, clientIp, sizeof(clientIp), true))
+        {
+            ipMap.SetValue(clientIp, client);
+        }
+    }
+
     for (int i = 0; i < items.Length; i++)
     {
         JSON rawItem = items.Get(i);
         JSONObject item = view_as<JSONObject>(rawItem);
-        KickMatchingBan(item);
+        KickMatchingBan(item, steamMap, ipMap);
         delete item;
     }
 
+    delete steamMap;
+    delete ipMap;
     delete items;
     delete data;
 }
 
-void KickMatchingBan(JSONObject item)
+void KickMatchingBan(JSONObject item, StringMap steamMap, StringMap ipMap)
 {
     char steamId[64];
     char ipAddress[64];
@@ -838,23 +821,21 @@ void KickMatchingBan(JSONObject item)
     }
     item.GetString("reason", reason, sizeof(reason));
 
-    for (int client = 1; client <= MaxClients; client++)
+    // 用预构建索引 O(1) 查找匹配玩家，避免遍历所有客户端
+    int matchedClient = -1;
+    if (steamId[0] != '\0' && steamMap.GetValue(steamId, matchedClient))
     {
-        if (!IsClientInGame(client) || IsFakeClient(client))
-        {
-            continue;
-        }
+        // SteamID 匹配
+    }
+    else if (ipAddress[0] != '\0' && ipMap.GetValue(ipAddress, matchedClient))
+    {
+        // IP 匹配
+    }
 
-        char clientSteamId64[64];
-        char clientIp[64];
-        GetClientAuthId(client, AuthId_SteamID64, clientSteamId64, sizeof(clientSteamId64), true);
-        GetClientIP(client, clientIp, sizeof(clientIp), true);
-
-        if ((steamId[0] != '\0' && StrEqual(clientSteamId64, steamId)) || (ipAddress[0] != '\0' && StrEqual(clientIp, ipAddress)))
-        {
-            CompletePolledBanDetails(client);
-            KickClient(client, "你已被封禁：%s", reason);
-        }
+    if (matchedClient > 0 && IsClientInGame(matchedClient))
+    {
+        CompletePolledBanDetails(matchedClient);
+        KickClient(matchedClient, "你已被封禁：%s", reason);
     }
 }
 
@@ -865,7 +846,6 @@ void CompletePolledBanDetails(int client)
     char steamId64[64];
     char ipAddress[64];
     char playerName[128];
-    char payload[MAX_BAN_PAYLOAD];
     if (!ResolvePluginApiConfig(url, sizeof(url), "/bans/check", token, sizeof(token)))
     {
         return;
@@ -883,8 +863,9 @@ void CompletePolledBanDetails(int client)
     {
         return;
     }
-    BuildPluginBanCheckPayload(payload, sizeof(payload), token, currentPort, steamId64, ipAddress, playerName);
-    PostJsonPayload(url, payload, OnBanCheckResponse);
+    JSONObject payload = BuildPluginBanCheckPayload(token, currentPort, steamId64, ipAddress, playerName);
+    PostJsonObject(url, payload, OnBanCheckResponse);
+    delete payload;
 }
 
 bool GetCurrentReportToken(char[] token, int maxLen)
@@ -945,9 +926,9 @@ public Action Timer_ReportOnlinePlayers(Handle timer)
         return Plugin_Continue;
     }
 
-    char payload[MAX_REPORT_PAYLOAD];
-    BuildReportPayload(payload, sizeof(payload), reportToken);
-    PostJsonPayload(reportUrl, payload, OnReportResponse);
+    JSONObject payload = BuildReportPayload(reportToken);
+    PostJsonObject(reportUrl, payload, OnReportResponse);
+    delete payload;
 
     return Plugin_Continue;
 }
@@ -1374,9 +1355,9 @@ bool SubmitPluginBan(int client, int target, const char[] banType, const char[] 
     // 先尝试在线提交
     if (ResolvePluginApiConfig(banUrl, sizeof(banUrl), "/bans", token, sizeof(token)))
     {
-        char payload[MAX_BAN_PAYLOAD];
-        BuildPluginBanPayload(payload, sizeof(payload), token, currentPort, banType, normalizedSteamId, ipAddress, player, duration, reason, adminName);
-        PostJsonPayload(banUrl, payload, OnPluginBanResponse);
+        JSONObject payload = BuildPluginBanPayload(token, currentPort, banType, normalizedSteamId, ipAddress, player, duration, reason, adminName);
+        PostJsonObject(banUrl, payload, OnPluginBanResponse);
+        delete payload;
     }
     else
     {
@@ -1674,7 +1655,6 @@ public Action CommandUnban(int client, int args)
     char url[512];
     char adminName[128];
     char adminSteamid[64];
-    char payload[MAX_BAN_PAYLOAD];
 
     GetCmdArg(1, target, sizeof(target));
     if (!IsSteamId64String(target) && !IsIpAddressTarget(target))
@@ -1708,8 +1688,9 @@ public Action CommandUnban(int client, int args)
     // 尝试在线解封
     if (ResolvePluginApiConfig(url, sizeof(url), "/bans/unban", token, sizeof(token)))
     {
-        BuildPluginUnbanPayload(payload, sizeof(payload), token, currentPort, target, reason, adminName, adminSteamid);
-        PostJsonPayload(url, payload, OnPluginUnbanResponse, g_UnbanAdminUserId);
+        JSONObject payload = BuildPluginUnbanPayload(token, currentPort, target, reason, adminName, adminSteamid);
+        PostJsonObject(url, payload, OnPluginUnbanResponse, g_UnbanAdminUserId);
+        delete payload;
     }
     else
     {
@@ -1887,7 +1868,7 @@ void SubmitMenuBan(int client, const char[] reason)
 
 public void OnClientAuthorized(int client, const char[] auth)
 {
-    if (IsFakeClient(client))
+    if (IsFakeClient(client) || !IsClientConnected(client))
     {
         return;
     }
@@ -1898,12 +1879,16 @@ public void OnClientAuthorized(int client, const char[] auth)
 
 void SubmitAccessCheck(int client)
 {
+    if (client <= 0 || client > MaxClients || !IsClientConnected(client) || IsFakeClient(client))
+    {
+        return;
+    }
+
     char token[256];
     char url[512];
     char steamId64[64];
     char ipAddress[64];
     char playerName[128];
-    char payload[MAX_BAN_PAYLOAD];
     if (!ResolvePluginApiConfig(url, sizeof(url), "/access/check", token, sizeof(token)))
     {
         return;
@@ -1921,23 +1906,23 @@ void SubmitAccessCheck(int client)
     {
         return;
     }
-    BuildPluginAccessCheckPayload(payload, sizeof(payload), token, currentPort, steamId64, ipAddress, playerName);
+    JSONObject payload = BuildPluginAccessCheckPayload(token, currentPort, steamId64, ipAddress, playerName);
     int userId = GetClientUserId(client);
-    PostJsonPayload(url, payload, OnAccessCheckResponse, userId);
+    PostJsonObject(url, payload, OnAccessCheckResponse, userId);
+    delete payload;
 }
 
-bool PostJsonPayload(const char[] url, const char[] payloadText, HTTPRequestCallback callback, any value = 0)
+bool PostJsonObject(const char[] url, JSONObject payload, HTTPRequestCallback callback, any value = 0)
 {
-    JSONObject payload = JSONObject.FromString(payloadText);
     if (payload == null)
     {
-        LogError("Manger failed to parse JSON payload for %s.", url);
+        LogError("Manger failed to create JSON payload for %s.", url);
         return false;
     }
 
     HTTPRequest request = new HTTPRequest(url);
+    request.Timeout = 10;
     request.Post(payload, callback, value);
-    delete payload;
     return true;
 }
 
@@ -2255,7 +2240,7 @@ bool OfflineProfileMeetsRequirement(const char[] steamId, int minRating, int min
     return rating >= minRating && steamLevel >= minSteamLevel;
 }
 
-void BuildReportPayload(char[] payload, int maxLen, const char[] reportToken)
+JSONObject BuildReportPayload(const char[] reportToken)
 {
     int currentPort = 0;
     GetCurrentServerPort(currentPort);
@@ -2263,12 +2248,12 @@ void BuildReportPayload(char[] payload, int maxLen, const char[] reportToken)
     char currentMap[64];
     GetCurrentMap(currentMap, sizeof(currentMap));
 
-    char escapedMap[128];
-    EscapeJsonString(currentMap, escapedMap, sizeof(escapedMap));
+    JSONObject root = new JSONObject();
+    root.SetInt("port", currentPort);
+    root.SetString("report_token", reportToken);
+    root.SetString("current_map", currentMap);
 
-    Format(payload, maxLen, "{\"port\":%d,\"report_token\":\"%s\",\"current_map\":\"%s\",\"players\":[", currentPort, reportToken, escapedMap);
-
-    bool first = true;
+    JSONArray players = new JSONArray();
     for (int client = 1; client <= MaxClients; client++)
     {
         if (!IsClientInGame(client) || IsFakeClient(client))
@@ -2279,119 +2264,77 @@ void BuildReportPayload(char[] payload, int maxLen, const char[] reportToken)
         char player[128];
         char steamId64[64];
         char playerIp[64];
-        char escapedPlayer[256];
-        char escapedIp[128];
         GetClientName(client, player, sizeof(player));
         GetClientAuthId(client, AuthId_SteamID64, steamId64, sizeof(steamId64), true);
         GetClientIP(client, playerIp, sizeof(playerIp), true);
-        EscapeJsonString(player, escapedPlayer, sizeof(escapedPlayer));
-        EscapeJsonString(playerIp, escapedIp, sizeof(escapedIp));
 
-        char item[512];
-        int ping = RoundToNearest(GetClientAvgLatency(client, NetFlow_Both) * 1000.0);
-        Format(item, sizeof(item), "%s{\"name\":\"%s\",\"steam_id64\":\"%s\",\"ip\":\"%s\",\"ping\":%d,\"server_port\":%d}", first ? "" : ",", escapedPlayer, steamId64, escapedIp, ping, currentPort);
-        StrCat(payload, maxLen, item);
-        first = false;
+        JSONObject entry = new JSONObject();
+        entry.SetString("name", player);
+        entry.SetString("steam_id64", steamId64);
+        entry.SetString("ip", playerIp);
+        entry.SetInt("ping", RoundToNearest(GetClientAvgLatency(client, NetFlow_Both) * 1000.0));
+        entry.SetInt("server_port", currentPort);
+        players.Push(entry);
+        delete entry;
     }
 
-    StrCat(payload, maxLen, "]}");
+    root.Set("players", players);
+    delete players;
+    return root;
 }
 
-void BuildPluginBanPayload(char[] payload, int maxLen, const char[] token, int port, const char[] banType, const char[] steamId, const char[] ipAddress, const char[] player, int duration, const char[] reason, const char[] operatorName)
+JSONObject BuildPluginBanPayload(const char[] token, int port, const char[] banType, const char[] steamId, const char[] ipAddress, const char[] player, int duration, const char[] reason, const char[] operatorName)
 {
-    char escapedPlayer[256];
-    char escapedReason[512];
-    char escapedOperator[128];
-    EscapeJsonString(player, escapedPlayer, sizeof(escapedPlayer));
-    EscapeJsonString(reason, escapedReason, sizeof(escapedReason));
-    EscapeJsonString(operatorName, escapedOperator, sizeof(escapedOperator));
-
-    Format(payload, maxLen, "{\"report_token\":\"%s\",\"port\":%d,\"ban_type\":\"%s\",\"steam_id\":\"%s\",\"ip_address\":\"%s\",\"player\":\"%s\",\"duration_minutes\":%d,\"reason\":\"%s\",\"operator_name\":\"%s\"}", token, port, banType, steamId, ipAddress, escapedPlayer, duration, escapedReason, escapedOperator);
+    JSONObject payload = new JSONObject();
+    payload.SetString("report_token", token);
+    payload.SetInt("port", port);
+    payload.SetString("ban_type", banType);
+    payload.SetString("steam_id", steamId);
+    payload.SetString("ip_address", ipAddress);
+    payload.SetString("player", player);
+    payload.SetInt("duration_minutes", duration);
+    payload.SetString("reason", reason);
+    payload.SetString("operator_name", operatorName);
+    return payload;
 }
 
-void BuildPluginUnbanPayload(char[] payload, int maxLen, const char[] token, int port, const char[] target, const char[] reason, const char[] operatorName, const char[] operatorSteamid)
+JSONObject BuildPluginUnbanPayload(const char[] token, int port, const char[] target, const char[] reason, const char[] operatorName, const char[] operatorSteamid)
 {
-    char escapedReason[512];
-    char escapedOperator[128];
-    char escapedSteamid[64];
-    EscapeJsonString(reason, escapedReason, sizeof(escapedReason));
-    EscapeJsonString(operatorName, escapedOperator, sizeof(escapedOperator));
-    EscapeJsonString(operatorSteamid, escapedSteamid, sizeof(escapedSteamid));
-
+    JSONObject payload = new JSONObject();
+    payload.SetString("report_token", token);
+    payload.SetInt("port", port);
+    payload.SetString("target", target);
+    payload.SetString("reason", reason);
+    payload.SetString("operator_name", operatorName);
     if (operatorSteamid[0] != '\0')
     {
-        Format(payload, maxLen, "{\"report_token\":\"%s\",\"port\":%d,\"target\":\"%s\",\"reason\":\"%s\",\"operator_name\":\"%s\",\"operator_steamid\":\"%s\"}", token, port, target, escapedReason, escapedOperator, escapedSteamid);
+        payload.SetString("operator_steamid", operatorSteamid);
     }
-    else
-    {
-        Format(payload, maxLen, "{\"report_token\":\"%s\",\"port\":%d,\"target\":\"%s\",\"reason\":\"%s\",\"operator_name\":\"%s\"}", token, port, target, escapedReason, escapedOperator);
-    }
+    return payload;
 }
 
-void BuildPluginBanCheckPayload(char[] payload, int maxLen, const char[] token, int port, const char[] steamId, const char[] ipAddress, const char[] player)
+JSONObject BuildPluginBanCheckPayload(const char[] token, int port, const char[] steamId, const char[] ipAddress, const char[] player)
 {
-    char escapedPlayer[256];
-    char escapedIp[128];
-    EscapeJsonString(player, escapedPlayer, sizeof(escapedPlayer));
-    EscapeJsonString(ipAddress, escapedIp, sizeof(escapedIp));
-    Format(payload, maxLen, "{\"report_token\":\"%s\",\"port\":%d,\"steam_id\":\"%s\",\"ip_address\":\"%s\",\"player\":\"%s\",\"server_port\":%d}", token, port, steamId, escapedIp, escapedPlayer, port);
+    JSONObject payload = new JSONObject();
+    payload.SetString("report_token", token);
+    payload.SetInt("port", port);
+    payload.SetInt("server_port", port);
+    payload.SetString("steam_id", steamId);
+    payload.SetString("ip_address", ipAddress);
+    payload.SetString("player", player);
+    return payload;
 }
 
-void BuildPluginAccessCheckPayload(char[] payload, int maxLen, const char[] token, int port, const char[] steamId64, const char[] ipAddress, const char[] player)
+JSONObject BuildPluginAccessCheckPayload(const char[] token, int port, const char[] steamId64, const char[] ipAddress, const char[] player)
 {
-    char escapedPlayer[256];
-    char escapedIp[128];
-    EscapeJsonString(player, escapedPlayer, sizeof(escapedPlayer));
-    EscapeJsonString(ipAddress, escapedIp, sizeof(escapedIp));
-    Format(payload, maxLen, "{\"report_token\":\"%s\",\"port\":%d,\"steam_id64\":\"%s\",\"ip_address\":\"%s\",\"player\":\"%s\",\"server_port\":%d}", token, port, steamId64, escapedIp, escapedPlayer, port);
-}
-
-void EscapeJsonString(const char[] input, char[] output, int maxLen)
-{
-    output[0] = '\0';
-
-    for (int i = 0; input[i] != '\0'; i++)
-    {
-        char chunk[8];
-        if (input[i] == '"')
-        {
-            strcopy(chunk, sizeof(chunk), "\\\"");
-        }
-        else if (input[i] == '\\')
-        {
-            strcopy(chunk, sizeof(chunk), "\\\\");
-        }
-        else if (input[i] == '\n')
-        {
-            strcopy(chunk, sizeof(chunk), "\\n");
-        }
-        else if (input[i] == '\r')
-        {
-            strcopy(chunk, sizeof(chunk), "\\r");
-        }
-        else if (input[i] == '\t')
-        {
-            strcopy(chunk, sizeof(chunk), "\\t");
-        }
-        else if (input[i] == '\b')
-        {
-            strcopy(chunk, sizeof(chunk), "\\b");
-        }
-        else if (input[i] == '\f')
-        {
-            strcopy(chunk, sizeof(chunk), "\\f");
-        }
-        else if (input[i] < 0x20)
-        {
-            Format(chunk, sizeof(chunk), "\\u%04x", input[i]);
-        }
-        else
-        {
-            Format(chunk, sizeof(chunk), "%c", input[i]);
-        }
-
-        StrCat(output, maxLen, chunk);
-    }
+    JSONObject payload = new JSONObject();
+    payload.SetString("report_token", token);
+    payload.SetInt("port", port);
+    payload.SetInt("server_port", port);
+    payload.SetString("steam_id64", steamId64);
+    payload.SetString("ip_address", ipAddress);
+    payload.SetString("player", player);
+    return payload;
 }
 
 void StartStatusReportTimer()
@@ -2413,23 +2356,11 @@ void StopStatusReportTimer()
 
 public Action Timer_ReportServerStatus(Handle timer)
 {
-    CollectServerStats();
+    g_LastTickrate = GetTickrate();
     ReportServerStatus();
     return Plugin_Continue;
 }
 
-void CollectServerStats()
-{
-    g_LastTickrate = GetTickrate();
-    int playersCount = 0;
-    for (int client = 1; client <= MaxClients; client++)
-    {
-        if (IsClientInGame(client) && !IsFakeClient(client))
-        {
-            playersCount++;
-        }
-    }
-}
 
 void ReportServerStatus()
 {
@@ -2440,12 +2371,12 @@ void ReportServerStatus()
         return;
     }
 
-    char payload[MAX_STATUS_PAYLOAD];
-    BuildServerStatusPayload(payload, sizeof(payload), token);
-    PostJsonPayload(url, payload, OnServerStatusResponse);
+    JSONObject payload = BuildServerStatusPayload(token);
+    PostJsonObject(url, payload, OnServerStatusResponse);
+    delete payload;
 }
 
-void BuildServerStatusPayload(char[] payload, int maxLen, const char[] token)
+JSONObject BuildServerStatusPayload(const char[] token)
 {
     int currentPort = 0;
     GetCurrentServerPort(currentPort);
@@ -2467,12 +2398,18 @@ void BuildServerStatusPayload(char[] payload, int maxLen, const char[] token)
 
     char currentMap[128];
     GetCurrentMap(currentMap, sizeof(currentMap));
-    char escapedMap[256];
-    EscapeJsonString(currentMap, escapedMap, sizeof(escapedMap));
 
-    Format(payload, maxLen,
-        "{\"report_token\":\"%s\",\"port\":%d,\"fps\":%.2f,\"cpu_usage\":%.2f,\"tickrate\":%.2f,\"uptime_seconds\":%d,\"players_count\":%d,\"max_players\":%d,\"current_map\":\"%s\"}",
-        token, currentPort, fps, cpu, tickrate, uptime, playersCount, maxPlayers, escapedMap);
+    JSONObject payload = new JSONObject();
+    payload.SetString("report_token", token);
+    payload.SetInt("port", currentPort);
+    payload.SetFloat("fps", fps);
+    payload.SetFloat("cpu_usage", cpu);
+    payload.SetFloat("tickrate", tickrate);
+    payload.SetInt("uptime_seconds", uptime);
+    payload.SetInt("players_count", playersCount);
+    payload.SetInt("max_players", maxPlayers);
+    payload.SetString("current_map", currentMap);
+    return payload;
 }
 
 public void OnServerStatusResponse(HTTPResponse response, any value, const char[] error)
@@ -2496,18 +2433,21 @@ float GetServerFrameRate()
 
 float GetServerCpuUsage()
 {
+    if (g_CpuUsageCvar != null)
+    {
+        return g_CpuUsageCvar.FloatValue;
+    }
     return 0.0;
 }
 
 int GetTickrate()
 {
-    ConVar tickrateCvar = FindConVar("sv_maxrate");
-    if (tickrateCvar != null)
+    if (g_TickrateCvar != null)
     {
-        int maxRate = tickrateCvar.IntValue;
-        if (maxRate > 0)
+        int maxUpdateRate = g_TickrateCvar.IntValue;
+        if (maxUpdateRate > 0)
         {
-            return maxRate / 1000;
+            return maxUpdateRate;
         }
     }
     return 64;

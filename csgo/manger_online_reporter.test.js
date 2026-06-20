@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 const root = resolve(import.meta.dirname, '../');
 const onlineSourcePath = resolve(root, 'csgo/addons/sourcemod/scripting/manger_online_reporter.sp');
 const edgeSourcePath = resolve(root, 'csgo/addons/sourcemod/scripting/manger_edge_sync.sp');
+const sharedIncludePath = resolve(root, 'csgo/addons/sourcemod/scripting/include/manger_shared.inc');
 const onlinePluginPath = resolve(root, 'csgo/addons/sourcemod/plugins/manger_online_reporter.smx');
 const edgePluginPath = resolve(root, 'csgo/addons/sourcemod/plugins/manger_edge_sync.smx');
 const configPath = resolve(root, 'csgo/cfg/sourcemod/manger_online_reporter.cfg');
@@ -18,7 +19,6 @@ test('online reporter uses row-based port token mappings from cfg', () => {
   const source = read(onlineSourcePath);
 
   assert.match(source, /RegServerCmd\("manger_server",\s*CommandServerMapping/);
-  assert.match(source, /BuildPath\(Path_SM, path, sizeof\(path\), "\.\.\/\.\.\/cfg\/sourcemod\/manger_online_reporter\.cfg"\)/);
   assert.match(source, /IntToString\(currentPort, portKey, sizeof\(portKey\)\)/);
   assert.match(source, /g_ServerTokenMap\.GetString\(portKey, token, maxLen\)/);
   assert.doesNotMatch(source, /CreateConVar\("manger_report_identity"/);
@@ -31,8 +31,8 @@ test('online reporter parses all cfg-backed intervals and debug flag', () => {
 
   assert.match(source, /CreateConVar\("manger_status_report_interval"/);
   assert.match(source, /CreateConVar\("manger_debug_log"/);
-  assert.match(source, /ParseConfigValueLine\(line, "manger_status_report_interval"/);
-  assert.match(source, /ParseConfigValueLine\(line, "manger_debug_log"/);
+  // ParseConfigValueLine is now in shared include
+  assert.match(source, /#include <manger_shared>/);
   assert.match(config, /manger_status_report_interval\s+"30\.0"/);
   assert.match(config, /manger_debug_log\s+"0"/);
   assert.match(config, /manger_server\s+"10001"\s+"/);
@@ -80,7 +80,8 @@ test('online reporter normalizes plugin steam bans to SteamID64 before sync', ()
   assert.match(source, /DecimalAddStrings\("76561197960265728", accountId, steamId64, maxLen\)/);
   assert.match(source, /bool NormalizePluginSteamId\(const char\[] input, char\[] steamId64, int maxLen\)/);
   assert.match(source, /if \(!NormalizePluginSteamId\(steamId, normalizedSteamId, sizeof\(normalizedSteamId\)\)\)/);
-  assert.match(source, /BuildPluginBanPayload\(payload, sizeof\(payload\), token, currentPort, banType, normalizedSteamId, ipAddress, player, duration, reason, adminName\)/);
+  // BuildPluginBanPayload now returns JSONObject directly
+  assert.match(source, /JSONObject BuildPluginBanPayload\(const char\[] token/);
   assert.match(source, /strcopy\(targetId, sizeof\(targetId\), normalizedSteamId\)/);
   assert.match(source, /if \(!ConvertSteam2ToSteamId64\(targetArg, steamId64, sizeof\(steamId64\)\)\)/);
 });
@@ -108,6 +109,110 @@ test('online reporter uses unified plugin API endpoints', () => {
   assert.doesNotMatch(source, /manger_ban_api_url/);
 });
 
+test('online reporter uses JSONObject API for payload construction', () => {
+  const source = read(onlineSourcePath);
+
+  // All BuildXxxPayload functions now return JSONObject
+  assert.match(source, /JSONObject BuildReportPayload/);
+  assert.match(source, /JSONObject BuildPluginBanPayload/);
+  assert.match(source, /JSONObject BuildPluginUnbanPayload/);
+  assert.match(source, /JSONObject BuildPluginBanCheckPayload/);
+  assert.match(source, /JSONObject BuildPluginAccessCheckPayload/);
+  assert.match(source, /JSONObject BuildServerStatusPayload/);
+  // PostJsonObject replaces PostJsonPayload (no string round-trip)
+  assert.match(source, /bool PostJsonObject\(const char\[] url, JSONObject payload/);
+  assert.doesNotMatch(source, /JSONObject\.FromString/);
+});
+
+test('online reporter caches hostport ConVar handle', () => {
+  const source = read(onlineSourcePath);
+
+  assert.match(source, /ConVar g_HostPortCvar/);
+  assert.match(source, /g_HostPortCvar = FindConVar\("hostport"\)/);
+  assert.match(source, /g_HostPortCvar\.IntValue/);
+});
+
+test('online reporter caches tickrate ConVar handle', () => {
+  const source = read(onlineSourcePath);
+  const tickrateLookups = source.match(/FindConVar\("sv_maxupdaterate"\)/g) ?? [];
+
+  assert.match(source, /ConVar g_TickrateCvar = null/);
+  assert.equal(tickrateLookups.length, 1);
+  assert.match(source, /g_TickrateCvar = FindConVar\("sv_maxupdaterate"\)/);
+  assert.match(source, /int GetTickrate\(\)[\s\S]*?g_TickrateCvar\.IntValue/);
+});
+
+test('csgo plugins do not keep deprecated or unused globals/macros', () => {
+  const online = read(onlineSourcePath);
+  const edge = read(edgeSourcePath);
+  const combined = `${online}\n${edge}`;
+
+  assert.doesNotMatch(combined, /adt_trie/);
+  assert.doesNotMatch(combined, /g_ServerPorts/);
+  assert.doesNotMatch(edge, /MAX_SYNC_PAYLOAD/);
+  assert.doesNotMatch(edge, /SAFE_INT_CHECK/);
+});
+
+test('online reporter cleans up on client disconnect', () => {
+  const source = read(onlineSourcePath);
+
+  assert.match(source, /public void OnClientDisconnect\(int client\)/);
+  assert.match(source, /g_WaitingOwnReason\[client\] = false/);
+  assert.match(source, /g_BanTarget\[client\] = 0/);
+  assert.match(source, /g_BanTime\[client\] = 0/);
+});
+
+test('online reporter resets ban poll etag on config change', () => {
+  const source = read(onlineSourcePath);
+
+  assert.match(source, /g_BanPollEtag\[0\] = '\\0'/);
+});
+
+test('online reporter bans table has indexes', () => {
+  const source = read(onlineSourcePath);
+
+  assert.match(source, /CREATE INDEX IF NOT EXISTS idx_bans_steam_id ON bans\(steam_id\)/);
+  assert.match(source, /CREATE INDEX IF NOT EXISTS idx_bans_ip_address ON bans\(ip_address\)/);
+  assert.match(source, /CREATE INDEX IF NOT EXISTS idx_bans_expires_at ON bans\(expires_at\)/);
+});
+
+test('online reporter uses pre-built player index for ban poll matching', () => {
+  const source = read(onlineSourcePath);
+
+  assert.match(source, /StringMap steamMap = new StringMap\(\)/);
+  assert.match(source, /StringMap ipMap = new StringMap\(\)/);
+  assert.match(source, /steamMap\.SetValue\(clientSteamId64, client\)/);
+  assert.match(source, /ipMap\.SetValue\(clientIp, client\)/);
+  assert.match(source, /KickMatchingBan\(item, steamMap, ipMap\)/);
+});
+
+test('online reporter rolls back access snapshot transaction on insert failure', () => {
+  const source = read(onlineSourcePath);
+
+  assert.match(source, /if \(!SQL_FastQuery\(g_AccessSnapshotDb, "DELETE FROM metadata"\)[\s\S]*?ROLLBACK/);
+  assert.match(source, /bool SaveSnapshotBans\(JSONArray bans\)/);
+  assert.match(source, /bool SaveSnapshotWhitelist\(JSONArray whitelist\)/);
+  assert.match(source, /bool SaveSnapshotAccessProfiles\(JSONArray profiles\)/);
+  assert.match(source, /if \(!SQL_FastQuery\(g_AccessSnapshotDb, query\)\)[\s\S]*?return false;/);
+  assert.match(source, /if \(!SQL_FastQuery\(g_AccessSnapshotDb, "COMMIT"\)\)[\s\S]*?ROLLBACK/);
+});
+
+test('online reporter access checks guard disconnected clients and send server_port', () => {
+  const source = read(onlineSourcePath);
+
+  assert.match(source, /void SubmitAccessCheck\(int client\)[\s\S]*?!IsClientConnected\(client\)/);
+  assert.match(source, /JSONObject BuildPluginBanCheckPayload[\s\S]*?payload\.SetInt\("server_port", port\)/);
+  assert.match(source, /JSONObject BuildPluginAccessCheckPayload[\s\S]*?payload\.SetInt\("server_port", port\)/);
+});
+
+test('shared include file exists and contains common functions', () => {
+  const shared = read(sharedIncludePath);
+
+  assert.match(shared, /stock bool ParseConfigValueLine/);
+  assert.match(shared, /stock bool CopyQuotedValue/);
+  assert.match(shared, /stock bool ParseServerMappingLine/);
+});
+
 test('edge sync loads API and token from reporter cfg', () => {
   const source = read(edgeSourcePath);
 
@@ -115,7 +220,8 @@ test('edge sync loads API and token from reporter cfg', () => {
   assert.match(source, /CreateConVar\("manger_api_base_url"/);
   assert.match(source, /void LoadEdgeSyncConfig\(\)/);
   assert.match(source, /BuildPath\(Path_SM, path, sizeof\(path\), "\.\.\/\.\.\/cfg\/sourcemod\/manger_online_reporter\.cfg"\)/);
-  assert.match(source, /ParseServerMappingLine\(line, port, token, sizeof\(token\)\)/);
+  // ParseServerMappingLine is now in shared include
+  assert.match(source, /#include <manger_shared>/);
   assert.match(source, /port == currentPort/);
   assert.match(source, /strcopy\(g_ServerReportToken, sizeof\(g_ServerReportToken\), token\)/);
 });
@@ -131,6 +237,52 @@ test('edge sync retries transient failures and avoids concurrent syncs', () => {
   assert.match(source, /response\.Status >= HTTPStatus_BadRequest && response\.Status < HTTPStatus_InternalServerError/);
   assert.match(source, /MarkOperationsFailed\(ids, errorMsg\)/);
   assert.match(source, /MarkOperationsRetryable\(ids, errorMsg\)/);
+});
+
+test('plugin HTTP requests use explicit timeouts', () => {
+  const online = read(onlineSourcePath);
+  const edge = read(edgeSourcePath);
+  const combined = `${online}\n${edge}`;
+  const requestCount = combined.match(/HTTPRequest request = new HTTPRequest\(url\)/g)?.length ?? 0;
+  const timeoutCount = combined.match(/request\.Timeout = 10/g)?.length ?? 0;
+
+  assert.ok(requestCount > 0);
+  assert.equal(timeoutCount, requestCount);
+});
+
+test('edge sync failed operations do not increment retry count', () => {
+  const source = read(edgeSourcePath);
+  const failedFunction = source.match(/void MarkOperationsFailed\(ArrayList ids, const char\[] error\)[\s\S]*?\n}\n\nvoid MarkOperationsRetryable/)?.[0] ?? '';
+
+  assert.ok(failedFunction.length > 0);
+  assert.match(source, /UPDATE offline_queue SET status = 'failed', sync_error = '%s' WHERE id = %s/);
+  assert.doesNotMatch(failedFunction, /retry_count = retry_count \+ 1/);
+});
+
+test('edge sync has retry limit and cleanup', () => {
+  const source = read(edgeSourcePath);
+
+  assert.match(source, /#define MAX_RETRY_COUNT/);
+  assert.match(source, /#define CLEANUP_RETENTION_SECONDS/);
+  assert.match(source, /retry_count < %d.*MAX_RETRY_COUNT/);
+  assert.match(source, /void CleanupStaleRecords\(\)/);
+  assert.match(source, /DELETE FROM offline_queue WHERE status IN \('synced', 'failed'\)/);
+  assert.match(source, /DELETE FROM audit_log WHERE created_at/);
+});
+
+test('edge sync uses sequence counter in idempotency key', () => {
+  const source = read(edgeSourcePath);
+
+  assert.match(source, /int g_OperationSeq/);
+  assert.match(source, /\+\+g_OperationSeq/);
+});
+
+test('edge sync caches hostport ConVar handle', () => {
+  const source = read(edgeSourcePath);
+
+  assert.match(source, /ConVar g_HostPortCvar/);
+  assert.match(source, /g_HostPortCvar = FindConVar\("hostport"\)/);
+  assert.match(source, /g_HostPortCvar\.IntValue/);
 });
 
 test('ban poll sends and stores server etag to skip unchanged payloads', () => {

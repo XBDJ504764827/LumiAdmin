@@ -10,30 +10,44 @@
 #include <sourcemod>
 #include <adt_array>
 #include <ripext>
+#include <manger_shared>
 
 #define DEFAULT_API_BASE_URL "http://127.0.0.1:8080/api/plugin"
 #define EDGE_SYNC_DB "manger_edge_sync"
-#define MAX_SYNC_PAYLOAD 8192
 #define MAX_IDEMPOTENCY_KEY 64
 #define MAX_SERVER_TOKEN 256
+#define MAX_RETRY_COUNT 10
+#define CLEANUP_RETENTION_SECONDS 604800
 
 Database g_EdgeSyncDb = null;
 Handle g_SyncTimer = null;
 ConVar g_ApiBaseUrl;
 ConVar g_SyncInterval;
+ConVar g_HostPortCvar = null;
 char g_ServerReportToken[MAX_SERVER_TOKEN];
 int g_ServerPort = 0;
 bool g_IsOnline = true;
 bool g_SyncInFlight = false;
 int g_PendingCount = 0;
 int g_LastSyncTime = 0;
+int g_OperationSeq = 0;
+
+/**
+ * 安全格式化整数到 SQL 字符串，负数输出 "0"。
+ */
+void SafeIntToString(int value, char[] buffer, int maxLen)
+{
+    if (value < 0) value = 0;
+    IntToString(value, buffer, maxLen);
+}
+
 
 public Plugin myinfo =
 {
     name = "Manger Edge Sync Agent",
     author = "XBDJ",
     description = "Offline operation queue and sync engine for Manger",
-    version = "1.0.0",
+    version = "1.0.1",
     url = ""
 };
 
@@ -45,6 +59,7 @@ public void OnPluginStart()
         g_ApiBaseUrl = CreateConVar("manger_api_base_url", DEFAULT_API_BASE_URL, "Manger plugin API base URL.");
     }
     g_SyncInterval = CreateConVar("manger_edge_sync_interval", "30.0", "Offline queue sync interval in seconds.", _, true, 10.0);
+    g_HostPortCvar = FindConVar("hostport");
     HookConVarChange(g_SyncInterval, OnSyncIntervalChanged);
 
     RegServerCmd("manger_edge_set_token", CommandSetToken, "Set server report token for Edge Sync");
@@ -105,116 +120,14 @@ public Action Timer_SyncQueue(Handle timer)
 
 bool GetCurrentServerPort(int &port)
 {
-    ConVar hostport = FindConVar("hostport");
-    if (hostport == null)
+    if (g_HostPortCvar == null)
     {
         return false;
     }
-
-    port = hostport.IntValue;
+    port = g_HostPortCvar.IntValue;
     return port > 0;
 }
 
-bool ParseConfigValueLine(const char[] line, const char[] key, char[] value, int maxLen)
-{
-    value[0] = '\0';
-    if (StrContains(line, key, false) != 0)
-    {
-        return false;
-    }
-
-    int firstQuote = FindCharInString(line, '"');
-    if (firstQuote < 0)
-    {
-        return false;
-    }
-
-    int secondQuote = FindCharInString(line[firstQuote + 1], '"');
-    if (secondQuote < 0)
-    {
-        return false;
-    }
-    secondQuote += firstQuote + 1;
-
-    int copyLength = secondQuote - firstQuote - 1;
-    if (copyLength >= maxLen)
-    {
-        copyLength = maxLen - 1;
-    }
-
-    for (int i = 0; i < copyLength; i++)
-    {
-        value[i] = line[firstQuote + 1 + i];
-    }
-    value[copyLength] = '\0';
-    return true;
-}
-
-bool CopyQuotedValue(const char[] line, int firstQuote, char[] value, int maxLen, int &nextOffset)
-{
-    value[0] = '\0';
-
-    int secondQuote = FindCharInString(line[firstQuote + 1], '"');
-    if (secondQuote < 0)
-    {
-        return false;
-    }
-    secondQuote += firstQuote + 1;
-
-    int copyLength = secondQuote - firstQuote - 1;
-    if (copyLength >= maxLen)
-    {
-        copyLength = maxLen - 1;
-    }
-
-    for (int i = 0; i < copyLength; i++)
-    {
-        value[i] = line[firstQuote + 1 + i];
-    }
-    value[copyLength] = '\0';
-    nextOffset = secondQuote + 1;
-    return true;
-}
-
-bool ParseServerMappingLine(const char[] line, int &port, char[] token, int tokenMaxLen)
-{
-    token[0] = '\0';
-    port = 0;
-
-    if (StrContains(line, "manger_server", false) != 0)
-    {
-        return false;
-    }
-
-    int firstQuote = FindCharInString(line, '"');
-    if (firstQuote < 0)
-    {
-        return false;
-    }
-
-    char portText[16];
-    int nextOffset = 0;
-    if (!CopyQuotedValue(line, firstQuote, portText, sizeof(portText), nextOffset))
-    {
-        return false;
-    }
-
-    int tokenQuote = FindCharInString(line[nextOffset], '"');
-    if (tokenQuote < 0)
-    {
-        return false;
-    }
-    tokenQuote += nextOffset;
-
-    if (!CopyQuotedValue(line, tokenQuote, token, tokenMaxLen, nextOffset))
-    {
-        return false;
-    }
-
-    port = StringToInt(portText);
-    TrimString(token);
-    return port > 0;
-}
 
 void LoadEdgeSyncConfig()
 {
@@ -276,13 +189,16 @@ void InitEdgeSyncDb()
 
     // 更新待同步计数
     UpdatePendingCount();
+
+    // 清理过期历史数据（保留7天）
+    CleanupStaleRecords();
 }
 
 void UpdatePendingCount()
 {
     if (g_EdgeSyncDb == null) return;
 
-    DBResultSet results = SQL_Query(g_EdgeSyncDb, "SELECT COUNT(*) FROM offline_queue WHERE status = 'pending'");
+    DBResultSet results = SQL_Query(g_EdgeSyncDb, "SELECT COUNT(*) FROM offline_queue WHERE status = 'pending' AND retry_count < %d", MAX_RETRY_COUNT);
     if (results != null)
     {
         if (SQL_FetchRow(results))
@@ -291,6 +207,20 @@ void UpdatePendingCount()
         }
         delete results;
     }
+}
+
+void CleanupStaleRecords()
+{
+    if (g_EdgeSyncDb == null) return;
+
+    int cutoff = GetTime() - CLEANUP_RETENTION_SECONDS;
+
+    char query[256];
+    Format(query, sizeof(query), "DELETE FROM offline_queue WHERE status IN ('synced', 'failed') AND created_at < %d", cutoff);
+    SQL_FastQuery(g_EdgeSyncDb, query);
+
+    Format(query, sizeof(query), "DELETE FROM audit_log WHERE created_at < %d", cutoff);
+    SQL_FastQuery(g_EdgeSyncDb, query);
 }
 
 public Action CommandSetToken(int args)
@@ -355,8 +285,22 @@ int EnqueueOperation(
 
     // 生成幂等键
     char idempotencyKey[MAX_IDEMPOTENCY_KEY];
-    Format(idempotencyKey, sizeof(idempotencyKey), "%d_%s_%s_%d",
-        GetTime(), operation, target, g_ServerPort);
+    Format(idempotencyKey, sizeof(idempotencyKey), "%d_%d_%s_%s_%d",
+        GetTime(), ++g_OperationSeq, operation, target, g_ServerPort);
+
+    // 校验 durationMinutes 为合法非负整数
+    if (durationMinutes < 0)
+    {
+        LogError("[EdgeSync] EnqueueOperation rejected: negative duration_minutes %d.", durationMinutes);
+        return -1;
+    }
+
+    // 校验 g_ServerPort 为合法正整数
+    if (g_ServerPort <= 0)
+    {
+        LogError("[EdgeSync] EnqueueOperation rejected: invalid server_port %d.", g_ServerPort);
+        return -1;
+    }
 
     // 转义字符串
     char escapedTarget[256];
@@ -374,7 +318,12 @@ int EnqueueOperation(
     SQL_EscapeString(g_EdgeSyncDb, idempotencyKey, escapedIdempotencyKey, sizeof(escapedIdempotencyKey));
 
     char query[2048];
-    Format(query, sizeof(query), "INSERT INTO offline_queue (operation, target, target_type, player_name, reason, duration_minutes, operator_name, operator_steamid, server_port, created_at, status, idempotency_key) VALUES ('%s', '%s', '%s', '%s', '%s', %d, '%s', '%s', %d, %d, 'pending', '%s')", operation, escapedTarget, targetType, escapedPlayerName, escapedReason, durationMinutes, escapedOperatorName, escapedOperatorSteamid, g_ServerPort, GetTime(), escapedIdempotencyKey);
+    char portBuf[16];
+    char timeBuf[16];
+    SafeIntToString(g_ServerPort, portBuf, sizeof(portBuf));
+    SafeIntToString(GetTime(), timeBuf, sizeof(timeBuf));
+
+    Format(query, sizeof(query), "INSERT INTO offline_queue (operation, target, target_type, player_name, reason, duration_minutes, operator_name, operator_steamid, server_port, created_at, status, idempotency_key) VALUES ('%s', '%s', '%s', '%s', '%s', %d, '%s', '%s', %s, %s, 'pending', '%s')", operation, escapedTarget, targetType, escapedPlayerName, escapedReason, durationMinutes, escapedOperatorName, escapedOperatorSteamid, portBuf, timeBuf, escapedIdempotencyKey);
 
     if (!SQL_FastQuery(g_EdgeSyncDb, query))
     {
@@ -428,7 +377,14 @@ void WriteLocalAuditLog(
     SQL_EscapeString(g_EdgeSyncDb, message, escapedMessage, sizeof(escapedMessage));
 
     char query[1024];
-    Format(query, sizeof(query), "INSERT INTO audit_log (operation, target, operator_name, operator_steamid, server_port, success, message, created_at) VALUES ('%s', '%s', '%s', '%s', %d, %d, '%s', %d)", operation, escapedTarget, escapedOperatorName, escapedOperatorSteamid, g_ServerPort, success ? 1 : 0, escapedMessage, GetTime());
+    char portBuf[16];
+    char timeBuf[16];
+    SafeIntToString(g_ServerPort, portBuf, sizeof(portBuf));
+    SafeIntToString(GetTime(), timeBuf, sizeof(timeBuf));
+    char successBuf[8];
+    SafeIntToString(success ? 1 : 0, successBuf, sizeof(successBuf));
+
+    Format(query, sizeof(query), "INSERT INTO audit_log (operation, target, operator_name, operator_steamid, server_port, success, message, created_at) VALUES ('%s', '%s', '%s', '%s', %s, %s, '%s', %s)", operation, escapedTarget, escapedOperatorName, escapedOperatorSteamid, portBuf, successBuf, escapedMessage, timeBuf);
 
     SQL_FastQuery(g_EdgeSyncDb, query);
 }
@@ -444,7 +400,7 @@ void SyncOfflineQueue()
     if (g_ServerPort <= 0 || g_ServerReportToken[0] == '\0') return;
 
     // 查询待同步的操作
-    DBResultSet results = SQL_Query(g_EdgeSyncDb, "SELECT id, operation, target, target_type, player_name, reason, duration_minutes, operator_name, operator_steamid, created_at, idempotency_key FROM offline_queue WHERE status = 'pending' ORDER BY created_at ASC LIMIT 50");
+    DBResultSet results = SQL_Query(g_EdgeSyncDb, "SELECT id, operation, target, target_type, player_name, reason, duration_minutes, operator_name, operator_steamid, created_at, idempotency_key FROM offline_queue WHERE status = 'pending' AND retry_count < %d ORDER BY created_at ASC LIMIT 50", MAX_RETRY_COUNT);
 
     if (results == null) return;
 
@@ -528,6 +484,7 @@ void SyncOfflineQueue()
     StrCat(url, sizeof(url), "/offline/sync");
 
     HTTPRequest request = new HTTPRequest(url);
+    request.Timeout = 10;
     g_SyncInFlight = true;
     request.Post(jsonPayload, OnSyncResponse, ids);
     delete jsonPayload;
@@ -599,9 +556,14 @@ public void OnSyncResponse(HTTPResponse response, any value, const char[] error)
 void MarkOperationSynced(int id)
 {
     if (g_EdgeSyncDb == null) return;
+    if (id < 0) return;
 
     char query[256];
-    Format(query, sizeof(query), "UPDATE offline_queue SET status = 'synced', synced_at = %d WHERE id = %d", GetTime(), id);
+    char timeBuf[16];
+    char idBuf[16];
+    SafeIntToString(GetTime(), timeBuf, sizeof(timeBuf));
+    SafeIntToString(id, idBuf, sizeof(idBuf));
+    Format(query, sizeof(query), "UPDATE offline_queue SET status = 'synced', synced_at = %s WHERE id = %s", timeBuf, idBuf);
     SQL_FastQuery(g_EdgeSyncDb, query);
 }
 
@@ -615,8 +577,12 @@ void MarkOperationsFailed(ArrayList ids, const char[] error)
     for (int i = 0; i < ids.Length; i++)
     {
         int id = ids.Get(i);
+        if (id < 0) continue;
+
         char query[512];
-        Format(query, sizeof(query), "UPDATE offline_queue SET status = 'failed', sync_error = '%s', retry_count = retry_count + 1 WHERE id = %d", escapedError, id);
+        char idBuf[16];
+        SafeIntToString(id, idBuf, sizeof(idBuf));
+        Format(query, sizeof(query), "UPDATE offline_queue SET status = 'failed', sync_error = '%s' WHERE id = %s", escapedError, idBuf);
         SQL_FastQuery(g_EdgeSyncDb, query);
     }
 
@@ -633,8 +599,12 @@ void MarkOperationsRetryable(ArrayList ids, const char[] error)
     for (int i = 0; i < ids.Length; i++)
     {
         int id = ids.Get(i);
+        if (id < 0) continue;
+
         char query[512];
-        Format(query, sizeof(query), "UPDATE offline_queue SET status = 'pending', sync_error = '%s', retry_count = retry_count + 1 WHERE id = %d", escapedError, id);
+        char idBuf[16];
+        SafeIntToString(id, idBuf, sizeof(idBuf));
+        Format(query, sizeof(query), "UPDATE offline_queue SET status = 'pending', sync_error = '%s', retry_count = retry_count + 1 WHERE id = %s", escapedError, idBuf);
         SQL_FastQuery(g_EdgeSyncDb, query);
     }
 

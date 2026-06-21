@@ -8,7 +8,7 @@ use serde::Deserialize;
 use crate::routes::{current_operator, AppCtx, AppError};
 use crate::services::{global_ban_service, permission_service};
 
-/// 实时获取全球封禁列表（直接从 KZTimer API 拉取，合并本地状态）
+/// 获取全球封禁列表（优先 KZTimer 实时数据，外部 API 限流时回退本地缓存）
 pub(crate) async fn list_global_bans(
     State(ctx): State<AppCtx>,
     headers: HeaderMap,
@@ -31,6 +31,8 @@ pub(crate) async fn list_global_bans(
         "page": result.page,
         "page_size": result.page_size,
         "has_more": result.has_more,
+        "source": result.source,
+        "warning": result.warning,
     })))
 }
 

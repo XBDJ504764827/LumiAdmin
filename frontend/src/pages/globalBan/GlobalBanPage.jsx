@@ -52,9 +52,20 @@ export function GlobalBanPage() {
   const [searchSource, setSearchSource] = useState('');
 
   const pageSize = 20;
-  const { data, isLoading, error, refetch } = useApiQuery(['globalBans',page],(token)=>api.globalBans(token,{page,page_size:pageSize}),typeof session!=='undefined');
+  const { data, isLoading, error, refetch } = useApiQuery(
+    ['globalBans',page],
+    (token)=>api.globalBans(token,{page,page_size:pageSize}),
+    {
+      enabled: typeof session !== 'undefined',
+      staleTime: 60_000,
+      retry: 1,
+      refetchOnWindowFocus: false,
+    },
+  );
   const items = data?.items || [];
   const hasMore = data?.has_more || false;
+  const source = data?.source || 'live';
+  const warning = data?.warning || '';
 
   async function handleSync() {
     if(syncing)return;setSyncing(true);setSyncResult(null);
@@ -80,6 +91,7 @@ export function GlobalBanPage() {
       </div>
 
       {syncResult&&<div className={`sync-result-bar ${syncResult.error?'error':'success'}`}>{syncResult.error?<span>同步失败: {syncResult.error}</span>:<span>同步完成 — 获取 {syncResult.total_fetched??0} 条，新增 {syncResult.new_bans??0} 条</span>}<button className="btn btn-sm" onClick={()=>setSyncResult(null)}>关闭</button></div>}
+      {warning&&<div className="info-box warning" style={{marginBottom:16}}>{warning}</div>}
 
       {/* 搜索框 */}
       <div className="card" style={{marginBottom:16}}>
@@ -115,7 +127,9 @@ export function GlobalBanPage() {
       )}
 
       {/* 全量列表 */}
-      <div className="card"><div className="card-body p-0"><div className="table-responsive"><table className="data-table"><thead><tr><th>玩家</th><th>SteamID64</th><th>封禁类型</th><th>到期时间</th><th>备注</th><th>本地封禁</th><th>封禁时间</th><th>操作</th></tr></thead><tbody>
+      <div className="card">
+        <div className="card-header"><div><div className="card-title">封禁列表</div><div className="card-sub">数据来源：{source==='local_cache'?'本地同步缓存':source==='memory_cache'?'最近一次实时缓存':'KZTimer 实时 API'}</div></div></div>
+        <div className="card-body p-0"><div className="table-responsive"><table className="data-table"><thead><tr><th>玩家</th><th>SteamID64</th><th>封禁类型</th><th>到期时间</th><th>备注</th><th>本地封禁</th><th>封禁时间</th><th>操作</th></tr></thead><tbody>
         {isLoading?<TableLoading colSpan={8} text="正在加载全球封禁列表..."/>:
          error?<tr><td colSpan={8} className="table-state-cell"><div className="table-state-inner table-state-inner--error">加载失败: {error.message}</div></td></tr>:
          items.length===0?<TableEmpty colSpan={8} text="暂无全球封禁记录"/>:

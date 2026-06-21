@@ -17,8 +17,13 @@
 use crate::{db::Database, services::observability_service};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::QueryBuilder;
 use sqlx::Postgres;
+use sqlx::QueryBuilder;
+use std::{
+    collections::HashMap,
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
+};
 use uuid::Uuid;
 
 /// KZTimer API 返回的封禁记录
@@ -79,11 +84,115 @@ pub struct LiveBanListResult {
     pub total: i64,
     /// 当前页是否满（用于判断是否有下一页）
     pub has_more: bool,
+    /// 数据来源：live=KZTimer 实时 API，memory_cache=进程内短缓存，local_cache=本地同步表
+    pub source: String,
+    /// 当使用降级数据时给前端展示的提示
+    pub warning: Option<String>,
 }
 
 // =====================================================
 // HTTP 请求（带超时 + 重试）
 // =====================================================
+
+#[derive(Clone)]
+struct KztListCacheEntry {
+    bans: Vec<KZTBan>,
+    stored_at: Instant,
+}
+
+static KZT_RATE_LIMIT_UNTIL: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+static KZT_LIST_CACHE: OnceLock<Mutex<HashMap<String, KztListCacheEntry>>> = OnceLock::new();
+
+fn kzt_rate_limit_until() -> &'static Mutex<Option<Instant>> {
+    KZT_RATE_LIMIT_UNTIL.get_or_init(|| Mutex::new(None))
+}
+
+fn kzt_list_cache() -> &'static Mutex<HashMap<String, KztListCacheEntry>> {
+    KZT_LIST_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn kzt_cache_key(offset: i64, limit: i64, expired_filter: Option<bool>) -> String {
+    let expired = expired_filter
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "all".to_string());
+    format!("{expired}:{limit}:{offset}")
+}
+
+fn kzt_cooldown_remaining() -> Option<Duration> {
+    let mut guard = kzt_rate_limit_until().lock().ok()?;
+    let until = *guard;
+    match until {
+        Some(instant) if instant > Instant::now() => Some(instant.duration_since(Instant::now())),
+        Some(_) => {
+            *guard = None;
+            None
+        }
+        None => None,
+    }
+}
+
+fn set_kzt_cooldown(duration: Duration, reason: &str) {
+    let until = Instant::now() + duration;
+    if let Ok(mut guard) = kzt_rate_limit_until().lock() {
+        match *guard {
+            Some(current) if current > until => {}
+            _ => *guard = Some(until),
+        }
+    }
+    tracing::warn!(
+        cooldown_secs = duration.as_secs(),
+        reason,
+        "KZTimer API 进入限流冷却"
+    );
+}
+
+fn retry_after_duration(headers: &reqwest::header::HeaderMap) -> Duration {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(60))
+}
+
+fn remember_kzt_bans(offset: i64, limit: i64, expired_filter: Option<bool>, bans: &[KZTBan]) {
+    let Ok(mut cache) = kzt_list_cache().lock() else {
+        return;
+    };
+    let now = Instant::now();
+    cache.retain(|_, entry| now.duration_since(entry.stored_at) < Duration::from_secs(15 * 60));
+    cache.insert(
+        kzt_cache_key(offset, limit, expired_filter),
+        KztListCacheEntry {
+            bans: bans.to_vec(),
+            stored_at: now,
+        },
+    );
+    if cache.len() > 100 {
+        let keys: Vec<String> = cache
+            .iter()
+            .filter(|(_, entry)| now.duration_since(entry.stored_at) >= Duration::from_secs(5 * 60))
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in keys {
+            cache.remove(&key);
+        }
+    }
+}
+
+fn cached_kzt_bans(
+    offset: i64,
+    limit: i64,
+    expired_filter: Option<bool>,
+    max_age: Duration,
+) -> Option<Vec<KZTBan>> {
+    let cache = kzt_list_cache().lock().ok()?;
+    let entry = cache.get(&kzt_cache_key(offset, limit, expired_filter))?;
+    if Instant::now().duration_since(entry.stored_at) <= max_age {
+        return Some(entry.bans.clone());
+    }
+    None
+}
 
 /// 从 KZTimer API 拉取封禁列表（带超时和重试）
 /// `expired_filter`: None=全部, Some(true)=仅过期, Some(false)=仅活跃
@@ -92,6 +201,13 @@ async fn fetch_kzt_bans(
     limit: i64,
     expired_filter: Option<bool>,
 ) -> anyhow::Result<Vec<KZTBan>> {
+    if let Some(remaining) = kzt_cooldown_remaining() {
+        anyhow::bail!(
+            "KZTimer API 正在限流冷却，请 {} 秒后重试",
+            remaining.as_secs().max(1)
+        );
+    }
+
     let client = crate::http_client::http_client();
     let url = match expired_filter {
         Some(v) => format!(
@@ -106,18 +222,25 @@ async fn fetch_kzt_bans(
 
     let mut last_err: Option<String> = None;
     for attempt in 0..3u8 {
-        let req_result = tokio::time::timeout(
-            std::time::Duration::from_secs(20),
-            client.get(&url).send(),
-        )
-        .await;
+        let req_result =
+            tokio::time::timeout(std::time::Duration::from_secs(20), client.get(&url).send())
+                .await;
 
         match req_result {
             Ok(Ok(resp)) => {
                 let status = resp.status();
                 if status.is_success() {
                     let bans: Vec<KZTBan> = resp.json().await?;
+                    remember_kzt_bans(offset, limit, expired_filter, &bans);
                     return Ok(bans);
+                }
+                if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    let cooldown = retry_after_duration(resp.headers());
+                    set_kzt_cooldown(cooldown, "429 Too Many Requests");
+                    anyhow::bail!(
+                        "KZTimer API 返回 429 Too Many Requests，已暂停请求 {} 秒",
+                        cooldown.as_secs()
+                    );
                 }
                 let err_str = format!("status={}", status);
                 tracing::warn!(attempt, offset, %err_str, "KZTimer API 请求返回非成功状态");
@@ -155,7 +278,24 @@ pub async fn fetch_live_global_bans(
     page_size: i64,
 ) -> anyhow::Result<LiveBanListResult> {
     let offset = (page - 1) * page_size;
-    let bans = fetch_kzt_bans(offset, page_size, Some(false)).await?;
+    let bans_result = fetch_kzt_bans(offset, page_size, Some(false)).await;
+    let (bans, source, warning) = match bans_result {
+        Ok(bans) => (bans, "live".to_string(), None),
+        Err(error) => {
+            tracing::warn!(%error, page, page_size, "KZTimer 全球封禁实时列表不可用，尝试使用缓存");
+            if let Some(cached) =
+                cached_kzt_bans(offset, page_size, Some(false), Duration::from_secs(15 * 60))
+            {
+                (
+                    cached,
+                    "memory_cache".to_string(),
+                    Some("KZTimer API 暂不可用，正在显示最近一次成功获取的数据。".to_string()),
+                )
+            } else {
+                return fetch_local_global_bans(db, page, page_size, Some(error.to_string())).await;
+            }
+        }
+    };
     let has_more = bans.len() as i64 == page_size;
 
     // 批量查询本地状态，避免 N+1
@@ -195,6 +335,112 @@ pub async fn fetch_live_global_bans(
         page_size,
         total: 0, // KZTimer API 不返回 total，前端通过 has_more 翻页
         has_more,
+        source,
+        warning,
+    })
+}
+
+async fn fetch_local_global_bans(
+    db: &Database,
+    page: i64,
+    page_size: i64,
+    cause: Option<String>,
+) -> anyhow::Result<LiveBanListResult> {
+    let offset = (page - 1) * page_size;
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(
+        i64,
+        String,
+        Option<String>,
+        Option<String>,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        Option<String>,
+        Option<String>,
+        Option<Uuid>,
+        bool,
+    )> = sqlx::query_as(
+        r#"SELECT
+              kzt_ban_id::BIGINT,
+              steam_id64,
+              player_name,
+              steam_id,
+              ban_type,
+              notes,
+              stats,
+              server_id::BIGINT,
+              expires_on,
+              created_on,
+              local_ban_id,
+              manual_unbanned
+           FROM global_bans
+           WHERE is_expired = false
+           ORDER BY created_on DESC NULLS LAST, synced_at DESC
+           LIMIT $1 OFFSET $2"#,
+    )
+    .bind(page_size + 1)
+    .bind(offset)
+    .fetch_all(&db.pool)
+    .await?;
+
+    let has_more = rows.len() as i64 > page_size;
+    let items: Vec<LiveBanItem> = rows
+        .into_iter()
+        .take(page_size as usize)
+        .map(
+            |(
+                kzt_ban_id,
+                steamid64,
+                player_name,
+                steam_id,
+                ban_type,
+                notes,
+                stats,
+                server_id,
+                expires_on,
+                created_on,
+                local_ban_id,
+                manual_unbanned,
+            )| LiveBanItem {
+                ban: KZTBan {
+                    id: kzt_ban_id,
+                    ban_type,
+                    expires_on,
+                    steamid64,
+                    player_name,
+                    steam_id,
+                    notes,
+                    stats,
+                    server_id,
+                    created_on,
+                    updated_on: None,
+                },
+                local_ban_id,
+                manual_unbanned,
+            },
+        )
+        .collect();
+
+    let warning = match cause {
+        Some(error) if !items.is_empty() => Some(format!(
+            "KZTimer API 暂不可用，正在显示本地同步缓存数据，可能不是最新。原因：{error}"
+        )),
+        Some(error) => Some(format!(
+            "KZTimer API 暂不可用，且本地暂无同步缓存数据。原因：{error}"
+        )),
+        None => None,
+    };
+
+    Ok(LiveBanListResult {
+        items,
+        page,
+        page_size,
+        total: 0,
+        has_more,
+        source: "local_cache".to_string(),
+        warning,
     })
 }
 
@@ -229,20 +475,44 @@ pub async fn search_player_bans(
     .fetch_all(&db.pool)
     .await?;
 
-    // 2) 同时查 KZTimer API 获取最新数据（后台查询，确保数据新鲜）
-    let kzt_url = format!(
-        "https://kztimerglobal.com/api/v2.0/bans?steamid64={}&limit=100&offset=0",
-        steamid64
-    );
-    let kzt_result = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        crate::http_client::http_client().get(&kzt_url).send(),
-    )
-    .await;
+    // 2) 查 KZTimer API 获取最新数据。若列表请求刚触发 429 冷却，则跳过实时查询。
+    let kzt_bans: Vec<KZTBan> = if kzt_cooldown_remaining().is_some() {
+        Vec::new()
+    } else {
+        let kzt_url = format!(
+            "https://kztimerglobal.com/api/v2.0/bans?steamid64={}&limit=100&offset=0",
+            steamid64
+        );
+        let kzt_result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            crate::http_client::http_client().get(&kzt_url).send(),
+        )
+        .await;
 
-    let kzt_bans: Vec<KZTBan> = match kzt_result {
-        Ok(Ok(resp)) if resp.status().is_success() => resp.json().await.unwrap_or_default(),
-        _ => Vec::new(),
+        match kzt_result {
+            Ok(Ok(resp)) if resp.status().is_success() => resp.json().await.unwrap_or_default(),
+            Ok(Ok(resp)) if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS => {
+                let cooldown = retry_after_duration(resp.headers());
+                set_kzt_cooldown(cooldown, "429 Too Many Requests");
+                Vec::new()
+            }
+            Ok(Ok(resp)) => {
+                tracing::warn!(
+                    status = %resp.status(),
+                    steamid64,
+                    "KZTimer 玩家封禁搜索返回非成功状态"
+                );
+                Vec::new()
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, steamid64, "KZTimer 玩家封禁搜索失败");
+                Vec::new()
+            }
+            Err(_) => {
+                tracing::warn!(steamid64, "KZTimer 玩家封禁搜索超时");
+                Vec::new()
+            }
+        }
     };
 
     if !kzt_bans.is_empty() {

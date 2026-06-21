@@ -102,6 +102,7 @@ struct KztListCacheEntry {
 
 static KZT_RATE_LIMIT_UNTIL: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
 static KZT_LIST_CACHE: OnceLock<Mutex<HashMap<String, KztListCacheEntry>>> = OnceLock::new();
+static GLOBAL_BAN_SYNC_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 fn kzt_rate_limit_until() -> &'static Mutex<Option<Instant>> {
     KZT_RATE_LIMIT_UNTIL.get_or_init(|| Mutex::new(None))
@@ -109,6 +110,10 @@ fn kzt_rate_limit_until() -> &'static Mutex<Option<Instant>> {
 
 fn kzt_list_cache() -> &'static Mutex<HashMap<String, KztListCacheEntry>> {
     KZT_LIST_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn global_ban_sync_lock() -> &'static tokio::sync::Mutex<()> {
+    GLOBAL_BAN_SYNC_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
 fn kzt_cache_key(offset: i64, limit: i64, expired_filter: Option<bool>) -> String {
@@ -304,7 +309,7 @@ pub async fn fetch_live_global_bans(
         std::collections::HashMap::new()
     } else {
         let rows: Vec<(i64, Option<Uuid>, bool)> = sqlx::query_as(
-            "SELECT kzt_ban_id, local_ban_id, manual_unbanned FROM global_bans WHERE kzt_ban_id = ANY($1)",
+            "SELECT kzt_ban_id::BIGINT, local_ban_id, manual_unbanned FROM global_bans WHERE kzt_ban_id = ANY($1)",
         )
         .bind(&kzt_ids)
         .fetch_all(&db.pool)
@@ -570,6 +575,15 @@ pub async fn search_player_bans(
 ///   - 已存在的记录：仅更新元数据，不改变 ban_records 状态
 ///   - 不再自动解封过期的全球封禁（避免解封后又被重新封禁）
 pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
+    let Ok(_guard) = global_ban_sync_lock().try_lock() else {
+        tracing::warn!("全球封禁同步跳过：已有同步任务正在运行");
+        anyhow::bail!("全球封禁同步正在运行，请稍后重试");
+    };
+
+    sync_global_bans_locked(db).await
+}
+
+async fn sync_global_bans_locked(db: &Database) -> anyhow::Result<SyncResult> {
     let mut result = SyncResult::default();
 
     // 0) 读取同步起始时间（部署这版后端的时间）
@@ -581,12 +595,29 @@ pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
     .map(|(v,): (DateTime<Utc>,)| v)
     .unwrap_or_else(|_| Utc::now());
 
-    tracing::debug!(%sync_since, "全球封禁同步起始时间");
-
     // 1) 拉取 KZTimer 所有活跃封禁（分页）
     let mut all_bans: Vec<KZTBan> = Vec::new();
     for offset in (0..10000).step_by(500) {
-        let bans = fetch_kzt_bans(offset, 500, Some(false)).await?;
+        let bans = match fetch_kzt_bans(offset, 500, Some(false)).await {
+            Ok(bans) => bans,
+            Err(e) if all_bans.is_empty() => {
+                tracing::warn!(
+                    offset,
+                    error = %e,
+                    "KZTimer 全球封禁首个分页拉取失败，同步无法继续"
+                );
+                return Err(e);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    offset,
+                    already_fetched = all_bans.len(),
+                    error = %e,
+                    "KZTimer 全球封禁分页拉取失败，将使用已拉取数据继续同步"
+                );
+                break;
+            }
+        };
         let len = bans.len();
         all_bans.extend(bans);
         if len < 500 {
@@ -605,14 +636,13 @@ pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
     } else {
         let id_vec: Vec<i64> = api_ban_ids.iter().copied().collect();
         let rows: Vec<(i64,)> = sqlx::query_as(
-            "SELECT kzt_ban_id FROM global_bans WHERE kzt_ban_id = ANY($1)",
+            "SELECT kzt_ban_id::BIGINT FROM global_bans WHERE kzt_ban_id = ANY($1)",
         )
         .bind(&id_vec)
         .fetch_all(&db.pool)
         .await?;
         rows.into_iter().map(|r| r.0).collect()
     };
-
     // 4) 查询已被管理员解封的 kzt_ban_id（per-ban 标记）
     //    管理员解封只标记该条全球封禁记录，后续该玩家如果被 KZTimer 发了新的封禁（不同 kzt_ban_id）
     //    仍会被同步到 LumiAdmin 中封禁
@@ -621,14 +651,13 @@ pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
     } else {
         let id_vec: Vec<i64> = api_ban_ids.iter().copied().collect();
         let rows: Vec<(i64,)> = sqlx::query_as(
-            "SELECT kzt_ban_id FROM global_bans WHERE manual_unbanned = true AND kzt_ban_id = ANY($1)",
+            "SELECT kzt_ban_id::BIGINT FROM global_bans WHERE manual_unbanned = true AND kzt_ban_id = ANY($1)",
         )
         .bind(&id_vec)
         .fetch_all(&db.pool)
         .await?;
         rows.into_iter().map(|r| r.0).collect()
     };
-
     // 5) 批量处理新封禁（INSERT global_bans + 按需创建 ban_records）
     //    分批批量 INSERT，避免逐条 N+1
     let new_bans: Vec<&KZTBan> = all_bans
@@ -643,12 +672,21 @@ pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
             .created_on
             .as_deref()
             .and_then(|c| parse_kzt_datetime(c).ok());
-        let is_before_sync_since = ban_created.map(|dt| dt < sync_since).unwrap_or(true);
 
-        let local_id = if is_ban_unbanned || is_before_sync_since {
+        let local_id = if is_ban_unbanned {
+            None
+        } else if ban_created.is_none() {
+            tracing::warn!(
+                kzt_ban_id = ban.id,
+                steam_id = %ban.steamid64,
+                created_on = ?ban.created_on,
+                "跳过新增全球封禁：created_on 缺失或无法解析"
+            );
+            None
+        } else if ban_created.map(|dt| dt < sync_since).unwrap_or(true) {
             None
         } else {
-            create_local_ban(
+            match create_local_ban(
                 db,
                 &ban.steamid64,
                 &ban.player_name,
@@ -658,8 +696,21 @@ pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
                 ban.expires_on.as_deref(),
             )
             .await
-            .ok()
-            .flatten()
+            {
+                Ok(Some(local_id)) => {
+                    Some(local_id)
+                }
+                Ok(None) => None,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        kzt_ban_id = ban.id,
+                        steam_id = %ban.steamid64,
+                        "新增全球封禁创建本地封禁失败"
+                    );
+                    None
+                }
+            }
         };
 
         if local_id.is_some() {
@@ -696,7 +747,7 @@ pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
                     .unwrap_or(true)
         }).collect();
 
-        sqlx::query(
+        let insert_result = sqlx::query(
             r#"INSERT INTO global_bans (
                 id, kzt_ban_id, steam_id64, player_name, steam_id, ban_type,
                 notes, stats, server_id, expires_on, created_on, updated_on,
@@ -729,6 +780,7 @@ pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
         .bind(&manual_flags)
         .execute(&db.pool)
         .await?;
+        let _ = insert_result;
     }
 
     // 6) 批量更新已存在记录的元数据
@@ -747,7 +799,7 @@ pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
         let expires_vec: Vec<Option<&str>> = chunk.iter().map(|b| b.expires_on.as_deref()).collect();
         let updated_vec: Vec<Option<&str>> = chunk.iter().map(|b| b.updated_on.as_deref()).collect();
 
-        sqlx::query(
+        let update_result = sqlx::query(
             r#"UPDATE global_bans gb
                SET player_name = u.player_name, ban_type = u.ban_type, notes = u.notes,
                    stats = u.stats, expires_on = u.expires_on, updated_on = u.updated_on,
@@ -765,28 +817,43 @@ pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
         .bind(&updated_vec)
         .execute(&db.pool)
         .await?;
+        let _ = update_result;
     }
 
     // 7) 补偿已有 global_bans 但缺失活跃 ban_records 的记录。
     //    旧逻辑只在 kzt_ban_id 首次插入时创建本地封禁；如果当时创建失败、
     //    或记录已存在但 local_ban_id 为空，后续同步只更新元数据，不会再补建。
-    result.new_bans += ensure_missing_local_bans(db, &all_bans, sync_since).await?;
+    let repair_stats = ensure_missing_local_bans(db, &all_bans, sync_since).await?;
+    result.repaired_local_bans = repair_stats.repaired;
+    result.new_bans += repair_stats.repaired;
 
     Ok(result)
+}
+
+#[derive(Debug, Default)]
+struct LocalBanRepairStats {
+    repaired: i64,
+    skipped_missing_state: i64,
+    skipped_active_local_ban: i64,
+    skipped_manual_unbanned: i64,
+    skipped_before_sync_since: i64,
+    skipped_create_none: i64,
+    create_errors: i64,
 }
 
 async fn ensure_missing_local_bans(
     db: &Database,
     all_bans: &[KZTBan],
     sync_since: DateTime<Utc>,
-) -> anyhow::Result<i64> {
+) -> anyhow::Result<LocalBanRepairStats> {
+    let mut stats = LocalBanRepairStats::default();
     if all_bans.is_empty() {
-        return Ok(0);
+        return Ok(stats);
     }
 
     let api_ban_ids: Vec<i64> = all_bans.iter().map(|b| b.id).collect();
     let rows: Vec<(i64, Option<Uuid>, bool, Option<String>)> = sqlx::query_as(
-        r#"SELECT gb.kzt_ban_id, gb.local_ban_id, gb.manual_unbanned, br.status
+        r#"SELECT gb.kzt_ban_id::BIGINT, gb.local_ban_id, gb.manual_unbanned, br.status
            FROM global_bans gb
            LEFT JOIN ban_records br ON br.id = gb.local_ban_id
            WHERE gb.kzt_ban_id = ANY($1)"#,
@@ -802,16 +869,18 @@ async fn ensure_missing_local_bans(
         })
         .collect();
 
-    let mut repaired = 0;
     for ban in all_bans {
         let Some((local_ban_id, manual_unbanned, local_status)) = local_states.get(&ban.id) else {
+            stats.skipped_missing_state += 1;
             continue;
         };
         if *manual_unbanned {
+            stats.skipped_manual_unbanned += 1;
             continue;
         }
         let has_active_local_ban = local_ban_id.is_some() && local_status.as_deref() == Some("active");
         if has_active_local_ban {
+            stats.skipped_active_local_ban += 1;
             continue;
         }
 
@@ -821,6 +890,7 @@ async fn ensure_missing_local_bans(
             .and_then(|c| parse_kzt_datetime(c).ok());
         let should_sync = ban_created.map(|dt| dt >= sync_since).unwrap_or(false);
         if !should_sync {
+            stats.skipped_before_sync_since += 1;
             continue;
         }
 
@@ -845,10 +915,13 @@ async fn ensure_missing_local_bans(
                 .bind(local_id)
                 .execute(&db.pool)
                 .await?;
-                repaired += 1;
+                stats.repaired += 1;
             }
-            Ok(None) => {}
+            Ok(None) => {
+                stats.skipped_create_none += 1;
+            }
             Err(e) => {
+                stats.create_errors += 1;
                 tracing::warn!(
                     error = %e,
                     kzt_ban_id = ban.id,
@@ -859,7 +932,7 @@ async fn ensure_missing_local_bans(
         }
     }
 
-    Ok(repaired)
+    Ok(stats)
 }
 
 /// 在 ban_records 中创建本地封禁（source = "global_ban"）
@@ -1122,6 +1195,7 @@ fn push_filters(builder: &mut QueryBuilder<'_, Postgres>, params: &GlobalBanQuer
 pub struct SyncResult {
     pub total_fetched: i64,
     pub new_bans: i64,
+    pub repaired_local_bans: i64,
     pub expired: i64,
     pub re_banned: i64,
 }

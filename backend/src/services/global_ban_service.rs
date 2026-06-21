@@ -767,7 +767,99 @@ pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
         .await?;
     }
 
+    // 7) 补偿已有 global_bans 但缺失活跃 ban_records 的记录。
+    //    旧逻辑只在 kzt_ban_id 首次插入时创建本地封禁；如果当时创建失败、
+    //    或记录已存在但 local_ban_id 为空，后续同步只更新元数据，不会再补建。
+    result.new_bans += ensure_missing_local_bans(db, &all_bans, sync_since).await?;
+
     Ok(result)
+}
+
+async fn ensure_missing_local_bans(
+    db: &Database,
+    all_bans: &[KZTBan],
+    sync_since: DateTime<Utc>,
+) -> anyhow::Result<i64> {
+    if all_bans.is_empty() {
+        return Ok(0);
+    }
+
+    let api_ban_ids: Vec<i64> = all_bans.iter().map(|b| b.id).collect();
+    let rows: Vec<(i64, Option<Uuid>, bool, Option<String>)> = sqlx::query_as(
+        r#"SELECT gb.kzt_ban_id, gb.local_ban_id, gb.manual_unbanned, br.status
+           FROM global_bans gb
+           LEFT JOIN ban_records br ON br.id = gb.local_ban_id
+           WHERE gb.kzt_ban_id = ANY($1)"#,
+    )
+    .bind(&api_ban_ids)
+    .fetch_all(&db.pool)
+    .await?;
+
+    let local_states: std::collections::HashMap<i64, (Option<Uuid>, bool, Option<String>)> = rows
+        .into_iter()
+        .map(|(kzt_ban_id, local_ban_id, manual_unbanned, local_status)| {
+            (kzt_ban_id, (local_ban_id, manual_unbanned, local_status))
+        })
+        .collect();
+
+    let mut repaired = 0;
+    for ban in all_bans {
+        let Some((local_ban_id, manual_unbanned, local_status)) = local_states.get(&ban.id) else {
+            continue;
+        };
+        if *manual_unbanned {
+            continue;
+        }
+        let has_active_local_ban = local_ban_id.is_some() && local_status.as_deref() == Some("active");
+        if has_active_local_ban {
+            continue;
+        }
+
+        let ban_created = ban
+            .created_on
+            .as_deref()
+            .and_then(|c| parse_kzt_datetime(c).ok());
+        let should_sync = ban_created.map(|dt| dt >= sync_since).unwrap_or(false);
+        if !should_sync {
+            continue;
+        }
+
+        match create_local_ban(
+            db,
+            &ban.steamid64,
+            &ban.player_name,
+            &ban.ban_type,
+            &ban.notes,
+            ban.created_on.as_deref(),
+            ban.expires_on.as_deref(),
+        )
+        .await
+        {
+            Ok(Some(local_id)) => {
+                sqlx::query(
+                    r#"UPDATE global_bans
+                       SET local_ban_id = $2, manual_unbanned = false, synced_at = now()
+                       WHERE kzt_ban_id = $1 AND manual_unbanned = false"#,
+                )
+                .bind(ban.id)
+                .bind(local_id)
+                .execute(&db.pool)
+                .await?;
+                repaired += 1;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    kzt_ban_id = ban.id,
+                    steam_id = %ban.steamid64,
+                    "补建全球封禁本地封禁失败"
+                );
+            }
+        }
+    }
+
+    Ok(repaired)
 }
 
 /// 在 ban_records 中创建本地封禁（source = "global_ban"）

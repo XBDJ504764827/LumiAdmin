@@ -1,4 +1,5 @@
 use crate::db::Database;
+use crate::services::observability_service;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -292,20 +293,35 @@ pub async fn notify_plugin_ban(
 // ---------------------------------------------------------------------------
 
 pub fn start_cleanup_loop(db: Database, interval_secs: u64) {
+    observability_service::register_task(
+        "notification_cleanup",
+        "已读通知清理",
+        "清理",
+        Some(interval_secs),
+        true,
+    );
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
         loop {
             interval.tick().await;
-            match sqlx::query(
-                r#"DELETE FROM notifications WHERE read = true AND created_at < now() - interval '30 days'"#,
+            match observability_service::observe_task(
+                "notification_cleanup",
+                async {
+                    let result = sqlx::query(
+                        r#"DELETE FROM notifications WHERE read = true AND created_at < now() - interval '30 days'"#,
+                    )
+                    .execute(&db.pool)
+                    .await?;
+                    Ok::<u64, sqlx::Error>(result.rows_affected())
+                },
+                |count| format!("清理 {} 条已读通知", count),
             )
-            .execute(&db.pool)
             .await
             {
-                Ok(result) => {
-                    if result.rows_affected() > 0 {
+                Ok(count) => {
+                    if count > 0 {
                         tracing::info!(
-                            count = result.rows_affected(),
+                            count,
                             "cleaned up old read notifications"
                         );
                     }

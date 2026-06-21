@@ -1,4 +1,5 @@
 use crate::db::Database;
+use crate::services::observability_service;
 use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -125,14 +126,33 @@ impl WhitelistCache {
 }
 
 pub fn start_ban_cache_refresh_loop(db: Database, cache: Arc<ActiveBanCache>, interval_secs: u64) {
+    observability_service::register_task(
+        "active_ban_cache_refresh",
+        "活跃封禁缓存刷新",
+        "缓存",
+        Some(interval_secs),
+        true,
+    );
     tokio::spawn(async move {
-        if let Err(error) = cache.refresh(&db).await {
+        if let Err(error) = observability_service::observe_task(
+            "active_ban_cache_refresh",
+            cache.refresh(&db),
+            |_| "初始封禁缓存刷新完成".to_string(),
+        )
+        .await
+        {
             tracing::warn!(%error, "首次刷新活跃封禁缓存失败");
         }
         let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         loop {
             interval.tick().await;
-            if let Err(error) = cache.refresh(&db).await {
+            if let Err(error) = observability_service::observe_task(
+                "active_ban_cache_refresh",
+                cache.refresh(&db),
+                |_| "封禁缓存刷新完成".to_string(),
+            )
+            .await
+            {
                 tracing::warn!(%error, "刷新活跃封禁缓存失败");
             }
         }
@@ -144,14 +164,33 @@ pub fn start_whitelist_cache_refresh_loop(
     cache: Arc<WhitelistCache>,
     interval_secs: u64,
 ) {
+    observability_service::register_task(
+        "whitelist_cache_refresh",
+        "白名单缓存刷新",
+        "缓存",
+        Some(interval_secs),
+        true,
+    );
     tokio::spawn(async move {
-        if let Err(error) = cache.refresh(&db).await {
+        if let Err(error) = observability_service::observe_task(
+            "whitelist_cache_refresh",
+            cache.refresh(&db),
+            |_| "初始白名单缓存刷新完成".to_string(),
+        )
+        .await
+        {
             tracing::warn!(%error, "首次刷新白名单缓存失败");
         }
         let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         loop {
             interval.tick().await;
-            if let Err(error) = cache.refresh(&db).await {
+            if let Err(error) = observability_service::observe_task(
+                "whitelist_cache_refresh",
+                cache.refresh(&db),
+                |_| "白名单缓存刷新完成".to_string(),
+            )
+            .await
+            {
                 tracing::warn!(%error, "刷新白名单缓存失败");
             }
         }

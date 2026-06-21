@@ -1,4 +1,4 @@
-use crate::db::Database;
+use crate::{db::Database, services::observability_service};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -145,13 +145,26 @@ pub fn start_status_history_cleanup_loop(
     interval_secs: u64,
     retention_secs: i64,
 ) {
+    observability_service::register_task(
+        "server_status_history_cleanup",
+        "服务器性能历史清理",
+        "清理",
+        Some(interval_secs),
+        true,
+    );
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
         // 首次 tick 立即触发，等待一个周期后再开始
         interval.tick().await;
         loop {
             interval.tick().await;
-            match cleanup_old_status_history(&db, retention_secs).await {
+            match observability_service::observe_task(
+                "server_status_history_cleanup",
+                cleanup_old_status_history(&db, retention_secs),
+                |count| format!("清理 {} 条性能历史", count),
+            )
+            .await
+            {
                 Ok(0) => {}
                 Ok(count) => {
                     tracing::info!(count, retention_secs, "清理过期服务器状态历史")

@@ -1,9 +1,17 @@
 use crate::config::Config;
 use crate::db::Database;
+use crate::services::observability_service;
 use crate::services::steam_service::SteamResolver;
 use futures::stream::{self, StreamExt};
 /// 每隔 interval_seconds 秒刷新所有白名单记录的Steam名称
 pub fn start_steam_name_refresh_loop(db: Database, config: Config, interval_seconds: u64) {
+    observability_service::register_task(
+        "steam_name_refresh",
+        "Steam 资料刷新",
+        "外部依赖",
+        Some(interval_seconds),
+        true,
+    );
     tokio::spawn(async move {
         // 首次启动延迟30秒，避免与其他初始化任务冲突
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
@@ -12,7 +20,13 @@ pub fn start_steam_name_refresh_loop(db: Database, config: Config, interval_seco
         loop {
             interval.tick().await;
             let resolver = SteamResolver::new(&config);
-            match refresh_steam_names(&db, &resolver).await {
+            match observability_service::observe_task(
+                "steam_name_refresh",
+                refresh_steam_names(&db, &resolver),
+                |count| format!("刷新 {} 条 Steam 资料", count),
+            )
+            .await
+            {
                 Ok(count) => {
                     if count > 0 {
                         tracing::info!(count, "定时刷新Steam名称完成");

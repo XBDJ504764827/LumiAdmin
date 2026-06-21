@@ -1,5 +1,6 @@
 // 进服记录监控服务
 use crate::db::Database;
+use crate::services::observability_service;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, QueryBuilder};
@@ -260,11 +261,24 @@ pub async fn cleanup_old_access_logs(db: &Database, retention_days: i64) -> anyh
 
 /// 启动进服记录定时清理任务
 pub fn start_access_log_cleanup_loop(db: Database, interval_secs: u64, retention_days: i64) {
+    observability_service::register_task(
+        "access_log_cleanup",
+        "进服记录清理",
+        "清理",
+        Some(interval_secs),
+        true,
+    );
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
         loop {
             interval.tick().await;
-            match cleanup_old_access_logs(&db, retention_days).await {
+            match observability_service::observe_task(
+                "access_log_cleanup",
+                cleanup_old_access_logs(&db, retention_days),
+                |count| format!("清理 {} 条进服记录", count),
+            )
+            .await
+            {
                 Ok(0) => {}
                 Ok(count) => tracing::info!(count, retention_days, "进服记录清理完成"),
                 Err(e) => tracing::warn!(%e, "进服记录清理失败"),

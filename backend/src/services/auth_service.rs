@@ -3,6 +3,7 @@ use crate::{
     db::Database,
     models::{SessionResponse, SessionView, User, preferred_operator_name},
     password::verify_password,
+    services::observability_service,
 };
 use uuid::Uuid;
 
@@ -107,11 +108,24 @@ pub async fn cleanup_expired_sessions(db: &Database) -> anyhow::Result<u64> {
 
 /// 启动过期 session 定时清理循环
 pub fn start_session_cleanup_loop(db: Database, interval_secs: u64) {
+    observability_service::register_task(
+        "session_cleanup",
+        "过期会话清理",
+        "清理",
+        Some(interval_secs),
+        true,
+    );
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
         loop {
             interval.tick().await;
-            match cleanup_expired_sessions(&db).await {
+            match observability_service::observe_task(
+                "session_cleanup",
+                cleanup_expired_sessions(&db),
+                |count| format!("清理 {} 个过期会话", count),
+            )
+            .await
+            {
                 Ok(0) => {}
                 Ok(count) => tracing::info!(count, "cleaned up expired sessions"),
                 Err(e) => tracing::warn!(%e, "failed to cleanup expired sessions"),

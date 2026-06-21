@@ -1,6 +1,9 @@
 use crate::db::Database;
 use crate::rcon::StatusResult;
-use crate::services::external_server_service::{self, ExternalServer};
+use crate::services::{
+    external_server_service::{self, ExternalServer},
+    observability_service,
+};
 use chrono::Utc;
 use futures::StreamExt;
 use std::time::Duration;
@@ -11,6 +14,13 @@ const CACHE_TTL_SECS: u64 = 60;
 /// 每个服务器的实际查询频率由其自身的 poll_interval 决定。
 /// 服务器列表缓存 60 秒，避免高频查库。
 pub fn start_rcon_poll_loop(db: Database, base_interval_secs: u64) {
+    observability_service::register_task(
+        "external_server_rcon_poll",
+        "外部服务器状态轮询",
+        "集成",
+        Some(base_interval_secs),
+        true,
+    );
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(base_interval_secs));
         let mut cached_servers: Vec<ExternalServer> = Vec::new();
@@ -37,7 +47,13 @@ pub fn start_rcon_poll_loop(db: Database, base_interval_secs: u64) {
                 continue;
             }
 
-            if let Err(error) = poll_once(&db, &cached_servers).await {
+            if let Err(error) = observability_service::observe_task(
+                "external_server_rcon_poll",
+                poll_once(&db, &cached_servers),
+                |_| format!("轮询 {} 台外部服务器", cached_servers.len()),
+            )
+            .await
+            {
                 tracing::warn!(%error, "RCON poll cycle failed");
             }
         }

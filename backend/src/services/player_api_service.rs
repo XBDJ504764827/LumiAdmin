@@ -1,4 +1,4 @@
-use crate::db::Database;
+use crate::{db::Database, services::observability_service};
 use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -625,12 +625,25 @@ pub async fn dispatch_interval_seconds(db: &Database) -> anyhow::Result<u64> {
 }
 
 pub fn start_dispatch_loop(db: Database) {
+    observability_service::register_task(
+        "player_api_dispatch",
+        "玩家信息 API Webhook 分发",
+        "集成",
+        None,
+        true,
+    );
     let _handle = tokio::spawn(async move {
         let client = Client::new();
         loop {
             let seconds = dispatch_interval_seconds(&db).await.unwrap_or(30);
             tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
-            if let Err(error) = dispatch_once(&db, &client).await {
+            if let Err(error) = observability_service::observe_task(
+                "player_api_dispatch",
+                dispatch_once(&db, &client),
+                |_| "分发完成".to_string(),
+            )
+            .await
+            {
                 tracing::warn!(%error, "player api webhook dispatch failed");
             }
         }

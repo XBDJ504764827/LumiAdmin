@@ -10,6 +10,7 @@ pub mod global_ban;
 pub mod map_feedback;
 pub mod misc;
 pub mod notification;
+pub mod ops;
 pub mod player_detail;
 pub mod player_report;
 pub mod plugin;
@@ -386,6 +387,8 @@ pub fn router(
         .route("/api/logs", get(misc::logs))
         // -- docs --
         .route("/api/docs/endpoints", get(misc::api_endpoint_docs))
+        // -- ops --
+        .route("/api/ops/overview", get(ops::overview))
         // -- player access rules --
         .route(
             "/api/player-access/rules",

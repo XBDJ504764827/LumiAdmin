@@ -1,4 +1,4 @@
-use crate::db::Database;
+use crate::{db::Database, services::observability_service};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -240,11 +240,24 @@ impl GokzCacheManager {
 
     /// 启动缓存清理定时任务
     pub fn start_cleanup_task(self: Arc<Self>, interval_secs: u64) {
+        observability_service::register_task(
+            "gokz_cache_cleanup",
+            "GOKZ 缓存清理",
+            "清理",
+            Some(interval_secs),
+            true,
+        );
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
             loop {
                 interval.tick().await;
-                if let Err(e) = self.cleanup().await {
+                if let Err(e) = observability_service::observe_task(
+                    "gokz_cache_cleanup",
+                    self.cleanup(),
+                    |count| format!("清理 {} 条 GOKZ 缓存", count),
+                )
+                .await
+                {
                     warn!(error = %e, "GOKZ 缓存清理失败");
                 }
             }

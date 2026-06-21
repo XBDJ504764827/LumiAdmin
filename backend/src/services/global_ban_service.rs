@@ -14,7 +14,7 @@
 //   - 同步创建的 ban_records 的 created_at 使用 KZTimer 封禁的 created_on
 //   - expires_at 使用 KZTimer 封禁的 expires_on
 //   - 这样本地封禁时间与全球 API 封禁时间一致
-use crate::db::Database;
+use crate::{db::Database, services::observability_service};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::QueryBuilder;
@@ -770,6 +770,20 @@ pub fn start_global_ban_sync_loop(
     ban_cache: std::sync::Arc<crate::services::access_cache::ActiveBanCache>,
     interval_secs: u64,
 ) {
+    observability_service::register_task(
+        "global_ban_sync",
+        "全球封禁同步",
+        "外部依赖",
+        Some(interval_secs),
+        true,
+    );
+    observability_service::register_task(
+        "global_ban_stale_cleanup",
+        "全球封禁误封清理",
+        "清理",
+        None,
+        true,
+    );
     tokio::spawn(async move {
         // 如果设置了环境变量 GLOBAL_BAN_SYNC_SINCE，用它覆盖数据库中的 sync_since
         if let Ok(env_since) = std::env::var("GLOBAL_BAN_SYNC_SINCE") {
@@ -810,7 +824,13 @@ pub fn start_global_ban_sync_loop(
         }
 
         // 启动时清理可能的误封禁数据
-        match cleanup_stale_global_bans(&db).await {
+        match observability_service::observe_task(
+            "global_ban_stale_cleanup",
+            cleanup_stale_global_bans(&db),
+            |count| format!("清理 {} 条误封记录", count),
+        )
+        .await
+        {
             Ok(0) => {}
             Ok(n) => {
                 tracing::info!(count = n, "清理了因全球封禁过期但本地仍活跃的误封禁记录");
@@ -822,7 +842,16 @@ pub fn start_global_ban_sync_loop(
         }
 
         // 启动时执行一次增量同步
-        match sync_global_bans(&db).await {
+        match observability_service::observe_task(
+            "global_ban_sync",
+            sync_global_bans(&db),
+            |r| format!(
+                "拉取 {} 条，新增 {}，过期 {}，重封 {}",
+                r.total_fetched, r.new_bans, r.expired, r.re_banned
+            ),
+        )
+        .await
+        {
             Ok(r) => {
                 tracing::info!(?r, "全球封禁初始同步完成");
                 if r.new_bans > 0 || r.expired > 0 || r.re_banned > 0 {
@@ -837,7 +866,16 @@ pub fn start_global_ban_sync_loop(
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
         loop {
             interval.tick().await;
-            match sync_global_bans(&db).await {
+            match observability_service::observe_task(
+                "global_ban_sync",
+                sync_global_bans(&db),
+                |r| format!(
+                    "拉取 {} 条，新增 {}，过期 {}，重封 {}",
+                    r.total_fetched, r.new_bans, r.expired, r.re_banned
+                ),
+            )
+            .await
+            {
                 Ok(r) => {
                     if r.new_bans > 0 || r.expired > 0 || r.re_banned > 0 {
                         tracing::info!(?r, "全球封禁同步完成");

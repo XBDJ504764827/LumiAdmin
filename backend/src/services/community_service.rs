@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::db::Database;
+use crate::{db::Database, services::observability_service};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -738,11 +738,24 @@ async fn mark_stale_servers_offline(db: &Database) -> anyhow::Result<()> {
 
 /// 启动定时清理过期服务器的后台任务（每 30 秒执行一次）
 pub fn start_stale_cleanup_loop(db: Database) {
+    observability_service::register_task(
+        "stale_server_cleanup",
+        "过期服务器状态清理",
+        "清理",
+        Some(30),
+        true,
+    );
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
         loop {
             interval.tick().await;
-            if let Err(error) = mark_stale_servers_offline(&db).await {
+            if let Err(error) = observability_service::observe_task(
+                "stale_server_cleanup",
+                mark_stale_servers_offline(&db),
+                |_| "服务器状态清理完成".to_string(),
+            )
+            .await
+            {
                 tracing::warn!(%error, "清理过期服务器状态失败");
             }
         }

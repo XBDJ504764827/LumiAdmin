@@ -121,6 +121,7 @@ export const api = {
   deleteUser: (token, id) => request(`/api/users/${id}`, { method: 'DELETE', headers: withAuth(token) }),
   revokeUserSessions: (token, userId) => request(`/api/auth/users/${userId}/sessions`, { method: 'DELETE', headers: withAuth(token) }),
   logs: (token, params = {}) => request(`/api/logs${buildQueryString(params)}`, { headers: withAuth(token) }),
+  opsOverview: (token) => request('/api/ops/overview', { headers: withAuth(token) }),
   docsEndpoints: (token) => request('/api/docs/endpoints', { headers: withAuth(token) }),
   playerAccessRules: (token) => request('/api/player-access/rules', { headers: withAuth(token) }),
   createPlayerAccessRule: (token, body) => request('/api/player-access/rules', { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),

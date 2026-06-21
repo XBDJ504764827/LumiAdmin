@@ -1,4 +1,4 @@
-use crate::db::Database;
+use crate::{db::Database, services::observability_service};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::OnceCell;
@@ -76,8 +76,21 @@ impl MapTierSync {
 
     /// 启动定时同步循环
     pub fn start_sync_loop(self, db: Database, interval_secs: u64) {
+        observability_service::register_task(
+            "map_tier_sync",
+            "地图等级同步",
+            "外部依赖",
+            Some(interval_secs),
+            true,
+        );
         tokio::spawn(async move {
-            match self.sync_map_tiers(&db).await {
+            match observability_service::observe_task(
+                "map_tier_sync",
+                self.sync_map_tiers(&db),
+                |count| format!("同步 {} 条地图等级", count),
+            )
+            .await
+            {
                 Ok(count) => tracing::info!(count, "map_tiers 初始同步完成"),
                 Err(e) => tracing::warn!(%e, "map_tiers 初始同步失败"),
             }
@@ -85,7 +98,13 @@ impl MapTierSync {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
             loop {
                 interval.tick().await;
-                match self.sync_map_tiers(&db).await {
+                match observability_service::observe_task(
+                    "map_tier_sync",
+                    self.sync_map_tiers(&db),
+                    |count| format!("同步 {} 条地图等级", count),
+                )
+                .await
+                {
                     Ok(count) => tracing::info!(count, "map_tiers 定时同步完成"),
                     Err(e) => tracing::warn!(%e, "map_tiers 定时同步失败"),
                 }

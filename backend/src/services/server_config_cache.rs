@@ -1,4 +1,5 @@
 use crate::db::Database;
+use crate::services::observability_service;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -374,16 +375,35 @@ impl ServerConfigCache {
 
 /// 启动服务器配置缓存刷新循环
 pub fn start_refresh_loop(db: Database, cache: Arc<ServerConfigCache>, interval_secs: u64) {
+    observability_service::register_task(
+        "server_config_cache_refresh",
+        "服务器配置缓存刷新",
+        "缓存",
+        Some(interval_secs),
+        true,
+    );
     tokio::spawn(async move {
         // 首次启动立即刷新
-        if let Err(error) = cache.refresh(&db).await {
+        if let Err(error) = observability_service::observe_task(
+            "server_config_cache_refresh",
+            cache.refresh(&db),
+            |_| "初始服务器配置缓存刷新完成".to_string(),
+        )
+        .await
+        {
             tracing::warn!(%error, "首次刷新服务器配置缓存失败");
         }
 
         let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         loop {
             interval.tick().await;
-            if let Err(error) = cache.refresh(&db).await {
+            if let Err(error) = observability_service::observe_task(
+                "server_config_cache_refresh",
+                cache.refresh(&db),
+                |_| "服务器配置缓存刷新完成".to_string(),
+            )
+            .await
+            {
                 tracing::warn!(%error, "刷新服务器配置缓存失败");
             }
         }

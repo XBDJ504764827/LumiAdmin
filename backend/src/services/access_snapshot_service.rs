@@ -1,4 +1,4 @@
-use crate::db::Database;
+use crate::{db::Database, services::observability_service};
 use anyhow::Context;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -347,15 +347,34 @@ impl SnapshotStore {
 }
 
 pub fn start_refresh_loop(db: Database, store: SnapshotStore) {
+    observability_service::register_task(
+        "access_snapshot_refresh",
+        "访问控制快照刷新",
+        "缓存",
+        Some(300),
+        true,
+    );
     tokio::spawn(async move {
-        if let Err(error) = refresh_snapshot(&db, &store).await {
+        if let Err(error) = observability_service::observe_task(
+            "access_snapshot_refresh",
+            refresh_snapshot(&db, &store),
+            |_| "初始快照刷新完成".to_string(),
+        )
+        .await
+        {
             warn!(%error, "initial access snapshot refresh failed");
         }
 
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
         loop {
             interval.tick().await;
-            if let Err(error) = refresh_snapshot(&db, &store).await {
+            if let Err(error) = observability_service::observe_task(
+                "access_snapshot_refresh",
+                refresh_snapshot(&db, &store),
+                |_| "快照刷新完成".to_string(),
+            )
+            .await
+            {
                 error!(%error, "access snapshot refresh failed");
             }
         }

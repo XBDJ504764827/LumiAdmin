@@ -1,13 +1,26 @@
-use crate::db::Database;
+use crate::{db::Database, services::observability_service};
 
 /// 启动封禁过期检查循环
 /// 每隔 interval_seconds 秒检查一次过期的封禁记录并自动解封
 pub fn start_expiry_loop(db: Database, interval_seconds: u64) {
+    observability_service::register_task(
+        "ban_expiry",
+        "过期封禁自动解封",
+        "封禁",
+        Some(interval_seconds),
+        true,
+    );
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_seconds));
         loop {
             interval.tick().await;
-            match process_expired_bans(&db).await {
+            match observability_service::observe_task(
+                "ban_expiry",
+                process_expired_bans(&db),
+                |count| format!("本轮自动解封 {} 条", count),
+            )
+            .await
+            {
                 Ok(count) => {
                     if count > 0 {
                         tracing::info!(count, "自动解封过期封禁记录");

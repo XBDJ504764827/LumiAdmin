@@ -149,6 +149,12 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Cache SourceMod Compiler
+        uses: actions/cache@v4
+        with:
+          path: csgo/.build
+          key: ${{ runner.os }}-sourcemod-1.11.0-git6970
+
       - name: Build SourceMod Plugins
         run: bash csgo/build_plugins.sh
 

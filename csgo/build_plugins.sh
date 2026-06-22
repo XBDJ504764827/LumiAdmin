@@ -6,18 +6,64 @@ CSGO_DIR="$ROOT_DIR/csgo"
 SOURCE_DIR="$CSGO_DIR/addons/sourcemod/scripting"
 PLUGIN_DIR="$CSGO_DIR/addons/sourcemod/plugins"
 PROJECT_INCLUDE_DIR="$SOURCE_DIR/include"
-SOURCEMOD_DIR="$CSGO_DIR/sourcemod-1.11.0-git6970-linux/addons/sourcemod"
-SOURCEMOD_INCLUDE_DIR="$SOURCEMOD_DIR/scripting/include"
+SOURCEMOD_VERSION="${SOURCEMOD_VERSION:-1.11.0-git6970}"
+SOURCEMOD_SERIES="${SOURCEMOD_SERIES:-1.11}"
+SOURCEMOD_ARCHIVE="sourcemod-${SOURCEMOD_VERSION}-linux.tar.gz"
+SOURCEMOD_DOWNLOAD_URL="${SOURCEMOD_DOWNLOAD_URL:-https://sm.alliedmods.net/smdrop/${SOURCEMOD_SERIES}/${SOURCEMOD_ARCHIVE}}"
+SOURCEMOD_BUILD_DIR="${SOURCEMOD_BUILD_DIR:-$CSGO_DIR/.build}"
+LEGACY_SOURCEMOD_ROOT="$CSGO_DIR/sourcemod-${SOURCEMOD_VERSION}-linux"
+DOWNLOADED_SOURCEMOD_ROOT="$SOURCEMOD_BUILD_DIR/sourcemod-${SOURCEMOD_VERSION}-linux"
 
-SPCOMP="$SOURCEMOD_DIR/scripting/spcomp64"
-if [[ ! -x "$SPCOMP" ]]; then
-  SPCOMP="$SOURCEMOD_DIR/scripting/spcomp"
-fi
+find_compiler() {
+  local sourcemod_dir="$1"
 
-if [[ ! -x "$SPCOMP" ]]; then
-  echo "SourceMod compiler not found under $SOURCEMOD_DIR/scripting" >&2
+  if [[ -x "$sourcemod_dir/scripting/spcomp64" ]]; then
+    printf '%s\n' "$sourcemod_dir/scripting/spcomp64"
+    return 0
+  fi
+
+  if [[ -x "$sourcemod_dir/scripting/spcomp" ]]; then
+    printf '%s\n' "$sourcemod_dir/scripting/spcomp"
+    return 0
+  fi
+
+  return 1
+}
+
+ensure_sourcemod() {
+  local sourcemod_root
+  local compiler
+
+  for sourcemod_root in "$LEGACY_SOURCEMOD_ROOT" "$DOWNLOADED_SOURCEMOD_ROOT"; do
+    if compiler="$(find_compiler "$sourcemod_root/addons/sourcemod")"; then
+      SOURCEMOD_DIR="$sourcemod_root/addons/sourcemod"
+      SPCOMP="$compiler"
+      return 0
+    fi
+  done
+
+  mkdir -p "$DOWNLOADED_SOURCEMOD_ROOT"
+
+  local archive_path="$SOURCEMOD_BUILD_DIR/$SOURCEMOD_ARCHIVE"
+  if [[ ! -f "$archive_path" ]]; then
+    echo "Downloading SourceMod compiler: $SOURCEMOD_DOWNLOAD_URL"
+    curl -fsSL "$SOURCEMOD_DOWNLOAD_URL" -o "$archive_path"
+  fi
+
+  tar -xzf "$archive_path" -C "$DOWNLOADED_SOURCEMOD_ROOT"
+
+  if compiler="$(find_compiler "$DOWNLOADED_SOURCEMOD_ROOT/addons/sourcemod")"; then
+    SOURCEMOD_DIR="$DOWNLOADED_SOURCEMOD_ROOT/addons/sourcemod"
+    SPCOMP="$compiler"
+    return 0
+  fi
+
+  echo "SourceMod compiler not found after extracting $archive_path" >&2
   exit 1
-fi
+}
+
+ensure_sourcemod
+SOURCEMOD_INCLUDE_DIR="$SOURCEMOD_DIR/scripting/include"
 
 mkdir -p "$PLUGIN_DIR"
 

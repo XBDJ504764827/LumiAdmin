@@ -17,6 +17,7 @@ frontend/dist/
 
 # ----- SourceMod 编译器 -----
 sourcemod-*/
+csgo/.build/
 
 # ----- Claude Code -----
 .claude/

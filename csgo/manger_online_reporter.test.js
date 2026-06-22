@@ -267,6 +267,9 @@ test('edge sync centralizes SQL escaping and execution helpers', () => {
 test('plugin build script compiles both SourceMod plugins', () => {
   const script = read(buildScriptPath);
 
+  assert.match(script, /SOURCEMOD_VERSION="\$\{SOURCEMOD_VERSION:-1\.11\.0-git6970\}"/);
+  assert.match(script, /sm\.alliedmods\.net\/smdrop/);
+  assert.match(script, /curl -fsSL "\$SOURCEMOD_DOWNLOAD_URL" -o "\$archive_path"/);
   assert.match(script, /spcomp64/);
   assert.match(script, /addons\/sourcemod\/plugins/);
   assert.match(script, /manger_online_reporter\.sp/);
@@ -278,6 +281,7 @@ test('plugin build script compiles both SourceMod plugins', () => {
 test('deploy workflow rebuilds and tests SourceMod plugins', () => {
   const workflow = read(deployWorkflowPath);
 
+  assert.match(workflow, /name: Cache SourceMod Compiler[\s\S]*?path: csgo\/\.build/);
   assert.match(workflow, /name: Build SourceMod Plugins[\s\S]*?bash csgo\/build_plugins\.sh/);
   assert.match(workflow, /name: Test Plugin Sources[\s\S]*?node --test csgo\/manger_online_reporter\.test\.js/);
 });

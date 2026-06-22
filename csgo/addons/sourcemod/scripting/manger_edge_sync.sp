@@ -12,6 +12,10 @@
 #include <ripext>
 #include <manger_shared>
 
+native int MangerReporter_GetApiBaseUrl(char[] apiBaseUrl, int maxLen);
+native int MangerReporter_GetReportToken(char[] token, int maxLen);
+native int MangerReporter_GetServerPort();
+
 #define DEFAULT_API_BASE_URL "http://127.0.0.1:8080/api/plugin"
 #define EDGE_SYNC_DB "manger_edge_sync"
 #define MAX_IDEMPOTENCY_KEY 64
@@ -66,7 +70,7 @@ public void OnPluginStart()
     RegAdminCmd("sm_sync_status", CommandSyncStatus, ADMFLAG_RCON, "Show offline sync status");
     RegAdminCmd("sm_force_sync", CommandForceSync, ADMFLAG_RCON, "Force sync offline queue");
 
-    LoadEdgeSyncConfig();
+    ResolveEdgeSyncConfig();
     InitEdgeSyncDb();
     StartSyncTimer();
 }
@@ -77,7 +81,7 @@ public void OnMapStart()
     {
         InitEdgeSyncDb();
     }
-    LoadEdgeSyncConfig();
+    ResolveEdgeSyncConfig();
     StartSyncTimer();
 }
 
@@ -171,6 +175,53 @@ void LoadEdgeSyncConfig()
     delete file;
 }
 
+bool LoadEdgeSyncConfigFromReporter()
+{
+    if (!LibraryExists("manger_online_reporter"))
+    {
+        return false;
+    }
+
+    int port = MangerReporter_GetServerPort();
+    if (port <= 0)
+    {
+        return false;
+    }
+
+    char apiBaseUrl[512];
+    if (!MangerReporter_GetApiBaseUrl(apiBaseUrl, sizeof(apiBaseUrl)))
+    {
+        return false;
+    }
+
+    char token[MAX_SERVER_TOKEN];
+    if (!MangerReporter_GetReportToken(token, sizeof(token)))
+    {
+        return false;
+    }
+
+    TrimString(apiBaseUrl);
+    TrimString(token);
+    if (apiBaseUrl[0] == '\0' || token[0] == '\0')
+    {
+        return false;
+    }
+
+    g_ApiBaseUrl.SetString(apiBaseUrl);
+    g_ServerPort = port;
+    strcopy(g_ServerReportToken, sizeof(g_ServerReportToken), token);
+    return true;
+}
+
+void ResolveEdgeSyncConfig()
+{
+    if (LoadEdgeSyncConfigFromReporter())
+    {
+        return;
+    }
+    LoadEdgeSyncConfig();
+}
+
 void InitEdgeSyncDb()
 {
     char error[256];
@@ -183,6 +234,7 @@ void InitEdgeSyncDb()
 
     // 离线操作队列表
     SQL_FastQuery(g_EdgeSyncDb, "CREATE TABLE IF NOT EXISTS offline_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, operation TEXT NOT NULL, target TEXT NOT NULL, target_type TEXT NOT NULL, player_name TEXT, reason TEXT, duration_minutes INTEGER, operator_name TEXT NOT NULL, operator_steamid TEXT, server_port INTEGER NOT NULL, created_at INTEGER NOT NULL, status TEXT NOT NULL, synced_at INTEGER, sync_error TEXT, retry_count INTEGER DEFAULT 0, idempotency_key TEXT NOT NULL)");
+    SQL_FastQuery(g_EdgeSyncDb, "CREATE UNIQUE INDEX IF NOT EXISTS idx_offline_queue_idempotency_key ON offline_queue(idempotency_key)");
 
     // 本地审计日志表
     SQL_FastQuery(g_EdgeSyncDb, "CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, operation TEXT NOT NULL, target TEXT NOT NULL, operator_name TEXT NOT NULL, operator_steamid TEXT, server_port INTEGER NOT NULL, success INTEGER NOT NULL, message TEXT, created_at INTEGER NOT NULL)");
@@ -237,6 +289,22 @@ public Action CommandSetToken(int args)
 
     LogMessage("[EdgeSync] Configured for port %d", g_ServerPort);
     return Plugin_Handled;
+}
+
+bool EscapeSqlString(Database db, const char[] value, char[] escaped, int maxLen)
+{
+    escaped[0] = '\0';
+    return SQL_EscapeString(db, value, escaped, maxLen);
+}
+
+bool ExecuteSql(Database db, const char[] query, const char[] context)
+{
+    if (SQL_FastQuery(db, query))
+    {
+        return true;
+    }
+    LogError("[EdgeSync] SQL failed in %s.", context);
+    return false;
 }
 
 public Action CommandSyncStatus(int client, int args)
@@ -310,12 +378,12 @@ int EnqueueOperation(
     char escapedOperatorSteamid[256];
     char escapedIdempotencyKey[MAX_IDEMPOTENCY_KEY];
 
-    SQL_EscapeString(g_EdgeSyncDb, target, escapedTarget, sizeof(escapedTarget));
-    SQL_EscapeString(g_EdgeSyncDb, playerName, escapedPlayerName, sizeof(escapedPlayerName));
-    SQL_EscapeString(g_EdgeSyncDb, reason, escapedReason, sizeof(escapedReason));
-    SQL_EscapeString(g_EdgeSyncDb, operatorName, escapedOperatorName, sizeof(escapedOperatorName));
-    SQL_EscapeString(g_EdgeSyncDb, operatorSteamid, escapedOperatorSteamid, sizeof(escapedOperatorSteamid));
-    SQL_EscapeString(g_EdgeSyncDb, idempotencyKey, escapedIdempotencyKey, sizeof(escapedIdempotencyKey));
+    EscapeSqlString(g_EdgeSyncDb, target, escapedTarget, sizeof(escapedTarget));
+    EscapeSqlString(g_EdgeSyncDb, playerName, escapedPlayerName, sizeof(escapedPlayerName));
+    EscapeSqlString(g_EdgeSyncDb, reason, escapedReason, sizeof(escapedReason));
+    EscapeSqlString(g_EdgeSyncDb, operatorName, escapedOperatorName, sizeof(escapedOperatorName));
+    EscapeSqlString(g_EdgeSyncDb, operatorSteamid, escapedOperatorSteamid, sizeof(escapedOperatorSteamid));
+    EscapeSqlString(g_EdgeSyncDb, idempotencyKey, escapedIdempotencyKey, sizeof(escapedIdempotencyKey));
 
     char query[2048];
     char portBuf[16];
@@ -325,9 +393,8 @@ int EnqueueOperation(
 
     Format(query, sizeof(query), "INSERT INTO offline_queue (operation, target, target_type, player_name, reason, duration_minutes, operator_name, operator_steamid, server_port, created_at, status, idempotency_key) VALUES ('%s', '%s', '%s', '%s', '%s', %d, '%s', '%s', %s, %s, 'pending', '%s')", operation, escapedTarget, targetType, escapedPlayerName, escapedReason, durationMinutes, escapedOperatorName, escapedOperatorSteamid, portBuf, timeBuf, escapedIdempotencyKey);
 
-    if (!SQL_FastQuery(g_EdgeSyncDb, query))
+    if (!ExecuteSql(g_EdgeSyncDb, query, "enqueue operation"))
     {
-        LogError("[EdgeSync] Failed to enqueue operation: %s", query);
         return -1;
     }
 
@@ -371,10 +438,10 @@ void WriteLocalAuditLog(
     char escapedOperatorSteamid[256];
     char escapedMessage[512];
 
-    SQL_EscapeString(g_EdgeSyncDb, target, escapedTarget, sizeof(escapedTarget));
-    SQL_EscapeString(g_EdgeSyncDb, operatorName, escapedOperatorName, sizeof(escapedOperatorName));
-    SQL_EscapeString(g_EdgeSyncDb, operatorSteamid, escapedOperatorSteamid, sizeof(escapedOperatorSteamid));
-    SQL_EscapeString(g_EdgeSyncDb, message, escapedMessage, sizeof(escapedMessage));
+    EscapeSqlString(g_EdgeSyncDb, target, escapedTarget, sizeof(escapedTarget));
+    EscapeSqlString(g_EdgeSyncDb, operatorName, escapedOperatorName, sizeof(escapedOperatorName));
+    EscapeSqlString(g_EdgeSyncDb, operatorSteamid, escapedOperatorSteamid, sizeof(escapedOperatorSteamid));
+    EscapeSqlString(g_EdgeSyncDb, message, escapedMessage, sizeof(escapedMessage));
 
     char query[1024];
     char portBuf[16];
@@ -386,7 +453,7 @@ void WriteLocalAuditLog(
 
     Format(query, sizeof(query), "INSERT INTO audit_log (operation, target, operator_name, operator_steamid, server_port, success, message, created_at) VALUES ('%s', '%s', '%s', '%s', %s, %s, '%s', %s)", operation, escapedTarget, escapedOperatorName, escapedOperatorSteamid, portBuf, successBuf, escapedMessage, timeBuf);
 
-    SQL_FastQuery(g_EdgeSyncDb, query);
+    ExecuteSql(g_EdgeSyncDb, query, "local audit log");
 }
 
 void SyncOfflineQueue()
@@ -395,7 +462,7 @@ void SyncOfflineQueue()
     if (g_SyncInFlight) return;
     if (g_ServerPort <= 0 || g_ServerReportToken[0] == '\0')
     {
-        LoadEdgeSyncConfig();
+        ResolveEdgeSyncConfig();
     }
     if (g_ServerPort <= 0 || g_ServerReportToken[0] == '\0') return;
 
@@ -564,7 +631,7 @@ void MarkOperationSynced(int id)
     SafeIntToString(GetTime(), timeBuf, sizeof(timeBuf));
     SafeIntToString(id, idBuf, sizeof(idBuf));
     Format(query, sizeof(query), "UPDATE offline_queue SET status = 'synced', synced_at = %s WHERE id = %s", timeBuf, idBuf);
-    SQL_FastQuery(g_EdgeSyncDb, query);
+    ExecuteSql(g_EdgeSyncDb, query, "mark operation synced");
 }
 
 void MarkOperationsFailed(ArrayList ids, const char[] error)
@@ -572,7 +639,7 @@ void MarkOperationsFailed(ArrayList ids, const char[] error)
     if (g_EdgeSyncDb == null) return;
 
     char escapedError[256];
-    SQL_EscapeString(g_EdgeSyncDb, error, escapedError, sizeof(escapedError));
+    EscapeSqlString(g_EdgeSyncDb, error, escapedError, sizeof(escapedError));
 
     for (int i = 0; i < ids.Length; i++)
     {
@@ -583,7 +650,7 @@ void MarkOperationsFailed(ArrayList ids, const char[] error)
         char idBuf[16];
         SafeIntToString(id, idBuf, sizeof(idBuf));
         Format(query, sizeof(query), "UPDATE offline_queue SET status = 'failed', sync_error = '%s' WHERE id = %s", escapedError, idBuf);
-        SQL_FastQuery(g_EdgeSyncDb, query);
+        ExecuteSql(g_EdgeSyncDb, query, "mark operations failed");
     }
 
     UpdatePendingCount();
@@ -594,7 +661,7 @@ void MarkOperationsRetryable(ArrayList ids, const char[] error)
     if (g_EdgeSyncDb == null) return;
 
     char escapedError[256];
-    SQL_EscapeString(g_EdgeSyncDb, error, escapedError, sizeof(escapedError));
+    EscapeSqlString(g_EdgeSyncDb, error, escapedError, sizeof(escapedError));
 
     for (int i = 0; i < ids.Length; i++)
     {
@@ -605,7 +672,7 @@ void MarkOperationsRetryable(ArrayList ids, const char[] error)
         char idBuf[16];
         SafeIntToString(id, idBuf, sizeof(idBuf));
         Format(query, sizeof(query), "UPDATE offline_queue SET status = 'pending', sync_error = '%s', retry_count = retry_count + 1 WHERE id = %s", escapedError, idBuf);
-        SQL_FastQuery(g_EdgeSyncDb, query);
+        ExecuteSql(g_EdgeSyncDb, query, "mark operations retryable");
     }
 
     UpdatePendingCount();
@@ -646,6 +713,9 @@ public int Native_GetPendingCount(Handle plugin, int numParams)
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
 {
+    MarkNativeAsOptional("MangerReporter_GetApiBaseUrl");
+    MarkNativeAsOptional("MangerReporter_GetReportToken");
+    MarkNativeAsOptional("MangerReporter_GetServerPort");
     CreateNative("EdgeSync_EnqueueOperation", Native_EnqueueOperation);
     CreateNative("EdgeSync_IsOnline", Native_IsOnline);
     CreateNative("EdgeSync_GetPendingCount", Native_GetPendingCount);

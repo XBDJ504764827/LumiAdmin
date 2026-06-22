@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { PageSkeleton } from '../shared/PageSkeleton.jsx';
 import { ErrorBoundary } from '../shared/ErrorBoundary.jsx';
+import { ROUTE_ROLES } from './roles.js';
 
 const DashboardPage = lazy(() => import('../pages/dashboard/DashboardPage.jsx').then(m => ({ default: m.DashboardPage })));
 const CommunityPage = lazy(() => import('../pages/community/CommunityPage.jsx').then(m => ({ default: m.CommunityPage })));
@@ -40,34 +41,34 @@ function Lazy({ children }) {
 }
 
 export const protectedRoutes = [
-  { path: '/dashboard', element: <Lazy><DashboardPage /></Lazy>, roles: ['admin', 'developer'] },
-  { path: '/community', element: <Lazy><CommunityPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },
-  { path: '/rcon', element: <Lazy><RconPage /></Lazy>, roles: ['admin', 'developer'] },
-  { path: '/whitelist', element: <Lazy><WhitelistPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },
-  { path: '/ban', element: <Lazy><BanPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },
-  { path: '/player-detail', element: <Lazy><PlayerDetailPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },
-  { path: '/ban-appeal', element: <Lazy><BanAppealPage /></Lazy>, roles: ['admin', 'developer'] },
-  { path: '/player-reports', element: <Lazy><PlayerReportPage /></Lazy>, roles: ['admin', 'developer'] },
-  { path: '/users', element: <Lazy><UsersPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },
-  { path: '/player-access', element: <Lazy><PlayerAccessPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },
-  { path: '/access-logs', element: <Lazy><AccessLogPage /></Lazy>, roles: ['admin', 'developer'] },
-  { path: '/global-bans', element: <Lazy><GlobalBanPage /></Lazy>, roles: ['admin', 'developer'] },
-  { path: '/map-feedback', element: <Lazy><MapFeedbackPage /></Lazy>, roles: ['admin', 'developer'] },
-  { path: '/audit', element: <Lazy><AuditPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },
-  { path: '/notifications', element: <Lazy><NotificationPage /></Lazy>, roles: ['admin', 'developer', 'normal'] },
-  { path: '/logs', element: <Lazy><LogsPage /></Lazy>, roles: ['admin', 'developer'] },
-  { path: '/ops', element: <Lazy><OpsOverviewPage /></Lazy>, roles: ['admin', 'developer'] },
-  { path: '/docs/api', element: <Lazy><ApiListPage /></Lazy>, roles: ['admin', 'developer'] },
-  { path: '/player-api', element: <Lazy><PlayerApiPage /></Lazy>, roles: ['admin', 'developer'] },
-  { path: '/external-ban-api', element: <Lazy><ExternalBanApiPage /></Lazy>, roles: ['admin', 'developer'] },
-  { path: '/external-servers', element: <Lazy><ExternalServerPage /></Lazy>, roles: ['admin', 'developer'] },
+  { path: '/dashboard', element: <Lazy><DashboardPage /></Lazy>, roles: ROUTE_ROLES.admin },
+  { path: '/community', element: <Lazy><CommunityPage /></Lazy>, roles: ROUTE_ROLES.staff },
+  { path: '/rcon', element: <Lazy><RconPage /></Lazy>, roles: ROUTE_ROLES.admin },
+  { path: '/whitelist', element: <Lazy><WhitelistPage /></Lazy>, roles: ROUTE_ROLES.staff },
+  { path: '/ban', element: <Lazy><BanPage /></Lazy>, roles: ROUTE_ROLES.staff },
+  { path: '/player-detail', element: <Lazy><PlayerDetailPage /></Lazy>, roles: ROUTE_ROLES.staff },
+  { path: '/ban-appeal', element: <Lazy><BanAppealPage /></Lazy>, roles: ROUTE_ROLES.admin },
+  { path: '/player-reports', element: <Lazy><PlayerReportPage /></Lazy>, roles: ROUTE_ROLES.admin },
+  { path: '/users', element: <Lazy><UsersPage /></Lazy>, roles: ROUTE_ROLES.staff },
+  { path: '/player-access', element: <Lazy><PlayerAccessPage /></Lazy>, roles: ROUTE_ROLES.staff },
+  { path: '/access-logs', element: <Lazy><AccessLogPage /></Lazy>, roles: ROUTE_ROLES.admin },
+  { path: '/global-bans', element: <Lazy><GlobalBanPage /></Lazy>, roles: ROUTE_ROLES.admin },
+  { path: '/map-feedback', element: <Lazy><MapFeedbackPage /></Lazy>, roles: ROUTE_ROLES.admin },
+  { path: '/audit', element: <Lazy><AuditPage /></Lazy>, roles: ROUTE_ROLES.staff },
+  { path: '/notifications', element: <Lazy><NotificationPage /></Lazy>, roles: ROUTE_ROLES.staff },
+  { path: '/logs', element: <Lazy><LogsPage /></Lazy>, roles: ROUTE_ROLES.admin },
+  { path: '/ops', element: <Lazy><OpsOverviewPage /></Lazy>, roles: ROUTE_ROLES.admin },
+  { path: '/docs/api', element: <Lazy><ApiListPage /></Lazy>, roles: ROUTE_ROLES.admin },
+  { path: '/player-api', element: <Lazy><PlayerApiPage /></Lazy>, roles: ROUTE_ROLES.admin },
+  { path: '/external-ban-api', element: <Lazy><ExternalBanApiPage /></Lazy>, roles: ROUTE_ROLES.admin },
+  { path: '/external-servers', element: <Lazy><ExternalServerPage /></Lazy>, roles: ROUTE_ROLES.admin },
 ];
 
 export const publicRoutes = [
-  { path: '/public/apply', element: <Lazy><PublicApplyPage /></Lazy>, roles: ['guest', 'admin', 'developer', 'normal'] },
-  { path: '/public/whitelist', element: <Lazy><PublicWhitelistPage /></Lazy>, roles: ['guest', 'admin', 'developer', 'normal'] },
-  { path: '/public/ban', element: <Lazy><PublicBanPage /></Lazy>, roles: ['guest', 'admin', 'developer', 'normal'] },
-  { path: '/public/ban-appeal', element: <Lazy><PublicBanAppealPage /></Lazy>, roles: ['guest', 'admin', 'developer', 'normal'] },
-  { path: '/public/player-report', element: <Lazy><PublicPlayerReportPage /></Lazy>, roles: ['guest', 'admin', 'developer', 'normal'] },
-  { path: '/public/map-feedback', element: <Lazy><PublicMapFeedbackPage /></Lazy>, roles: ['guest', 'admin', 'developer', 'normal'] },
+  { path: '/public/apply', element: <Lazy><PublicApplyPage /></Lazy>, roles: ROUTE_ROLES.public },
+  { path: '/public/whitelist', element: <Lazy><PublicWhitelistPage /></Lazy>, roles: ROUTE_ROLES.public },
+  { path: '/public/ban', element: <Lazy><PublicBanPage /></Lazy>, roles: ROUTE_ROLES.public },
+  { path: '/public/ban-appeal', element: <Lazy><PublicBanAppealPage /></Lazy>, roles: ROUTE_ROLES.public },
+  { path: '/public/player-report', element: <Lazy><PublicPlayerReportPage /></Lazy>, roles: ROUTE_ROLES.public },
+  { path: '/public/map-feedback', element: <Lazy><PublicMapFeedbackPage /></Lazy>, roles: ROUTE_ROLES.public },
 ];

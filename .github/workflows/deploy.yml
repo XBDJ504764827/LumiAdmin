@@ -144,6 +144,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build SourceMod Plugins
+        run: bash csgo/build_plugins.sh
+
+      - name: Test Plugin Sources
+        run: node --test csgo/manger_online_reporter.test.js
+
       - name: Upload Plugin Artifact
         uses: actions/upload-artifact@v4
         with:

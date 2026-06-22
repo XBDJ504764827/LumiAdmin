@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint src/",
-    "test": "find src csgo -name '*.test.js' 2>/dev/null | xargs node --test || echo 'No tests found'",
+    "test": "node --test $(find src ../csgo -name '*.test.js' 2>/dev/null)",
     "preview": "vite preview"
   },
   "dependencies": {

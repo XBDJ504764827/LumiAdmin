@@ -250,10 +250,7 @@ pub fn overview(db: &Database, config: &Config) -> ObservabilityOverview {
             steamchina_profile: config.steamchina_profile_key.is_some(),
             steamchina_level: config.steamchina_level_key.is_some(),
             mysql_map_tiers: config.mysql_database_url.is_some(),
-            r2_storage: config.r2_endpoint.is_some()
-                && config.r2_bucket.is_some()
-                && config.r2_access_key_id.is_some()
-                && config.r2_secret_access_key.is_some(),
+            r2_storage: config.r2_storage_enabled(),
         },
         config: RuntimeConfigOverview {
             request_timeout_secs: config.request_timeout_secs,

@@ -202,11 +202,19 @@ cargo build --release   # 生产构建 → target/release/manger-backend
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
+| `APP_ENV` | `development` | 运行环境；设置为 `production` 时会启用更严格的启动校验 |
 | `BIND_ADDR` | `0.0.0.0:3001` | 服务监听地址 |
 | `DEV_USERNAME` | `dev` | 初始管理员用户名 |
-| `DEV_PASSWORD` | `dev123` | 初始管理员密码（生产环境务必修改） |
+| `DEV_PASSWORD` | `change-me` | 初始管理员密码；生产环境必须设置为非默认强密码 |
 | `SESSION_TTL_HOURS` | `24` | 会话有效期（小时） |
 | `CORS_ORIGIN` | 允许所有来源 | 前端域名（生产环境务必设置） |
+
+生产环境启动校验：
+
+- `APP_ENV=production` 时必须设置 `CORS_ORIGIN`。
+- `DEV_PASSWORD` 不能使用 `change-me` 或 `dev123`。
+- 如果配置任意 `R2_*` 字段，则 `R2_ENDPOINT`、`R2_BUCKET`、`R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY` 必须全部配置。
+- `MAX_REQUEST_BODY_BYTES` 如果小于或等于 `APPEAL_FILE_MAX_SIZE_MB` 对应字节数，会自动修正为文件上限加 10MB。
 
 ### Steam API
 
@@ -254,6 +262,10 @@ cargo build --release   # 生产构建 → target/release/manger-backend
 | 变量 | 说明 |
 |------|------|
 | `MYSQL_DATABASE_URL` | MySQL 连接字符串（用于地图等级同步，可选） |
+
+### 数据库迁移
+
+后端启动时会先执行旧版幂等 Schema 兼容迁移，再执行 `backend/migrations/` 下的 SQLx 正式迁移文件。后续新增或修改数据库结构时，优先添加带时间戳的 SQL 迁移文件，旧版代码迁移只作为兼容已有部署的过渡层保留。
 
 ---
 
@@ -338,20 +350,26 @@ cargo build --release   # 生产构建 → target/release/manger-backend
 
 ## SourceMod 插件部署
 
+本地编译插件：
+
+```bash
+bash csgo/build_plugins.sh
+```
+
 ### 在线玩家上报插件
 
 1. 将 `manger_online_reporter.smx` 放入服务器的 `addons/sourcemod/plugins/`
 2. 编辑 `cfg/sourcemod/manger_online_reporter.cfg`：
    ```
-   manger_report_url "http://你的后端地址:3001/api/plugin/online-players/report"
-   manger_report_token "服务器的 report_token"
+   manger_api_base_url "https://你的后端地址/api/plugin"
+   manger_server "27015" "服务器的 report_token"
    ```
 3. 重载插件或重启服务器
 
 ### 封禁同步插件
 
 1. 将 `manger_edge_sync.smx` 放入服务器的 `addons/sourcemod/plugins/`
-2. 配置后端地址和 Token
+2. 与在线玩家上报插件共用 `manger_online_reporter.cfg` 的后端地址和端口 Token
 3. 插件会定时从后端拉取封禁列表并同步到本地
 
 ---

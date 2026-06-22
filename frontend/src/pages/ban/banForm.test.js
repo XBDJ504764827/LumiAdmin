@@ -33,6 +33,7 @@ test('buildCreateBanPayload converts optional empty fields to null', () => {
     ban_type: 'ip',
     ip_address: null,
     reason: '重复违规',
+    duration_minutes: undefined,
   });
 });
 
@@ -68,6 +69,8 @@ test('inactive ban records expose reban action and reuse record fields', () => {
     ban_type: 'steam',
     ip_address: '192.168.1.20',
     reason: '作弊',
+    duration_minutes: 0,
+    expires_at: null,
   });
   assert.equal(banModalTitle('reban'), '重新封禁玩家');
   assert.equal(banModalSubmitText('reban', false), '确认重新封禁');

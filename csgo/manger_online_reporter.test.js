@@ -10,6 +10,8 @@ const sharedIncludePath = resolve(root, 'csgo/addons/sourcemod/scripting/include
 const onlinePluginPath = resolve(root, 'csgo/addons/sourcemod/plugins/manger_online_reporter.smx');
 const edgePluginPath = resolve(root, 'csgo/addons/sourcemod/plugins/manger_edge_sync.smx');
 const configPath = resolve(root, 'csgo/cfg/sourcemod/manger_online_reporter.cfg');
+const buildScriptPath = resolve(root, 'csgo/build_plugins.sh');
+const deployWorkflowPath = resolve(root, '.github/workflows/deploy.yml');
 
 function read(path) {
   return readFileSync(path, 'utf8');
@@ -35,7 +37,8 @@ test('online reporter parses all cfg-backed intervals and debug flag', () => {
   assert.match(source, /#include <manger_shared>/);
   assert.match(config, /manger_status_report_interval\s+"30\.0"/);
   assert.match(config, /manger_debug_log\s+"0"/);
-  assert.match(config, /manger_server\s+"10001"\s+"/);
+  assert.match(config, /\/\/\s*manger_server\s+"10001"\s+"replace-with-report-token"/);
+  assert.doesNotMatch(config, /^\s*manger_server\s+"[^"]+"\s+""/m);
 });
 
 test('online reporter keeps repeat timer handles killable', () => {
@@ -224,6 +227,59 @@ test('edge sync loads API and token from reporter cfg', () => {
   assert.match(source, /#include <manger_shared>/);
   assert.match(source, /port == currentPort/);
   assert.match(source, /strcopy\(g_ServerReportToken, sizeof\(g_ServerReportToken\), token\)/);
+});
+
+test('online reporter exposes config natives for edge sync', () => {
+  const source = read(onlineSourcePath);
+
+  assert.match(source, /CreateNative\("MangerReporter_GetApiBaseUrl", Native_GetApiBaseUrl\)/);
+  assert.match(source, /CreateNative\("MangerReporter_GetReportToken", Native_GetReportToken\)/);
+  assert.match(source, /CreateNative\("MangerReporter_GetServerPort", Native_GetServerPort\)/);
+  assert.match(source, /RegPluginLibrary\("manger_online_reporter"\)/);
+});
+
+test('edge sync prefers reporter config natives and falls back to cfg', () => {
+  const source = read(edgeSourcePath);
+
+  assert.match(source, /native int MangerReporter_GetApiBaseUrl/);
+  assert.match(source, /LibraryExists\("manger_online_reporter"\)/);
+  assert.match(source, /MarkNativeAsOptional\("MangerReporter_GetApiBaseUrl"\)/);
+  assert.match(source, /bool LoadEdgeSyncConfigFromReporter\(\)/);
+  assert.match(source, /void ResolveEdgeSyncConfig\(\)/);
+  assert.match(source, /if \(LoadEdgeSyncConfigFromReporter\(\)\)[\s\S]*?return;[\s\S]*?LoadEdgeSyncConfig\(\);/);
+});
+
+test('edge sync enforces unique idempotency keys', () => {
+  const source = read(edgeSourcePath);
+
+  assert.match(source, /CREATE UNIQUE INDEX IF NOT EXISTS idx_offline_queue_idempotency_key ON offline_queue\(idempotency_key\)/);
+});
+
+test('edge sync centralizes SQL escaping and execution helpers', () => {
+  const source = read(edgeSourcePath);
+
+  assert.match(source, /bool EscapeSqlString\(Database db, const char\[] value, char\[] escaped, int maxLen\)/);
+  assert.match(source, /bool ExecuteSql\(Database db, const char\[] query, const char\[] context\)/);
+  assert.match(source, /ExecuteSql\(g_EdgeSyncDb, query, "enqueue operation"\)/);
+  assert.doesNotMatch(source, /Failed to enqueue operation: %s", query/);
+});
+
+test('plugin build script compiles both SourceMod plugins', () => {
+  const script = read(buildScriptPath);
+
+  assert.match(script, /spcomp64/);
+  assert.match(script, /addons\/sourcemod\/plugins/);
+  assert.match(script, /manger_online_reporter\.sp/);
+  assert.match(script, /manger_online_reporter\.smx/);
+  assert.match(script, /manger_edge_sync\.sp/);
+  assert.match(script, /manger_edge_sync\.smx/);
+});
+
+test('deploy workflow rebuilds and tests SourceMod plugins', () => {
+  const workflow = read(deployWorkflowPath);
+
+  assert.match(workflow, /name: Build SourceMod Plugins[\s\S]*?bash csgo\/build_plugins\.sh/);
+  assert.match(workflow, /name: Test Plugin Sources[\s\S]*?node --test csgo\/manger_online_reporter\.test\.js/);
 });
 
 test('edge sync retries transient failures and avoids concurrent syncs', () => {

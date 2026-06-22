@@ -1,5 +1,7 @@
 #[derive(Clone, Debug)]
 pub struct Config {
+    pub app_env: String,
+    pub is_production: bool,
     pub database_url: String,
     pub bind_addr: String,
     pub session_ttl_hours: i64,
@@ -86,9 +88,11 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(appeal_file_max_size_bytes + 10 * 1024 * 1024);
 
-        let is_production = std::env::var("APP_ENV")
-            .map(|v| v.to_lowercase() == "production")
-            .unwrap_or(false);
+        let app_env = std::env::var("APP_ENV")
+            .unwrap_or_else(|_| "development".into())
+            .trim()
+            .to_lowercase();
+        let is_production = app_env == "production";
 
         let dev_password = match std::env::var("DEV_PASSWORD") {
             Ok(v) if !v.is_empty() => v,
@@ -98,11 +102,21 @@ impl Config {
             }
             _ => {
                 tracing::warn!("DEV_PASSWORD 未设置，使用不安全的默认密码，请在生产环境中配置");
-                "dev123".into()
+                "change-me".into()
             }
         };
 
+        if matches!(dev_password.as_str(), "change-me" | "dev123") {
+            if is_production {
+                tracing::error!("生产环境禁止使用默认 DEV_PASSWORD，请设置高强度初始管理员密码");
+                std::process::exit(1);
+            }
+            tracing::warn!("当前 DEV_PASSWORD 是默认示例值，请勿用于生产环境");
+        }
+
         let mut config = Self {
+            app_env,
+            is_production,
             database_url: std::env::var("DATABASE_URL").expect("DATABASE_URL is required"),
             bind_addr: std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:3001".into()),
             session_ttl_hours: env_u64("SESSION_TTL_HOURS", 24) as i64,
@@ -122,7 +136,7 @@ impl Config {
             http_timeout_secs: env_u64("HTTP_TIMEOUT_SECS", 300),
             http_connect_timeout_secs: env_u64("HTTP_CONNECT_TIMEOUT_SECS", 5),
             // 请求超时
-            request_timeout_secs: env_u64("REQUEST_TIMEOUT_SECS", 60),
+            request_timeout_secs: env_u64("REQUEST_TIMEOUT_SECS", 300),
             // CORS 允许的来源
             cors_origin: std::env::var("CORS_ORIGIN").ok().filter(|v| !v.is_empty()),
             mysql_database_url: std::env::var("MYSQL_DATABASE_URL")
@@ -135,7 +149,10 @@ impl Config {
             rcon_poll_scan_interval_secs: env_u64("RCON_POLL_SCAN_INTERVAL_SECS", 5),
             map_tier_sync_interval_secs: env_u64("MAP_TIER_SYNC_INTERVAL_SECS", 6 * 3600),
             // 服务器状态历史清理：每小时清理一次，保留 1 小时数据
-            status_history_cleanup_interval_secs: env_u64("STATUS_HISTORY_CLEANUP_INTERVAL_SECS", 3600),
+            status_history_cleanup_interval_secs: env_u64(
+                "STATUS_HISTORY_CLEANUP_INTERVAL_SECS",
+                3600,
+            ),
             status_history_retention_secs: env_u64("STATUS_HISTORY_RETENTION_SECS", 3600),
             server_config_cache_ttl_secs: env_u64("SERVER_CONFIG_CACHE_TTL_SECS", 300),
             server_config_cache_refresh_interval_secs: env_u64(
@@ -190,6 +207,32 @@ impl Config {
             config.http_connect_timeout_secs = config.http_timeout_secs;
         }
 
+        if config.request_timeout_secs == 0 {
+            tracing::warn!("REQUEST_TIMEOUT_SECS 为 0，已自动修正为 300");
+            config.request_timeout_secs = 300;
+        }
+
+        if config.http_timeout_secs == 0 {
+            tracing::warn!("HTTP_TIMEOUT_SECS 为 0，已自动修正为 300");
+            config.http_timeout_secs = 300;
+        }
+
+        if config.max_request_body_bytes <= config.appeal_file_max_size_bytes {
+            let corrected = config.appeal_file_max_size_bytes + 10 * 1024 * 1024;
+            tracing::warn!(
+                max_request_body_bytes = config.max_request_body_bytes,
+                appeal_file_max_size_bytes = config.appeal_file_max_size_bytes,
+                corrected,
+                "MAX_REQUEST_BODY_BYTES 必须大于 APPEAL_FILE_MAX_SIZE_MB，已自动修正"
+            );
+            config.max_request_body_bytes = corrected;
+        }
+
+        if config.is_production && config.cors_origin.is_none() {
+            tracing::error!("生产环境必须设置 CORS_ORIGIN，避免后台 API 被任意来源调用");
+            std::process::exit(1);
+        }
+
         // R2 凭据完整性检查
         let r2_count = [
             config.r2_endpoint.is_some(),
@@ -201,7 +244,19 @@ impl Config {
         .filter(|&&v| v)
         .count();
         if r2_count > 0 && r2_count < 4 {
-            tracing::warn!(filled = r2_count, total = 4, "R2 存储配置不完整，部分字段已填写但缺少其他字段，R2 功能将不可用");
+            if config.is_production {
+                tracing::error!(
+                    filled = r2_count,
+                    total = 4,
+                    "生产环境 R2 存储配置不完整，请补齐或清空 R2_* 配置"
+                );
+                std::process::exit(1);
+            }
+            tracing::warn!(
+                filled = r2_count,
+                total = 4,
+                "R2 存储配置不完整，部分字段已填写但缺少其他字段，R2 功能将不可用"
+            );
         }
 
         // 启动配置日志（隐藏敏感字段）
@@ -211,12 +266,20 @@ impl Config {
             db_min_connections = config.db_min_connections,
             session_ttl_hours = config.session_ttl_hours,
             request_timeout_secs = config.request_timeout_secs,
-            is_production = is_production,
-            r2_enabled = config.r2_endpoint.is_some(),
+            app_env = %config.app_env,
+            is_production = config.is_production,
+            r2_enabled = config.r2_storage_enabled(),
             "应用配置已加载"
         );
 
         config
+    }
+
+    pub fn r2_storage_enabled(&self) -> bool {
+        self.r2_endpoint.is_some()
+            && self.r2_bucket.is_some()
+            && self.r2_access_key_id.is_some()
+            && self.r2_secret_access_key.is_some()
     }
 }
 
@@ -239,7 +302,13 @@ fn env_u32_clamped(key: &str, default: u32, min: u32, max: u32) -> u32 {
         Ok(val) => match val.parse::<u32>() {
             Ok(n) => {
                 if n < min || n > max {
-                    tracing::warn!(key = key, value = n, min = min, max = max, "环境变量超出范围，已自动修正");
+                    tracing::warn!(
+                        key = key,
+                        value = n,
+                        min = min,
+                        max = max,
+                        "环境变量超出范围，已自动修正"
+                    );
                 }
                 n.clamp(min, max)
             }

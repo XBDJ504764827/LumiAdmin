@@ -104,6 +104,48 @@ public void OnPluginStart()
     StartStatusReportTimer();
 }
 
+public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int errMax)
+{
+    CreateNative("MangerReporter_GetApiBaseUrl", Native_GetApiBaseUrl);
+    CreateNative("MangerReporter_GetReportToken", Native_GetReportToken);
+    CreateNative("MangerReporter_GetServerPort", Native_GetServerPort);
+    RegPluginLibrary("manger_online_reporter");
+    return APLRes_Success;
+}
+
+public int Native_GetApiBaseUrl(Handle plugin, int numParams)
+{
+    int maxLen = GetNativeCell(2);
+    char apiBaseUrl[512];
+    g_ApiBaseUrl.GetString(apiBaseUrl, sizeof(apiBaseUrl));
+    TrimString(apiBaseUrl);
+    SetNativeString(1, apiBaseUrl, maxLen);
+    return apiBaseUrl[0] != '\0' ? 1 : 0;
+}
+
+public int Native_GetReportToken(Handle plugin, int numParams)
+{
+    int maxLen = GetNativeCell(2);
+    char token[MAX_SERVER_TOKEN];
+    if (!GetCurrentReportToken(token, sizeof(token)))
+    {
+        SetNativeString(1, "", maxLen);
+        return 0;
+    }
+    SetNativeString(1, token, maxLen);
+    return 1;
+}
+
+public int Native_GetServerPort(Handle plugin, int numParams)
+{
+    int port = 0;
+    if (!GetCurrentServerPort(port))
+    {
+        return 0;
+    }
+    return port;
+}
+
 public void OnMapStart()
 {
     if (g_AccessSnapshotDb == null)

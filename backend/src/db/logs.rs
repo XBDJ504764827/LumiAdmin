@@ -62,17 +62,26 @@ pub(super) async fn migrate_logs_operations_and_indexes(&self) -> anyhow::Result
           server_port INTEGER,
           success BOOLEAN NOT NULL DEFAULT true,
           message TEXT,
+          client_ip TEXT,
+          details JSONB,
           idempotency_key TEXT UNIQUE,
           created_at TIMESTAMPTZ DEFAULT now()
         )"#,
     )
     .execute(&self.pool)
     .await?;
+    sqlx::query(r#"ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS client_ip TEXT"#)
+        .execute(&self.pool)
+        .await?;
+    sqlx::query(r#"ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS details JSONB"#)
+        .execute(&self.pool)
+        .await?;
 
     let audit_indexes = [
         r#"CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC)"#,
         r#"CREATE INDEX IF NOT EXISTS idx_audit_logs_server_id ON audit_logs (server_id)"#,
         r#"CREATE INDEX IF NOT EXISTS idx_audit_logs_operation ON audit_logs (operation)"#,
+        r#"CREATE INDEX IF NOT EXISTS idx_audit_logs_client_ip ON audit_logs (client_ip) WHERE client_ip IS NOT NULL"#,
     ];
     for sql in audit_indexes {
         sqlx::query(sql).execute(&self.pool).await?;

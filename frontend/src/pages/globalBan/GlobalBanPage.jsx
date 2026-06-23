@@ -19,6 +19,27 @@ function sourceLabel(source) {
   if (source === 'live') return 'KZTimer 实时 API';
   return '本地同步缓存';
 }
+function formatInterval(seconds) {
+  if (!seconds) return '-';
+  if (seconds >= 3600) return `${Math.round(seconds / 3600)} 小时`;
+  if (seconds >= 60) return `${Math.round(seconds / 60)} 分钟`;
+  return `${seconds} 秒`;
+}
+function taskStatus(task) {
+  if (!task) return { label: '等待记录', kind: 'default' };
+  if (task.running) return { label: '同步中', kind: 'info' };
+  if (task.consecutive_failures > 0) return { label: '异常', kind: 'danger' };
+  if (!task.last_success_at && !task.last_failure_at) return { label: '等待首轮', kind: 'warning' };
+  return { label: '正常', kind: 'success' };
+}
+function apiStatus(metric, nowMs) {
+  if (!metric) return { label: '等待请求', kind: 'default' };
+  const cooldownUntil = metric.cooldown_until ? new Date(metric.cooldown_until).getTime() : 0;
+  if (cooldownUntil > nowMs) return { label: '冷却中', kind: 'warning' };
+  if (metric.consecutive_failures > 0) return { label: '异常', kind: 'danger' };
+  if (metric.last_success_at) return { label: '正常', kind: 'success' };
+  return { label: '等待请求', kind: 'default' };
+}
 
 function BanDetailModal({ ban, localBanId, manualUnbanned, onClose }) {
   return (<Modal open={true} title="全球封禁详情" onClose={onClose} wide footer={<button className="btn btn-outline" onClick={onClose}>关闭</button>}>
@@ -74,10 +95,23 @@ export function GlobalBanPage() {
   const hasMore = data?.has_more || false;
   const source = data?.source || 'local_cache';
   const warning = data?.warning || '';
+  const { data: statusData, refetch: refetchStatus, dataUpdatedAt: statusUpdatedAt } = useApiQuery(
+    ['globalBanStatus'],
+    (token)=>api.globalBanStatus(token),
+    {
+      enabled: typeof session !== 'undefined',
+      staleTime: 30_000,
+      refetchInterval: 30_000,
+      refetchOnWindowFocus: false,
+    },
+  );
+  const syncStatus = statusData?.status;
+  const syncTaskStatus = taskStatus(syncStatus?.task);
+  const externalApiStatus = apiStatus(syncStatus?.external_api, statusUpdatedAt || 0);
 
   async function handleSync() {
     if(syncing)return;setSyncing(true);setSyncResult(null);
-    try{const result=await api.syncGlobalBans(token);setSyncResult(result.result||result);refetch();}catch(e){setSyncResult({error:e.message});}finally{setSyncing(false);}
+    try{const result=await api.syncGlobalBans(token);setSyncResult(result.result||result);refetch();refetchStatus();}catch(e){setSyncResult({error:e.message});refetchStatus();}finally{setSyncing(false);}
   }
 
   async function handleSearch(e) {
@@ -94,12 +128,29 @@ export function GlobalBanPage() {
     <div className="content-section active">
       <div className="breadcrumb"><span>日志与审计</span><span className="sep">›</span><span className="current">全球封禁</span></div>
       <div className="page-header">
-        <div><div className="page-title">全球封禁</div><div className="page-sub">实时显示 KZTimer GlobalAPI 中的全球封禁记录。</div></div>
+        <div><div className="page-title">全球封禁</div><div className="page-sub">显示后台同步到本地的 KZTimer 全球封禁记录。</div></div>
         {isDeveloper&&<button className="btn btn-primary" onClick={handleSync} disabled={syncing}>{syncing?'同步中...':'手动同步'}</button>}
       </div>
 
       {syncResult&&<div className={`sync-result-bar ${syncResult.error?'error':'success'}`}>{syncResult.error?<span>同步失败: {syncResult.error}</span>:<span>同步完成 — 获取 {syncResult.total_fetched??0} 条，新增 {syncResult.new_bans??0} 条</span>}<button className="btn btn-sm" onClick={()=>setSyncResult(null)}>关闭</button></div>}
       {warning&&<div className="info-box warning" style={{marginBottom:16}}>{warning}</div>}
+      {syncStatus&&(
+        <div className="card" style={{marginBottom:16}}>
+          <div className="card-header"><div><div className="card-title">同步状态</div><div className="card-sub">列表、搜索和公开检测均读取这份本地同步数据</div></div></div>
+          <div className="card-body">
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:12}}>
+              <div className="ops-kv"><span>最近同步</span><strong>{formatChinaDateTime(syncStatus.last_synced_at)}</strong></div>
+              <div className="ops-kv"><span>同步周期</span><strong>{formatInterval(syncStatus.sync_interval_secs)}</strong></div>
+              <div className="ops-kv"><span>缓存活跃 / 总数</span><strong>{syncStatus.active_bans??0} / {syncStatus.stored_bans??0}</strong></div>
+              <div className="ops-kv"><span>本地封禁</span><strong>{syncStatus.local_active_bans??0}</strong></div>
+              <div className="ops-kv"><span>同步任务</span><StatusPill kind={syncTaskStatus.kind}>{syncTaskStatus.label}</StatusPill></div>
+              <div className="ops-kv"><span>KZTimer API</span><StatusPill kind={externalApiStatus.kind}>{externalApiStatus.label}</StatusPill></div>
+            </div>
+            {syncStatus.task?.last_error&&<div className="info-box danger" style={{marginTop:12,marginBottom:0}}>最近同步错误：{syncStatus.task.last_error}</div>}
+            {syncStatus.external_api?.cooldown_until&&<div className="info-box warning" style={{marginTop:12,marginBottom:0}}>KZTimer API 冷却到 {formatChinaDateTime(syncStatus.external_api.cooldown_until)}，冷却期间继续使用本地缓存。</div>}
+          </div>
+        </div>
+      )}
 
       {/* 搜索框 */}
       <div className="card" style={{marginBottom:16}}>

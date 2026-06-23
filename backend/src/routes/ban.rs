@@ -74,6 +74,58 @@ pub(crate) struct PluginBanCheckBody {
     pub server_port: Option<i32>,
 }
 
+fn optional_client_ip(headers: &HeaderMap) -> Option<String> {
+    let ip = extract_client_ip(headers);
+    (!ip.trim().is_empty()).then_some(ip)
+}
+
+fn audit_target_for_ban(item: &ban_service::BanItem) -> String {
+    if !item.steam_id.trim().is_empty() {
+        item.steam_id.clone()
+    } else if let Some(ip) = item.ip_address.as_ref().filter(|value| !value.trim().is_empty()) {
+        ip.clone()
+    } else {
+        item.id.to_string()
+    }
+}
+
+async fn write_web_ban_audit(
+    ctx: &AppCtx,
+    headers: &HeaderMap,
+    actor: &crate::models::Operator,
+    operation: &str,
+    item: &ban_service::BanItem,
+    message: impl Into<String>,
+    details: serde_json::Value,
+) {
+    if let Err(e) = audit_service::write_audit_log_with_context(
+        &ctx.db,
+        audit_service::AuditLogInput {
+            operation: operation.to_string(),
+            target: audit_target_for_ban(item),
+            target_type: item.ban_type.clone(),
+            player_name: item.player.clone(),
+            reason: Some(item.reason.clone()),
+            duration_minutes: Some(item.duration_minutes),
+            operator_name: actor.display_name.clone(),
+            operator_steamid: None,
+            source: "web".to_string(),
+            server_id: item.server_id,
+            server_name: item.server_name.clone(),
+            server_port: item.server_port,
+            success: true,
+            message: Some(message.into()),
+            idempotency_key: None,
+        },
+        optional_client_ip(headers),
+        Some(details),
+    )
+    .await
+    {
+        tracing::warn!(%e, "web ban audit log write failed");
+    }
+}
+
 pub(crate) async fn bans(
     State(ctx): State<AppCtx>,
     headers: HeaderMap,
@@ -189,6 +241,33 @@ pub(crate) async fn create_ban(
             tracing::warn!(%e, "sync failure notification failed");
         }
     }
+    write_web_ban_audit(
+        &ctx,
+        &headers,
+        &actor,
+        "ban",
+        &item,
+        format!("后台创建封禁，外部同步：{}", sync_result.message),
+        serde_json::json!({
+            "action": "create_ban",
+            "ban_id": item.id,
+            "player": item.player,
+            "steam_id": item.steam_id,
+            "ip_address": item.ip_address,
+            "ban_type": item.ban_type,
+            "duration_minutes": item.duration_minutes,
+            "expires_at": item.expires_at,
+            "reason": item.reason,
+            "source": item.source,
+            "operator_username": actor.username,
+            "operator_role": actor.role,
+            "external_sync": {
+                "ok": sync_result.ok,
+                "message": sync_result.message,
+            },
+        }),
+    )
+    .await;
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({ "item": item })),
@@ -208,6 +287,9 @@ pub(crate) async fn update_ban(
     if !permission_service::can_unban_record(&actor, &record) {
         return Err(forbidden());
     }
+    let before = ban_service::get_ban(&ctx.db, id)
+        .await
+        .map_err(invalid_request)?;
 
     let item = ban_service::update_ban(
         &ctx.db,
@@ -247,6 +329,41 @@ pub(crate) async fn update_ban(
     if let Err(e) = external_ban_api_service::resync_ban(&ctx.db, id, &item).await {
         tracing::warn!(%e, ban_id = %id, "external ban resync failed on update");
     }
+    write_web_ban_audit(
+        &ctx,
+        &headers,
+        &actor,
+        "ban_update",
+        &item,
+        format!("后台编辑封禁，ID: {}", item.id),
+        serde_json::json!({
+            "action": "update_ban",
+            "ban_id": item.id,
+            "before": {
+                "player": before.player,
+                "steam_id": before.steam_id,
+                "ip_address": before.ip_address,
+                "ban_type": before.ban_type,
+                "duration_minutes": before.duration_minutes,
+                "expires_at": before.expires_at,
+                "reason": before.reason,
+                "status": before.status,
+            },
+            "after": {
+                "player": item.player,
+                "steam_id": item.steam_id,
+                "ip_address": item.ip_address,
+                "ban_type": item.ban_type,
+                "duration_minutes": item.duration_minutes,
+                "expires_at": item.expires_at,
+                "reason": item.reason,
+                "status": item.status,
+            },
+            "operator_username": actor.username,
+            "operator_role": actor.role,
+        }),
+    )
+    .await;
     Ok(Json(serde_json::json!({ "item": item })))
 }
 
@@ -262,11 +379,15 @@ pub(crate) async fn delete_ban(
     if !permission_service::can_unban_record(&actor, &record) {
         return Err(forbidden());
     }
+    let before = ban_service::get_ban(&ctx.db, id)
+        .await
+        .map_err(invalid_request)?;
 
     // Read sync records before hard-delete (CASCADE will remove them)
     let sync_records = external_ban_api_service::read_sync_records_before_delete(&ctx.db, id)
         .await
         .unwrap_or_default();
+    let sync_record_count = sync_records.len();
 
     ban_service::delete_ban(&ctx.db, id)
         .await
@@ -296,6 +417,33 @@ pub(crate) async fn delete_ban(
     {
         tracing::warn!(%e, "日志写入失败");
     }
+    write_web_ban_audit(
+        &ctx,
+        &headers,
+        &actor,
+        "ban_delete",
+        &before,
+        format!("后台删除封禁，ID: {}", before.id),
+        serde_json::json!({
+            "action": "delete_ban",
+            "deleted": {
+                "ban_id": before.id,
+                "player": before.player,
+                "steam_id": before.steam_id,
+                "ip_address": before.ip_address,
+                "ban_type": before.ban_type,
+                "duration_minutes": before.duration_minutes,
+                "expires_at": before.expires_at,
+                "reason": before.reason,
+                "status": before.status,
+                "source": before.source,
+            },
+            "external_sync_records": sync_record_count,
+            "operator_username": actor.username,
+            "operator_role": actor.role,
+        }),
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -336,6 +484,28 @@ pub(crate) async fn unban_ban(
     if let Err(e) = external_ban_api_service::unsync_ban(&ctx.db, id).await {
         tracing::warn!(%e, ban_id = %id, "external ban unsync failed on unban");
     }
+    write_web_ban_audit(
+        &ctx,
+        &headers,
+        &actor,
+        "unban",
+        &item,
+        format!("后台解封，ID: {}", item.id),
+        serde_json::json!({
+            "action": "unban",
+            "ban_id": item.id,
+            "player": item.player,
+            "steam_id": item.steam_id,
+            "ip_address": item.ip_address,
+            "ban_type": item.ban_type,
+            "removed_by": item.removed_by,
+            "removed_at": item.removed_at,
+            "source": item.source,
+            "operator_username": actor.username,
+            "operator_role": actor.role,
+        }),
+    )
+    .await;
     Ok(Json(serde_json::json!({ "item": item })))
 }
 
@@ -451,7 +621,7 @@ pub(crate) async fn upload_ban_files(
         return Err(forbidden());
     }
 
-    ban_service::find_ban(&ctx.db, ban_id)
+    let ban_item = ban_service::get_ban(&ctx.db, ban_id)
         .await
         .map_err(invalid_request)?;
 
@@ -581,6 +751,23 @@ pub(crate) async fn upload_ban_files(
     {
         tracing::warn!(%e, "日志写入失败");
     }
+    write_web_ban_audit(
+        &ctx,
+        &headers,
+        &actor,
+        "ban_file_upload",
+        &ban_item,
+        format!("后台上传封禁附件 {} 个", uploaded.len()),
+        serde_json::json!({
+            "action": "upload_ban_files",
+            "ban_id": ban_id,
+            "uploaded": uploaded,
+            "errors": errors,
+            "operator_username": actor.username,
+            "operator_role": actor.role,
+        }),
+    )
+    .await;
 
     Ok(Json(serde_json::json!({
         "uploaded": uploaded,

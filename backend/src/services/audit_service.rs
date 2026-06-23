@@ -1,6 +1,7 @@
 use crate::db::Database;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use serde_json::Value;
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -39,6 +40,8 @@ pub struct AuditLogItem {
     pub server_port: Option<i32>,
     pub success: bool,
     pub message: Option<String>,
+    pub client_ip: Option<String>,
+    pub details: Option<Value>,
     pub idempotency_key: Option<String>,
     pub created_at: DateTime<Utc>,
 }
@@ -49,6 +52,7 @@ pub struct AuditLogQuery {
     pub operation: Option<String>,
     pub operator_name: Option<String>,
     pub target: Option<String>,
+    pub search: Option<String>,
     pub source: Option<String>,
     pub success: Option<bool>,
     pub page: i64,
@@ -57,17 +61,27 @@ pub struct AuditLogQuery {
 
 /// 写入审计日志
 pub async fn write_audit_log(db: &Database, input: AuditLogInput) -> anyhow::Result<AuditLogItem> {
+    write_audit_log_with_context(db, input, None, None).await
+}
+
+/// 写入带客户端上下文和结构化详情的审计日志。
+pub async fn write_audit_log_with_context(
+    db: &Database,
+    input: AuditLogInput,
+    client_ip: Option<String>,
+    details: Option<Value>,
+) -> anyhow::Result<AuditLogItem> {
     let id = Uuid::new_v4();
     let row = sqlx::query_as::<_, AuditLogItem>(
         r#"INSERT INTO audit_logs (
             id, operation, target, target_type, player_name, reason, duration_minutes,
             operator_name, operator_steamid, source, server_id, server_name, server_port,
-            success, message, idempotency_key, created_at
+            success, message, client_ip, details, idempotency_key, created_at
            )
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now())
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, now())
            RETURNING id, operation, target, target_type, player_name, reason, duration_minutes,
                      operator_name, operator_steamid, source, server_id, server_name, server_port,
-                     success, message, idempotency_key, created_at"#,
+                     success, message, client_ip, details, idempotency_key, created_at"#,
     )
     .bind(id)
     .bind(&input.operation)
@@ -84,6 +98,8 @@ pub async fn write_audit_log(db: &Database, input: AuditLogInput) -> anyhow::Res
     .bind(input.server_port)
     .bind(input.success)
     .bind(&input.message)
+    .bind(&client_ip)
+    .bind(&details)
     .bind(&input.idempotency_key)
     .fetch_one(&db.pool)
     .await?;
@@ -123,6 +139,15 @@ pub async fn list_audit_logs(
             param_idx += 1;
         }
     }
+    if let Some(ref search) = query.search {
+        if !search.trim().is_empty() {
+            conditions.push(format!(
+                "(al.target ILIKE ${0} OR al.player_name ILIKE ${0} OR al.operator_name ILIKE ${0} OR al.reason ILIKE ${0} OR al.message ILIKE ${0} OR al.client_ip ILIKE ${0} OR al.server_name ILIKE ${0} OR al.details::TEXT ILIKE ${0})",
+                param_idx
+            ));
+            param_idx += 1;
+        }
+    }
     if let Some(ref source) = query.source {
         if !source.trim().is_empty() {
             conditions.push(format!("source = ${}", param_idx));
@@ -158,7 +183,7 @@ pub async fn list_audit_logs(
     let data_sql = format!(
         r#"SELECT id, operation, target, target_type, player_name, reason, duration_minutes,
                   COALESCE(operator_user.display_name, al.operator_name) AS operator_name, operator_steamid, source, server_id, server_name, server_port,
-                  success, message, idempotency_key, created_at
+                  success, message, client_ip, details, idempotency_key, created_at
            FROM audit_logs al {operator_join} {}
            ORDER BY created_at DESC
            LIMIT ${} OFFSET ${}"#,
@@ -190,6 +215,13 @@ pub async fn list_audit_logs(
         if !target.trim().is_empty() {
             count_query = count_query.bind(format!("%{}%", target.trim()));
             data_query = data_query.bind(format!("%{}%", target.trim()));
+        }
+    }
+    if let Some(ref search) = query.search {
+        if !search.trim().is_empty() {
+            let pattern = format!("%{}%", search.trim());
+            count_query = count_query.bind(pattern.clone());
+            data_query = data_query.bind(pattern);
         }
     }
     if let Some(ref source) = query.source {

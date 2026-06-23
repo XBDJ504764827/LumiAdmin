@@ -21,9 +21,18 @@ function formatBytes(bytes = 0) {
 
 function taskStatus(task) {
   if (!task.enabled) return { label: '未启用', className: 'pill-default' };
+  if (task.running) return { label: '运行中', className: 'pill-info' };
   if (task.consecutive_failures > 0) return { label: '异常', className: 'pill-danger' };
   if (!task.last_success_at && !task.last_failure_at) return { label: '等待首轮', className: 'pill-warning' };
   return { label: '正常', className: 'pill-online' };
+}
+
+function externalApiStatus(metric, nowMs) {
+  const cooldownUntil = metric.cooldown_until ? new Date(metric.cooldown_until).getTime() : 0;
+  if (cooldownUntil > nowMs) return { label: '冷却中', className: 'pill-warning' };
+  if (metric.consecutive_failures > 0) return { label: '异常', className: 'pill-danger' };
+  if (metric.last_success_at) return { label: '正常', className: 'pill-online' };
+  return { label: '等待请求', className: 'pill-default' };
 }
 
 function dependencyStatus(enabled) {
@@ -54,8 +63,15 @@ export function OpsOverviewPage() {
 
   const overview = data?.data;
   const tasks = overview?.background_tasks ?? [];
+  const externalApis = overview?.external_apis ?? [];
+  const overviewGeneratedAt = overview?.generated_at ? new Date(overview.generated_at).getTime() : 0;
   const failingTasks = tasks.filter((task) => task.consecutive_failures > 0).length;
   const pendingTasks = tasks.filter((task) => !task.last_success_at && !task.last_failure_at).length;
+  const externalApiIssues = externalApis.filter((metric) => {
+    const cooldownUntil = metric.cooldown_until ? new Date(metric.cooldown_until).getTime() : 0;
+    return metric.consecutive_failures > 0 || cooldownUntil > overviewGeneratedAt;
+  }).length;
+  const externalApiRateLimits = externalApis.reduce((sum, metric) => sum + (metric.rate_limited ?? 0), 0);
   const db = overview?.database ?? {};
   const http = overview?.http ?? {};
   const config = overview?.config ?? {};
@@ -88,6 +104,7 @@ export function OpsOverviewPage() {
           <div className="ops-metric-grid">
             <OpsMetric label="进程运行时间" value={formatDuration(overview.process?.uptime_seconds ?? 0)} hint={`启动于 ${formatChinaDateTime(overview.process?.started_at)}`} tone="online" />
             <OpsMetric label="后台任务" value={`${tasks.length - failingTasks} / ${tasks.length}`} hint={failingTasks ? `${failingTasks} 个任务异常` : pendingTasks ? `${pendingTasks} 个任务等待首轮` : '全部任务正常'} tone={failingTasks ? 'danger' : pendingTasks ? 'warning' : 'online'} />
+            <OpsMetric label="外部 API" value={`${externalApis.length - externalApiIssues} / ${externalApis.length}`} hint={`累计 429 ${externalApiRateLimits} 次`} tone={externalApiIssues ? 'warning' : 'info'} />
             <OpsMetric label="HTTP 请求" value={http.total_requests ?? 0} hint={`错误率 ${(http.error_rate ?? 0).toFixed(2)}%，慢请求 ${http.slow_requests ?? 0}`} tone={(http.error_rate ?? 0) > 0 ? 'warning' : 'info'} />
             <OpsMetric label="数据库连接池" value={`${db.size ?? 0} / ${db.max_connections ?? 0}`} hint={`空闲 ${db.idle ?? 0}，使用率 ${dbUsage}%`} tone={dbUsage >= 80 ? 'warning' : 'info'} />
           </div>
@@ -110,13 +127,14 @@ export function OpsOverviewPage() {
                         <th>状态</th>
                         <th>周期</th>
                         <th>最近完成</th>
+                        <th>下次 / 开始</th>
                         <th>耗时</th>
                         <th>运行 / 失败</th>
                         <th>说明</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {tasks.length === 0 ? <TableEmpty colSpan={8} text="暂无后台任务数据" /> : null}
+                      {tasks.length === 0 ? <TableEmpty colSpan={9} text="暂无后台任务数据" /> : null}
                       {tasks.map((task) => {
                         const status = taskStatus(task);
                         return (
@@ -126,9 +144,10 @@ export function OpsOverviewPage() {
                             <td><span className={`status-pill ${status.className}`}>{status.label}</span></td>
                             <td className="text-muted-light">{task.interval_secs ? `${task.interval_secs}s` : '动态'}</td>
                             <td className="text-muted-light">{task.last_finished_at ? formatChinaDateTime(task.last_finished_at) : '-'}</td>
+                            <td className="text-muted-light">{task.running ? formatChinaDateTime(task.current_started_at) : task.next_run_at ? formatChinaDateTime(task.next_run_at) : '-'}</td>
                             <td className="text-muted-light">{task.last_duration_ms != null ? `${task.last_duration_ms} ms` : '-'}</td>
                             <td className="text-muted-light">{task.runs} / {task.failures}</td>
-                            <td className="ops-task-message">{task.last_message ?? '-'}</td>
+                            <td className="ops-task-message">{task.last_error ?? task.last_message ?? '-'}</td>
                           </tr>
                         );
                       })}
@@ -152,6 +171,35 @@ export function OpsOverviewPage() {
                   <div className="ops-kv"><span>平均耗时</span><strong>{http.average_duration_ms ?? 0} ms</strong></div>
                   <div className="ops-kv"><span>最大耗时</span><strong>{http.max_duration_ms ?? 0} ms</strong></div>
                   <div className="ops-kv"><span>慢请求</span><strong>{http.slow_requests ?? 0}</strong></div>
+                </div>
+              </div>
+
+              <div className="card">
+                <div className="card-header">
+                  <div>
+                    <div className="card-title">外部 API</div>
+                    <div className="card-sub">当前进程内请求、失败和冷却统计</div>
+                  </div>
+                </div>
+                <div className="card-body">
+                  {externalApis.length === 0 ? <div className="text-muted-light">暂无外部 API 请求记录</div> : null}
+                  {externalApis.map((metric) => {
+                    const status = externalApiStatus(metric, overviewGeneratedAt);
+                    return (
+                      <div className="ops-kv" key={metric.key}>
+                        <span>{metric.name}</span>
+                        <strong>
+                          <span className={`status-pill ${status.className}`}>{status.label}</span>
+                        </strong>
+                      </div>
+                    );
+                  })}
+                  {externalApis.map((metric) => (
+                    <div className="ops-kv" key={`${metric.key}-stats`}>
+                      <span>{metric.requests ?? 0} 请求 / {metric.failures ?? 0} 失败 / {metric.rate_limited ?? 0} 次 429</span>
+                      <strong>{metric.cooldown_until ? formatChinaDateTime(metric.cooldown_until) : '-'}</strong>
+                    </div>
+                  ))}
                 </div>
               </div>
 

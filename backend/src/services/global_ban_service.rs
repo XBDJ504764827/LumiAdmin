@@ -14,17 +14,23 @@
 //   - 同步创建的 ban_records 的 created_at 使用 KZTimer 封禁的 created_on
 //   - expires_at 使用 KZTimer 封禁的 expires_on
 //   - 这样本地封禁时间与全球 API 封禁时间一致
-use crate::{db::Database, services::observability_service};
+use crate::{
+    db::Database,
+    services::{external_api_service, observability_service},
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::Postgres;
 use sqlx::QueryBuilder;
 use std::{
     collections::HashMap,
-    sync::{Mutex, OnceLock},
-    time::{Duration, Instant},
+    sync::OnceLock,
+    time::Duration,
 };
 use uuid::Uuid;
+
+const KZT_GLOBAL_BANS_API_KEY: &str = "kztimer_global_bans";
+const KZT_GLOBAL_BANS_API_NAME: &str = "KZTimer GlobalAPI";
 
 /// KZTimer API 返回的封禁记录
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +96,17 @@ pub struct LiveBanListResult {
     pub warning: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct GlobalBanSyncStatus {
+    pub sync_interval_secs: u64,
+    pub stored_bans: i64,
+    pub active_bans: i64,
+    pub local_active_bans: i64,
+    pub last_synced_at: Option<DateTime<Utc>>,
+    pub task: Option<observability_service::TaskMetric>,
+    pub external_api: Option<external_api_service::ExternalApiMetric>,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct LocalGlobalBanRecord {
     pub kzt_ban_id: i64,
@@ -146,72 +163,22 @@ impl LocalGlobalBanRecord {
 }
 
 // =====================================================
-// HTTP 请求（带超时 + 重试）
+// HTTP 请求（统一外部 API 限流 + 冷却）
 // =====================================================
 
-static KZT_RATE_LIMIT_UNTIL: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
 static GLOBAL_BAN_SYNC_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-
-fn kzt_rate_limit_until() -> &'static Mutex<Option<Instant>> {
-    KZT_RATE_LIMIT_UNTIL.get_or_init(|| Mutex::new(None))
-}
 
 fn global_ban_sync_lock() -> &'static tokio::sync::Mutex<()> {
     GLOBAL_BAN_SYNC_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
-fn kzt_cooldown_remaining() -> Option<Duration> {
-    let mut guard = kzt_rate_limit_until().lock().ok()?;
-    let until = *guard;
-    match until {
-        Some(instant) if instant > Instant::now() => Some(instant.duration_since(Instant::now())),
-        Some(_) => {
-            *guard = None;
-            None
-        }
-        None => None,
-    }
-}
-
-fn set_kzt_cooldown(duration: Duration, reason: &str) {
-    let until = Instant::now() + duration;
-    if let Ok(mut guard) = kzt_rate_limit_until().lock() {
-        match *guard {
-            Some(current) if current > until => {}
-            _ => *guard = Some(until),
-        }
-    }
-    tracing::warn!(
-        cooldown_secs = duration.as_secs(),
-        reason,
-        "KZTimer API 进入限流冷却"
-    );
-}
-
-fn retry_after_duration(headers: &reqwest::header::HeaderMap) -> Duration {
-    headers
-        .get(reqwest::header::RETRY_AFTER)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.trim().parse::<u64>().ok())
-        .map(Duration::from_secs)
-        .unwrap_or_else(|| Duration::from_secs(60))
-}
-
-/// 从 KZTimer API 拉取封禁列表（带超时和重试）
+/// 从 KZTimer API 拉取封禁列表。
 /// `expired_filter`: None=全部, Some(true)=仅过期, Some(false)=仅活跃
 async fn fetch_kzt_bans(
     offset: i64,
     limit: i64,
     expired_filter: Option<bool>,
 ) -> anyhow::Result<Vec<KZTBan>> {
-    if let Some(remaining) = kzt_cooldown_remaining() {
-        anyhow::bail!(
-            "KZTimer API 正在限流冷却，请 {} 秒后重试",
-            remaining.as_secs().max(1)
-        );
-    }
-
-    let client = crate::http_client::http_client();
     let url = match expired_filter {
         Some(v) => format!(
             "https://kztimerglobal.com/api/v2.0/bans?isExpired={}&limit={}&offset={}",
@@ -223,48 +190,13 @@ async fn fetch_kzt_bans(
         ),
     };
 
-    let mut last_err: Option<String> = None;
-    for attempt in 0..3u8 {
-        let req_result =
-            tokio::time::timeout(std::time::Duration::from_secs(20), client.get(&url).send()).await;
-
-        match req_result {
-            Ok(Ok(resp)) => {
-                let status = resp.status();
-                if status.is_success() {
-                    let bans: Vec<KZTBan> = resp.json().await?;
-                    return Ok(bans);
-                }
-                if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                    let cooldown = retry_after_duration(resp.headers());
-                    set_kzt_cooldown(cooldown, "429 Too Many Requests");
-                    anyhow::bail!(
-                        "KZTimer API 返回 429 Too Many Requests，已暂停请求 {} 秒",
-                        cooldown.as_secs()
-                    );
-                }
-                let err_str = format!("status={}", status);
-                tracing::warn!(attempt, offset, %err_str, "KZTimer API 请求返回非成功状态");
-                last_err = Some(format!("KZTimer API 返回 {status}"));
-            }
-            Ok(Err(e)) => {
-                let err_str = e.to_string();
-                tracing::warn!(attempt, offset, %err_str, "KZTimer API 请求失败");
-                last_err = Some(err_str);
-            }
-            Err(_) => {
-                let err_str = format!("KZTimer API 请求超时 (20s), offset={}", offset);
-                tracing::warn!(attempt, offset, %err_str, "KZTimer API 请求超时");
-                last_err = Some(err_str);
-            }
-        }
-
-        if attempt < 2 {
-            tokio::time::sleep(std::time::Duration::from_secs(2 + attempt as u64)).await;
-        }
-    }
-
-    anyhow::bail!(last_err.unwrap_or_else(|| "KZTimer API 请求失败".to_string()))
+    external_api_service::get_json(
+        KZT_GLOBAL_BANS_API_KEY,
+        KZT_GLOBAL_BANS_API_NAME,
+        &url,
+        Duration::from_secs(20),
+    )
+    .await
 }
 
 // =====================================================
@@ -419,6 +351,40 @@ pub async fn public_global_bans_batch(
         })
         .collect();
     Ok(results)
+}
+
+pub async fn sync_status(
+    db: &Database,
+    sync_interval_secs: u64,
+) -> anyhow::Result<GlobalBanSyncStatus> {
+    let (stored_bans, active_bans, last_synced_at): (i64, i64, Option<DateTime<Utc>>) =
+        sqlx::query_as(
+            r#"SELECT
+                 COUNT(*)::BIGINT,
+                 COUNT(*) FILTER (WHERE is_expired = false)::BIGINT,
+                 MAX(synced_at)
+               FROM global_bans"#,
+        )
+        .fetch_one(&db.pool)
+        .await?;
+
+    let (local_active_bans,): (i64,) = sqlx::query_as(
+        r#"SELECT COUNT(*)::BIGINT
+           FROM ban_records
+           WHERE source = 'global_ban' AND status = 'active'"#,
+    )
+    .fetch_one(&db.pool)
+    .await?;
+
+    Ok(GlobalBanSyncStatus {
+        sync_interval_secs,
+        stored_bans,
+        active_bans,
+        local_active_bans,
+        last_synced_at,
+        task: observability_service::task_metric("global_ban_sync"),
+        external_api: external_api_service::metric(KZT_GLOBAL_BANS_API_KEY),
+    })
 }
 
 // =====================================================

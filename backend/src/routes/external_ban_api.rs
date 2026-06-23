@@ -181,7 +181,7 @@ pub(crate) async fn sync_ban(
     }
 
     // Write audit log for manual sync
-    if let Err(e) = audit_service::write_audit_log(
+    if let Err(e) = audit_service::write_audit_log_with_context(
         &ctx.db,
         audit_service::AuditLogInput {
             operation: "external_ban_sync".to_string(),
@@ -200,6 +200,15 @@ pub(crate) async fn sync_ban(
             message: Some(result.message.clone()),
             idempotency_key: None,
         },
+        Some(extract_client_ip(&headers)),
+        Some(serde_json::json!({
+            "action": "sync_external_ban",
+            "ban_id": id,
+            "ok": result.ok,
+            "message": result.message,
+            "operator_username": actor.username,
+            "operator_role": actor.role,
+        })),
     )
     .await
     {
@@ -292,7 +301,7 @@ pub(crate) async fn retry_failed_syncs(
     }
 
     // Audit log for retry
-    if let Err(e) = audit_service::write_audit_log(
+    if let Err(e) = audit_service::write_audit_log_with_context(
         &ctx.db,
         audit_service::AuditLogInput {
             operation: "external_ban_retry".to_string(),
@@ -311,6 +320,14 @@ pub(crate) async fn retry_failed_syncs(
             message: Some(result.message.clone()),
             idempotency_key: None,
         },
+        Some(extract_client_ip(&headers)),
+        Some(serde_json::json!({
+            "action": "retry_failed_external_syncs",
+            "ok": result.ok,
+            "message": result.message,
+            "operator_username": actor.username,
+            "operator_role": actor.role,
+        })),
     )
     .await
     {

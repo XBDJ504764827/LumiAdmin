@@ -1,4 +1,4 @@
-use crate::{config::Config, db::Database};
+use crate::{config::Config, db::Database, services::external_api_service};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::{
@@ -7,7 +7,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         LazyLock, RwLock,
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 static PROCESS_STARTED_AT: LazyLock<DateTime<Utc>> = LazyLock::new(Utc::now);
@@ -34,15 +34,19 @@ pub struct TaskMetric {
     pub category: &'static str,
     pub interval_secs: Option<u64>,
     pub enabled: bool,
+    pub running: bool,
     pub runs: u64,
     pub failures: u64,
     pub consecutive_failures: u64,
+    pub current_started_at: Option<DateTime<Utc>>,
+    pub next_run_at: Option<DateTime<Utc>>,
     pub last_started_at: Option<DateTime<Utc>>,
     pub last_finished_at: Option<DateTime<Utc>>,
     pub last_success_at: Option<DateTime<Utc>>,
     pub last_failure_at: Option<DateTime<Utc>>,
     pub last_duration_ms: Option<u64>,
     pub last_message: Option<String>,
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -96,6 +100,7 @@ pub struct ObservabilityOverview {
     pub database: DatabaseOverview,
     pub http: HttpOverview,
     pub background_tasks: Vec<TaskMetric>,
+    pub external_apis: Vec<external_api_service::ExternalApiMetric>,
     pub dependencies: DependencyOverview,
     pub config: RuntimeConfigOverview,
 }
@@ -114,30 +119,52 @@ pub fn register_task(
         category,
         interval_secs,
         enabled,
+        running: false,
         runs: 0,
         failures: 0,
         consecutive_failures: 0,
+        current_started_at: None,
+        next_run_at: None,
         last_started_at: None,
         last_finished_at: None,
         last_success_at: None,
         last_failure_at: None,
         last_duration_ms: None,
         last_message: None,
+        last_error: None,
     });
+}
+
+pub fn record_task_started(key: &'static str) {
+    let mut tasks = TASKS.write().expect("task metrics lock poisoned");
+    if let Some(task) = tasks.get_mut(key) {
+        let now = Utc::now();
+        task.running = true;
+        task.current_started_at = Some(now);
+        task.last_started_at = Some(now);
+        task.next_run_at = None;
+    }
 }
 
 pub fn record_task_success(key: &'static str, duration_ms: u64, message: impl Into<String>) {
     let mut tasks = TASKS.write().expect("task metrics lock poisoned");
     if let Some(task) = tasks.get_mut(key) {
         let now = Utc::now();
+        let started_at = task
+            .current_started_at
+            .unwrap_or_else(|| now - chrono::Duration::milliseconds(duration_ms as i64));
         task.runs += 1;
         task.consecutive_failures = 0;
-        task.last_started_at = Some(now - chrono::Duration::milliseconds(duration_ms as i64));
+        task.running = false;
+        task.current_started_at = None;
+        task.next_run_at = next_run_at(task.interval_secs, now);
+        task.last_started_at = Some(started_at);
         task.last_finished_at = Some(now);
         task.last_success_at = Some(now);
         task.last_duration_ms = Some(duration_ms);
         let message = message.into();
         task.last_message = (!message.is_empty()).then_some(message);
+        task.last_error = None;
     }
 }
 
@@ -145,16 +172,30 @@ pub fn record_task_failure(key: &'static str, duration_ms: u64, message: impl In
     let mut tasks = TASKS.write().expect("task metrics lock poisoned");
     if let Some(task) = tasks.get_mut(key) {
         let now = Utc::now();
+        let started_at = task
+            .current_started_at
+            .unwrap_or_else(|| now - chrono::Duration::milliseconds(duration_ms as i64));
+        let message = message.into();
         task.runs += 1;
         task.failures += 1;
         task.consecutive_failures += 1;
-        task.last_started_at = Some(now - chrono::Duration::milliseconds(duration_ms as i64));
+        task.running = false;
+        task.current_started_at = None;
+        task.next_run_at = next_run_at(task.interval_secs, now);
+        task.last_started_at = Some(started_at);
         task.last_finished_at = Some(now);
         task.last_failure_at = Some(now);
         task.last_duration_ms = Some(duration_ms);
-        let message = message.into();
-        task.last_message = (!message.is_empty()).then_some(message);
+        let message = (!message.is_empty()).then_some(message);
+        task.last_message = message.clone();
+        task.last_error = message;
     }
+}
+
+fn next_run_at(interval_secs: Option<u64>, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    interval_secs
+        .and_then(|secs| chrono::Duration::from_std(Duration::from_secs(secs)).ok())
+        .map(|duration| now + duration)
 }
 
 pub async fn observe_task<T, E, F>(
@@ -167,6 +208,7 @@ where
     E: std::fmt::Display,
 {
     let started = Instant::now();
+    record_task_started(key);
     let result = future.await;
     let duration_ms = started.elapsed().as_millis() as u64;
     match &result {
@@ -174,6 +216,13 @@ where
         Err(error) => record_task_failure(key, duration_ms, error.to_string()),
     }
     result
+}
+
+pub fn task_metric(key: &'static str) -> Option<TaskMetric> {
+    TASKS
+        .read()
+        .ok()
+        .and_then(|tasks| tasks.get(key).cloned())
 }
 
 pub fn record_http_request(status: u16, duration_ms: u64) {
@@ -245,6 +294,7 @@ pub fn overview(db: &Database, config: &Config) -> ObservabilityOverview {
             error_rate,
         },
         background_tasks,
+        external_apis: external_api_service::metrics(),
         dependencies: DependencyOverview {
             steam_web_api: config.steam_web_key.is_some(),
             steamchina_profile: config.steamchina_profile_key.is_some(),

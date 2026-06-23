@@ -250,6 +250,26 @@ pub(super) async fn migrate_player_access_cache_extended(&self) -> anyhow::Resul
         .execute(&self.pool).await?;
     sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_global_bans_kzt_ban_id ON global_bans (kzt_ban_id)"#)
         .execute(&self.pool).await?;
+    sqlx::query(
+        r#"CREATE INDEX IF NOT EXISTS idx_global_bans_active_created
+           ON global_bans (created_on DESC NULLS LAST, synced_at DESC)
+           WHERE is_expired = false"#,
+    )
+    .execute(&self.pool)
+    .await?;
+    sqlx::query(
+        r#"CREATE INDEX IF NOT EXISTS idx_global_bans_active_steam_created
+           ON global_bans (steam_id64, created_on DESC NULLS LAST, synced_at DESC)
+           WHERE is_expired = false"#,
+    )
+    .execute(&self.pool)
+    .await?;
+    sqlx::query(
+        r#"CREATE INDEX IF NOT EXISTS idx_global_bans_synced_at
+           ON global_bans (synced_at DESC)"#,
+    )
+    .execute(&self.pool)
+    .await?;
     // 兼容旧表
     let gb_columns = [
         ("is_expired", "BOOLEAN NOT NULL DEFAULT false"),

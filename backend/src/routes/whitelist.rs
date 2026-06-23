@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::routes::{current_operator, AppCtx, AppError, ListQuery};
 use crate::services::rate_limit_service::extract_client_ip;
-use crate::services::{log_service, permission_service, whitelist_service};
+use crate::services::{audit_service, log_service, permission_service, whitelist_service};
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
@@ -35,6 +35,86 @@ pub(crate) struct WhitelistActionBody {
 #[derive(Deserialize)]
 pub(crate) struct RefreshSteamNamesBody {
     pub status: Option<String>,
+}
+
+fn optional_client_ip(headers: &HeaderMap) -> Option<String> {
+    let ip = extract_client_ip(headers);
+    (!ip.trim().is_empty()).then_some(ip)
+}
+
+async fn write_whitelist_audit(
+    ctx: &AppCtx,
+    headers: &HeaderMap,
+    actor: &crate::models::Operator,
+    operation: &str,
+    item: &whitelist_service::WhitelistItem,
+    reason: Option<String>,
+    message: impl Into<String>,
+    details: serde_json::Value,
+) {
+    if let Err(e) = audit_service::write_audit_log_with_context(
+        &ctx.db,
+        audit_service::AuditLogInput {
+            operation: operation.to_string(),
+            target: item.steamid64.clone(),
+            target_type: "whitelist".to_string(),
+            player_name: Some(item.nickname.clone()),
+            reason,
+            duration_minutes: None,
+            operator_name: actor.display_name.clone(),
+            operator_steamid: None,
+            source: "web".to_string(),
+            server_id: None,
+            server_name: None,
+            server_port: None,
+            success: true,
+            message: Some(message.into()),
+            idempotency_key: None,
+        },
+        optional_client_ip(headers),
+        Some(details),
+    )
+    .await
+    {
+        tracing::warn!(%e, "whitelist audit log write failed");
+    }
+}
+
+async fn write_whitelist_batch_audit(
+    ctx: &AppCtx,
+    headers: &HeaderMap,
+    actor: &crate::models::Operator,
+    operation: &str,
+    target: impl Into<String>,
+    message: impl Into<String>,
+    details: serde_json::Value,
+) {
+    if let Err(e) = audit_service::write_audit_log_with_context(
+        &ctx.db,
+        audit_service::AuditLogInput {
+            operation: operation.to_string(),
+            target: target.into(),
+            target_type: "whitelist".to_string(),
+            player_name: None,
+            reason: None,
+            duration_minutes: None,
+            operator_name: actor.display_name.clone(),
+            operator_steamid: None,
+            source: "web".to_string(),
+            server_id: None,
+            server_name: None,
+            server_port: None,
+            success: true,
+            message: Some(message.into()),
+            idempotency_key: None,
+        },
+        optional_client_ip(headers),
+        Some(details),
+    )
+    .await
+    {
+        tracing::warn!(%e, "whitelist batch audit log write failed");
+    }
 }
 
 pub(crate) async fn whitelist(
@@ -82,6 +162,29 @@ pub(crate) async fn create_whitelist(
         &extract_client_ip(&headers),
     )
     .await;
+    write_whitelist_audit(
+        &ctx,
+        &headers,
+        &actor,
+        "whitelist_add",
+        &item,
+        item.approval_reason.clone(),
+        format!("后台手动添加白名单，ID: {}", item.id),
+        serde_json::json!({
+            "action": "create_manual_whitelist",
+            "whitelist_id": item.id,
+            "steamid64": item.steamid64,
+            "steamid": item.steamid,
+            "steamid3": item.steamid3,
+            "nickname": item.nickname,
+            "status": item.status,
+            "approved_at": item.approved_at,
+            "approved_by": item.approved_by,
+            "operator_username": actor.username,
+            "operator_role": actor.role,
+        }),
+    )
+    .await;
     Ok((axum::http::StatusCode::CREATED, Json(serde_json::json!({"item": item}))))
 }
 
@@ -107,6 +210,28 @@ pub(crate) async fn approve_whitelist_request(
         "通过白名单申请",
         &item.nickname,
         &extract_client_ip(&headers),
+    )
+    .await;
+    write_whitelist_audit(
+        &ctx,
+        &headers,
+        &actor,
+        "whitelist_approve",
+        &item,
+        item.approval_reason.clone(),
+        format!("后台通过白名单申请，ID: {}", item.id),
+        serde_json::json!({
+            "action": "approve_whitelist",
+            "whitelist_id": item.id,
+            "steamid64": item.steamid64,
+            "nickname": item.nickname,
+            "status": item.status,
+            "approval_reason": item.approval_reason,
+            "approved_at": item.approved_at,
+            "approved_by": item.approved_by,
+            "operator_username": actor.username,
+            "operator_role": actor.role,
+        }),
     )
     .await;
     Ok(Json(serde_json::json!({"item": item})))
@@ -135,6 +260,28 @@ pub(crate) async fn reject_whitelist_request(
         &extract_client_ip(&headers),
     )
     .await;
+    write_whitelist_audit(
+        &ctx,
+        &headers,
+        &actor,
+        "whitelist_reject",
+        &item,
+        Some(body.reason),
+        format!("后台拒绝白名单申请，ID: {}", item.id),
+        serde_json::json!({
+            "action": "reject_whitelist",
+            "whitelist_id": item.id,
+            "steamid64": item.steamid64,
+            "nickname": item.nickname,
+            "status": item.status,
+            "rejection_reason": item.rejection_reason,
+            "rejected_at": item.rejected_at,
+            "rejected_by": item.rejected_by,
+            "operator_username": actor.username,
+            "operator_role": actor.role,
+        }),
+    )
+    .await;
     Ok(Json(serde_json::json!({"item": item})))
 }
 
@@ -161,6 +308,27 @@ pub(crate) async fn restore_whitelist_request(
         &extract_client_ip(&headers),
     )
     .await;
+    write_whitelist_audit(
+        &ctx,
+        &headers,
+        &actor,
+        "whitelist_restore",
+        &item,
+        item.approval_reason.clone(),
+        format!("后台恢复白名单通过状态，ID: {}", item.id),
+        serde_json::json!({
+            "action": "restore_whitelist",
+            "whitelist_id": item.id,
+            "steamid64": item.steamid64,
+            "nickname": item.nickname,
+            "status": item.status,
+            "approved_at": item.approved_at,
+            "approved_by": item.approved_by,
+            "operator_username": actor.username,
+            "operator_role": actor.role,
+        }),
+    )
+    .await;
     Ok(Json(serde_json::json!({"item": item})))
 }
 
@@ -185,6 +353,25 @@ pub(crate) async fn revoke_whitelist_request(
         "删除白名单审核",
         &item.nickname,
         &extract_client_ip(&headers),
+    )
+    .await;
+    write_whitelist_audit(
+        &ctx,
+        &headers,
+        &actor,
+        "whitelist_revoke",
+        &item,
+        None,
+        format!("后台撤销白名单，ID: {}", item.id),
+        serde_json::json!({
+            "action": "revoke_whitelist",
+            "whitelist_id": item.id,
+            "steamid64": item.steamid64,
+            "nickname": item.nickname,
+            "status": item.status,
+            "operator_username": actor.username,
+            "operator_role": actor.role,
+        }),
     )
     .await;
     Ok(Json(serde_json::json!({"item": item})))
@@ -235,6 +422,22 @@ pub(crate) async fn refresh_all_steam_names(
         "批量刷新Steam名称",
         &format!("更新了{}条记录", updated_count),
         &extract_client_ip(&headers),
+    )
+    .await;
+    write_whitelist_batch_audit(
+        &ctx,
+        &headers,
+        &actor,
+        "whitelist_refresh_names",
+        body.status.as_deref().unwrap_or("all"),
+        format!("批量刷新白名单 Steam 名称，更新 {} 条", updated_count),
+        serde_json::json!({
+            "action": "refresh_all_steam_persona_names",
+            "status_filter": body.status,
+            "updated_count": updated_count,
+            "operator_username": actor.username,
+            "operator_role": actor.role,
+        }),
     )
     .await;
     Ok(Json(serde_json::json!({ "updated_count": updated_count })))

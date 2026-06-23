@@ -1,15 +1,14 @@
 use crate::routes::{AppCtx, ListQuery, invalid_request};
 use crate::services::{
-    ban_appeal_service, ban_service, log_service, notification_service, public_service, r2_storage,
-    rate_limit_service::extract_client_ip, whitelist_service,
+    ban_appeal_service, ban_service, global_ban_service, log_service, notification_service,
+    public_service, r2_storage, rate_limit_service::extract_client_ip, whitelist_service,
 };
 use axum::{
     Json,
     extract::{Multipart, Path, Query, State},
     http::{HeaderMap, StatusCode},
 };
-use futures::stream::StreamExt;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -201,88 +200,30 @@ pub(crate) async fn query_active_bans(
     })))
 }
 
-/// 查询全球封禁记录（优先从本地 global_bans 表查，本地无则代理第三方 API，带缓存）
+/// 查询全球封禁记录。
+/// 数据来自后台同步维护的 global_bans 表，避免公开页面直接打 KZTimer 限额。
 pub(crate) async fn get_global_bans(
     State(ctx): State<AppCtx>,
     Path(steamid64): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    // 优先从本地 global_bans 表查询（全球封禁同步功能维护）
-    #[allow(clippy::type_complexity)]
-    let local_bans: Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
-        r#"SELECT kzt_ban_id, ban_type, notes, stats, expires_on, created_on, player_name
-           FROM global_bans WHERE steam_id64 = $1 AND is_expired = false"#
-    ).bind(&steamid64).fetch_all(&ctx.db.pool).await.unwrap_or_default();
+    let bans = global_ban_service::public_global_bans_for_steamid(&ctx.db, &steamid64)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, steamid64 = %steamid64, "查询本地全球封禁失败");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "查询失败" })),
+            )
+        })?;
 
-    if !local_bans.is_empty() {
-        let ban_items: Vec<serde_json::Value> = local_bans.into_iter().map(|(id, ban_type, notes, stats, expires_on, created_on, player_name)| {
-            serde_json::json!({
-                "id": id,
-                "ban_type": ban_type,
-                "notes": notes,
-                "stats": stats,
-                "expires_on": expires_on,
-                "created_on": created_on,
-                "player_name": player_name,
-                "steamid64": steamid64.clone(),
-            })
-        }).collect();
-        return Ok(Json(serde_json::json!(ban_items)));
-    }
-
-    // 本地无数据 → 检查缓存，再回退到第三方 API
-    {
-        let cache = ctx.global_bans_cache.read().await;
-        if let Some((data, timestamp)) = cache.get(&steamid64) {
-            if chrono::Utc::now() - *timestamp < chrono::Duration::minutes(30) {
-                return Ok(Json(data.clone()));
-            }
-        }
-    }
-
-let data = fetch_global_bans_from_api(&steamid64).await.map_err(|e| {
-        tracing::error!(error = ?e, steamid64 = %steamid64, "查询全球封禁失败");
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "查询失败" })),
-        )
-    })?;
-
-    // 写入缓存
-    {
-        let mut cache = ctx.global_bans_cache.write().await;
-        cache.insert(steamid64.clone(), (data.clone(), chrono::Utc::now()));
-        // 清理过期缓存
-        let now = chrono::Utc::now();
-        cache.retain(|_, (_, ts)| now - *ts < chrono::Duration::minutes(30));
-        // 硬上限：超出时移除最旧的条目
-        if cache.len() > 500 {
-            let mut entries: Vec<_> = cache
-                .keys()
-                .cloned()
-                .zip(cache.values().map(|(_, ts)| *ts))
-                .collect();
-            entries.sort_by_key(|(_, ts)| *ts);
-            let to_remove = cache.len() - 400;
-            let keys_to_remove: Vec<_> = entries
-                .into_iter()
-                .take(to_remove)
-                .map(|(k, _)| k)
-                .collect();
-            for key in keys_to_remove {
-                cache.remove(&key);
-            }
-        }
-    }
-
-    Ok(Json(data))
+    Ok(Json(serde_json::json!(bans)))
 }
 
-/// 批量查询全球封禁记录（减少请求次数）
+/// 批量查询全球封禁记录（从本地同步表读取，减少 KZTimer 请求）
 pub(crate) async fn get_global_bans_batch(
     State(ctx): State<AppCtx>,
     Json(body): Json<GlobalBansBatchBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    // 限制单次最多查询 30 个 ID，并去掉空值/重复值，避免浪费外部请求。
     let mut seen = HashSet::new();
     let steamids: Vec<String> = body
         .steamids
@@ -291,102 +232,16 @@ pub(crate) async fn get_global_bans_batch(
         .filter(|steamid| !steamid.is_empty() && seen.insert(steamid.clone()))
         .take(30)
         .collect();
-    let mut results: HashMap<String, serde_json::Value> = HashMap::new();
-    let mut to_fetch: Vec<String> = Vec::new();
 
-    // 优先从本地 global_bans 表查询（全球封禁同步功能维护的数据）
-    for steamid64 in &steamids {
-        #[allow(clippy::type_complexity)]
-        let local_bans: Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
-            r#"SELECT kzt_ban_id, ban_type, notes, stats, expires_on, created_on, player_name
-               FROM global_bans WHERE steam_id64 = $1 AND is_expired = false"#
-        ).bind(steamid64).fetch_all(&ctx.db.pool).await.unwrap_or_default();
-
-        if !local_bans.is_empty() {
-            // 本地有数据 → 直接使用，不请求第三方 API
-            let ban_items: Vec<serde_json::Value> = local_bans.into_iter().map(|(id, ban_type, notes, stats, expires_on, created_on, player_name)| {
-                serde_json::json!({
-                    "id": id,
-                    "ban_type": ban_type,
-                    "notes": notes,
-                    "stats": stats,
-                    "expires_on": expires_on,
-                    "created_on": created_on,
-                    "player_name": player_name,
-                    "steamid64": steamid64,
-                })
-            }).collect();
-            results.insert(steamid64.clone(), serde_json::json!(ban_items));
-            continue;
-        }
-
-        // 本地无数据 → 检查缓存，再回退到第三方 API
-        {
-            let cache = ctx.global_bans_cache.read().await;
-            if let Some((data, timestamp)) = cache.get(steamid64) {
-                if chrono::Utc::now() - *timestamp < chrono::Duration::minutes(30) {
-                    results.insert(steamid64.clone(), data.clone());
-                    continue;
-                }
-            }
-        }
-        to_fetch.push(steamid64.clone());
-    }
-
-    // 批量请求（限制并发数，最多同时 10 个 SteamID 查询）
-    if !to_fetch.is_empty() {
-        let fetch_ids = to_fetch;
-        let fetch_ids_for_timeout = fetch_ids.clone();
-        let results_vec = tokio::time::timeout(std::time::Duration::from_secs(15), async {
-            let stream = futures::stream::iter(fetch_ids.into_iter().map(|id| async move {
-                let result = fetch_global_bans_from_api(&id).await;
-                (id, result)
-            }));
-            stream.buffer_unordered(10).collect::<Vec<_>>().await
-        })
+    let results = global_ban_service::public_global_bans_batch(&ctx.db, &steamids)
         .await
-        .unwrap_or_else(|_| {
-            tracing::warn!("global bans batch query timed out after 15s");
-            fetch_ids_for_timeout
-                .into_iter()
-                .map(|s| (s, Err(())))
-                .collect()
-        });
-
-        // 写入缓存和结果
-        let mut cache = ctx.global_bans_cache.write().await;
-        for (steamid64, result) in results_vec {
-            match result {
-                Ok(data) => {
-                    results.insert(steamid64.clone(), data.clone());
-                    cache.insert(steamid64, (data, chrono::Utc::now()));
-                }
-                Err(_) => {
-                    results.insert(steamid64, serde_json::json!({ "data": [], "count": 0 }));
-                }
-            }
-        }
-        // 清理过期和超量缓存
-        let now = chrono::Utc::now();
-        cache.retain(|_, (_, ts)| now - *ts < chrono::Duration::minutes(30));
-        if cache.len() > 500 {
-            let mut entries: Vec<_> = cache
-                .keys()
-                .cloned()
-                .zip(cache.values().map(|(_, ts)| *ts))
-                .collect();
-            entries.sort_by_key(|(_, ts)| *ts);
-            let to_remove = cache.len() - 400;
-            let keys_to_remove: Vec<_> = entries
-                .into_iter()
-                .take(to_remove)
-                .map(|(k, _)| k)
-                .collect();
-            for key in keys_to_remove {
-                cache.remove(&key);
-            }
-        }
-    }
+        .map_err(|e| {
+            tracing::error!(error = %e, "批量查询本地全球封禁失败");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "查询失败" })),
+            )
+        })?;
 
     Ok(Json(serde_json::json!({ "results": results })))
 }
@@ -475,50 +330,6 @@ pub(crate) async fn query_appeal_status(
     })))
 }
 
-async fn fetch_global_bans_json(url: String, timeout: Duration) -> Option<serde_json::Value> {
-    use crate::http_client;
-
-    tokio::time::timeout(timeout, async {
-        let response = http_client::http_client().get(&url).send().await.ok()?;
-        if !response.status().is_success() {
-            return None;
-        }
-        response.json::<serde_json::Value>().await.ok()
-    })
-    .await
-    .ok()
-    .flatten()
-}
-
-/// 从第三方 API 获取封禁记录
-async fn fetch_global_bans_from_api(steamid64: &str) -> Result<serde_json::Value, ()> {
-    let timeout = Duration::from_secs(5);
-
-    // 主 API（KZTimerGlobal）
-    let primary_url = format!(
-        "https://kztimerglobal.com/api/v2.0/bans?steamid64={}&limit=30&offset=0",
-        steamid64
-    );
-
-    // 备用 API（GOKZ.TOP）
-    let fallback_url = format!(
-        "https://api.gokz.top/api/v1/bans?steamid64={}&is_expired=false&limit=100",
-        steamid64
-    );
-
-    // 主备接口并发请求，避免主 API 慢或超时时再串行等待备用 API。
-    let (primary, fallback) = tokio::join!(
-        fetch_global_bans_json(primary_url, timeout),
-        fetch_global_bans_json(fallback_url, timeout)
-    );
-
-    if let Some(data) = primary.or(fallback) {
-        return Ok(data);
-    }
-
-    Err(())
-}
-
 // ---------------------------------------------------------------------------
 // gokz.top 玩家统计代理（前端无法直接访问 gokz API，需要后端代理绕过 CORS）
 // 使用统一的 GokzCacheManager 进行缓存管理（PostgreSQL + 内存二级缓存）
@@ -534,10 +345,7 @@ pub(crate) struct GokzPlayerStatsQuery {
 }
 
 /// 从 gokz.top 获取单个 scope 的排行榜数据
-async fn fetch_gokz_scope(
-    steamid64: &str,
-    scope: &str,
-) -> Option<GokzModeStats> {
+async fn fetch_gokz_scope(steamid64: &str, scope: &str) -> Option<GokzModeStats> {
     use crate::http_client;
 
     let url = format!(
@@ -583,7 +391,10 @@ pub(crate) async fn get_gokz_player_stats(
             _ => &None,
         };
         let mut obj = serde_json::Map::new();
-        obj.insert(params.scope.to_uppercase(), serde_json::to_value(mode_stats).unwrap_or(serde_json::Value::Null));
+        obj.insert(
+            params.scope.to_uppercase(),
+            serde_json::to_value(mode_stats).unwrap_or(serde_json::Value::Null),
+        );
         return Ok(Json(serde_json::Value::Object(obj)));
     }
 
@@ -604,7 +415,10 @@ pub(crate) async fn get_gokz_player_stats(
     }
 
     let mut obj = serde_json::Map::new();
-    obj.insert(params.scope.to_uppercase(), serde_json::to_value(&data).unwrap_or(serde_json::Value::Null));
+    obj.insert(
+        params.scope.to_uppercase(),
+        serde_json::to_value(&data).unwrap_or(serde_json::Value::Null),
+    );
     Ok(Json(serde_json::Value::Object(obj)))
 }
 
@@ -682,7 +496,8 @@ pub(crate) async fn preload_gokz_stats(
     let cached = ctx.gokz_cache.get_batch(&body.steamid64s).await;
 
     // 对于未缓存的玩家，并发请求并写入缓存
-    let uncached: Vec<String> = body.steamid64s
+    let uncached: Vec<String> = body
+        .steamid64s
         .iter()
         .filter(|s| !cached.contains_key(*s))
         .cloned()
@@ -725,12 +540,15 @@ pub(crate) async fn preload_gokz_stats(
     let final_cached = ctx.gokz_cache.get_batch(&body.steamid64s).await;
     let mut response = serde_json::Map::new();
     for (steamid64, stats) in final_cached {
-        response.insert(steamid64, serde_json::json!({
-            "KZT": stats.kzt,
-            "SKZ": stats.skz,
-            "VNL": stats.vnl,
-            "OVR": stats.ovr,
-        }));
+        response.insert(
+            steamid64,
+            serde_json::json!({
+                "KZT": stats.kzt,
+                "SKZ": stats.skz,
+                "VNL": stats.vnl,
+                "OVR": stats.ovr,
+            }),
+        );
     }
 
     Ok(Json(serde_json::Value::Object(response)))

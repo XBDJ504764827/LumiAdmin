@@ -84,43 +84,80 @@ pub struct LiveBanListResult {
     pub total: i64,
     /// 当前页是否满（用于判断是否有下一页）
     pub has_more: bool,
-    /// 数据来源：live=KZTimer 实时 API，memory_cache=进程内短缓存，local_cache=本地同步表
+    /// 数据来源：local_cache=本地同步表
     pub source: String,
     /// 当使用降级数据时给前端展示的提示
     pub warning: Option<String>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct LocalGlobalBanRecord {
+    pub kzt_ban_id: i64,
+    pub steam_id64: String,
+    pub player_name: Option<String>,
+    pub steam_id: Option<String>,
+    pub ban_type: String,
+    pub notes: Option<String>,
+    pub stats: Option<String>,
+    pub server_id: Option<i64>,
+    pub expires_on: Option<String>,
+    pub created_on: Option<String>,
+    pub updated_on: Option<String>,
+    pub local_ban_id: Option<Uuid>,
+    pub manual_unbanned: bool,
+}
+
+impl LocalGlobalBanRecord {
+    fn into_live_item(self) -> LiveBanItem {
+        LiveBanItem {
+            ban: KZTBan {
+                id: self.kzt_ban_id,
+                ban_type: self.ban_type,
+                expires_on: self.expires_on,
+                steamid64: self.steam_id64,
+                player_name: self.player_name,
+                steam_id: self.steam_id,
+                notes: self.notes,
+                stats: self.stats,
+                server_id: self.server_id,
+                created_on: self.created_on,
+                updated_on: self.updated_on,
+            },
+            local_ban_id: self.local_ban_id,
+            manual_unbanned: self.manual_unbanned,
+        }
+    }
+
+    fn to_public_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "id": self.kzt_ban_id,
+            "ban_type": self.ban_type,
+            "notes": self.notes,
+            "stats": self.stats,
+            "expires_on": self.expires_on,
+            "created_on": self.created_on,
+            "updated_on": self.updated_on,
+            "player_name": self.player_name,
+            "steamid64": self.steam_id64,
+            "steam_id": self.steam_id,
+            "server_id": self.server_id,
+        })
+    }
 }
 
 // =====================================================
 // HTTP 请求（带超时 + 重试）
 // =====================================================
 
-#[derive(Clone)]
-struct KztListCacheEntry {
-    bans: Vec<KZTBan>,
-    stored_at: Instant,
-}
-
 static KZT_RATE_LIMIT_UNTIL: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
-static KZT_LIST_CACHE: OnceLock<Mutex<HashMap<String, KztListCacheEntry>>> = OnceLock::new();
 static GLOBAL_BAN_SYNC_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 fn kzt_rate_limit_until() -> &'static Mutex<Option<Instant>> {
     KZT_RATE_LIMIT_UNTIL.get_or_init(|| Mutex::new(None))
 }
 
-fn kzt_list_cache() -> &'static Mutex<HashMap<String, KztListCacheEntry>> {
-    KZT_LIST_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
 fn global_ban_sync_lock() -> &'static tokio::sync::Mutex<()> {
     GLOBAL_BAN_SYNC_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
-}
-
-fn kzt_cache_key(offset: i64, limit: i64, expired_filter: Option<bool>) -> String {
-    let expired = expired_filter
-        .map(|v| v.to_string())
-        .unwrap_or_else(|| "all".to_string());
-    format!("{expired}:{limit}:{offset}")
 }
 
 fn kzt_cooldown_remaining() -> Option<Duration> {
@@ -160,45 +197,6 @@ fn retry_after_duration(headers: &reqwest::header::HeaderMap) -> Duration {
         .unwrap_or_else(|| Duration::from_secs(60))
 }
 
-fn remember_kzt_bans(offset: i64, limit: i64, expired_filter: Option<bool>, bans: &[KZTBan]) {
-    let Ok(mut cache) = kzt_list_cache().lock() else {
-        return;
-    };
-    let now = Instant::now();
-    cache.retain(|_, entry| now.duration_since(entry.stored_at) < Duration::from_secs(15 * 60));
-    cache.insert(
-        kzt_cache_key(offset, limit, expired_filter),
-        KztListCacheEntry {
-            bans: bans.to_vec(),
-            stored_at: now,
-        },
-    );
-    if cache.len() > 100 {
-        let keys: Vec<String> = cache
-            .iter()
-            .filter(|(_, entry)| now.duration_since(entry.stored_at) >= Duration::from_secs(5 * 60))
-            .map(|(key, _)| key.clone())
-            .collect();
-        for key in keys {
-            cache.remove(&key);
-        }
-    }
-}
-
-fn cached_kzt_bans(
-    offset: i64,
-    limit: i64,
-    expired_filter: Option<bool>,
-    max_age: Duration,
-) -> Option<Vec<KZTBan>> {
-    let cache = kzt_list_cache().lock().ok()?;
-    let entry = cache.get(&kzt_cache_key(offset, limit, expired_filter))?;
-    if Instant::now().duration_since(entry.stored_at) <= max_age {
-        return Some(entry.bans.clone());
-    }
-    None
-}
-
 /// 从 KZTimer API 拉取封禁列表（带超时和重试）
 /// `expired_filter`: None=全部, Some(true)=仅过期, Some(false)=仅活跃
 async fn fetch_kzt_bans(
@@ -228,15 +226,13 @@ async fn fetch_kzt_bans(
     let mut last_err: Option<String> = None;
     for attempt in 0..3u8 {
         let req_result =
-            tokio::time::timeout(std::time::Duration::from_secs(20), client.get(&url).send())
-                .await;
+            tokio::time::timeout(std::time::Duration::from_secs(20), client.get(&url).send()).await;
 
         match req_result {
             Ok(Ok(resp)) => {
                 let status = resp.status();
                 if status.is_success() {
                     let bans: Vec<KZTBan> = resp.json().await?;
-                    remember_kzt_bans(offset, limit, expired_filter, &bans);
                     return Ok(bans);
                 }
                 if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
@@ -272,101 +268,18 @@ async fn fetch_kzt_bans(
 }
 
 // =====================================================
-// 实时查询（前端展示用）：直接从 KZTimer API 拉取
+// 本地同步表查询（前端展示用）
 // =====================================================
 
-/// 实时获取 KZTimer 活跃封禁列表并合并本地封禁状态（前端展示用）
-/// 每页 page_size 条，支持翻页
+/// 获取本地同步的 KZTimer 活跃封禁列表并合并本地封禁状态（前端展示用）。
+/// KZTimer 实时请求只由后台同步/手动同步触发，避免页面访问打爆外部限额。
 pub async fn fetch_live_global_bans(
     db: &Database,
     page: i64,
     page_size: i64,
 ) -> anyhow::Result<LiveBanListResult> {
     let offset = (page - 1) * page_size;
-    let bans_result = fetch_kzt_bans(offset, page_size, Some(false)).await;
-    let (bans, source, warning) = match bans_result {
-        Ok(bans) => (bans, "live".to_string(), None),
-        Err(error) => {
-            tracing::warn!(%error, page, page_size, "KZTimer 全球封禁实时列表不可用，尝试使用缓存");
-            if let Some(cached) =
-                cached_kzt_bans(offset, page_size, Some(false), Duration::from_secs(15 * 60))
-            {
-                (
-                    cached,
-                    "memory_cache".to_string(),
-                    Some("KZTimer API 暂不可用，正在显示最近一次成功获取的数据。".to_string()),
-                )
-            } else {
-                return fetch_local_global_bans(db, page, page_size, Some(error.to_string())).await;
-            }
-        }
-    };
-    let has_more = bans.len() as i64 == page_size;
-
-    // 批量查询本地状态，避免 N+1
-    let kzt_ids: Vec<i64> = bans.iter().map(|b| b.id).collect();
-    let local_states: std::collections::HashMap<i64, (Option<Uuid>, bool)> = if kzt_ids.is_empty() {
-        std::collections::HashMap::new()
-    } else {
-        let rows: Vec<(i64, Option<Uuid>, bool)> = sqlx::query_as(
-            "SELECT kzt_ban_id::BIGINT, local_ban_id, manual_unbanned FROM global_bans WHERE kzt_ban_id = ANY($1)",
-        )
-        .bind(&kzt_ids)
-        .fetch_all(&db.pool)
-        .await
-        .unwrap_or_default();
-
-        rows.into_iter()
-            .map(|(kid, lid, mu)| (kid, (lid, mu)))
-            .collect()
-    };
-
-    let items: Vec<LiveBanItem> = bans
-        .into_iter()
-        .map(|ban| {
-            let (local_ban_id, manual_unbanned) =
-                local_states.get(&ban.id).copied().unwrap_or((None, false));
-            LiveBanItem {
-                ban,
-                local_ban_id,
-                manual_unbanned,
-            }
-        })
-        .collect();
-
-    Ok(LiveBanListResult {
-        items,
-        page,
-        page_size,
-        total: 0, // KZTimer API 不返回 total，前端通过 has_more 翻页
-        has_more,
-        source,
-        warning,
-    })
-}
-
-async fn fetch_local_global_bans(
-    db: &Database,
-    page: i64,
-    page_size: i64,
-    cause: Option<String>,
-) -> anyhow::Result<LiveBanListResult> {
-    let offset = (page - 1) * page_size;
-    #[allow(clippy::type_complexity)]
-    let rows: Vec<(
-        i64,
-        String,
-        Option<String>,
-        Option<String>,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<i64>,
-        Option<String>,
-        Option<String>,
-        Option<Uuid>,
-        bool,
-    )> = sqlx::query_as(
+    let rows: Vec<LocalGlobalBanRecord> = sqlx::query_as(
         r#"SELECT
               kzt_ban_id::BIGINT,
               steam_id64,
@@ -378,6 +291,7 @@ async fn fetch_local_global_bans(
               server_id::BIGINT,
               expires_on,
               created_on,
+              updated_on,
               local_ban_id,
               manual_unbanned
            FROM global_bans
@@ -394,49 +308,8 @@ async fn fetch_local_global_bans(
     let items: Vec<LiveBanItem> = rows
         .into_iter()
         .take(page_size as usize)
-        .map(
-            |(
-                kzt_ban_id,
-                steamid64,
-                player_name,
-                steam_id,
-                ban_type,
-                notes,
-                stats,
-                server_id,
-                expires_on,
-                created_on,
-                local_ban_id,
-                manual_unbanned,
-            )| LiveBanItem {
-                ban: KZTBan {
-                    id: kzt_ban_id,
-                    ban_type,
-                    expires_on,
-                    steamid64,
-                    player_name,
-                    steam_id,
-                    notes,
-                    stats,
-                    server_id,
-                    created_on,
-                    updated_on: None,
-                },
-                local_ban_id,
-                manual_unbanned,
-            },
-        )
+        .map(LocalGlobalBanRecord::into_live_item)
         .collect();
-
-    let warning = match cause {
-        Some(error) if !items.is_empty() => Some(format!(
-            "KZTimer API 暂不可用，正在显示本地同步缓存数据，可能不是最新。原因：{error}"
-        )),
-        Some(error) => Some(format!(
-            "KZTimer API 暂不可用，且本地暂无同步缓存数据。原因：{error}"
-        )),
-        None => None,
-    };
 
     Ok(LiveBanListResult {
         items,
@@ -445,17 +318,16 @@ async fn fetch_local_global_bans(
         total: 0,
         has_more,
         source: "local_cache".to_string(),
-        warning,
+        warning: None,
     })
 }
 
-/// 按 SteamID 搜索玩家全球封禁
-/// 先查本地 global_bans 表（缓存），再查 KZTimer API（实时）
-/// 返回结果合并，并标记数据来源
+/// 按 SteamID 搜索玩家全球封禁。
+/// 查询来源为后台同步维护的 global_bans 表，不在交互请求中直连 KZTimer。
 #[derive(Debug, Serialize)]
 pub struct PlayerBanSearchResult {
     pub items: Vec<LiveBanItem>,
-    /// 数据来源：cached=本地缓存, live=实时API, both=两者都有
+    /// 数据来源：local_cache=本地同步表, none=未命中
     pub source: String,
 }
 
@@ -467,101 +339,86 @@ pub async fn search_player_bans(
     let identity = resolver.resolve(steam_input).await?;
     let steamid64 = &identity.steamid64;
 
-    let mut items: Vec<LiveBanItem> = Vec::new();
-    let source: String;
-
-    // 1) 先查本地 global_bans 表（缓存，快速返回）
-    #[allow(clippy::type_complexity)]
-    let local_rows: Vec<(i32, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<i32>, Option<Uuid>, bool)> = sqlx::query_as(
-        r#"SELECT kzt_ban_id, ban_type, notes, stats, expires_on, created_on, updated_on, server_id, local_ban_id, manual_unbanned
-           FROM global_bans WHERE steam_id64 = $1 ORDER BY created_on DESC LIMIT 100"#,
-    )
-    .bind(steamid64)
-    .fetch_all(&db.pool)
-    .await?;
-
-    // 2) 查 KZTimer API 获取最新数据。若列表请求刚触发 429 冷却，则跳过实时查询。
-    let kzt_bans: Vec<KZTBan> = if kzt_cooldown_remaining().is_some() {
-        Vec::new()
+    let local_rows = load_local_global_bans_for_steamids(db, &[steamid64.clone()]).await?;
+    let items: Vec<LiveBanItem> = local_rows
+        .into_iter()
+        .map(LocalGlobalBanRecord::into_live_item)
+        .collect();
+    let source = if items.is_empty() {
+        "none".to_string()
     } else {
-        let kzt_url = format!(
-            "https://kztimerglobal.com/api/v2.0/bans?steamid64={}&limit=100&offset=0",
-            steamid64
-        );
-        let kzt_result = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            crate::http_client::http_client().get(&kzt_url).send(),
-        )
-        .await;
-
-        match kzt_result {
-            Ok(Ok(resp)) if resp.status().is_success() => resp.json().await.unwrap_or_default(),
-            Ok(Ok(resp)) if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS => {
-                let cooldown = retry_after_duration(resp.headers());
-                set_kzt_cooldown(cooldown, "429 Too Many Requests");
-                Vec::new()
-            }
-            Ok(Ok(resp)) => {
-                tracing::warn!(
-                    status = %resp.status(),
-                    steamid64,
-                    "KZTimer 玩家封禁搜索返回非成功状态"
-                );
-                Vec::new()
-            }
-            Ok(Err(e)) => {
-                tracing::warn!(error = %e, steamid64, "KZTimer 玩家封禁搜索失败");
-                Vec::new()
-            }
-            Err(_) => {
-                tracing::warn!(steamid64, "KZTimer 玩家封禁搜索超时");
-                Vec::new()
-            }
-        }
+        "local_cache".to_string()
     };
 
-    if !kzt_bans.is_empty() {
-        // 有实时数据 → 以 KZTimer API 为主，合并本地状态
-        source = if !local_rows.is_empty() { "both" } else { "live" }.to_string();
-        for ban in &kzt_bans {
-            let local = local_rows.iter().find(|(kzt_id, _, _, _, _, _, _, _, _, _)| *kzt_id as i64 == ban.id);
-            let (local_ban_id, manual_unbanned) = match local {
-                Some((_, _, _, _, _, _, _, _, lid, mu)) => (*lid, *mu),
-                None => (None, false),
-            };
-            items.push(LiveBanItem {
-                ban: ban.clone(),
-                local_ban_id,
-                manual_unbanned,
-            });
-        }
-    } else if !local_rows.is_empty() {
-        // KZTimer API 超时或失败 → 使用本地缓存
-        source = "cached".to_string();
-        for (kzt_ban_id, ban_type, notes, stats, expires_on, created_on, updated_on, server_id, local_ban_id, manual_unbanned) in &local_rows {
-            items.push(LiveBanItem {
-                ban: KZTBan {
-                    id: *kzt_ban_id as i64,
-                    ban_type: ban_type.clone(),
-                    notes: notes.clone(),
-                    stats: stats.clone(),
-                    steamid64: steamid64.clone(),
-                    player_name: None,
-                    steam_id: None,
-                    expires_on: expires_on.clone(),
-                    created_on: created_on.clone(),
-                    updated_on: updated_on.clone(),
-                    server_id: server_id.map(|v| v as i64),
-                },
-                local_ban_id: *local_ban_id,
-                manual_unbanned: *manual_unbanned,
-            });
-        }
-    } else {
-        source = "none".to_string();
+    Ok(PlayerBanSearchResult { items, source })
+}
+
+async fn load_local_global_bans_for_steamids(
+    db: &Database,
+    steamids: &[String],
+) -> anyhow::Result<Vec<LocalGlobalBanRecord>> {
+    if steamids.is_empty() {
+        return Ok(Vec::new());
     }
 
-    Ok(PlayerBanSearchResult { items, source })
+    sqlx::query_as(
+        r#"SELECT
+              kzt_ban_id::BIGINT,
+              steam_id64,
+              player_name,
+              steam_id,
+              ban_type,
+              notes,
+              stats,
+              server_id::BIGINT,
+              expires_on,
+              created_on,
+              updated_on,
+              local_ban_id,
+              manual_unbanned
+           FROM global_bans
+           WHERE steam_id64 = ANY($1) AND is_expired = false
+           ORDER BY steam_id64 ASC, created_on DESC NULLS LAST, synced_at DESC
+           LIMIT 3000"#,
+    )
+    .bind(steamids)
+    .fetch_all(&db.pool)
+    .await
+    .map_err(Into::into)
+}
+
+pub async fn public_global_bans_for_steamid(
+    db: &Database,
+    steamid64: &str,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let rows = load_local_global_bans_for_steamids(db, &[steamid64.trim().to_string()]).await?;
+    Ok(rows
+        .iter()
+        .map(LocalGlobalBanRecord::to_public_json)
+        .collect())
+}
+
+pub async fn public_global_bans_batch(
+    db: &Database,
+    steamids: &[String],
+) -> anyhow::Result<HashMap<String, serde_json::Value>> {
+    let rows = load_local_global_bans_for_steamids(db, steamids).await?;
+    let mut grouped: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+    for row in rows {
+        grouped
+            .entry(row.steam_id64.clone())
+            .or_default()
+            .push(row.to_public_json());
+    }
+
+    let results = steamids
+        .iter()
+        .map(|steamid| {
+            let bans = grouped.remove(steamid).unwrap_or_default();
+            (steamid.clone(), serde_json::json!(bans))
+        })
+        .collect();
+    Ok(results)
 }
 
 // =====================================================
@@ -587,13 +444,12 @@ async fn sync_global_bans_locked(db: &Database) -> anyhow::Result<SyncResult> {
     let mut result = SyncResult::default();
 
     // 0) 读取同步起始时间（部署这版后端的时间）
-    let sync_since: DateTime<Utc> = sqlx::query_as(
-        "SELECT sync_since FROM global_ban_config WHERE id = true",
-    )
-    .fetch_one(&db.pool)
-    .await
-    .map(|(v,): (DateTime<Utc>,)| v)
-    .unwrap_or_else(|_| Utc::now());
+    let sync_since: DateTime<Utc> =
+        sqlx::query_as("SELECT sync_since FROM global_ban_config WHERE id = true")
+            .fetch_one(&db.pool)
+            .await
+            .map(|(v,): (DateTime<Utc>,)| v)
+            .unwrap_or_else(|_| Utc::now());
 
     // 1) 拉取 KZTimer 所有活跃封禁（分页）
     let mut all_bans: Vec<KZTBan> = Vec::new();
@@ -627,20 +483,18 @@ async fn sync_global_bans_locked(db: &Database) -> anyhow::Result<SyncResult> {
     result.total_fetched = all_bans.len() as i64;
 
     // 2) 收集 API 返回的所有 kzt_ban_id
-    let api_ban_ids: std::collections::HashSet<i64> =
-        all_bans.iter().map(|b| b.id).collect();
+    let api_ban_ids: std::collections::HashSet<i64> = all_bans.iter().map(|b| b.id).collect();
 
     // 3) 批量查询本地已存在的 kzt_ban_id（避免逐条查询）
     let existing_ids: std::collections::HashSet<i64> = if api_ban_ids.is_empty() {
         std::collections::HashSet::new()
     } else {
         let id_vec: Vec<i64> = api_ban_ids.iter().copied().collect();
-        let rows: Vec<(i64,)> = sqlx::query_as(
-            "SELECT kzt_ban_id::BIGINT FROM global_bans WHERE kzt_ban_id = ANY($1)",
-        )
-        .bind(&id_vec)
-        .fetch_all(&db.pool)
-        .await?;
+        let rows: Vec<(i64,)> =
+            sqlx::query_as("SELECT kzt_ban_id::BIGINT FROM global_bans WHERE kzt_ban_id = ANY($1)")
+                .bind(&id_vec)
+                .fetch_all(&db.pool)
+                .await?;
         rows.into_iter().map(|r| r.0).collect()
     };
     // 4) 查询已被管理员解封的 kzt_ban_id（per-ban 标记）
@@ -697,9 +551,7 @@ async fn sync_global_bans_locked(db: &Database) -> anyhow::Result<SyncResult> {
             )
             .await
             {
-                Ok(Some(local_id)) => {
-                    Some(local_id)
-                }
+                Ok(Some(local_id)) => Some(local_id),
                 Ok(None) => None,
                 Err(e) => {
                     tracing::warn!(
@@ -725,27 +577,40 @@ async fn sync_global_bans_locked(db: &Database) -> anyhow::Result<SyncResult> {
 
     // 批量 INSERT global_bans（每批 500 条）
     for chunk in new_bans.chunks(500) {
-        if chunk.is_empty() { continue; }
+        if chunk.is_empty() {
+            continue;
+        }
         let ids: Vec<Uuid> = (0..chunk.len()).map(|_| Uuid::new_v4()).collect();
         let kzt_ids: Vec<i64> = chunk.iter().map(|b| b.id).collect();
         let steam_id64s: Vec<&str> = chunk.iter().map(|b| b.steamid64.as_str()).collect();
-        let player_names: Vec<Option<&str>> = chunk.iter().map(|b| b.player_name.as_deref()).collect();
+        let player_names: Vec<Option<&str>> =
+            chunk.iter().map(|b| b.player_name.as_deref()).collect();
         let steam_ids: Vec<Option<&str>> = chunk.iter().map(|b| b.steam_id.as_deref()).collect();
         let ban_types: Vec<&str> = chunk.iter().map(|b| b.ban_type.as_str()).collect();
         let notes_vec: Vec<Option<&str>> = chunk.iter().map(|b| b.notes.as_deref()).collect();
         let stats_vec: Vec<Option<&str>> = chunk.iter().map(|b| b.stats.as_deref()).collect();
         let server_ids: Vec<Option<i64>> = chunk.iter().map(|b| b.server_id).collect();
-        let expires_vec: Vec<Option<&str>> = chunk.iter().map(|b| b.expires_on.as_deref()).collect();
-        let created_vec: Vec<Option<&str>> = chunk.iter().map(|b| b.created_on.as_deref()).collect();
-        let updated_vec: Vec<Option<&str>> = chunk.iter().map(|b| b.updated_on.as_deref()).collect();
-        let local_ids: Vec<Option<Uuid>> = chunk.iter().map(|b| local_id_map.get(&b.id).copied().unwrap_or(None)).collect();
-        let manual_flags: Vec<bool> = chunk.iter().map(|b| {
-            unbanned_kzt_ids.contains(&b.id)
-                || b.created_on.as_deref()
-                    .and_then(|c| parse_kzt_datetime(c).ok())
-                    .map(|dt| dt < sync_since)
-                    .unwrap_or(true)
-        }).collect();
+        let expires_vec: Vec<Option<&str>> =
+            chunk.iter().map(|b| b.expires_on.as_deref()).collect();
+        let created_vec: Vec<Option<&str>> =
+            chunk.iter().map(|b| b.created_on.as_deref()).collect();
+        let updated_vec: Vec<Option<&str>> =
+            chunk.iter().map(|b| b.updated_on.as_deref()).collect();
+        let local_ids: Vec<Option<Uuid>> = chunk
+            .iter()
+            .map(|b| local_id_map.get(&b.id).copied().unwrap_or(None))
+            .collect();
+        let manual_flags: Vec<bool> = chunk
+            .iter()
+            .map(|b| {
+                unbanned_kzt_ids.contains(&b.id)
+                    || b.created_on
+                        .as_deref()
+                        .and_then(|c| parse_kzt_datetime(c).ok())
+                        .map(|dt| dt < sync_since)
+                        .unwrap_or(true)
+            })
+            .collect();
 
         let insert_result = sqlx::query(
             r#"INSERT INTO global_bans (
@@ -790,14 +655,19 @@ async fn sync_global_bans_locked(db: &Database) -> anyhow::Result<SyncResult> {
         .collect();
 
     for chunk in existing_bans.chunks(500) {
-        if chunk.is_empty() { continue; }
+        if chunk.is_empty() {
+            continue;
+        }
         let kzt_ids: Vec<i64> = chunk.iter().map(|b| b.id).collect();
-        let player_names: Vec<Option<&str>> = chunk.iter().map(|b| b.player_name.as_deref()).collect();
+        let player_names: Vec<Option<&str>> =
+            chunk.iter().map(|b| b.player_name.as_deref()).collect();
         let ban_types: Vec<&str> = chunk.iter().map(|b| b.ban_type.as_str()).collect();
         let notes_vec: Vec<Option<&str>> = chunk.iter().map(|b| b.notes.as_deref()).collect();
         let stats_vec: Vec<Option<&str>> = chunk.iter().map(|b| b.stats.as_deref()).collect();
-        let expires_vec: Vec<Option<&str>> = chunk.iter().map(|b| b.expires_on.as_deref()).collect();
-        let updated_vec: Vec<Option<&str>> = chunk.iter().map(|b| b.updated_on.as_deref()).collect();
+        let expires_vec: Vec<Option<&str>> =
+            chunk.iter().map(|b| b.expires_on.as_deref()).collect();
+        let updated_vec: Vec<Option<&str>> =
+            chunk.iter().map(|b| b.updated_on.as_deref()).collect();
 
         let update_result = sqlx::query(
             r#"UPDATE global_bans gb
@@ -864,9 +734,11 @@ async fn ensure_missing_local_bans(
 
     let local_states: std::collections::HashMap<i64, (Option<Uuid>, bool, Option<String>)> = rows
         .into_iter()
-        .map(|(kzt_ban_id, local_ban_id, manual_unbanned, local_status)| {
-            (kzt_ban_id, (local_ban_id, manual_unbanned, local_status))
-        })
+        .map(
+            |(kzt_ban_id, local_ban_id, manual_unbanned, local_status)| {
+                (kzt_ban_id, (local_ban_id, manual_unbanned, local_status))
+            },
+        )
         .collect();
 
     for ban in all_bans {
@@ -878,7 +750,8 @@ async fn ensure_missing_local_bans(
             stats.skipped_manual_unbanned += 1;
             continue;
         }
-        let has_active_local_ban = local_ban_id.is_some() && local_status.as_deref() == Some("active");
+        let has_active_local_ban =
+            local_ban_id.is_some() && local_status.as_deref() == Some("active");
         if has_active_local_ban {
             stats.skipped_active_local_ban += 1;
             continue;
@@ -965,7 +838,10 @@ async fn create_local_ban(
     .fetch_optional(&db.pool)
     .await?;
     if existing_other.is_some() {
-        tracing::info!(steam_id = steam_id64, "玩家已有 LumiAdmin 活跃封禁，跳过创建全球封禁来源记录");
+        tracing::info!(
+            steam_id = steam_id64,
+            "玩家已有 LumiAdmin 活跃封禁，跳过创建全球封禁来源记录"
+        );
         return Ok(None);
     }
 
@@ -1008,7 +884,10 @@ fn build_ban_meta(
     let reason = format!(
         "[全球封禁] {}{}",
         ban_type,
-        notes.as_deref().map(|n| format!(" - {}", n)).unwrap_or_default()
+        notes
+            .as_deref()
+            .map(|n| format!(" - {}", n))
+            .unwrap_or_default()
     );
 
     // 解析封禁时间（失败则用 now()）
@@ -1020,9 +899,7 @@ fn build_ban_meta(
     let expires_dt = expires_on.and_then(|e| parse_kzt_datetime(e).ok());
 
     // 判断是否永久封禁
-    let is_permanent = expires_on
-        .map(|e| e.starts_with("9999"))
-        .unwrap_or(true); // expires_on 为空也视为永久
+    let is_permanent = expires_on.map(|e| e.starts_with("9999")).unwrap_or(true); // expires_on 为空也视为永久
 
     if is_permanent {
         // 永久封禁：duration_minutes=0，expires_at=NULL
@@ -1048,7 +925,11 @@ fn parse_kzt_datetime(s: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
         return Ok(dt.with_timezone(&Utc));
     }
     // 尝试 ISO 8601 无时区（如 2024-01-01T00:00:00）→ 按 UTC 解析
-    let s2 = if s.ends_with('Z') { s.to_string() } else { format!("{}Z", s) };
+    let s2 = if s.ends_with('Z') {
+        s.to_string()
+    } else {
+        format!("{}Z", s)
+    };
     DateTime::parse_from_rfc3339(&s2).map(|dt| dt.with_timezone(&Utc))
 }
 
@@ -1061,15 +942,13 @@ pub async fn manual_unban(
     operator: &str,
 ) -> anyhow::Result<()> {
     // 查找本地 global_bans 记录
-    let row: Option<(Option<Uuid>,)> = sqlx::query_as(
-        "SELECT local_ban_id FROM global_bans WHERE kzt_ban_id = $1",
-    )
-    .bind(kzt_ban_id)
-    .fetch_optional(&db.pool)
-    .await?;
+    let row: Option<(Option<Uuid>,)> =
+        sqlx::query_as("SELECT local_ban_id FROM global_bans WHERE kzt_ban_id = $1")
+            .bind(kzt_ban_id)
+            .fetch_optional(&db.pool)
+            .await?;
 
-    let (local_id,) =
-        row.ok_or_else(|| anyhow::anyhow!("全球封禁记录不存在"))?;
+    let (local_id,) = row.ok_or_else(|| anyhow::anyhow!("全球封禁记录不存在"))?;
 
     // 解除对应的 ban_records 记录
     if let Some(lid) = local_id {
@@ -1084,12 +963,10 @@ pub async fn manual_unban(
 
     // 仅标记这一条全球封禁记录为 manual_unbanned=true（per-ban 标记）
     // 后续该玩家如果被 KZTimer 发了新的封禁（不同 kzt_ban_id）仍会被同步到 LumiAdmin
-    sqlx::query(
-        "UPDATE global_bans SET manual_unbanned = true WHERE kzt_ban_id = $1",
-    )
-    .bind(kzt_ban_id)
-    .execute(&db.pool)
-    .await?;
+    sqlx::query("UPDATE global_bans SET manual_unbanned = true WHERE kzt_ban_id = $1")
+        .bind(kzt_ban_id)
+        .execute(&db.pool)
+        .await?;
 
     // 刷新封禁缓存
     ban_cache.refresh(db).await?;
@@ -1103,12 +980,10 @@ pub async fn mark_ban_unbanned_by_local_ban_id(
     db: &Database,
     local_ban_id: Uuid,
 ) -> anyhow::Result<()> {
-    sqlx::query(
-        "UPDATE global_bans SET manual_unbanned = true WHERE local_ban_id = $1",
-    )
-    .bind(local_ban_id)
-    .execute(&db.pool)
-    .await?;
+    sqlx::query("UPDATE global_bans SET manual_unbanned = true WHERE local_ban_id = $1")
+        .bind(local_ban_id)
+        .execute(&db.pool)
+        .await?;
     Ok(())
 }
 
@@ -1168,7 +1043,9 @@ fn push_filters(builder: &mut QueryBuilder<'_, Postgres>, params: &GlobalBanQuer
     let mut has_where = false;
     if let Some(v) = params.steam_id64.as_ref().filter(|v| !v.trim().is_empty()) {
         push_filter_prefix(builder, &mut has_where);
-        builder.push("steam_id64 = ").push_bind(v.trim().to_string());
+        builder
+            .push("steam_id64 = ")
+            .push_bind(v.trim().to_string());
     }
     if let Some(v) = params.ban_type.as_ref().filter(|v| !v.trim().is_empty()) {
         push_filter_prefix(builder, &mut has_where);
@@ -1178,7 +1055,12 @@ fn push_filters(builder: &mut QueryBuilder<'_, Postgres>, params: &GlobalBanQuer
         push_filter_prefix(builder, &mut has_where);
         builder.push("is_expired = ").push_bind(v);
     }
-    if let Some(v) = params.search.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+    if let Some(v) = params
+        .search
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
         let pattern = format!("%{}%", v.replace('%', "\\%").replace('_', "\\_"));
         push_filter_prefix(builder, &mut has_where);
         builder
@@ -1248,13 +1130,12 @@ pub fn start_global_ban_sync_loop(
         }
 
         // 读取并记录当前 sync_since
-        let current_since: Option<(DateTime<Utc>,)> = sqlx::query_as(
-            "SELECT sync_since FROM global_ban_config WHERE id = true",
-        )
-        .fetch_optional(&db.pool)
-        .await
-        .ok()
-        .flatten();
+        let current_since: Option<(DateTime<Utc>,)> =
+            sqlx::query_as("SELECT sync_since FROM global_ban_config WHERE id = true")
+                .fetch_optional(&db.pool)
+                .await
+                .ok()
+                .flatten();
         if let Some((since,)) = current_since {
             tracing::info!(%since, "全球封禁同步起始时间（只同步该时间之后新增的全球封禁）");
         }
@@ -1278,14 +1159,12 @@ pub fn start_global_ban_sync_loop(
         }
 
         // 启动时执行一次增量同步
-        match observability_service::observe_task(
-            "global_ban_sync",
-            sync_global_bans(&db),
-            |r| format!(
+        match observability_service::observe_task("global_ban_sync", sync_global_bans(&db), |r| {
+            format!(
                 "拉取 {} 条，新增 {}，过期 {}，重封 {}",
                 r.total_fetched, r.new_bans, r.expired, r.re_banned
-            ),
-        )
+            )
+        })
         .await
         {
             Ok(r) => {
@@ -1305,10 +1184,12 @@ pub fn start_global_ban_sync_loop(
             match observability_service::observe_task(
                 "global_ban_sync",
                 sync_global_bans(&db),
-                |r| format!(
-                    "拉取 {} 条，新增 {}，过期 {}，重封 {}",
-                    r.total_fetched, r.new_bans, r.expired, r.re_banned
-                ),
+                |r| {
+                    format!(
+                        "拉取 {} 条，新增 {}，过期 {}，重封 {}",
+                        r.total_fetched, r.new_bans, r.expired, r.re_banned
+                    )
+                },
             )
             .await
             {

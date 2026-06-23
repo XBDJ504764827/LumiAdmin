@@ -26,11 +26,8 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
-use chrono::Utc;
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::{
@@ -53,14 +50,11 @@ use crate::{
 
 use crate::services::gokz_cache::GokzCacheManager;
 
-type GlobalBansCache = Arc<RwLock<HashMap<String, (serde_json::Value, chrono::DateTime<Utc>)>>>;
-
 #[derive(Clone)]
 pub struct AppCtx {
     pub config: Config,
     pub db: Database,
     pub access_snapshot: SnapshotStore,
-    pub global_bans_cache: GlobalBansCache,
     pub gokz_cache: Arc<GokzCacheManager>, // 统一 GOKZ 缓存管理器
     pub server_config_cache: Arc<ServerConfigCache>,
     pub active_ban_cache: Arc<ActiveBanCache>,
@@ -501,7 +495,6 @@ pub fn router(
             config: config.clone(),
             db,
             access_snapshot,
-            global_bans_cache: Arc::new(RwLock::new(HashMap::new())),
             gokz_cache,
             server_config_cache,
             active_ban_cache,

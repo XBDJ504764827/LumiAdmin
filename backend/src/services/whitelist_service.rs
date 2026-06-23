@@ -117,13 +117,14 @@ pub async fn list_whitelist(
     // 使用 COUNT(*) OVER() 窗口函数一次性获取总数和数据。
     // 不再使用逐行 LATERAL JOIN 解析 approved_by/rejected_by，改为取原始值后在应用层批量解析。
     // 详见 services::display_name::resolve_display_names。
+    let order_clause = whitelist_order_clause(query.status.as_deref());
     let data_sql = format!(
         r#"SELECT wr.id, wr.steamid64, wr.steamid, wr.steamid3, wr.profile_url, wr.nickname, wr.steam_persona_name, wr.status,
                   wr.applied_at, wr.approved_at, wr.approved_by, wr.approval_reason,
                   wr.rejected_at, wr.rejected_by, wr.rejection_reason,
                   COUNT(*) OVER() as total_count
            FROM whitelist_requests wr
-           {where_clause} ORDER BY wr.applied_at DESC LIMIT ${param_idx} OFFSET ${}"#,
+           {where_clause} {order_clause} LIMIT ${param_idx} OFFSET ${}"#,
         param_idx + 1
     );
 
@@ -181,6 +182,18 @@ pub async fn list_whitelist(
         page: query.page(),
         page_size: query.page_size(),
     })
+}
+
+fn whitelist_order_clause(status: Option<&str>) -> &'static str {
+    match status.map(str::trim) {
+        Some("approved") => {
+            "ORDER BY wr.approved_at DESC NULLS LAST, wr.applied_at DESC, wr.id DESC"
+        }
+        Some("rejected") => {
+            "ORDER BY wr.rejected_at DESC NULLS LAST, wr.applied_at DESC, wr.id DESC"
+        }
+        _ => "ORDER BY wr.applied_at DESC, wr.id DESC",
+    }
 }
 
 pub async fn create_public_whitelist_request(
@@ -726,7 +739,8 @@ fn map_whitelist_row(row: WhitelistRow) -> WhitelistItem {
 mod tests {
     use super::{
         create_manual_whitelist, create_public_whitelist_request, find_by_steamid64,
-        reject_whitelist, restore_whitelist, ManualWhitelistInput, PublicWhitelistRequestInput,
+        list_whitelist, reject_whitelist, restore_whitelist, ManualWhitelistInput,
+        PublicWhitelistRequestInput,
     };
     use crate::{config::Config, db::Database, services::steam_service::SteamResolver};
     use chrono::{Duration, Utc};
@@ -945,6 +959,67 @@ mod tests {
             assert_eq!(item.approved_by.as_deref(), Some("Alex"));
             assert_eq!(item.steamid.as_deref(), Some("STEAM_0:1:12345"));
             assert_eq!(item.steamid3.as_deref(), Some("[U:1:24691]"));
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn list_whitelist_orders_approved_by_latest_approved_at() {
+        with_test_db(async |db| {
+            let now = Utc::now();
+            let old_application_latest_approval = insert_whitelist_record(
+                &db,
+                "76561198000000031",
+                "approved",
+                "最后通过的旧申请",
+                None,
+                now - Duration::days(7),
+            )
+            .await;
+            let new_application_older_approval = insert_whitelist_record(
+                &db,
+                "76561198000000032",
+                "approved",
+                "较早通过的新申请",
+                None,
+                now - Duration::hours(1),
+            )
+            .await;
+
+            sqlx::query(
+                r#"
+                UPDATE whitelist_requests
+                SET approved_at = CASE
+                    WHEN id = $1 THEN $3
+                    WHEN id = $2 THEN $4
+                    ELSE approved_at
+                END
+                WHERE id IN ($1, $2)
+                "#,
+            )
+            .bind(old_application_latest_approval)
+            .bind(new_application_older_approval)
+            .bind(now)
+            .bind(now - Duration::hours(2))
+            .execute(&db.pool)
+            .await?;
+
+            let result = list_whitelist(
+                &db,
+                &crate::routes::ListQuery {
+                    search: None,
+                    status: Some("approved".to_string()),
+                    page: None,
+                    page_size: None,
+                },
+            )
+            .await?;
+
+            assert_eq!(result.items.len(), 2);
+            assert_eq!(result.items[0].id, old_application_latest_approval);
+            assert_eq!(result.items[0].nickname, "最后通过的旧申请");
+            assert_eq!(result.items[1].id, new_application_older_approval);
             Ok(())
         })
         .await;

@@ -90,8 +90,10 @@ mod tests {
 
     #[test]
     fn priority_constants_are_ordered() {
-        assert!(PRIO_USERNAME < PRIO_DISPLAY_NAME);
-        assert!(PRIO_DISPLAY_NAME < PRIO_REMARK);
+        const {
+            assert!(PRIO_USERNAME < PRIO_DISPLAY_NAME);
+            assert!(PRIO_DISPLAY_NAME < PRIO_REMARK);
+        }
     }
 
     /// 数据库集成测试：验证批量解析能正确按优先级（username > display_name > remark）
@@ -111,8 +113,18 @@ mod tests {
             // 用户 A：username='alpha'，display_name='Alpha展示'，remark=''  -> 显示名应为 'alpha'
             // 用户 B：username='beta'，display_name='Beta展示'，remark='Beta备注' -> 显示名应为 'Beta备注'
             for (uid, username, display_name, remark) in [
-                ("aaaa1111-0000-0000-0000-000000000001", "alpha", "Alpha展示", ""),
-                ("aaaa1111-0000-0000-0000-000000000002", "beta", "Beta展示", "Beta备注"),
+                (
+                    "aaaa1111-0000-0000-0000-000000000001",
+                    "alpha",
+                    "Alpha展示",
+                    "",
+                ),
+                (
+                    "aaaa1111-0000-0000-0000-000000000002",
+                    "beta",
+                    "Beta展示",
+                    "Beta备注",
+                ),
             ] {
                 sqlx::query(
                     r#"INSERT INTO users (id, username, display_name, password_hash, role, remark)
@@ -128,10 +140,10 @@ mod tests {
 
             // 用 display_name 列的值去查（验证优先级：应匹配到该用户）
             let names = vec![
-                "alpha".to_string(),        // 命中 A.username
-                "Alpha展示".to_string(),    // 命中 A.display_name（优先级低于 username，但同用户结果一致）
-                "Beta展示".to_string(),     // 命中 B.display_name
-                "nobody".to_string(),       // 任何列都不匹配
+                "alpha".to_string(),     // 命中 A.username
+                "Alpha展示".to_string(), // 命中 A.display_name（优先级低于 username，但同用户结果一致）
+                "Beta展示".to_string(),  // 命中 B.display_name
+                "nobody".to_string(),    // 任何列都不匹配
             ];
             let map = resolve_display_names(&db, &names).await?;
 

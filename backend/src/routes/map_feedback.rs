@@ -7,10 +7,7 @@ use serde::Deserialize;
 
 use crate::routes::{current_operator, invalid_request, AppCtx, ListQuery};
 use crate::services::{
-    log_service,
-    map_feedback_service,
-    notification_service,
-    rate_limit_service::extract_client_ip,
+    log_service, map_feedback_service, notification_service, rate_limit_service::extract_client_ip,
 };
 
 /// 管理员查询地图反馈列表
@@ -64,7 +61,10 @@ pub(crate) async fn submit_feedback(
     State(ctx): State<AppCtx>,
     headers: HeaderMap,
     Json(body): Json<map_feedback_service::CreateMapFeedbackInput>,
-) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), (axum::http::StatusCode, Json<serde_json::Value>)> {
+) -> Result<
+    (axum::http::StatusCode, Json<serde_json::Value>),
+    (axum::http::StatusCode, Json<serde_json::Value>),
+> {
     let item = map_feedback_service::create_feedback(&ctx.db, &ctx.config, body)
         .await
         .map_err(invalid_request)?;
@@ -74,7 +74,11 @@ pub(crate) async fn submit_feedback(
         "guest",
         "公共展示页",
         "提交地图反馈",
-        &format!("{:?}: {}", item.feedback_type, &item.detail.chars().take(80).collect::<String>()),
+        &format!(
+            "{:?}: {}",
+            item.feedback_type,
+            &item.detail.chars().take(80).collect::<String>()
+        ),
         &extract_client_ip(&headers),
     )
     .await;
@@ -93,7 +97,10 @@ pub(crate) async fn submit_feedback(
         tracing::warn!(%e, "地图反馈通知失败");
     }
 
-    Ok((axum::http::StatusCode::CREATED, Json(serde_json::json!({ "item": item }))))
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(serde_json::json!({ "item": item })),
+    ))
 }
 
 /// 公开页面按 SteamID 查询反馈状态

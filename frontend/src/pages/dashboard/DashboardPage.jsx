@@ -1,5 +1,6 @@
 import { useAuth } from '../../state/store.js';
 import { api } from '../../lib/api.js';
+import { publicApi } from '../../lib/publicApi.js';
 import { useApiQuery } from '../../shared/useApiQuery.js';
 import { normalizeAdminPreviewRows } from './dashboardData.js';
 import { formatChinaToday, getChinaHour } from '../../shared/time.js';
@@ -63,8 +64,8 @@ export function DashboardPage() {
   
   const publicWhitelist = useApiQuery(
     ['publicWhitelist'],
-    () => api.publicWhitelist(),
-    { enabled: true }
+    () => publicApi.publicWhitelist(),
+    { auth: false }
   );
 
   if (metrics.isLoading) {

@@ -1,9 +1,6 @@
 use crate::{
     db::Database,
-    services::{
-        access_cache::ActiveBanCache, access_snapshot_service,
-        ban_service::BanItem,
-    },
+    services::{access_cache::ActiveBanCache, access_snapshot_service, ban_service::BanItem},
 };
 use chrono::{Duration, Utc};
 use serde::Serialize;
@@ -338,9 +335,7 @@ pub async fn poll_active_bans(
     db: &Database,
     input: PluginBanPollInput,
 ) -> anyhow::Result<Vec<BanItem>> {
-    Ok(poll_active_bans_versioned(db, input, None)
-        .await?
-        .items)
+    Ok(poll_active_bans_versioned(db, input, None).await?.items)
 }
 
 /// 全量轮询结果（含版本签名 etag 与总数）。
@@ -368,7 +363,10 @@ pub struct BanPollResult {
 /// 说明：`ban_records` 表当前没有 `updated_at` 列，因此用 `MAX(created_at)`（新增封禁）
 /// 与 `MAX(removed_at)`（解封）共同构成变更指纹。这两类事件正是插件轮询关心的
 /// 主要变化；封禁字段编辑（update_ban）不改变活跃集合成员，对插件同步无影响。
-async fn compute_ban_poll_etag(db: &Database, server: &ServerAuth) -> anyhow::Result<(String, i64)> {
+async fn compute_ban_poll_etag(
+    db: &Database,
+    server: &ServerAuth,
+) -> anyhow::Result<(String, i64)> {
     let row: (i64, Option<chrono::DateTime<chrono::Utc>>) = sqlx::query_as(
         r#"SELECT
                 COUNT(*),

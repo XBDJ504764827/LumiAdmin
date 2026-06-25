@@ -6,8 +6,8 @@
 //   - auth → useAuthStore
 //   - theme → useThemeStore
 //
-// 向下兼容：state/auth.jsx 和 state/theme.jsx 仍可作为 Context 包装层
-// 存在，避免一次性修改所有页面。
+// 页面统一从本模块获取 auth/theme hooks，避免 Context 包装层和
+// Zustand store 混用。
 
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
@@ -115,8 +115,7 @@ export const useAuthStore = create(
 );
 
 // ═══════════════════════════════════════════════════════════
-// 向下兼容 hook：useAuth() / useTheme()
-// 供各页面直接从 store.js 引入使用
+// 页面级 hooks
 // ═══════════════════════════════════════════════════════════
 export function useAuth() {
   const session = useAuthStore((s) => s.session);

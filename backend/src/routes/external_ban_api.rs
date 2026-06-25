@@ -7,7 +7,9 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::routes::{current_operator, forbidden, invalid_request, AppCtx};
-use crate::services::{audit_service, external_ban_api_service, log_service, rate_limit_service::extract_client_ip};
+use crate::services::{
+    audit_service, external_ban_api_service, log_service, rate_limit_service::extract_client_ip,
+};
 
 #[derive(Deserialize, Clone)]
 pub(crate) struct TargetBody {

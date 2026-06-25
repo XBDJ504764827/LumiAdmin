@@ -219,10 +219,7 @@ where
 }
 
 pub fn task_metric(key: &'static str) -> Option<TaskMetric> {
-    TASKS
-        .read()
-        .ok()
-        .and_then(|tasks| tasks.get(key).cloned())
+    TASKS.read().ok().and_then(|tasks| tasks.get(key).cloned())
 }
 
 pub fn record_http_request(status: u16, duration_ms: u64) {
@@ -285,11 +282,7 @@ pub fn overview(db: &Database, config: &Config) -> ObservabilityOverview {
             total_requests,
             error_requests,
             slow_requests: HTTP_METRICS.slow_requests.load(Ordering::Relaxed),
-            average_duration_ms: if total_requests == 0 {
-                0
-            } else {
-                total_duration_ms / total_requests
-            },
+            average_duration_ms: total_duration_ms.checked_div(total_requests).unwrap_or(0),
             max_duration_ms: HTTP_METRICS.max_duration_ms.load(Ordering::Relaxed),
             error_rate,
         },

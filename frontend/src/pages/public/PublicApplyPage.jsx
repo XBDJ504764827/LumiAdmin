@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { api } from '../../lib/api.js';
+import { publicApi } from '../../lib/publicApi.js';
 import { PublicPageShell } from './PublicPageShell.jsx';
 
 export function PublicApplyPage() {
@@ -16,7 +16,7 @@ export function PublicApplyPage() {
     setResolving(true);
     setResolveError('');
     try {
-      const result = await api.resolveSteam({ steam_input: steamInput.trim() });
+      const result = await publicApi.resolveSteam({ steam_input: steamInput.trim() });
       if (result.persona_name) {
         setNickname(result.persona_name);
       } else {
@@ -41,7 +41,7 @@ export function PublicApplyPage() {
       setSubmitting(true);
       setError('');
       setMessage('');
-      await api.submitWhitelist({ steam_input: steamInput.trim(), nickname: nickname.trim() });
+      await publicApi.submitWhitelist({ steam_input: steamInput.trim(), nickname: nickname.trim() });
       setMessage('申请已提交，请等待管理员审核。');
       setSteamInput('');
       setNickname('');

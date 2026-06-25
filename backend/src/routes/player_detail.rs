@@ -7,7 +7,9 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::routes::{current_operator, forbidden, invalid_request, AppCtx};
-use crate::services::{log_service, permission_service, player_detail_service, rate_limit_service::extract_client_ip};
+use crate::services::{
+    log_service, permission_service, player_detail_service, rate_limit_service::extract_client_ip,
+};
 
 #[derive(Deserialize)]
 pub(crate) struct PlayerDetailQuery {

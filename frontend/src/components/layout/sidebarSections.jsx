@@ -15,7 +15,6 @@ const icons = {
   banAppeal: icon(<><path d="M8 1.5C5.5 1.5 3.5 3.5 3 6c0 2.5-1 3.5-2.5 5h15C14 9.5 13 8.5 13 6c-.5-2.5-2.5-4.5-5-4.5z" /><path d="M6 12.5c.5 1 1 1.5 2 1.5s1.5-.5 2-1.5" strokeLinecap="round" /><path d="M3 1.5L13 11.5" strokeLinecap="round" /></>),
   playerReport: icon(<><path d="M8 1.5l6 2.5v4.5c0 3.5-2.4 5.5-6 6-3.6-.5-6-2.5-6-6V4l6-2.5z" /><path d="M8 5v4" strokeLinecap="round" /><path d="M8 12h.01" strokeLinecap="round" /></>),
   users: icon(<><circle cx="8" cy="5" r="3" /><path d="M2 14c0-3.314 2.686-5 6-5s6 1.686 6 5" /></>),
-  playerAccess: icon(<><path d="M11 2v4m0 0h4m-4 0L15 2M5 14v-4m0 0H1m4 0l-4 4M2 8a6 6 0 1 0 12 0A6 6 0 0 0 2 8z" strokeLinecap="round" strokeLinejoin="round" /></>),
   audit: icon(<><path d="M8 2l6 3v5c0 3.5-2.5 6.5-6 8-3.5-1.5-6-4.5-6-8V5l6-3z" /><path d="M6 8l2 2 4-4" strokeLinecap="round" strokeLinejoin="round" /></>),
   notification: icon(<><path d="M8 1.5C5.5 1.5 3.5 3.5 3 6c0 2.5-1 3.5-2.5 5h15C14 9.5 13 8.5 13 6c-.5-2.5-2.5-4.5-5-4.5z" /><path d="M6 12.5c.5 1 1 1.5 2 1.5s1.5-.5 2-1.5" strokeLinecap="round" /></>),
   logs: icon(<><path d="M2 2h4v5H2zM10 2h4v3h-4zM10 9h4v5h-4zM2 11h4v3H2zM6 5h4v11M6 2h4v3" /></>),
@@ -37,7 +36,6 @@ export function sidebarSections(role) {
   const canReviewReports = ['developer', 'admin'].includes(role);
 
   const systemItems = canSeeLogs ? [
-    { path: '/player-access', label: '进服设置', icon: icons.playerAccess },
     {
       label: '日志与审计',
       icon: icons.logFolder,
@@ -60,7 +58,6 @@ export function sidebarSections(role) {
     },
     { path: '/external-servers', label: '外部服务器', icon: icons.externalServer },
   ] : [
-    { path: '/player-access', label: '进服设置', icon: icons.playerAccess },
     { path: '/audit', label: '审计日志', icon: icons.audit },
     { path: '/external-servers', label: '外部服务器', icon: icons.externalServer },
   ];

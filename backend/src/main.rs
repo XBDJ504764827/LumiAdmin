@@ -133,7 +133,9 @@ async fn main() -> anyhow::Result<()> {
     let steam_resolver = services::steam_service::SteamResolver::new(&config);
     // 初始化统一 GOKZ 缓存管理器
     let gokz_cache = Arc::new(services::gokz_cache::GokzCacheManager::new(db.clone()));
-    gokz_cache.clone().start_cleanup_task(config.session_cleanup_interval_secs);
+    gokz_cache
+        .clone()
+        .start_cleanup_task(config.session_cleanup_interval_secs);
 
     let app = routes::router(
         config,

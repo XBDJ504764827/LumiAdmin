@@ -155,13 +155,12 @@ pub async fn delete_server(db: &Database, id: Uuid) -> anyhow::Result<()> {
 
 /// 根据服务器 ID 获取服务器信息描述（用于日志记录）
 pub async fn find_server_info(db: &Database, id: Uuid) -> Option<String> {
-    let row: Option<(String, String, i32)> = sqlx::query_as(
-        r#"SELECT name, ip, port FROM external_servers WHERE id = $1"#,
-    )
-    .bind(id)
-    .fetch_optional(&db.pool)
-    .await
-    .ok()?;
+    let row: Option<(String, String, i32)> =
+        sqlx::query_as(r#"SELECT name, ip, port FROM external_servers WHERE id = $1"#)
+            .bind(id)
+            .fetch_optional(&db.pool)
+            .await
+            .ok()?;
 
     row.map(|(name, ip, port)| format!("{} ({}:{})", name, ip, port))
 }

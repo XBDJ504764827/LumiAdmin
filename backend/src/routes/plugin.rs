@@ -8,7 +8,8 @@ use serde::Deserialize;
 
 use crate::routes::{current_operator, forbidden, invalid_request, invalid_request_status, AppCtx};
 use crate::services::{
-    log_service, offline_sync_service, permission_service, player_api_service, server_status_service,
+    log_service, offline_sync_service, permission_service, player_api_service,
+    server_status_service,
 };
 
 #[derive(Deserialize)]
@@ -171,7 +172,11 @@ pub(crate) async fn update_player_api_config(
         &actor.display_name,
         "玩家信息API",
         "更新Webhook配置",
-        &format!("{} 个 Webhook 端点, 间隔 {}s", config.items.len(), config.interval_seconds),
+        &format!(
+            "{} 个 Webhook 端点, 间隔 {}s",
+            config.items.len(),
+            config.interval_seconds
+        ),
         "",
     )
     .await

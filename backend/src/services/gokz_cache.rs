@@ -31,9 +31,21 @@ const CACHE_MAX_ENTRIES: usize = 10000;
 /// GOKZ 内存缓存条目类型
 type GokzMemoryCache = HashMap<String, (GokzStats, DateTime<Utc>)>;
 /// GOKZ 数据库缓存行类型（kzt/skz/vnl/ovr + 时间戳）
-type GokzDbRow = (Option<serde_json::Value>, Option<serde_json::Value>, Option<serde_json::Value>, Option<serde_json::Value>, DateTime<Utc>);
+type GokzDbRow = (
+    Option<serde_json::Value>,
+    Option<serde_json::Value>,
+    Option<serde_json::Value>,
+    Option<serde_json::Value>,
+    DateTime<Utc>,
+);
 /// GOKZ 批量数据库行类型（含 steamid64）
-type GokzBatchRow = (String, Option<serde_json::Value>, Option<serde_json::Value>, Option<serde_json::Value>, Option<serde_json::Value>);
+type GokzBatchRow = (
+    String,
+    Option<serde_json::Value>,
+    Option<serde_json::Value>,
+    Option<serde_json::Value>,
+    Option<serde_json::Value>,
+);
 
 /// 统一 GOKZ 缓存管理器
 /// 使用 PostgreSQL 作为持久化缓存，同时维护内存缓存加速读取
@@ -111,10 +123,22 @@ impl GokzCacheManager {
             .unwrap_or(0);
         let steam_level = 0i32; // steam_level 由 access_service 单独管理
 
-        let kzt_json = stats.kzt.as_ref().and_then(|s| serde_json::to_value(s).ok());
-        let skz_json = stats.skz.as_ref().and_then(|s| serde_json::to_value(s).ok());
-        let vnl_json = stats.vnl.as_ref().and_then(|s| serde_json::to_value(s).ok());
-        let ovr_json = stats.ovr.as_ref().and_then(|s| serde_json::to_value(s).ok());
+        let kzt_json = stats
+            .kzt
+            .as_ref()
+            .and_then(|s| serde_json::to_value(s).ok());
+        let skz_json = stats
+            .skz
+            .as_ref()
+            .and_then(|s| serde_json::to_value(s).ok());
+        let vnl_json = stats
+            .vnl
+            .as_ref()
+            .and_then(|s| serde_json::to_value(s).ok());
+        let ovr_json = stats
+            .ovr
+            .as_ref()
+            .and_then(|s| serde_json::to_value(s).ok());
 
         let expires_at = Utc::now() + Duration::hours(CACHE_TTL_HOURS);
 

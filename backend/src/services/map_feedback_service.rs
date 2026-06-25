@@ -1,8 +1,5 @@
 use crate::{
-    config::Config,
-    db::Database,
-    routes::ListQuery,
-    services::steam_service::SteamResolver,
+    config::Config, db::Database, routes::ListQuery, services::steam_service::SteamResolver,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -205,10 +202,7 @@ pub async fn review_feedback(
     input: ReviewMapFeedbackInput,
 ) -> anyhow::Result<MapFeedbackItem> {
     let status = input.status.trim();
-    anyhow::ensure!(
-        matches!(status, "resolved" | "rejected"),
-        "审核状态无效"
-    );
+    anyhow::ensure!(matches!(status, "resolved" | "rejected"), "审核状态无效");
 
     let row = sqlx::query_as::<_, MapFeedbackRow>(&format!(
         r#"UPDATE map_feedback

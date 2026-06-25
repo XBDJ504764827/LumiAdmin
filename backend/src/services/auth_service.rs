@@ -1,7 +1,7 @@
 use crate::{
     auth::session::{build_session, role_label, to_view},
     db::Database,
-    models::{SessionResponse, SessionView, User, preferred_operator_name},
+    models::{preferred_operator_name, SessionResponse, SessionView, User},
     password::verify_password,
     services::observability_service,
 };

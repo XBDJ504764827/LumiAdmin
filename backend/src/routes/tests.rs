@@ -66,7 +66,11 @@ fn test_app(config: Config, db: Database) -> TestApp {
         SteamResolver::new(&config),
         gokz_cache,
     );
-    TestApp { router, whitelist_cache, ban_cache }
+    TestApp {
+        router,
+        whitelist_cache,
+        ban_cache,
+    }
 }
 
 fn schema_url(base_url: &str, schema: &str) -> String {
@@ -1105,13 +1109,17 @@ async fn plugin_status_report_keeps_empty_players_when_no_online_rows() {
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        let server: (String, Vec<String>, Option<chrono::DateTime<chrono::Utc>>, i32) =
-            sqlx::query_as(
-                r#"SELECT status, players, last_reported_at, max_players FROM servers WHERE id = $1"#,
-            )
-            .bind(server_id)
-            .fetch_one(&db.pool)
-            .await?;
+        let server: (
+            String,
+            Vec<String>,
+            Option<chrono::DateTime<chrono::Utc>>,
+            i32,
+        ) = sqlx::query_as(
+            r#"SELECT status, players, last_reported_at, max_players FROM servers WHERE id = $1"#,
+        )
+        .bind(server_id)
+        .fetch_one(&db.pool)
+        .await?;
         assert_eq!(server.0, "online");
         assert!(server.1.is_empty());
         assert!(server.2.is_some());

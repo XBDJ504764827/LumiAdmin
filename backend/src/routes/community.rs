@@ -7,7 +7,10 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::routes::{current_operator, forbidden, invalid_request, AppCtx};
-use crate::services::{community_rcon, community_service, log_service, permission_service, rate_limit_service::extract_client_ip};
+use crate::services::{
+    community_rcon, community_service, log_service, permission_service,
+    rate_limit_service::extract_client_ip,
+};
 
 #[derive(Deserialize)]
 pub(crate) struct RconCommandBody {
@@ -103,7 +106,9 @@ pub(crate) async fn delete_community_group(
         return Err(forbidden());
     }
     // 获取社区组名称用于日志
-    let group_name = community_service::find_group_name(&ctx.db, group_id).await.unwrap_or_else(|_| group_id.to_string());
+    let group_name = community_service::find_group_name(&ctx.db, group_id)
+        .await
+        .unwrap_or_else(|_| group_id.to_string());
     community_service::delete_group(&ctx.db, group_id)
         .await
         .map_err(invalid_request)?;
@@ -144,11 +149,17 @@ pub(crate) async fn update_community_access(
         &actor.display_name,
         "社区组管理",
         "更新社区访问限制",
-        &format!("{} (白名单模式: {}, Rating≥{}, Steam等级≥{})",
+        &format!(
+            "{} (白名单模式: {}, Rating≥{}, Steam等级≥{})",
             group.name,
-            if group.whitelist_mode_enabled { "开" } else { "关" },
+            if group.whitelist_mode_enabled {
+                "开"
+            } else {
+                "关"
+            },
             group.min_rating,
-            group.min_steam_level),
+            group.min_steam_level
+        ),
         &extract_client_ip(&headers),
     )
     .await

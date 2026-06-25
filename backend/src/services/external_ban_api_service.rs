@@ -281,13 +281,12 @@ pub async fn delete_target(db: &Database, id: Uuid) -> anyhow::Result<()> {
 
 /// 根据目标 ID 获取目标信息描述（用于日志记录）
 pub async fn find_target_info(db: &Database, id: Uuid) -> Option<String> {
-    let row: Option<(String, String)> = sqlx::query_as(
-        r#"SELECT name, base_url FROM external_ban_api_targets WHERE id = $1"#,
-    )
-    .bind(id)
-    .fetch_optional(&db.pool)
-    .await
-    .ok()?;
+    let row: Option<(String, String)> =
+        sqlx::query_as(r#"SELECT name, base_url FROM external_ban_api_targets WHERE id = $1"#)
+            .bind(id)
+            .fetch_optional(&db.pool)
+            .await
+            .ok()?;
 
     row.map(|(name, url)| format!("{} ({})", name, url))
 }
@@ -663,16 +662,8 @@ pub async fn unsync_ban(db: &Database, ban_id: Uuid) -> anyhow::Result<()> {
 
         match delete_external_ban(&target.base_url, token, uuid_str).await {
             Ok(()) => {
-                if let Err(e) = upsert_sync(
-                    db,
-                    ban_id,
-                    target.id,
-                    None,
-                    None,
-                    "unsynced",
-                    None,
-                )
-                .await
+                if let Err(e) =
+                    upsert_sync(db, ban_id, target.id, None, None, "unsynced", None).await
                 {
                     tracing::warn!(%e, "failed to update sync status to unsynced");
                 }
@@ -738,9 +729,7 @@ pub async fn read_sync_records_before_delete(
 }
 
 /// Notify external APIs about deleted sync records (called after hard-deleting the ban).
-pub async fn notify_external_deletes(
-    records: &[(ExternalBanApiTargetRow, String)],
-) {
+pub async fn notify_external_deletes(records: &[(ExternalBanApiTargetRow, String)]) {
     for (target, external_uuid) in records {
         let token = match bearer_token(target) {
             Ok(t) => t,
@@ -888,10 +877,7 @@ pub async fn list_sync_records(
     let mut q = sqlx::query_as::<_, ExternalBanSyncRecord>(&sql);
 
     // Pre-compute search pattern to satisfy lifetime requirements
-    let search_pattern = query
-        .search
-        .as_ref()
-        .map(|s| format!("%{s}%"));
+    let search_pattern = query.search.as_ref().map(|s| format!("%{s}%"));
 
     if let Some(ref target_id) = query.target_id {
         q = q.bind(target_id);

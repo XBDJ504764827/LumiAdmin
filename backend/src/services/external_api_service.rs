@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
-use reqwest::{Response, StatusCode, header::HeaderMap};
-use serde::{Serialize, de::DeserializeOwned};
+use reqwest::{header::HeaderMap, Response, StatusCode};
+use serde::{de::DeserializeOwned, Serialize};
 use std::{
     collections::HashMap,
     sync::{Arc, LazyLock, RwLock},
@@ -28,13 +28,18 @@ struct ExternalApiState {
     cooldown_until_instant: Option<Instant>,
 }
 
+type ExternalApiLock = Arc<tokio::sync::Mutex<()>>;
+type ExternalApiLockMap = HashMap<&'static str, ExternalApiLock>;
+
 static EXTERNAL_APIS: LazyLock<RwLock<HashMap<&'static str, ExternalApiState>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
-static EXTERNAL_API_LOCKS: LazyLock<RwLock<HashMap<&'static str, Arc<tokio::sync::Mutex<()>>>>> =
+static EXTERNAL_API_LOCKS: LazyLock<RwLock<ExternalApiLockMap>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
 fn ensure_metric(key: &'static str, name: &'static str) {
-    let mut apis = EXTERNAL_APIS.write().expect("external api metrics lock poisoned");
+    let mut apis = EXTERNAL_APIS
+        .write()
+        .expect("external api metrics lock poisoned");
     apis.entry(key).or_insert_with(|| ExternalApiState {
         metric: ExternalApiMetric {
             key,
@@ -54,14 +59,18 @@ fn ensure_metric(key: &'static str, name: &'static str) {
     });
 }
 
-fn api_lock(key: &'static str) -> Arc<tokio::sync::Mutex<()>> {
+fn api_lock(key: &'static str) -> ExternalApiLock {
     {
-        let locks = EXTERNAL_API_LOCKS.read().expect("external api locks lock poisoned");
+        let locks = EXTERNAL_API_LOCKS
+            .read()
+            .expect("external api locks lock poisoned");
         if let Some(lock) = locks.get(key) {
             return lock.clone();
         }
     }
-    let mut locks = EXTERNAL_API_LOCKS.write().expect("external api locks lock poisoned");
+    let mut locks = EXTERNAL_API_LOCKS
+        .write()
+        .expect("external api locks lock poisoned");
     locks
         .entry(key)
         .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
@@ -189,7 +198,10 @@ where
         record_failure(
             key,
             Some(status),
-            format!("HTTP 429 Too Many Requests，已暂停请求 {} 秒", cooldown.as_secs()),
+            format!(
+                "HTTP 429 Too Many Requests，已暂停请求 {} 秒",
+                cooldown.as_secs()
+            ),
         );
         anyhow::bail!(
             "{} 返回 429 Too Many Requests，已暂停请求 {} 秒",
@@ -202,9 +214,8 @@ where
         anyhow::bail!("{} 返回 {status}", name);
     }
 
-    let parsed = response.json::<T>().await.map_err(|error| {
+    let parsed = response.json::<T>().await.inspect_err(|error| {
         record_failure(key, Some(status), error.to_string());
-        error
     })?;
     record_success(key, status);
     Ok(parsed)
@@ -235,13 +246,10 @@ pub fn metrics() -> Vec<ExternalApiMetric> {
 }
 
 pub fn metric(key: &'static str) -> Option<ExternalApiMetric> {
-    EXTERNAL_APIS
-        .write()
-        .ok()
-        .and_then(|mut apis| {
-            apis.get_mut(key).map(|state| {
-                clear_expired_cooldown(state);
-                state.metric.clone()
-            })
+    EXTERNAL_APIS.write().ok().and_then(|mut apis| {
+        apis.get_mut(key).map(|state| {
+            clear_expired_cooldown(state);
+            state.metric.clone()
         })
+    })
 }

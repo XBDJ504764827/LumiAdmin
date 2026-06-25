@@ -11,10 +11,16 @@ test('formatBanDuration formats minutes and hours', () => {
   assert.equal(formatBanDuration(120), '2 小时');
 });
 
-test('formatBanSource maps plugin source with operator name', () => {
-  assert.equal(formatBanSource('game_plugin', 'Admin'), '游戏内 - Admin');
-  assert.equal(formatBanSource('game_plugin'), '游戏内命令');
-  assert.equal(formatBanSource('manual'), '网站手动');
+test('formatBanSource maps known ban sources to detailed labels', () => {
+  assert.equal(formatBanSource('global_ban'), '全球封禁自动封禁');
+  assert.equal(formatBanSource('game_plugin', 'Admin'), '游戏管理员手动封禁');
+  assert.equal(formatBanSource('game_plugin'), '游戏管理员手动封禁');
+  assert.equal(formatBanSource('manual'), '网站管理员手动封禁');
+  assert.equal(formatBanSource('web'), '网站管理员手动封禁');
+  assert.equal(formatBanSource('offline_sync', 'Admin'), '游戏离线操作同步封禁');
+  assert.equal(formatBanSource('external_api'), '外部封禁 API 同步封禁');
+  assert.equal(formatBanSource('custom_source'), '其他来源封禁（custom_source）');
+  assert.equal(formatBanSource(null), '未知来源封禁');
 });
 
 test('formatExpiresAt handles permanent ban', () => {

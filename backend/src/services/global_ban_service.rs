@@ -22,11 +22,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::Postgres;
 use sqlx::QueryBuilder;
-use std::{
-    collections::HashMap,
-    sync::OnceLock,
-    time::Duration,
-};
+use std::{collections::HashMap, sync::OnceLock, time::Duration};
 use uuid::Uuid;
 
 const KZT_GLOBAL_BANS_API_KEY: &str = "kztimer_global_bans";
@@ -271,7 +267,8 @@ pub async fn search_player_bans(
     let identity = resolver.resolve(steam_input).await?;
     let steamid64 = &identity.steamid64;
 
-    let local_rows = load_local_global_bans_for_steamids(db, &[steamid64.clone()]).await?;
+    let local_rows =
+        load_local_global_bans_for_steamids(db, std::slice::from_ref(steamid64)).await?;
     let items: Vec<LiveBanItem> = local_rows
         .into_iter()
         .map(LocalGlobalBanRecord::into_live_item)

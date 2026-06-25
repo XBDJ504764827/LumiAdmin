@@ -120,7 +120,10 @@ const BAN_DISPLAY_FIELDS: &str = "br.id, br.player, br.steam_id, br.ip_address, 
 // 详见 services::display_name::resolve_display_names。
 const BAN_LIST_DISPLAY_FIELDS: &str = "br.id, br.player, br.steam_id, br.ip_address, br.ban_type, br.duration_minutes, br.expires_at, br.reason, br.status, br.operator_name, br.created_at";
 // 使用共享的 SQL 片段（仅单条详情查询仍在使用 LATERAL；列表查询已改为应用层解析）
-use crate::sql_fragments::{OPERATOR_DISPLAY_JOIN as BAN_OPERATOR_DISPLAY_JOIN, REMOVED_BY_DISPLAY_JOIN as BAN_REMOVED_BY_DISPLAY_JOIN};
+use crate::sql_fragments::{
+    OPERATOR_DISPLAY_JOIN as BAN_OPERATOR_DISPLAY_JOIN,
+    REMOVED_BY_DISPLAY_JOIN as BAN_REMOVED_BY_DISPLAY_JOIN,
+};
 
 pub(crate) fn row_to_item(row: BanRow) -> BanItem {
     BanItem {
@@ -213,11 +216,9 @@ pub async fn list_bans(
     let total: i64 = rows.first().map(|r| r.total_count).unwrap_or(0);
 
     // 应用层批量解析 operator_name -> 显示名（替代原先的逐行 LATERAL JOIN）
-    let operator_names: Vec<String> = rows
-        .iter()
-        .map(|r| r.base.operator_name.clone())
-        .collect();
-    let display_map = crate::services::display_name::resolve_display_names(db, &operator_names).await?;
+    let operator_names: Vec<String> = rows.iter().map(|r| r.base.operator_name.clone()).collect();
+    let display_map =
+        crate::services::display_name::resolve_display_names(db, &operator_names).await?;
 
     let items = rows
         .into_iter()
@@ -381,12 +382,11 @@ pub async fn update_ban(
 
 pub async fn delete_ban(db: &Database, id: Uuid) -> anyhow::Result<()> {
     // 先查询记录信息（如果是 global_ban 来源，需要在删除前标记对应 global_bans 记录）
-    let ban_info: Option<(String, String)> = sqlx::query_as(
-        "SELECT steam_id, source FROM ban_records WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&db.pool)
-    .await?;
+    let ban_info: Option<(String, String)> =
+        sqlx::query_as("SELECT steam_id, source FROM ban_records WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&db.pool)
+            .await?;
 
     // 如果是全球封禁来源，先标记对应的 global_bans 记录为 manual_unbanned=true
     // 必须在 DELETE 之前执行，因为 global_bans.local_ban_id 指向这条 ban_records

@@ -125,16 +125,13 @@ async fn handle_ws(
 
     // 从第一条消息获取 token 进行认证
     let token = match receiver.next().await {
-        Some(Ok(Message::Text(text))) => {
-            match serde_json::from_str::<serde_json::Value>(&text) {
-                Ok(msg) if msg.get("type").and_then(|t| t.as_str()) == Some("auth") => {
-                    msg.get("token")
-                        .and_then(|t| t.as_str())
-                        .and_then(|s| Uuid::parse_str(s).ok())
-                }
-                _ => None,
-            }
-        }
+        Some(Ok(Message::Text(text))) => match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(msg) if msg.get("type").and_then(|t| t.as_str()) == Some("auth") => msg
+                .get("token")
+                .and_then(|t| t.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok()),
+            _ => None,
+        },
         _ => None,
     };
 

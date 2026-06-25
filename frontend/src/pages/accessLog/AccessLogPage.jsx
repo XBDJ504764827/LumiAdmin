@@ -46,11 +46,9 @@ const ACCESS_METHOD_OPTIONS = [
   { value: 'unrestricted', label: '无限制' },
   { value: 'whitelist', label: '白名单' },
   { value: 'restriction', label: 'Rating 限制' },
-  { value: 'custom_rule', label: '自定义规则' },
   { value: 'banned', label: '被封禁' },
   { value: 'whitelist_rejected', label: '白名单未通过' },
   { value: 'restriction_rejected', label: 'Rating 不足' },
-  { value: 'custom_rule_rejected', label: '规则拒绝' },
 ];
 
 const ALLOWED_OPTIONS = [

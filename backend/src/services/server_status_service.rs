@@ -124,10 +124,7 @@ pub async fn report_server_status(
 
 /// 清理过期的服务器状态历史记录
 /// 只保留最近 `retention_secs` 秒的数据，删除更早的记录
-pub async fn cleanup_old_status_history(
-    db: &Database,
-    retention_secs: i64,
-) -> anyhow::Result<u64> {
+pub async fn cleanup_old_status_history(db: &Database, retention_secs: i64) -> anyhow::Result<u64> {
     let result = sqlx::query(
         r#"DELETE FROM server_status_history WHERE reported_at < now() - make_interval(secs => $1)"#,
     )
@@ -140,11 +137,7 @@ pub async fn cleanup_old_status_history(
 
 /// 启动服务器状态历史清理循环
 /// `interval_secs` 为清理执行间隔（秒），`retention_secs` 为数据保留时长（秒）
-pub fn start_status_history_cleanup_loop(
-    db: Database,
-    interval_secs: u64,
-    retention_secs: i64,
-) {
+pub fn start_status_history_cleanup_loop(db: Database, interval_secs: u64, retention_secs: i64) {
     observability_service::register_task(
         "server_status_history_cleanup",
         "服务器性能历史清理",

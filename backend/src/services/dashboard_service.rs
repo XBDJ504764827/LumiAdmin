@@ -1,7 +1,7 @@
 use crate::{auth::session::role_label, db::Database};
 use serde::Serialize;
 #[cfg(not(test))]
-use std::sync::{RwLock, OnceLock};
+use std::sync::{OnceLock, RwLock};
 #[cfg(not(test))]
 use std::time::{Duration, Instant};
 

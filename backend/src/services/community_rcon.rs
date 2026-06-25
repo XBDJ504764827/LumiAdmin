@@ -72,10 +72,25 @@ fn validate_rcon_command(command: &str) -> anyhow::Result<()> {
         .collect();
 
     const BLOCKED_COMMANDS: &[&str] = &[
-        "quit", "exit", "rcon_password", "sv_password", "servercfgfile",
-        "writeid", "writeip", "banid", "removeid", "removeip",
-        "exec", "alias", "sm_rcon", "changelevel", "map",
-        "kickid", "banip", "_restart", "restart",
+        "quit",
+        "exit",
+        "rcon_password",
+        "sv_password",
+        "servercfgfile",
+        "writeid",
+        "writeip",
+        "banid",
+        "removeid",
+        "removeip",
+        "exec",
+        "alias",
+        "sm_rcon",
+        "changelevel",
+        "map",
+        "kickid",
+        "banip",
+        "_restart",
+        "restart",
     ];
 
     for keyword in &keywords {

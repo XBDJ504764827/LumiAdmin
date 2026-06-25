@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../../lib/api.js';
+import { publicApi } from '../../lib/publicApi.js';
 import { useApiQuery } from '../../shared/useApiQuery.js';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { useAuth } from '../../state/store.js';
@@ -221,7 +222,7 @@ export function WhitelistPage() {
     const steamid64s = data.items.map(item => item.steamid64).filter(id => id);
     if (steamid64s.length === 0) return;
     // 并发预加载（不阻塞 UI）
-    api.preloadGokzStats(steamid64s).catch(() => { /* 静默失败 */ });
+    publicApi.preloadGokzStats(steamid64s).catch(() => { /* 静默失败 */ });
   }, [tab, data?.items]);
 
   // ---------------------------------------------------------------------------

@@ -7,7 +7,10 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::routes::{current_operator, forbidden, invalid_request, AppCtx, ListQuery};
-use crate::services::{ban_api_service, external_ban_api_service, log_service, permission_service, rate_limit_service::extract_client_ip};
+use crate::services::{
+    ban_api_service, external_ban_api_service, log_service, permission_service,
+    rate_limit_service::extract_client_ip,
+};
 
 #[derive(Deserialize)]
 pub(crate) struct CreateKeyBody {
@@ -96,7 +99,9 @@ pub(crate) async fn create_key(
     let result = ban_api_service::create_key(
         &ctx.db,
         actor.id,
-        ban_api_service::CreateBanApiKeyInput { name: body.name.clone() },
+        ban_api_service::CreateBanApiKeyInput {
+            name: body.name.clone(),
+        },
     )
     .await
     .map_err(invalid_request)?;
@@ -129,7 +134,9 @@ pub(crate) async fn delete_key(
     }
 
     // 获取密钥名称用于日志
-    let key_name = ban_api_service::find_key_name(&ctx.db, id).await.unwrap_or_else(|| id.to_string());
+    let key_name = ban_api_service::find_key_name(&ctx.db, id)
+        .await
+        .unwrap_or_else(|| id.to_string());
     ban_api_service::delete_key(&ctx.db, id)
         .await
         .map_err(invalid_request)?;
@@ -192,7 +199,11 @@ pub(crate) async fn create_integration_ban(
         &format!("API:{}", key.name),
         "封禁API",
         "通过API创建封禁",
-        &format!("{} ({})", body.player.as_deref().unwrap_or(&body.steam_id), body.steam_id),
+        &format!(
+            "{} ({})",
+            body.player.as_deref().unwrap_or(&body.steam_id),
+            body.steam_id
+        ),
         "",
     )
     .await

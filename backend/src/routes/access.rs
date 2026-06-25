@@ -1,20 +1,17 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Query, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
 use chrono::Utc;
 use serde::Deserialize;
-use uuid::Uuid;
 
 use crate::routes::{
     current_operator, forbidden, internal_error, invalid_request, invalid_request_status, AppCtx,
 };
-use crate::services::rate_limit_service::extract_client_ip;
 use crate::services::{
-    access_log_service, access_service, access_snapshot_service,
-    community_service, log_service, permission_service,
-    player_access_rule_service,
+    access_log_service, access_service, access_snapshot_service, community_service,
+    permission_service,
 };
 
 #[derive(Deserialize)]
@@ -57,11 +54,24 @@ pub(crate) async fn check_plugin_access(
     .map_err(invalid_request)?;
 
     // 记录进服日志（无论成功/失败）
-    if let Ok(Some(server)) = ctx.server_config_cache.get_by_token_port(&ctx.db, &body.report_token, body.port).await {
-        let access_method_str = result.access_method.clone().unwrap_or_else(|| "unknown".to_string());
-        let community_name = community_service::find_group_name(&ctx.db, server.community_id).await.ok();
+    if let Ok(Some(server)) = ctx
+        .server_config_cache
+        .get_by_token_port(&ctx.db, &body.report_token, body.port)
+        .await
+    {
+        let access_method_str = result
+            .access_method
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        let community_name = community_service::find_group_name(&ctx.db, server.community_id)
+            .await
+            .ok();
         let access_method = access_log_service::AccessMethod::from_str(&access_method_str);
-        let reject_reason = if result.allowed { None } else { Some(result.message.as_str()) };
+        let reject_reason = if result.allowed {
+            None
+        } else {
+            Some(result.message.as_str())
+        };
         let _ = access_log_service::create_access_log(
             &ctx.db,
             &body.steam_id64,
@@ -78,7 +88,8 @@ pub(crate) async fn check_plugin_access(
             reject_reason,
             result.rating,
             result.steam_level,
-        ).await;
+        )
+        .await;
     }
 
     Ok(Json(serde_json::json!({ "result": result })))
@@ -107,164 +118,6 @@ pub(crate) async fn plugin_access_snapshot(
 
     Ok(Json(serde_json::json!({ "item": item })))
 }
-
-pub(crate) async fn player_access_rules(
-    State(ctx): State<AppCtx>,
-    headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let _actor = current_operator(&ctx, &headers).await?;
-    let rules = player_access_rule_service::list_rules(&ctx.db)
-        .await
-        .map_err(invalid_request)?;
-    Ok(Json(serde_json::json!({ "items": rules })))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct CreatePlayerAccessRuleBody {
-    steamid64: String,
-    nickname: String,
-    allowed_communities: Option<Vec<Uuid>>,
-    blocked_communities: Option<Vec<Uuid>>,
-    allowed_servers: Option<Vec<Uuid>>,
-    blocked_servers: Option<Vec<Uuid>>,
-}
-
-pub(crate) async fn create_player_access_rule(
-    State(ctx): State<AppCtx>,
-    headers: HeaderMap,
-    Json(body): Json<CreatePlayerAccessRuleBody>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    let actor = current_operator(&ctx, &headers).await?;
-    if !permission_service::can_review_whitelist(&actor) {
-        return Err(forbidden());
-    }
-
-    let rule = player_access_rule_service::create_rule(
-        &ctx.db,
-        player_access_rule_service::CreatePlayerAccessRuleInput {
-            steamid64: body.steamid64,
-            nickname: body.nickname,
-            allowed_communities: body.allowed_communities,
-            blocked_communities: body.blocked_communities,
-            allowed_servers: body.allowed_servers,
-            blocked_servers: body.blocked_servers,
-        },
-    )
-    .await
-    .map_err(invalid_request)?;
-
-    if let Err(e) = log_service::create_log(
-        &ctx.db,
-        &actor.display_name,
-        "玩家进服设置",
-        "创建权限规则",
-        &format!("{} ({})", rule.nickname, rule.steamid64),
-        &extract_client_ip(&headers),
-    )
-    .await
-    {
-        tracing::warn!(%e, "日志写入失败");
-    }
-
-    Ok((
-        StatusCode::CREATED,
-        Json(serde_json::json!({ "item": rule })),
-    ))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct UpdatePlayerAccessRuleBody {
-    nickname: Option<String>,
-    allowed_communities: Option<Vec<Uuid>>,
-    blocked_communities: Option<Vec<Uuid>>,
-    allowed_servers: Option<Vec<Uuid>>,
-    blocked_servers: Option<Vec<Uuid>>,
-}
-
-pub(crate) async fn update_player_access_rule(
-    State(ctx): State<AppCtx>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Json(body): Json<UpdatePlayerAccessRuleBody>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let actor = current_operator(&ctx, &headers).await?;
-    if !permission_service::can_review_whitelist(&actor) {
-        return Err(forbidden());
-    }
-
-    let rule = player_access_rule_service::update_rule(
-        &ctx.db,
-        id,
-        player_access_rule_service::UpdatePlayerAccessRuleInput {
-            nickname: body.nickname,
-            allowed_communities: body.allowed_communities,
-            blocked_communities: body.blocked_communities,
-            allowed_servers: body.allowed_servers,
-            blocked_servers: body.blocked_servers,
-        },
-    )
-    .await
-    .map_err(invalid_request)?;
-
-    if let Err(e) = log_service::create_log(
-        &ctx.db,
-        &actor.display_name,
-        "玩家进服设置",
-        "更新权限规则",
-        &format!("{} ({})", rule.nickname, rule.steamid64),
-        &extract_client_ip(&headers),
-    )
-    .await
-    {
-        tracing::warn!(%e, "日志写入失败");
-    }
-
-    Ok(Json(serde_json::json!({ "item": rule })))
-}
-
-pub(crate) async fn delete_player_access_rule(
-    State(ctx): State<AppCtx>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
-    let actor = current_operator(&ctx, &headers).await?;
-    if !permission_service::can_revoke_whitelist(&actor) {
-        return Err(forbidden());
-    }
-
-    let rule = player_access_rule_service::find_rule_by_id(&ctx.db, id)
-        .await
-        .map_err(invalid_request)?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": "规则不存在" })),
-            )
-        })?;
-
-    player_access_rule_service::delete_rule(&ctx.db, id)
-        .await
-        .map_err(invalid_request)?;
-
-    if let Err(e) = log_service::create_log(
-        &ctx.db,
-        &actor.display_name,
-        "玩家进服设置",
-        "删除权限规则",
-        &format!("{} ({})", rule.nickname, rule.steamid64),
-        &extract_client_ip(&headers),
-    )
-    .await
-    {
-        tracing::warn!(%e, "日志写入失败");
-    }
-
-    Ok(StatusCode::NO_CONTENT)
-}
-
-// ------------------------------------------------------------------------
-// 进服记录查询
-// ------------------------------------------------------------------------
 
 pub(crate) async fn list_access_logs(
     State(ctx): State<AppCtx>,

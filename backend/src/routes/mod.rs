@@ -21,10 +21,10 @@ pub mod user;
 pub mod whitelist;
 
 use axum::{
-    Json, Router,
-    http::{HeaderMap, StatusCode, header},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
+    Json, Router,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -33,11 +33,11 @@ use uuid::Uuid;
 use crate::{
     config::Config,
     db::Database,
-    models::{Operator, preferred_operator_name},
+    models::{preferred_operator_name, Operator},
     services::{
         access_cache::{ActiveBanCache, WhitelistCache},
         access_snapshot_service::SnapshotStore,
-        notification_service::{NotificationHub, create_notification_hub},
+        notification_service::{create_notification_hub, NotificationHub},
         r2_storage::R2Storage,
         server_config_cache::ServerConfigCache,
         steam_service::SteamResolver,
@@ -383,25 +383,19 @@ pub fn router(
         .route("/api/docs/endpoints", get(misc::api_endpoint_docs))
         // -- ops --
         .route("/api/ops/overview", get(ops::overview))
-        // -- player access rules --
-        .route(
-            "/api/player-access/rules",
-            get(access::player_access_rules).post(access::create_player_access_rule),
-        )
-        .route(
-            "/api/player-access/rules/:id",
-            put(access::update_player_access_rule).delete(access::delete_player_access_rule),
-        )
         // -- player access logs --
-        .route(
-            "/api/player-access/logs",
-            get(access::list_access_logs),
-        )
+        .route("/api/player-access/logs", get(access::list_access_logs))
         // -- global bans --
-        .route("/api/global-bans", get(global_ban::list_global_bans).post(global_ban::search_player_bans))
+        .route(
+            "/api/global-bans",
+            get(global_ban::list_global_bans).post(global_ban::search_player_bans),
+        )
         .route("/api/global-bans/status", get(global_ban::sync_status))
         .route("/api/global-bans/sync", post(global_ban::trigger_sync))
-        .route("/api/global-bans/:kzt_ban_id/unban", post(global_ban::manual_unban_global_ban))
+        .route(
+            "/api/global-bans/:kzt_ban_id/unban",
+            post(global_ban::manual_unban_global_ban),
+        )
         // -- notifications --
         .route("/api/notifications", get(notification::list_notifications))
         .route(
@@ -464,10 +458,7 @@ pub fn router(
             post(map_feedback::query_feedback_status),
         )
         // -- admin: map feedback --
-        .route(
-            "/api/map-feedback",
-            get(map_feedback::list_feedback),
-        )
+        .route("/api/map-feedback", get(map_feedback::list_feedback))
         .route(
             "/api/map-feedback/:id/review",
             post(map_feedback::review_feedback),
@@ -605,7 +596,8 @@ pub(crate) fn translate_db_error(error: &anyhow::Error) -> String {
                 let message = db_err.message();
 
                 if message.contains("duplicate key") || message.contains("unique constraint") {
-                    if constraint.contains("users_username_key") || constraint.contains("username") {
+                    if constraint.contains("users_username_key") || constraint.contains("username")
+                    {
                         return "该用户名已存在，请更换其他用户名".to_string();
                     }
                     if constraint.contains("steam_id") || constraint.contains("steamid64") {

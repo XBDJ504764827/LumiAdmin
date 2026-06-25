@@ -4,8 +4,7 @@ use crate::{
     http_client,
     services::{
         access_cache::{ActiveBanCache, WhitelistCache},
-        access_snapshot_service, player_access_rule_service, player_risk_service,
-        plugin_ban_service, server_config_cache,
+        access_snapshot_service, player_risk_service, plugin_ban_service, server_config_cache,
     },
 };
 use chrono::{DateTime, Duration, Utc};
@@ -203,33 +202,7 @@ async fn check_access_live(
         ));
     }
 
-    // 2. 检查玩家进服权限规则（优先级最高）
-    let (access_allowed, access_reason, has_custom_rule) =
-        player_access_rule_service::check_player_access(
-            db,
-            steam_id64,
-            server.id,
-            server.community_id,
-        )
-        .await?;
-    if !access_allowed {
-        return Ok(reject_with_method(
-            access_reason.as_deref().unwrap_or("您被禁止进入该服务器"),
-            "custom_rule_rejected",
-            "custom_rule_rejected",
-        ));
-    }
-    // 如果自定义规则明确放行，记录为 custom_rule（直接跳过后续白名单/限制检查）
-    if has_custom_rule {
-        return Ok(allow_with_data(
-            "已通过自定义权限规则，允许进入服务器。",
-            "custom_rule",
-            None,
-            None,
-        ));
-    }
-
-    // 3. 检查服务器访问模式
+    // 2. 检查服务器访问模式
     let effective_restriction = server.effective_access_restriction_enabled();
     let effective_whitelist = server.effective_whitelist_mode_enabled();
 

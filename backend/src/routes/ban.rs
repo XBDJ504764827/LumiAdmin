@@ -82,7 +82,11 @@ fn optional_client_ip(headers: &HeaderMap) -> Option<String> {
 fn audit_target_for_ban(item: &ban_service::BanItem) -> String {
     if !item.steam_id.trim().is_empty() {
         item.steam_id.clone()
-    } else if let Some(ip) = item.ip_address.as_ref().filter(|value| !value.trim().is_empty()) {
+    } else if let Some(ip) = item
+        .ip_address
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
         ip.clone()
     } else {
         item.id.to_string()

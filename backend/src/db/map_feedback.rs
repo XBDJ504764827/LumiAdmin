@@ -1,8 +1,8 @@
 use super::Database;
 
 impl Database {
-pub(super) async fn migrate_map_feedback_schema(&self) -> anyhow::Result<()> {
-    sqlx::query(
+    pub(super) async fn migrate_map_feedback_schema(&self) -> anyhow::Result<()> {
+        sqlx::query(
         r#"CREATE TABLE IF NOT EXISTS map_feedback (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           feedback_type TEXT NOT NULL,
@@ -22,18 +22,18 @@ pub(super) async fn migrate_map_feedback_schema(&self) -> anyhow::Result<()> {
     .execute(&self.pool)
     .await?;
 
-    sqlx::query(
-        r#"CREATE INDEX IF NOT EXISTS idx_map_feedback_status_created
+        sqlx::query(
+            r#"CREATE INDEX IF NOT EXISTS idx_map_feedback_status_created
            ON map_feedback (status, created_at DESC)"#,
-    )
-    .execute(&self.pool)
-    .await?;
-    sqlx::query(
-        r#"CREATE INDEX IF NOT EXISTS idx_map_feedback_steam_id
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            r#"CREATE INDEX IF NOT EXISTS idx_map_feedback_steam_id
            ON map_feedback (steam_id)"#,
-    )
-    .execute(&self.pool)
-    .await?;
-    Ok(())
-}
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }

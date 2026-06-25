@@ -390,8 +390,5 @@ pub async fn query_reports_by_target_steam_id(
     .await?;
 
     // upload_token is deliberately None — public queries must not expose the token
-    Ok(rows
-        .into_iter()
-        .map(|row| row_to_item(row, None))
-        .collect())
+    Ok(rows.into_iter().map(|row| row_to_item(row, None)).collect())
 }

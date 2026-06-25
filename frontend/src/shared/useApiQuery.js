@@ -4,18 +4,20 @@ import { useAuth } from '../state/store.js';
 /**
  * 封装 React Query 的 Hook，自动注入 token
  * @param {Array} queryKey - 查询键
- * @param {Function} queryFn - 查询函数，接收 token 参数
- * @param {Object} options - React Query 选项
+ * @param {Function} queryFn - 查询函数，认证接口接收 token 参数；公开接口不接收参数
+ * @param {Object} options - React Query 选项，auth=false 时不要求登录态
  */
 export function useApiQuery(queryKey, queryFn, options = {}) {
   const { session } = useAuth();
   const token = session?.token ?? null;
+  const { auth = true, enabled = true, ...queryOptions } = options;
+  const requiresAuth = auth !== false;
 
   return useQuery({
-    queryKey: [...queryKey, token],
-    queryFn: () => queryFn(token),
-    enabled: !!token && (options.enabled !== false),
-    ...options,
+    ...queryOptions,
+    queryKey: requiresAuth ? [...queryKey, token] : queryKey,
+    queryFn: () => (requiresAuth ? queryFn(token) : queryFn()),
+    enabled: (requiresAuth ? !!token : true) && enabled,
   });
 }
 

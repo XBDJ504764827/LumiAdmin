@@ -19,7 +19,6 @@ pub struct AccessSnapshot {
     pub bans: Vec<SnapshotBan>,
     pub whitelist: Vec<SnapshotWhitelistEntry>,
     pub access_profiles: Vec<SnapshotAccessProfile>,
-    pub player_access_rules: Vec<SnapshotPlayerAccessRule>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,15 +61,6 @@ pub struct SnapshotAccessProfile {
     pub expires_at_unix: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SnapshotPlayerAccessRule {
-    pub steamid64: String,
-    pub allowed_servers: Vec<Uuid>,
-    pub blocked_servers: Vec<Uuid>,
-    pub allowed_communities: Vec<Uuid>,
-    pub blocked_communities: Vec<Uuid>,
-}
-
 #[derive(Debug, Clone)]
 pub struct SnapshotAccessInput {
     pub report_token: String,
@@ -98,12 +88,11 @@ pub async fn refresh_snapshot(
     store: &SnapshotStore,
 ) -> anyhow::Result<AccessSnapshot> {
     let now = Utc::now();
-    let (servers, bans, whitelist, access_profiles, player_access_rules) = tokio::try_join!(
+    let (servers, bans, whitelist, access_profiles) = tokio::try_join!(
         load_snapshot_servers(db),
         load_snapshot_bans(db),
         load_snapshot_whitelist(db),
         load_snapshot_access_profiles(db),
-        load_snapshot_player_access_rules(db),
     )?;
     let snapshot = with_version(AccessSnapshot {
         version: String::new(),
@@ -113,7 +102,6 @@ pub async fn refresh_snapshot(
         bans,
         whitelist,
         access_profiles,
-        player_access_rules,
     });
     store.write_snapshot(&snapshot).await?;
     info!(version = %snapshot.version, "access snapshot refreshed");
@@ -173,38 +161,6 @@ async fn load_snapshot_access_profiles(
     .await
     .map(|rows| rows.into_iter().map(Into::into).collect())
     .context("加载玩家访问资料快照失败")
-}
-
-#[derive(sqlx::FromRow)]
-struct SnapshotPlayerAccessRuleRow {
-    steamid64: String,
-    allowed_servers: Vec<Uuid>,
-    blocked_servers: Vec<Uuid>,
-    allowed_communities: Vec<Uuid>,
-    blocked_communities: Vec<Uuid>,
-}
-
-async fn load_snapshot_player_access_rules(
-    db: &Database,
-) -> anyhow::Result<Vec<SnapshotPlayerAccessRule>> {
-    let rows: Vec<SnapshotPlayerAccessRuleRow> = sqlx::query_as(
-        r#"SELECT steamid64, allowed_servers, blocked_servers, allowed_communities, blocked_communities
-           FROM player_access_rules"#,
-    )
-    .fetch_all(&db.pool)
-    .await
-    .context("加载玩家进服规则快照失败")?;
-
-    Ok(rows
-        .into_iter()
-        .map(|r| SnapshotPlayerAccessRule {
-            steamid64: r.steamid64,
-            allowed_servers: r.allowed_servers,
-            blocked_servers: r.blocked_servers,
-            allowed_communities: r.allowed_communities,
-            blocked_communities: r.blocked_communities,
-        })
-        .collect())
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -539,26 +495,6 @@ pub fn evaluate_access_snapshot(
         return reject(&format!("你已被封禁：{}", ban.reason));
     }
 
-    // 检查玩家进服规则
-    if let Some(rule) = snapshot
-        .player_access_rules
-        .iter()
-        .find(|r| r.steamid64 == input.steam_id64)
-    {
-        if rule.allowed_servers.contains(&server.id) {
-            return allow("允许进入服务器。");
-        }
-        if rule.blocked_servers.contains(&server.id) {
-            return reject("您被禁止进入该服务器");
-        }
-        if rule.allowed_communities.contains(&server.community_id) {
-            return allow("允许进入服务器。");
-        }
-        if rule.blocked_communities.contains(&server.community_id) {
-            return reject("您被禁止进入该社区的所有服务器");
-        }
-    }
-
     let has_restriction = effective_restriction_enabled(server);
     let has_whitelist = effective_whitelist_mode_enabled(server);
 
@@ -694,7 +630,6 @@ mod tests {
                 steam_id64: "76561198000000001".to_string(),
             }],
             access_profiles: Vec::new(),
-            player_access_rules: Vec::new(),
         }
     }
 

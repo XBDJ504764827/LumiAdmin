@@ -124,9 +124,7 @@ pub struct OnlinePlayersResponse {
     pub details: Vec<OnlinePlayerItem>,
 }
 
-#[derive(Serialize)]
-
-#[derive(sqlx::FromRow)]
+#[derive(Serialize, sqlx::FromRow)]
 struct CommunityRow {
     community_id: Uuid,
     community_name: String,
@@ -644,8 +642,6 @@ pub async fn list_online_players(
     Ok(OnlinePlayersResponse { players, details })
 }
 
-
-
 fn normalize_online_player(
     player: OnlinePlayerInput,
     report_port: u16,
@@ -762,29 +758,24 @@ pub fn start_stale_cleanup_loop(db: Database) {
     });
 }
 
-
-
 /// 根据社区组 ID 获取社区组名称（用于日志记录）
 pub async fn find_group_name(db: &Database, group_id: Uuid) -> anyhow::Result<String> {
-    let row: Option<(String,)> = sqlx::query_as(
-        r#"SELECT name FROM communities WHERE id = $1"#,
-    )
-    .bind(group_id)
-    .fetch_optional(&db.pool)
-    .await?;
+    let row: Option<(String,)> = sqlx::query_as(r#"SELECT name FROM communities WHERE id = $1"#)
+        .bind(group_id)
+        .fetch_optional(&db.pool)
+        .await?;
 
     Ok(row.map(|(name,)| name).unwrap_or_default())
 }
 
 /// 根据服务器 ID 获取服务器信息描述（用于日志记录）
 pub async fn find_server_info(db: &Database, server_id: Uuid) -> Option<String> {
-    let row: Option<(String, String, i32)> = sqlx::query_as(
-        r#"SELECT name, ip, port FROM servers WHERE id = $1"#,
-    )
-    .bind(server_id)
-    .fetch_optional(&db.pool)
-    .await
-    .ok()?;
+    let row: Option<(String, String, i32)> =
+        sqlx::query_as(r#"SELECT name, ip, port FROM servers WHERE id = $1"#)
+            .bind(server_id)
+            .fetch_optional(&db.pool)
+            .await
+            .ok()?;
 
     row.map(|(name, ip, port)| format!("{} ({}:{})", name, ip, port))
 }

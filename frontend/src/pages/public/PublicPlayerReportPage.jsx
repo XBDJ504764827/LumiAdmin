@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { api } from '../../lib/api.js';
+import { publicApi } from '../../lib/publicApi.js';
 import { PublicPageShell } from './PublicPageShell.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 
@@ -114,14 +114,14 @@ export function PublicPlayerReportPage() {
       return;
     }
     try {
-      const result = await api.resolveSteam({ steam_input: steamInput.trim() });
+      const result = await publicApi.resolveSteam({ steam_input: steamInput.trim() });
       if (result.persona_name && !targetName.trim()) setTargetName(result.persona_name);
     } catch {}
 
     // Query existing reports for this player
     setLoadingReports(true);
     try {
-      const result = await api.queryPlayerReportStatus({ steam_input: steamInput.trim() });
+      const result = await publicApi.queryPlayerReportStatus({ steam_input: steamInput.trim() });
       setExistingReports(result.reports ?? []);
     } catch {
       setExistingReports(null);
@@ -140,7 +140,7 @@ export function PublicPlayerReportPage() {
     let reportId;
     let uploadToken;
     try {
-      const result = await api.submitPlayerReport({
+      const result = await publicApi.submitPlayerReport({
         steam_input: steamInput.trim(),
         target_player_name: targetName.trim() || null,
         reporter_contact: contact.trim() || null,

@@ -6,11 +6,22 @@ export function formatBanDuration(minutes) {
   return `${minutes} 分钟`;
 }
 
-export function formatBanSource(source, operatorName) {
-  if (source === 'game_plugin') {
-    return operatorName ? `游戏内 - ${operatorName}` : '游戏内命令';
+export function formatBanSource(source) {
+  switch (source) {
+    case 'global_ban':
+      return '全球封禁自动封禁';
+    case 'game_plugin':
+      return '游戏管理员手动封禁';
+    case 'web':
+    case 'manual':
+      return '网站管理员手动封禁';
+    case 'offline_sync':
+      return '游戏离线操作同步封禁';
+    case 'external_api':
+      return '外部封禁 API 同步封禁';
+    default:
+      return source ? `其他来源封禁（${source}）` : '未知来源封禁';
   }
-  return '网站手动';
 }
 
 export function formatExpiresAt(value) {

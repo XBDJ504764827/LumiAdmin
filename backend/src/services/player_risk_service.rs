@@ -7,6 +7,8 @@ const RECENT_IP_LINK_DAYS: i64 = 90;
 const OLD_IP_LINK_DAYS: i64 = 365;
 const MAX_LINKED_ACCOUNT_ITEMS: usize = 20;
 
+type AccessRiskLinkedRow = (String, Option<String>, bool, bool, Option<DateTime<Utc>>);
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RiskSeverity {
@@ -245,7 +247,7 @@ pub async fn evaluate_ip_ban_for_access(
         return Ok(None);
     };
     let steamid64 = steamid64.trim();
-    let row: Option<(String, Option<String>, bool, bool, Option<DateTime<Utc>>)> = sqlx::query_as(
+    let row: Option<AccessRiskLinkedRow> = sqlx::query_as(
         r#"SELECT linked.steam_id,
                   linked.player_name,
                   EXISTS (

@@ -1,32 +1,32 @@
 use super::Database;
 
 impl Database {
-pub(super) async fn migrate_whitelist_schema(&self) -> anyhow::Result<()> {
-    let alters = [
-        r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS nickname TEXT"#,
-        r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS steamid64 TEXT"#,
-        r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS steamid TEXT"#,
-        r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS steamid3 TEXT"#,
-        r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS profile_url TEXT"#,
-        r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS steam_persona_name TEXT"#,
-        r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS applied_at TIMESTAMPTZ"#,
-        r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ"#,
-        r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS approved_by TEXT"#,
-        r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMPTZ"#,
-        r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS rejected_by TEXT"#,
-        r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS rejection_reason TEXT"#,
-        r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ"#,
-        r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS revoked_by TEXT"#,
-        r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS source TEXT"#,
-        r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ"#,
-        r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS approval_reason TEXT"#,
-    ];
-    for sql in alters {
-        sqlx::query(sql).execute(&self.pool).await?;
-    }
+    pub(super) async fn migrate_whitelist_schema(&self) -> anyhow::Result<()> {
+        let alters = [
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS nickname TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS steamid64 TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS steamid TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS steamid3 TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS profile_url TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS steam_persona_name TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS applied_at TIMESTAMPTZ"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS approved_by TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMPTZ"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS rejected_by TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS rejection_reason TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS revoked_by TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS source TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS approval_reason TEXT"#,
+        ];
+        for sql in alters {
+            sqlx::query(sql).execute(&self.pool).await?;
+        }
 
-    // 旧字段数据迁移
-    sqlx::query(
+        // 旧字段数据迁移
+        sqlx::query(
         r#"
         DO $$
         BEGIN
@@ -179,33 +179,33 @@ pub(super) async fn migrate_whitelist_schema(&self) -> anyhow::Result<()> {
         "#,
     ).execute(&self.pool).await?;
 
-    // 数据修补
-    let fixes = [
-        r#"UPDATE whitelist_requests SET steamid64 = steam_id WHERE steamid64 IS NULL AND steam_id ~ '^[0-9]{17}$'"#,
-        r#"UPDATE whitelist_requests SET steamid = steam_id WHERE steamid IS NULL AND steam_id IS NOT NULL"#,
-        r#"UPDATE whitelist_requests SET nickname = COALESCE(steamid64, steam_id, '未知玩家') WHERE nickname IS NULL OR btrim(nickname) = ''"#,
-        r#"UPDATE whitelist_requests SET source = 'public' WHERE source IS NULL OR btrim(source) = ''"#,
-        r#"UPDATE whitelist_requests SET updated_at = COALESCE(approved_at, rejected_at, revoked_at, applied_at) WHERE updated_at IS NULL"#,
-        r#"UPDATE whitelist_requests SET applied_at = COALESCE(updated_at, now()) WHERE applied_at IS NULL"#,
-    ];
-    for sql in fixes {
-        sqlx::query(sql).execute(&self.pool).await?;
-    }
+        // 数据修补
+        let fixes = [
+            r#"UPDATE whitelist_requests SET steamid64 = steam_id WHERE steamid64 IS NULL AND steam_id ~ '^[0-9]{17}$'"#,
+            r#"UPDATE whitelist_requests SET steamid = steam_id WHERE steamid IS NULL AND steam_id IS NOT NULL"#,
+            r#"UPDATE whitelist_requests SET nickname = COALESCE(steamid64, steam_id, '未知玩家') WHERE nickname IS NULL OR btrim(nickname) = ''"#,
+            r#"UPDATE whitelist_requests SET source = 'public' WHERE source IS NULL OR btrim(source) = ''"#,
+            r#"UPDATE whitelist_requests SET updated_at = COALESCE(approved_at, rejected_at, revoked_at, applied_at) WHERE updated_at IS NULL"#,
+            r#"UPDATE whitelist_requests SET applied_at = COALESCE(updated_at, now()) WHERE applied_at IS NULL"#,
+        ];
+        for sql in fixes {
+            sqlx::query(sql).execute(&self.pool).await?;
+        }
 
-    // 索引
-    sqlx::query(r#"DROP INDEX IF EXISTS idx_whitelist_requests_steamid64"#)
-        .execute(&self.pool)
-        .await?;
-    sqlx::query(
-        r#"CREATE INDEX IF NOT EXISTS idx_whitelist_requests_steamid64_lookup
+        // 索引
+        sqlx::query(r#"DROP INDEX IF EXISTS idx_whitelist_requests_steamid64"#)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(
+            r#"CREATE INDEX IF NOT EXISTS idx_whitelist_requests_steamid64_lookup
            ON whitelist_requests (steamid64, updated_at DESC, applied_at DESC)
            WHERE steamid64 IS NOT NULL"#,
-    )
-    .execute(&self.pool)
-    .await?;
+        )
+        .execute(&self.pool)
+        .await?;
 
-    Ok(())
-}
+        Ok(())
+    }
 
-// 日志、审计、离线操作、权限规则 + 性能索引 + 访问控制
+    // 日志、审计、离线操作、权限规则 + 性能索引 + 访问控制
 }

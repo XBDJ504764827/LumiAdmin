@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useApiQuery } from '../../shared/useApiQuery.js';
-import { api } from '../../lib/api.js';
+import { publicApi } from '../../lib/publicApi.js';
 import { PublicPageShell } from './PublicPageShell.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
@@ -12,8 +12,8 @@ export function PublicWhitelistPage() {
 
   const { data, isLoading, error, refetch } = useApiQuery(
     ['publicWhitelist', { page, search }],
-    () => api.publicWhitelist({ page, page_size: 20, ...(search ? { search } : {}) }),
-    { enabled: true },
+    () => publicApi.publicWhitelist({ page, page_size: 20, ...(search ? { search } : {}) }),
+    { auth: false },
   );
 
   const items = data?.items ?? [];

@@ -52,10 +52,9 @@ pub(crate) async fn sync_status(
         return Err(AppError::forbidden());
     }
 
-    let status =
-        global_ban_service::sync_status(&ctx.db, ctx.config.global_ban_sync_interval_secs)
-            .await
-            .map_err(AppError::internal)?;
+    let status = global_ban_service::sync_status(&ctx.db, ctx.config.global_ban_sync_interval_secs)
+        .await
+        .map_err(AppError::internal)?;
 
     Ok(Json(serde_json::json!({ "status": status })))
 }
@@ -71,13 +70,10 @@ pub(crate) async fn search_player_bans(
         return Err(AppError::forbidden());
     }
 
-    let result = global_ban_service::search_player_bans(
-        &ctx.db,
-        &ctx.steam_resolver,
-        &body.steam_input,
-    )
-    .await
-    .map_err(AppError::internal)?;
+    let result =
+        global_ban_service::search_player_bans(&ctx.db, &ctx.steam_resolver, &body.steam_input)
+            .await
+            .map_err(AppError::internal)?;
 
     Ok(Json(serde_json::json!({
         "items": result.items,
@@ -126,7 +122,9 @@ pub(crate) async fn manual_unban_global_ban(
             server_name: None,
             server_port: None,
             success: true,
-            message: Some(format!("后台手动解除全球封禁对应的本地封禁，KZTimer ID: {kzt_ban_id}")),
+            message: Some(format!(
+                "后台手动解除全球封禁对应的本地封禁，KZTimer ID: {kzt_ban_id}"
+            )),
             idempotency_key: None,
         },
         optional_client_ip(&headers),

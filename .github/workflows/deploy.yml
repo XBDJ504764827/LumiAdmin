@@ -119,7 +119,8 @@ jobs:
       - name: Check Backend
         run: |
           cd backend
-          cargo clippy --all-targets
+          cargo fmt --check
+          cargo clippy --all-targets --all-features -- -D warnings
           cargo test
 
       - name: Build Backend

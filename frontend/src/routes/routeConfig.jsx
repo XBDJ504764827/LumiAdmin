@@ -17,7 +17,6 @@ const ApiListPage = lazy(() => import('../pages/api/ApiListPage.jsx').then(m => 
 const PlayerApiPage = lazy(() => import('../pages/api/PlayerApiPage.jsx').then(m => ({ default: m.PlayerApiPage })));
 const ExternalBanApiPage = lazy(() => import('../pages/api/ExternalBanApiPage.jsx').then(m => ({ default: m.ExternalBanApiPage })));
 const ExternalServerPage = lazy(() => import('../pages/external/ExternalServerPage.jsx').then(m => ({ default: m.ExternalServerPage })));
-const PlayerAccessPage = lazy(() => import('../pages/playerAccess/PlayerAccessPage.jsx').then(m => ({ default: m.PlayerAccessPage })));
 const AccessLogPage = lazy(() => import('../pages/accessLog/AccessLogPage.jsx').then(m => ({ default: m.AccessLogPage })));
 const GlobalBanPage = lazy(() => import('../pages/globalBan/GlobalBanPage.jsx').then(m => ({ default: m.GlobalBanPage })));
 const MapFeedbackPage = lazy(() => import('../pages/mapFeedback/MapFeedbackPage.jsx').then(m => ({ default: m.MapFeedbackPage })));
@@ -30,7 +29,6 @@ const PublicBanPage = lazy(() => import('../pages/public/PublicBanPage.jsx').the
 const PublicBanAppealPage = lazy(() => import('../pages/public/PublicBanAppealPage.jsx').then(m => ({ default: m.PublicBanAppealPage })));
 const PublicPlayerReportPage = lazy(() => import('../pages/public/PublicPlayerReportPage.jsx').then(m => ({ default: m.PublicPlayerReportPage })));
 const PublicMapFeedbackPage = lazy(() => import('../pages/public/PublicMapFeedbackPage.jsx').then(m => ({ default: m.PublicMapFeedbackPage })));
-const _NotFoundPage = lazy(() => import('../pages/notFound/NotFoundPage.jsx').then(m => ({ default: m.NotFoundPage })));
 
 function Lazy({ children }) {
   return (
@@ -50,7 +48,6 @@ export const protectedRoutes = [
   { path: '/ban-appeal', element: <Lazy><BanAppealPage /></Lazy>, roles: ROUTE_ROLES.admin },
   { path: '/player-reports', element: <Lazy><PlayerReportPage /></Lazy>, roles: ROUTE_ROLES.admin },
   { path: '/users', element: <Lazy><UsersPage /></Lazy>, roles: ROUTE_ROLES.staff },
-  { path: '/player-access', element: <Lazy><PlayerAccessPage /></Lazy>, roles: ROUTE_ROLES.staff },
   { path: '/access-logs', element: <Lazy><AccessLogPage /></Lazy>, roles: ROUTE_ROLES.admin },
   { path: '/global-bans', element: <Lazy><GlobalBanPage /></Lazy>, roles: ROUTE_ROLES.admin },
   { path: '/map-feedback', element: <Lazy><MapFeedbackPage /></Lazy>, roles: ROUTE_ROLES.admin },

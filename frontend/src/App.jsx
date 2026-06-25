@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { AuthProvider, useAuth } from './state/auth.jsx';
-import { ThemeProvider } from './state/theme.jsx';
+import { useAuth, useAuthStore } from './state/store.js';
 import { ToastProvider } from './shared/Toast.jsx';
 import { AppShell } from './components/layout/AppShell.jsx';
 import { publicRoutes, protectedRoutes } from './routes/routeConfig.jsx';
@@ -23,15 +22,20 @@ const queryClient = new QueryClient({
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider>
-        <AuthProvider>
-          <ToastProvider>
-            <AppRoutes />
-          </ToastProvider>
-        </AuthProvider>
-      </ThemeProvider>
+      <ToastProvider>
+        <AppBootstrap />
+        <AppRoutes />
+      </ToastProvider>
     </QueryClientProvider>
   );
+}
+
+function AppBootstrap() {
+  useEffect(() => {
+    useAuthStore.getState().initialize();
+  }, []);
+
+  return null;
 }
 
 function GuardedRoute({ route, session }) {

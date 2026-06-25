@@ -1,12 +1,12 @@
-use crate::routes::{AppCtx, ListQuery, invalid_request};
+use crate::routes::{invalid_request, AppCtx, ListQuery};
 use crate::services::{
     ban_appeal_service, ban_service, global_ban_service, log_service, notification_service,
     public_service, r2_storage, rate_limit_service::extract_client_ip, whitelist_service,
 };
 use axum::{
-    Json,
     extract::{Multipart, Path, Query, State},
     http::{HeaderMap, StatusCode},
+    Json,
 };
 use std::collections::HashSet;
 use std::time::Duration;
@@ -116,12 +116,10 @@ pub(crate) async fn public_bans(
             tracing::error!(error = %e, "加载公开封禁列表失败");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
-    let stats = public_service::ban_stats(&ctx.db)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "加载封禁统计失败");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let stats = public_service::ban_stats(&ctx.db).await.map_err(|e| {
+        tracing::error!(error = %e, "加载封禁统计失败");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     Ok(Json(
         serde_json::json!({ "items": result.items, "total": result.total, "page": result.page, "page_size": result.page_size, "stats": stats }),
     ))

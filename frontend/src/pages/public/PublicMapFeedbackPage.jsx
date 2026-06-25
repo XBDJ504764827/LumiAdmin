@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { api } from '../../lib/api.js';
+import { publicApi } from '../../lib/publicApi.js';
 import { PublicPageShell } from './PublicPageShell.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 
@@ -55,7 +55,7 @@ export function PublicMapFeedbackPage() {
     }
     setLoadingFeedback(true);
     try {
-      const result = await api.queryMapFeedbackStatus({ steam_input: steamInput.trim() });
+      const result = await publicApi.queryMapFeedbackStatus({ steam_input: steamInput.trim() });
       setExistingFeedback(result.feedback ?? []);
     } catch {
       setExistingFeedback(null);
@@ -71,7 +71,7 @@ export function PublicMapFeedbackPage() {
     setMessage('');
 
     try {
-      await api.submitMapFeedback({
+      await publicApi.submitMapFeedback({
         feedback_type: feedbackType,
         steam_input: steamInput.trim() || null,
         contact: contact.trim() || null,

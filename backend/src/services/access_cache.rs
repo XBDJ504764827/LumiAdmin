@@ -52,15 +52,20 @@ impl ActiveBanCache {
 
     pub async fn refresh(&self, db: &Database) -> anyhow::Result<()> {
         #[allow(clippy::type_complexity)]
-        let rows: Vec<(Option<String>, Option<String>, Uuid, String, Option<DateTime<Utc>>)> =
-            sqlx::query_as(
-                r#"SELECT steam_id, ip_address, id, reason, expires_at
+        let rows: Vec<(
+            Option<String>,
+            Option<String>,
+            Uuid,
+            String,
+            Option<DateTime<Utc>>,
+        )> = sqlx::query_as(
+            r#"SELECT steam_id, ip_address, id, reason, expires_at
                    FROM ban_records
                    WHERE status = 'active'
                      AND (expires_at IS NULL OR expires_at > now())"#,
-            )
-            .fetch_all(&db.pool)
-            .await?;
+        )
+        .fetch_all(&db.pool)
+        .await?;
 
         let mut by_steam_id = HashMap::new();
         let mut by_ip = HashMap::new();
@@ -110,11 +115,10 @@ impl WhitelistCache {
     }
 
     pub async fn refresh(&self, db: &Database) -> anyhow::Result<()> {
-        let rows: Vec<(String,)> = sqlx::query_as(
-            r#"SELECT steamid64 FROM whitelist_requests WHERE status = 'approved'"#,
-        )
-        .fetch_all(&db.pool)
-        .await?;
+        let rows: Vec<(String,)> =
+            sqlx::query_as(r#"SELECT steamid64 FROM whitelist_requests WHERE status = 'approved'"#)
+                .fetch_all(&db.pool)
+                .await?;
 
         let approved: HashSet<String> = rows.into_iter().map(|(s,)| s).collect();
         let count = approved.len();

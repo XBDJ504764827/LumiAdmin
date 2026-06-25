@@ -175,7 +175,9 @@ fn push_filters(builder: &mut QueryBuilder<'_, Postgres>, params: &AccessLogQuer
 
     if let Some(v) = params.steam_id64.as_ref().filter(|v| !v.trim().is_empty()) {
         push_filter_prefix(builder, &mut has_where);
-        builder.push("steam_id64 = ").push_bind(v.trim().to_string());
+        builder
+            .push("steam_id64 = ")
+            .push_bind(v.trim().to_string());
     }
     if let Some(v) = params.server_id {
         push_filter_prefix(builder, &mut has_where);
@@ -185,19 +187,36 @@ fn push_filters(builder: &mut QueryBuilder<'_, Postgres>, params: &AccessLogQuer
         push_filter_prefix(builder, &mut has_where);
         builder.push("community_id = ").push_bind(v);
     }
-    if let Some(v) = params.access_method.as_ref().filter(|v| !v.trim().is_empty()) {
+    if let Some(v) = params
+        .access_method
+        .as_ref()
+        .filter(|v| !v.trim().is_empty())
+    {
         push_filter_prefix(builder, &mut has_where);
-        builder.push("access_method = ").push_bind(v.trim().to_string());
+        builder
+            .push("access_method = ")
+            .push_bind(v.trim().to_string());
     }
     if let Some(v) = params.allowed {
         push_filter_prefix(builder, &mut has_where);
         builder.push("allowed = ").push_bind(v);
     }
-    if let Some(v) = params.failure_code.as_ref().filter(|v| !v.trim().is_empty()) {
+    if let Some(v) = params
+        .failure_code
+        .as_ref()
+        .filter(|v| !v.trim().is_empty())
+    {
         push_filter_prefix(builder, &mut has_where);
-        builder.push("failure_code = ").push_bind(v.trim().to_string());
+        builder
+            .push("failure_code = ")
+            .push_bind(v.trim().to_string());
     }
-    if let Some(v) = params.ip_address.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+    if let Some(v) = params
+        .ip_address
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
         let pattern = format!("%{}%", v.replace('%', "\\%").replace('_', "\\_"));
         push_filter_prefix(builder, &mut has_where);
         builder
@@ -205,7 +224,12 @@ fn push_filters(builder: &mut QueryBuilder<'_, Postgres>, params: &AccessLogQuer
             .push_bind(pattern)
             .push(" ESCAPE '\\'");
     }
-    if let Some(v) = params.search.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+    if let Some(v) = params
+        .search
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
         let pattern = format!("%{}%", v.replace('%', "\\%").replace('_', "\\_"));
         push_filter_prefix(builder, &mut has_where);
         builder
@@ -224,7 +248,8 @@ pub async fn query_access_logs(
     db: &Database,
     params: &AccessLogQueryParams,
 ) -> anyhow::Result<(Vec<PlayerAccessLog>, i64)> {
-    let mut count_builder = QueryBuilder::<Postgres>::new("SELECT COUNT(*) FROM player_access_logs");
+    let mut count_builder =
+        QueryBuilder::<Postgres>::new("SELECT COUNT(*) FROM player_access_logs");
     push_filters(&mut count_builder, params);
     let (total,): (i64,) = count_builder.build_query_as().fetch_one(&db.pool).await?;
 

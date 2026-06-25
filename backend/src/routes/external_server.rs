@@ -7,7 +7,9 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::routes::{current_operator, forbidden, invalid_request, AppCtx};
-use crate::services::{external_server_service, log_service, rate_limit_service::extract_client_ip};
+use crate::services::{
+    external_server_service, log_service, rate_limit_service::extract_client_ip,
+};
 
 pub(crate) async fn list_external_servers(
     State(ctx): State<AppCtx>,

@@ -1,7 +1,8 @@
 import { useCallback, useRef, useState } from 'react';
-import { api } from '../../lib/api.js';
+import { publicApi } from '../../lib/publicApi.js';
 import { PublicPageShell } from './PublicPageShell.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
+import { formatBanSource } from '../ban/banDisplay.js';
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
 const ALLOWED_VIDEO = '.mp4,.avi,.mov,.webm,.mkv';
@@ -143,7 +144,7 @@ export function PublicBanAppealPage() {
     setResolving(true);
     setResolveError('');
     try {
-      const result = await api.resolveSteam({ steam_input: trimmed });
+      const result = await publicApi.resolveSteam({ steam_input: trimmed });
       if (result.persona_name) setNickname(result.persona_name);
       else setResolveError('未能自动获取 Steam 名称，请手动填写。');
       setSteamid64(result.steamid64);
@@ -152,7 +153,7 @@ export function PublicBanAppealPage() {
       setLoadingBans(true);
       setLoadingAppeals(true);
       try {
-        const banResult = await api.queryActiveBans({ steam_input: trimmed });
+        const banResult = await publicApi.queryActiveBans({ steam_input: trimmed });
         setBans(banResult.bans ?? []);
       } catch {
         setBans([]);
@@ -161,7 +162,7 @@ export function PublicBanAppealPage() {
       }
 
       try {
-        const appealResult = await api.queryAppealStatus({ steam_input: trimmed });
+        const appealResult = await publicApi.queryAppealStatus({ steam_input: trimmed });
         setExistingAppeals(appealResult.appeals ?? []);
       } catch {
         setExistingAppeals([]);
@@ -218,7 +219,7 @@ export function PublicBanAppealPage() {
     let appealId;
     let uploadToken;
     try {
-      const result = await api.submitBanAppeal({
+      const result = await publicApi.submitBanAppeal({
         ban_id: selectedBanId,
         steam_id: steamid64,
         player_name: nickname.trim(),
@@ -407,7 +408,7 @@ export function PublicBanAppealPage() {
                           </div>
                           <div style={{ fontSize: 12, color: 'var(--text3)' }}>
                             封禁时间：{formatChinaDateTime(ban.created_at, { seconds: false })} · 操作人：{ban.operator_name}
-                            {ban.source === 'game_plugin' ? ' · 来源：游戏插件' : ''}
+                            {ban.source ? ` · 来源：${formatBanSource(ban.source, ban.operator_name)}` : ''}
                           </div>
                         </div>
                       </label>

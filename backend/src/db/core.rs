@@ -1,9 +1,9 @@
 use super::Database;
 
 impl Database {
-pub(super) async fn migrate_core_tables(&self) -> anyhow::Result<()> {
-    let statements = [
-        r#"CREATE TABLE IF NOT EXISTS users (
+    pub(super) async fn migrate_core_tables(&self) -> anyhow::Result<()> {
+        let statements = [
+            r#"CREATE TABLE IF NOT EXISTS users (
           id UUID PRIMARY KEY,
           username TEXT UNIQUE NOT NULL,
           display_name TEXT NOT NULL,
@@ -11,7 +11,7 @@ pub(super) async fn migrate_core_tables(&self) -> anyhow::Result<()> {
           role TEXT NOT NULL,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )"#,
-        r#"CREATE TABLE IF NOT EXISTS sessions (
+            r#"CREATE TABLE IF NOT EXISTS sessions (
           token UUID PRIMARY KEY,
           user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           role TEXT NOT NULL,
@@ -20,14 +20,14 @@ pub(super) async fn migrate_core_tables(&self) -> anyhow::Result<()> {
           expires_at TIMESTAMPTZ NOT NULL,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )"#,
-        r#"CREATE TABLE IF NOT EXISTS public_whitelist (
+            r#"CREATE TABLE IF NOT EXISTS public_whitelist (
           id UUID PRIMARY KEY,
           nickname TEXT NOT NULL,
           steam_id64 TEXT NOT NULL,
           status TEXT NOT NULL,
           submitted_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )"#,
-        r#"CREATE TABLE IF NOT EXISTS public_bans (
+            r#"CREATE TABLE IF NOT EXISTS public_bans (
           id UUID PRIMARY KEY,
           player TEXT NOT NULL,
           steam_id TEXT NOT NULL,
@@ -35,13 +35,13 @@ pub(super) async fn migrate_core_tables(&self) -> anyhow::Result<()> {
           status TEXT NOT NULL,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )"#,
-        r#"CREATE TABLE IF NOT EXISTS communities (
+            r#"CREATE TABLE IF NOT EXISTS communities (
           id UUID PRIMARY KEY,
           name TEXT NOT NULL,
           created_by UUID,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )"#,
-        r#"CREATE TABLE IF NOT EXISTS servers (
+            r#"CREATE TABLE IF NOT EXISTS servers (
           id UUID PRIMARY KEY,
           community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
           name TEXT NOT NULL,
@@ -60,7 +60,7 @@ pub(super) async fn migrate_core_tables(&self) -> anyhow::Result<()> {
           whitelist_mode_enabled BOOLEAN NOT NULL DEFAULT false,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )"#,
-        r#"CREATE TABLE IF NOT EXISTS player_access_cache (
+            r#"CREATE TABLE IF NOT EXISTS player_access_cache (
           steamid64 TEXT PRIMARY KEY,
           rating INTEGER NOT NULL DEFAULT 0,
           steam_level INTEGER NOT NULL DEFAULT 0,
@@ -71,7 +71,7 @@ pub(super) async fn migrate_core_tables(&self) -> anyhow::Result<()> {
           expires_at TIMESTAMPTZ NOT NULL,
           updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )"#,
-        r#"CREATE TABLE IF NOT EXISTS whitelist_requests (
+            r#"CREATE TABLE IF NOT EXISTS whitelist_requests (
           id UUID PRIMARY KEY,
           steam_id TEXT NOT NULL,
           nickname TEXT NOT NULL,
@@ -79,7 +79,7 @@ pub(super) async fn migrate_core_tables(&self) -> anyhow::Result<()> {
           reviewer TEXT,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )"#,
-        r#"CREATE TABLE IF NOT EXISTS ban_records (
+            r#"CREATE TABLE IF NOT EXISTS ban_records (
           id UUID PRIMARY KEY,
           player TEXT,
           steam_id TEXT NOT NULL,
@@ -99,14 +99,14 @@ pub(super) async fn migrate_core_tables(&self) -> anyhow::Result<()> {
           removed_at TIMESTAMPTZ,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )"#,
-        r#"CREATE TABLE IF NOT EXISTS player_api_config (
+            r#"CREATE TABLE IF NOT EXISTS player_api_config (
           id BOOLEAN PRIMARY KEY DEFAULT true,
           max_api_count INTEGER NOT NULL DEFAULT 3,
           interval_seconds INTEGER NOT NULL DEFAULT 30,
           updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           CONSTRAINT player_api_config_single_row CHECK (id)
         )"#,
-        r#"CREATE TABLE IF NOT EXISTS player_api_webhooks (
+            r#"CREATE TABLE IF NOT EXISTS player_api_webhooks (
           id UUID PRIMARY KEY,
           webhook_url TEXT NOT NULL,
           secret TEXT,
@@ -117,7 +117,7 @@ pub(super) async fn migrate_core_tables(&self) -> anyhow::Result<()> {
           created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )"#,
-        r#"CREATE TABLE IF NOT EXISTS admin_logs (
+            r#"CREATE TABLE IF NOT EXISTS admin_logs (
           id UUID PRIMARY KEY,
           operator_name TEXT NOT NULL,
           module TEXT NOT NULL,
@@ -126,12 +126,11 @@ pub(super) async fn migrate_core_tables(&self) -> anyhow::Result<()> {
           ip_address TEXT NOT NULL,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )"#,
-    ];
+        ];
 
-    for stmt in statements {
-        sqlx::query(stmt).execute(&self.pool).await?;
+        for stmt in statements {
+            sqlx::query(stmt).execute(&self.pool).await?;
+        }
+        Ok(())
     }
-    Ok(())
-}
-
 }

@@ -636,22 +636,27 @@ pub(crate) async fn query_report_status(
     State(ctx): State<AppCtx>,
     Json(body): Json<QueryReportStatusBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let parsed = ctx.steam_resolver.resolve(&body.steam_input).await.map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
-
-    let reports = player_report_service::query_reports_by_target_steam_id(&ctx.db, &parsed.steamid64)
+    let parsed = ctx
+        .steam_resolver
+        .resolve(&body.steam_input)
         .await
         .map_err(|e| {
-            tracing::error!(error = %e, "查询举报状态失败");
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "查询举报状态失败"})),
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": e.to_string()})),
             )
         })?;
+
+    let reports =
+        player_report_service::query_reports_by_target_steam_id(&ctx.db, &parsed.steamid64)
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "查询举报状态失败");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "查询举报状态失败"})),
+                )
+            })?;
 
     Ok(Json(serde_json::json!({
         "steamid64": parsed.steamid64,

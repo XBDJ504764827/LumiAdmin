@@ -56,6 +56,7 @@ pub struct PlayerSummary {
     pub unique_ip_count: usize,
     pub linked_account_count: usize,
     pub linked_banned_account_count: usize,
+    pub linked_global_banned_account_count: usize,
     pub evidence_file_count: usize,
     pub admin_action_count: usize,
     pub last_seen_at: Option<DateTime<Utc>>,
@@ -215,6 +216,8 @@ pub struct LinkedAccount {
     pub last_seen: Option<DateTime<Utc>>,
     /// 是否有当前系统中的活跃封禁
     pub has_local_ban: bool,
+    /// 是否有当前同步缓存中的活跃全球封禁
+    pub has_global_ban: bool,
     /// 该关联账号最近一条白名单申请状态
     pub whitelist_status: Option<String>,
     /// 该关联账号白名单申请总数
@@ -403,6 +406,16 @@ pub async fn get_player_detail(
                 .map(|account| account.steam_id64.as_str())
         })
         .collect();
+    let linked_global_banned_ids: HashSet<&str> = ip_history
+        .iter()
+        .flat_map(|entry| {
+            entry
+                .linked_accounts
+                .iter()
+                .filter(|account| account.has_global_ban)
+                .map(|account| account.steam_id64.as_str())
+        })
+        .collect();
     let last_seen_at = [
         online_records.first().map(|item| item.reported_at),
         access_logs.first().map(|item| item.created_at),
@@ -424,6 +437,7 @@ pub async fn get_player_detail(
         unique_ip_count: ip_history.len(),
         linked_account_count: linked_ids.len(),
         linked_banned_account_count: linked_banned_ids.len(),
+        linked_global_banned_account_count: linked_global_banned_ids.len(),
         evidence_file_count: evidence_files.len(),
         admin_action_count: admin_actions.len() + audit_logs.len(),
         last_seen_at,
@@ -1093,6 +1107,8 @@ async fn fetch_linked_accounts(
         name_ban,
         name_wl,
         ban_rows,
+        global_ban_rows,
+        synced_global_ban_rows,
         whitelist_rows,
         server_rows,
         time_rows,
@@ -1146,11 +1162,41 @@ async fn fetch_linked_accounts(
             .await
             .map_err(anyhow::Error::from)
         },
-        // ⑥ 活跃封禁数
+        // ⑥ LumiAdmin 本地活跃封禁数（不含全球封禁同步生成的本地记录）
         async {
             sqlx::query_as::<_, LinkedCountRow>(
                 r#"SELECT steam_id, COUNT(*) AS cnt FROM ban_records
-                       WHERE status = 'active' AND steam_id = ANY($1)
+                       WHERE status = 'active'
+                         AND steam_id = ANY($1)
+                         AND source <> 'global_ban'
+                       GROUP BY steam_id"#,
+            )
+            .bind(linked_ids)
+            .fetch_all(&db.pool)
+            .await
+            .map_err(anyhow::Error::from)
+        },
+        // ⑥.1 活跃全球封禁数
+        async {
+            sqlx::query_as::<_, LinkedCountRow>(
+                r#"SELECT steam_id64 AS steam_id, COUNT(*) AS cnt FROM global_bans
+                       WHERE steam_id64 = ANY($1)
+                         AND is_expired = false
+                         AND manual_unbanned = false
+                       GROUP BY steam_id64"#,
+            )
+            .bind(linked_ids)
+            .fetch_all(&db.pool)
+            .await
+            .map_err(anyhow::Error::from)
+        },
+        // ⑥.2 由全球封禁同步生成的本地封禁数
+        async {
+            sqlx::query_as::<_, LinkedCountRow>(
+                r#"SELECT steam_id, COUNT(*) AS cnt FROM ban_records
+                       WHERE steam_id = ANY($1)
+                         AND status = 'active'
+                         AND source = 'global_ban'
                        GROUP BY steam_id"#,
             )
             .bind(linked_ids)
@@ -1259,6 +1305,14 @@ async fn fetch_linked_accounts(
         .into_iter()
         .map(|r| (r.steam_id, r.cnt > 0))
         .collect();
+    let global_ban_map: HashMap<String, bool> = global_ban_rows
+        .into_iter()
+        .map(|r| (r.steam_id, r.cnt > 0))
+        .collect();
+    let synced_global_ban_map: HashMap<String, bool> = synced_global_ban_rows
+        .into_iter()
+        .map(|r| (r.steam_id, r.cnt > 0))
+        .collect();
 
     let whitelist_map: HashMap<String, LinkedWhitelistRow> = whitelist_rows
         .into_iter()
@@ -1311,6 +1365,8 @@ async fn fetch_linked_accounts(
                 player_name: name_map.get(id).cloned(),
                 last_seen: time_map.get(id).copied().flatten(),
                 has_local_ban: ban_map.get(id).copied().unwrap_or(false),
+                has_global_ban: global_ban_map.get(id).copied().unwrap_or(false)
+                    || synced_global_ban_map.get(id).copied().unwrap_or(false),
                 whitelist_status,
                 whitelist_count,
                 whitelist_applied_at,

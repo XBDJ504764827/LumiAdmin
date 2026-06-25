@@ -219,6 +219,9 @@ function OverviewTab({detail, globalBans}) {
   const timeline = latestItems(detail.timeline || [], 10);
   const currentOnline = detail.online_records || [];
   const internalTags = detail.internal_profile?.tags || [];
+  const linkedLocalBans = count(summary.linked_banned_account_count);
+  const linkedGlobalBans = count(summary.linked_global_banned_account_count);
+  const linkedRiskBans = linkedLocalBans + linkedGlobalBans;
   const activeGlobalCount = (globalBans || []).filter(item => {
     const e = item.ban?.expires_on;
     if (!e || e.startsWith('9999')) return true;
@@ -231,7 +234,7 @@ function OverviewTab({detail, globalBans}) {
       <DossierMetric label="当前在线" value={count(summary.current_online_count)} hint={currentOnline.length>0?currentOnline.map(i=>i.server_name).join(' / '):'未在已上报服务器中'} tone={currentOnline.length>0?'success':'default'} />
       <DossierMetric label="有效封禁" value={count(summary.active_ban_count)+activeGlobalCount} hint={`本地 ${count(summary.active_ban_count)} · 全球 ${activeGlobalCount}`} tone={count(summary.active_ban_count)+activeGlobalCount>0?'danger':'success'} />
       <DossierMetric label="进服记录" value={count(summary.access_log_count)} hint={`成功 ${count(summary.access_success_count)} · 失败 ${count(summary.access_failure_count)}`} tone={count(summary.access_failure_count)>0?'warning':'default'} />
-      <DossierMetric label="IP 与关联账号" value={`${count(summary.unique_ip_count)} / ${count(summary.linked_account_count)}`} hint={`关联封禁账号 ${count(summary.linked_banned_account_count)}`} tone={count(summary.linked_banned_account_count)>0?'danger':'default'} />
+      <DossierMetric label="IP 与关联账号" value={`${count(summary.unique_ip_count)} / ${count(summary.linked_account_count)}`} hint={`关联封禁账号 本地 ${linkedLocalBans} · 全球 ${linkedGlobalBans}`} tone={linkedRiskBans>0?'danger':'default'} />
       <DossierMetric label="白名单状态" value={stLabel(summary.whitelist_status)} hint={`${detail.whitelist?.length||0} 条申请记录`} tone={summary.whitelist_status==='approved'?'success':summary.whitelist_status==='pending'?'warning':summary.whitelist_status?'danger':'default'} />
       <DossierMetric label="案件资料" value={(detail.bans?.length||0)+(detail.appeals?.length||0)+(detail.reports?.length||0)+(detail.map_feedback?.length||0)} hint={`证据 ${count(summary.evidence_file_count)} · 审计 ${count(summary.admin_action_count)}`} />
     </div>
@@ -250,8 +253,8 @@ function OverviewTab({detail, globalBans}) {
               <div><strong>服务器状态</strong><p>{currentOnline.length>0?`正在 ${currentOnline.map(i=>`${i.server_name}:${i.server_port}`).join('、')} 中。`:'当前在线快照中未发现该玩家。'}</p></div>
             </div>
             <div className="player-insight-item">
-              <span className={`player-insight-dot ${count(summary.linked_banned_account_count)>0?'danger':'default'}`}></span>
-              <div><strong>IP 关联</strong><p>{summary.linked_account_count>0?`共发现 ${summary.linked_account_count} 个同 IP 账号，其中 ${summary.linked_banned_account_count} 个存在有效封禁。`:'暂无同 IP 关联账号。'}</p></div>
+              <span className={`player-insight-dot ${linkedRiskBans>0?'danger':'default'}`}></span>
+              <div><strong>IP 关联</strong><p>{summary.linked_account_count>0?`共发现 ${summary.linked_account_count} 个同 IP 账号，其中本地封禁 ${linkedLocalBans} 个、全球封禁 ${linkedGlobalBans} 个。`:'暂无同 IP 关联账号。'}</p></div>
             </div>
             <div className="player-insight-item">
               <span className={`player-insight-dot ${riskProfile?.action==='deny'||riskProfile?.action==='require_force'?'danger':riskProfile?.action==='warn'?'warning':'success'}`}></span>
@@ -392,6 +395,7 @@ function StatusTab({detail, token, onRefresh}) {
 function OverviewStrip({detail, globalBans}) {
   const summary = detail.summary || {};
   const risk = detail.risk_profile;
+  const linkedRiskBans = count(summary.linked_banned_account_count) + count(summary.linked_global_banned_account_count);
   const activeGlobal = (globalBans || []).filter(item => {
     const e = item.ban?.expires_on;
     if (!e || e.startsWith('9999')) return true;
@@ -403,8 +407,8 @@ function OverviewStrip({detail, globalBans}) {
     { label:'进服失败', value:count(summary.access_failure_count), tone:count(summary.access_failure_count)>0?'danger':'default' },
     { label:'本地封禁', value:count(summary.active_ban_count), tone:count(summary.active_ban_count)>0?'danger':'success' },
     { label:'全球封禁', value:activeGlobal, tone:activeGlobal>0?'danger':'default' },
-    { label:'同 IP 账号', value:count(summary.linked_account_count), tone:count(summary.linked_banned_account_count)>0?'warning':'default' },
-    { label:'风控建议', value:risk?.action==='deny'?'拒绝':risk?.action==='require_force'?'强制':risk?.action==='warn'?'备注':'正常', tone:risk?.action==='deny'||risk?.action==='require_force'?'danger':risk?.action==='warn'?'warning':'success' },
+    { label:'同 IP 账号', value:count(summary.linked_account_count), tone:linkedRiskBans>0?'warning':'default' },
+    { label:'风险等级', value:risk?.action==='deny'||risk?.action==='require_force'?'高':risk?.action==='warn'?'中':'低', tone:risk?.action==='deny'||risk?.action==='require_force'?'danger':risk?.action==='warn'?'warning':'success' },
     { label:'证据文件', value:count(summary.evidence_file_count), tone:'default' },
   ];
   return <div className="player-overview-strip">
@@ -420,17 +424,18 @@ function NetworkTab({detail}) {
   return <>
     <div className="card"><div className="card-header"><div><div className="card-title">深度 IP 交叉与设备追踪表</div><div className="card-sub"><strong style={{color:'var(--accent)'}}>逆向检索同 IP 的关联 Steam 账号</strong>，包含关联账号白名单和封禁状态。</div></div></div><div className="card-body p-0">
       {ipHistory.length===0?<Empty>暂无 IP 登录记录。</Empty>:<div className="table-responsive"><table className="data-table tree-table"><thead><tr><th>IP</th><th>首次/最后活跃</th><th>服务器</th><th>关联账号 / 白名单</th></tr></thead><tbody>
-        {ipHistory.map(entry=>{const lb=entry.linked_accounts?.filter(a=>a.has_local_ban).length||0;return <React.Fragment key={entry.ip}>
+        {ipHistory.map(entry=>{const lb=entry.linked_accounts?.filter(a=>a.has_local_ban).length||0;const gb=entry.linked_accounts?.filter(a=>a.has_global_ban).length||0;const banned=lb+gb;return <React.Fragment key={entry.ip}>
           <tr><td><code className="steam-id" style={{fontWeight:700,fontSize:'13px'}}>{entry.ip}</code></td>
           <td style={{fontFamily:'var(--mono)',color:'var(--text2)',fontSize:'12px'}}>首:{entry.first_seen?formatChinaDateTime(entry.first_seen,{seconds:false}):'-'}<br/>末:{entry.last_seen?formatChinaDateTime(entry.last_seen,{seconds:false}):'-'}</td>
           <td style={{color:'var(--text2)'}}>{entry.servers?.map(s=>`${s.server_name}${s.server_port?`:${s.server_port}`:''}`).join(', ')||'-'}</td>
-          <td>{entry.linked_accounts?.length>0?<span style={{color:lb>0?'var(--danger-text)':'var(--text2)',fontWeight:600}}>⚠ {entry.linked_accounts.length}个关联{lb>0?`（${lb}个封禁）`:''}</span>:<span style={{color:'var(--text3)'}}>无</span>}</td></tr>
+          <td>{entry.linked_accounts?.length>0?<span style={{color:banned>0?'var(--danger-text)':'var(--text2)',fontWeight:600}}>⚠ {entry.linked_accounts.length}个关联{banned>0?`（本地 ${lb} · 全球 ${gb}）`:''}</span>:<span style={{color:'var(--text3)'}}>无</span>}</td></tr>
           {entry.linked_accounts?.map(acc=><tr key={acc.steam_id64}><td className="nested">└─关联</td><td style={{fontSize:'11px',color:'var(--text3)'}}>访问 {acc.access_count||0}次</td><td>{acc.servers?.join(', ')||'-'}</td>
           <td>
             <div className="linked-account-cell">
               <span style={{fontWeight:600}}>{acc.player_name||'(未知)'}</span> <code className="steam-id" style={{fontSize:'11px'}}>{acc.steam_id64}</code>
               <div className="linked-account-pills">
-                {acc.has_local_ban&&<StatusPill kind="danger">有封禁</StatusPill>}
+                {acc.has_local_ban&&<StatusPill kind="danger">本地封禁</StatusPill>}
+                {acc.has_global_ban&&<StatusPill kind="danger">全球封禁</StatusPill>}
                 {acc.whitelist_count>0?<StatusPill kind={stKind(acc.whitelist_status,'whitelist')}>白名单 {stLabel(acc.whitelist_status)} · {acc.whitelist_count} 次</StatusPill>:<StatusPill kind="default">无白名单</StatusPill>}
               </div>
               {acc.whitelist_applied_at&&<div className="player-table-sub">最近申请: {formatChinaDateTime(acc.whitelist_applied_at,{seconds:false})}{acc.whitelist_reviewer?` · 审核人: ${acc.whitelist_reviewer}`:''}</div>}

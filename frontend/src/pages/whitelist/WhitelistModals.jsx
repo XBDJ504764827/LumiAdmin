@@ -69,10 +69,10 @@ function GlobalBanRecordList({ bans = [] }) {
 }
 
 function riskActionLabel(action) {
-  if (action === 'deny') return '必须强制通过';
-  if (action === 'require_force') return '必须强制通过';
-  if (action === 'warn') return '需要备注';
-  return '低风险';
+  if (action === 'deny') return '高风险玩家';
+  if (action === 'require_force') return '高风险玩家';
+  if (action === 'warn') return '中风险玩家';
+  return '低风险玩家';
 }
 
 function riskTone(profile) {

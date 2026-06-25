@@ -48,7 +48,7 @@ function RiskBadge({ item, onClick }) {
   const profile = item?.risk_profile;
   if (!profile || riskAction(item) === 'allow') return null;
   const tone = riskTone(item);
-  const text = riskAction(item) === 'deny' ? '需强制通过' : riskAction(item) === 'require_force' ? '需强制通过' : '风险提示';
+  const text = riskAction(item) === 'deny' || riskAction(item) === 'require_force' ? '高风险玩家' : '中风险玩家';
   return (
     <button type="button" className={`whitelist-risk-badge ${tone}`} title={profile.summary || '查看风险详情'} onClick={() => onClick?.(item)}>
       <span>⚠</span>

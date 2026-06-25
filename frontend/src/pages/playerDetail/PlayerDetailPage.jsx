@@ -9,6 +9,9 @@ import { Modal } from '../../shared/Modal.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 
 const STATUS_LABELS = { active:'生效中', inactive:'已失效', pending:'待审核', approved:'已通过', rejected:'已驳回', revoked:'已撤销', resolved:'已解决', online:'在线', success:'成功', failed:'失败' };
+const ACCESS_METHOD_LABELS = { unrestricted:'无限制放行', whitelist:'白名单放行', restriction:'Rating 限制通过', custom_rule:'自定义规则放行', banned:'封禁拒绝', whitelist_rejected:'白名单拒绝', restriction_rejected:'Rating/等级拒绝', custom_rule_rejected:'自定义规则拒绝', snapshot_fallback:'快照回退' };
+const FAILURE_CODE_LABELS = { banned:'存在有效封禁', not_whitelisted:'未通过白名单', low_rating:'Rating 不足', low_steam_level:'Steam 等级不足', custom_rule_rejected:'自定义规则拒绝', profile_fetch_failed:'无法获取玩家资料', snapshot_unavailable:'访问控制服务不可用' };
+const CATEGORY_LABELS = { whitelist:'白名单', ban:'封禁', appeal:'申诉', report:'举报', online:'在线', access:'进服', admin:'后台操作', audit:'审计', evidence:'证据', map_feedback:'地图反馈' };
 function stKind(s,c){if(s==='active'||c==='ban')return s==='inactive'?'offline':'danger';if(s==='online'||s==='approved'||s==='success'||s==='resolved')return'success';if(s==='pending')return'warning';if(s==='failed'||s==='rejected')return'danger';if(s==='revoked'||s==='inactive')return'offline';return'default'}
 function stLabel(s){return STATUS_LABELS[s]||s||'-'}
 function durLabel(m){const v=Number(m);if(!Number.isFinite(v))return'-';if(v===0)return'永久';if(v<60)return`${v} 分钟`;if(v%1440===0)return`${v/1440} 天`;if(v%60===0)return`${v/60} 小时`;return`${v} 分钟`}
@@ -16,6 +19,12 @@ function tagsToText(t=[]){return t.join(', ')}
 function textToTags(v){return v.split(/[,，\n]/).map(t=>t.trim().replace(/^#/,'')).filter(Boolean).filter((t,i,a)=>a.findIndex(n=>n.toLowerCase()===t.toLowerCase())===i)}
 function Empty({children}){return<div className="player-detail-empty">{children}</div>}
 function feedbackTypeLabel(t){const m={missing:'地图缺失',broken:'地图损坏',request:'地图请求'};return m[t]||t||'-'}
+function methodLabel(method){return ACCESS_METHOD_LABELS[method]||method||'-'}
+function failureLabel(item){return FAILURE_CODE_LABELS[item?.failure_code]||item?.reject_reason||item?.failure_code||'-'}
+function categoryLabel(category){return CATEGORY_LABELS[category]||category||'事件'}
+function categoryKind(category,status){if(status==='failed'||category==='ban')return'danger';if(status==='pending')return'warning';if(status==='success'||status==='approved'||status==='online')return'success';if(category==='access')return status==='success'?'success':'danger';return'default'}
+function count(v){return Number(v||0)}
+function latestItems(items=[],limit=8){return [...items].sort((a,b)=>new Date(b.occurred_at)-new Date(a.occurred_at)).slice(0,limit)}
 
 // ── Ban Detail Popup ──
 function BanDetailPopup({item, onClose, onAction, token}) {
@@ -196,6 +205,158 @@ function GlobalBanPopup({items, onClose}) {
   </Modal>);
 }
 
+function DossierMetric({label, value, hint, tone='default'}) {
+  return <div className={`player-dossier-metric ${tone}`}>
+    <div className="player-dossier-metric-label">{label}</div>
+    <div className="player-dossier-metric-value">{value}</div>
+    {hint&&<div className="player-dossier-metric-hint">{hint}</div>}
+  </div>;
+}
+
+function OverviewTab({detail, globalBans}) {
+  const summary = detail.summary || {};
+  const riskProfile = detail.risk_profile;
+  const timeline = latestItems(detail.timeline || [], 10);
+  const currentOnline = detail.online_records || [];
+  const internalTags = detail.internal_profile?.tags || [];
+  const activeGlobalCount = (globalBans || []).filter(item => {
+    const e = item.ban?.expires_on;
+    if (!e || e.startsWith('9999')) return true;
+    const d = new Date(e);
+    return !Number.isNaN(d.getTime()) && d > new Date();
+  }).length;
+
+  return <>
+    <div className="player-dossier-metrics">
+      <DossierMetric label="当前在线" value={count(summary.current_online_count)} hint={currentOnline.length>0?currentOnline.map(i=>i.server_name).join(' / '):'未在已上报服务器中'} tone={currentOnline.length>0?'success':'default'} />
+      <DossierMetric label="有效封禁" value={count(summary.active_ban_count)+activeGlobalCount} hint={`本地 ${count(summary.active_ban_count)} · 全球 ${activeGlobalCount}`} tone={count(summary.active_ban_count)+activeGlobalCount>0?'danger':'success'} />
+      <DossierMetric label="进服记录" value={count(summary.access_log_count)} hint={`成功 ${count(summary.access_success_count)} · 失败 ${count(summary.access_failure_count)}`} tone={count(summary.access_failure_count)>0?'warning':'default'} />
+      <DossierMetric label="IP 与关联账号" value={`${count(summary.unique_ip_count)} / ${count(summary.linked_account_count)}`} hint={`关联封禁账号 ${count(summary.linked_banned_account_count)}`} tone={count(summary.linked_banned_account_count)>0?'danger':'default'} />
+      <DossierMetric label="白名单状态" value={stLabel(summary.whitelist_status)} hint={`${detail.whitelist?.length||0} 条申请记录`} tone={summary.whitelist_status==='approved'?'success':summary.whitelist_status==='pending'?'warning':summary.whitelist_status?'danger':'default'} />
+      <DossierMetric label="案件资料" value={(detail.bans?.length||0)+(detail.appeals?.length||0)+(detail.reports?.length||0)+(detail.map_feedback?.length||0)} hint={`证据 ${count(summary.evidence_file_count)} · 审计 ${count(summary.admin_action_count)}`} />
+    </div>
+
+    <div className="player-dossier-overview">
+      <div className="card">
+        <div className="card-header"><div><div className="card-title">档案关键结论</div><div className="card-sub">根据当前查询到的记录自动汇总。</div></div></div>
+        <div className="card-body">
+          <div className="player-insight-list">
+            <div className="player-insight-item">
+              <span className={`player-insight-dot ${count(summary.active_ban_count)+activeGlobalCount>0?'danger':'success'}`}></span>
+              <div><strong>封禁状态</strong><p>{count(summary.active_ban_count)>0?`存在 ${summary.active_ban_count} 条本地有效封禁。`:'未发现本地有效封禁。'}{activeGlobalCount>0?`另有 ${activeGlobalCount} 条有效全球封禁。`:''}</p></div>
+            </div>
+            <div className="player-insight-item">
+              <span className={`player-insight-dot ${currentOnline.length>0?'success':'default'}`}></span>
+              <div><strong>服务器状态</strong><p>{currentOnline.length>0?`正在 ${currentOnline.map(i=>`${i.server_name}:${i.server_port}`).join('、')} 中。`:'当前在线快照中未发现该玩家。'}</p></div>
+            </div>
+            <div className="player-insight-item">
+              <span className={`player-insight-dot ${count(summary.linked_banned_account_count)>0?'danger':'default'}`}></span>
+              <div><strong>IP 关联</strong><p>{summary.linked_account_count>0?`共发现 ${summary.linked_account_count} 个同 IP 账号，其中 ${summary.linked_banned_account_count} 个存在有效封禁。`:'暂无同 IP 关联账号。'}</p></div>
+            </div>
+            <div className="player-insight-item">
+              <span className={`player-insight-dot ${riskProfile?.action==='deny'||riskProfile?.action==='require_force'?'danger':riskProfile?.action==='warn'?'warning':'success'}`}></span>
+              <div><strong>白名单建议</strong><p>{riskProfile?.recommendation||'可以按正常流程审核。'}{riskProfile?.summary?` ${riskProfile.summary}`:''}</p></div>
+            </div>
+            <div className="player-insight-item">
+              <span className={`player-insight-dot ${internalTags.length>0?'warning':'default'}`}></span>
+              <div><strong>内部标记</strong><p>{internalTags.length>0?internalTags.map(t=>`#${t}`).join(' '):(detail.internal_profile?.note||'暂无内部备注或标签。')}</p></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-header"><div><div className="card-title">最近事件</div><div className="card-sub">从白名单、封禁、进服、举报、申诉、反馈和审计中合并。</div></div></div>
+        <div className="card-body">
+          {timeline.length===0?<Empty>暂无事件时间线。</Empty>:<div className="player-mini-timeline">
+            {timeline.map((event,i)=><div className="player-mini-event" key={`${event.event_type}-${event.related_id||i}-${event.occurred_at}`}>
+              <div className="player-mini-event-time">{formatChinaDateTime(event.occurred_at,{seconds:false})}</div>
+              <div className="player-mini-event-main"><strong>{event.title}</strong><span>{event.description||categoryLabel(event.category)}</span></div>
+              <StatusPill kind={categoryKind(event.category,event.status)}>{categoryLabel(event.category)}</StatusPill>
+            </div>)}
+          </div>}
+        </div>
+      </div>
+    </div>
+  </>;
+}
+
+function TimelineTab({detail}) {
+  const [filter, setFilter] = useState('all');
+  const timeline = detail.timeline || [];
+  const categories = Array.from(new Set(timeline.map(item=>item.category))).filter(Boolean);
+  const visible = filter==='all'?timeline:timeline.filter(item=>item.category===filter);
+
+  return <div className="card">
+    <div className="card-header">
+      <div><div className="card-title">玩家完整事件时间线</div><div className="card-sub">按发生时间倒序合并该账号牵涉到的所有记录。</div></div>
+    </div>
+    <div className="card-body">
+      <div className="player-timeline-filters">
+        <button type="button" className={`profile-tab ${filter==='all'?'active':''}`} onClick={()=>setFilter('all')}>全部</button>
+        {categories.map(category=><button type="button" key={category} className={`profile-tab ${filter===category?'active':''}`} onClick={()=>setFilter(category)}>{categoryLabel(category)}</button>)}
+      </div>
+      {visible.length===0?<Empty>暂无匹配事件。</Empty>:<div className="player-event-timeline">
+        {visible.map((event,i)=><div className={`player-event-item ${event.status==='failed'?'danger':''}`} key={`${event.event_type}-${event.related_id||i}-${event.occurred_at}`}>
+          <div className="player-event-marker"><span></span></div>
+          <div className="player-event-card">
+            <div className="player-event-top">
+              <div>
+                <div className="player-event-title">{event.title}</div>
+                <div className="player-event-time">{formatChinaDateTime(event.occurred_at)}</div>
+              </div>
+              <div className="player-event-pills">
+                <StatusPill kind={categoryKind(event.category,event.status)}>{categoryLabel(event.category)}</StatusPill>
+                {event.status&&<StatusPill kind={stKind(event.status)}>{stLabel(event.status)}</StatusPill>}
+              </div>
+            </div>
+            {event.description&&<div className="player-event-desc">{event.description}</div>}
+            <div className="player-event-meta">
+              <span>操作人: {event.actor||'-'}</span>
+              <span>来源: {event.source||'-'}</span>
+              {event.related_id&&<span className="mono">ID: {event.related_id}</span>}
+            </div>
+          </div>
+        </div>)}
+      </div>}
+    </div>
+  </div>;
+}
+
+function AccessTab({detail}) {
+  const accessLogs = detail.access_logs || [];
+  const currentOnline = detail.online_records || [];
+  return <>
+    <div className="card"><div className="card-header"><div><div className="card-title">进服成功 / 失败明细</div><div className="card-sub">展示进入服务器的判定方式、失败原因、IP、Rating 和 Steam 等级。</div></div></div><div className="card-body p-0">
+      {accessLogs.length===0?<Empty>暂无进服尝试日志。</Empty>:<div className="table-responsive"><table className="data-table player-record-table"><thead><tr><th>时间</th><th>结果</th><th>服务器</th><th>IP</th><th>方式 / 原因</th><th>Rating</th><th>Steam等级</th><th>玩家名</th></tr></thead><tbody>
+        {accessLogs.map(item=><tr key={item.id} className={!item.allowed?'row-access-denied':undefined}>
+          <td style={{fontFamily:'var(--mono)',fontSize:'12px',whiteSpace:'nowrap'}}>{formatChinaDateTime(item.created_at,{seconds:false})}</td>
+          <td><StatusPill kind={item.allowed?'success':'danger'}>{item.allowed?'成功':'失败'}</StatusPill></td>
+          <td className="fw-600">{item.server_name}:{item.server_port}<br/><span style={{color:'var(--text3)',fontSize:'11.5px'}}>{item.community_name||'-'}</span></td>
+          <td className="steam-id">{item.ip_address||'-'}</td>
+          <td><StatusPill kind={item.allowed?'success':'danger'}>{methodLabel(item.access_method)}</StatusPill><div className="player-table-sub">{item.allowed?'允许原因':failureLabel(item)}</div></td>
+          <td>{item.rating??'-'}</td>
+          <td>{item.steam_level??'-'}</td>
+          <td>{item.player_name||'-'}</td>
+        </tr>)}
+      </tbody></table></div>}
+    </div></div>
+
+    <div className="card"><div className="card-header"><div><div className="card-title">当前在线服务器</div><div className="card-sub">来自服务器实时上报快照。</div></div></div><div className="card-body p-0">
+      {currentOnline.length===0?<Empty>当前没有在已上报服务器中。</Empty>:<div className="table-responsive"><table className="data-table player-record-table"><thead><tr><th>服务器</th><th>社区</th><th>上报时间</th><th>IP</th><th>Ping</th><th>地图</th></tr></thead><tbody>
+        {currentOnline.map((item,i)=><tr key={`${item.server_id}-${item.reported_at}-${i}`}>
+          <td className="fw-600">{item.server_name}:{item.server_port}</td>
+          <td>{item.community_name||'-'}</td>
+          <td style={{fontFamily:'var(--mono)',fontSize:'12px',whiteSpace:'nowrap'}}>{formatChinaDateTime(item.reported_at,{seconds:false})}</td>
+          <td className="steam-id">{item.ip}</td>
+          <td>{item.ping}</td>
+          <td>{item.current_map||'-'}</td>
+        </tr>)}
+      </tbody></table></div>}
+    </div></div>
+  </>;
+}
+
 // ── Tabs ──
 function StatusTab({detail, token, onRefresh}) {
   const [popup, setPopup] = useState(null);
@@ -228,19 +389,53 @@ function StatusTab({detail, token, onRefresh}) {
   </>;
 }
 
+function OverviewStrip({detail, globalBans}) {
+  const summary = detail.summary || {};
+  const risk = detail.risk_profile;
+  const activeGlobal = (globalBans || []).filter(item => {
+    const e = item.ban?.expires_on;
+    if (!e || e.startsWith('9999')) return true;
+    const d = new Date(e);
+    return !Number.isNaN(d.getTime()) && d > new Date();
+  }).length;
+  const items = [
+    { label:'进服成功', value:count(summary.access_success_count), tone:'success' },
+    { label:'进服失败', value:count(summary.access_failure_count), tone:count(summary.access_failure_count)>0?'danger':'default' },
+    { label:'本地封禁', value:count(summary.active_ban_count), tone:count(summary.active_ban_count)>0?'danger':'success' },
+    { label:'全球封禁', value:activeGlobal, tone:activeGlobal>0?'danger':'default' },
+    { label:'同 IP 账号', value:count(summary.linked_account_count), tone:count(summary.linked_banned_account_count)>0?'warning':'default' },
+    { label:'风控建议', value:risk?.action==='deny'?'拒绝':risk?.action==='require_force'?'强制':risk?.action==='warn'?'备注':'正常', tone:risk?.action==='deny'||risk?.action==='require_force'?'danger':risk?.action==='warn'?'warning':'success' },
+    { label:'证据文件', value:count(summary.evidence_file_count), tone:'default' },
+  ];
+  return <div className="player-overview-strip">
+    {items.map(item=><div className={`player-overview-chip ${item.tone}`} key={item.label}>
+      <span>{item.label}</span><strong>{item.value}</strong>
+    </div>)}
+  </div>;
+}
+
 function NetworkTab({detail}) {
   const ipHistory = detail.ip_history || [];
   const onlineRecords = detail.online_records || [];
   return <>
-    <div className="card"><div className="card-header"><div><div className="card-title">深度 IP 交叉与设备追踪表</div><div className="card-sub"><strong style={{color:'var(--accent)'}}>逆向检索同 IP 的关联 Steam 账号</strong>，打击小号。</div></div></div><div className="card-body p-0">
-      {ipHistory.length===0?<Empty>暂无 IP 登录记录。</Empty>:<div className="table-responsive"><table className="data-table tree-table"><thead><tr><th>IP</th><th>首次/最后活跃</th><th>服务器</th><th>关联账号</th></tr></thead><tbody>
+    <div className="card"><div className="card-header"><div><div className="card-title">深度 IP 交叉与设备追踪表</div><div className="card-sub"><strong style={{color:'var(--accent)'}}>逆向检索同 IP 的关联 Steam 账号</strong>，包含关联账号白名单和封禁状态。</div></div></div><div className="card-body p-0">
+      {ipHistory.length===0?<Empty>暂无 IP 登录记录。</Empty>:<div className="table-responsive"><table className="data-table tree-table"><thead><tr><th>IP</th><th>首次/最后活跃</th><th>服务器</th><th>关联账号 / 白名单</th></tr></thead><tbody>
         {ipHistory.map(entry=>{const lb=entry.linked_accounts?.filter(a=>a.has_local_ban).length||0;return <React.Fragment key={entry.ip}>
           <tr><td><code className="steam-id" style={{fontWeight:700,fontSize:'13px'}}>{entry.ip}</code></td>
           <td style={{fontFamily:'var(--mono)',color:'var(--text2)',fontSize:'12px'}}>首:{entry.first_seen?formatChinaDateTime(entry.first_seen,{seconds:false}):'-'}<br/>末:{entry.last_seen?formatChinaDateTime(entry.last_seen,{seconds:false}):'-'}</td>
           <td style={{color:'var(--text2)'}}>{entry.servers?.map(s=>`${s.server_name}${s.server_port?`:${s.server_port}`:''}`).join(', ')||'-'}</td>
           <td>{entry.linked_accounts?.length>0?<span style={{color:lb>0?'var(--danger-text)':'var(--text2)',fontWeight:600}}>⚠ {entry.linked_accounts.length}个关联{lb>0?`（${lb}个封禁）`:''}</span>:<span style={{color:'var(--text3)'}}>无</span>}</td></tr>
           {entry.linked_accounts?.map(acc=><tr key={acc.steam_id64}><td className="nested">└─关联</td><td style={{fontSize:'11px',color:'var(--text3)'}}>访问 {acc.access_count||0}次</td><td>{acc.servers?.join(', ')||'-'}</td>
-          <td><span style={{fontWeight:600}}>{acc.player_name||'(未知)'}</span> <code className="steam-id" style={{fontSize:'11px'}}>{acc.steam_id64}</code>{acc.has_local_ban&&<StatusPill kind="danger" style={{marginLeft:4,padding:'2px 6px'}}>有封禁</StatusPill>}</td></tr>)}
+          <td>
+            <div className="linked-account-cell">
+              <span style={{fontWeight:600}}>{acc.player_name||'(未知)'}</span> <code className="steam-id" style={{fontSize:'11px'}}>{acc.steam_id64}</code>
+              <div className="linked-account-pills">
+                {acc.has_local_ban&&<StatusPill kind="danger">有封禁</StatusPill>}
+                {acc.whitelist_count>0?<StatusPill kind={stKind(acc.whitelist_status,'whitelist')}>白名单 {stLabel(acc.whitelist_status)} · {acc.whitelist_count} 次</StatusPill>:<StatusPill kind="default">无白名单</StatusPill>}
+              </div>
+              {acc.whitelist_applied_at&&<div className="player-table-sub">最近申请: {formatChinaDateTime(acc.whitelist_applied_at,{seconds:false})}{acc.whitelist_reviewer?` · 审核人: ${acc.whitelist_reviewer}`:''}</div>}
+            </div>
+          </td></tr>)}
         </React.Fragment>})}
       </tbody></table></div>}
     </div></div>
@@ -271,10 +466,12 @@ function BehaviorTab({detail, token, onRefresh}) {
         </tbody></table></div>}
       </div></div>
       <div className="card"><div className="card-header"><div><div className="card-title">玩家被举报记录</div><div className="card-sub">点击行查看详情并审核。</div></div></div><div className="card-body p-0">
-        {detail.reports.length===0?<Empty>暂无举报记录。</Empty>:<table className="data-table"><thead><tr><th>举报时间</th><th>理由</th><th>状态</th></tr></thead><tbody>
+        {detail.reports.length===0?<Empty>暂无举报记录。</Empty>:<table className="data-table"><thead><tr><th>举报时间</th><th>理由</th><th>举报联系方式</th><th>审核人</th><th>状态</th></tr></thead><tbody>
           {detail.reports.map(item=><tr key={item.id} style={{cursor:'pointer'}} onClick={()=>setPopup({type:'report',item})}>
             <td style={{fontFamily:'var(--mono)',fontSize:'12px',whiteSpace:'nowrap'}}>{formatChinaDateTime(item.created_at,{seconds:false})}</td>
             <td className="text-ellipsis" style={{maxWidth:180}}>{item.report_reason}</td>
+            <td className="text-ellipsis" style={{maxWidth:140}} title={item.reporter_contact||''}>{item.reporter_contact||'-'}</td>
+            <td>{item.reviewed_by||'-'}</td>
             <td><StatusPill kind={stKind(item.status,'report')}>{stLabel(item.status)}</StatusPill></td>
           </tr>)}
         </tbody></table>}
@@ -319,7 +516,15 @@ function AuditTab({detail}) {
   </div>;
 }
 
-const TABS = [{key:'status',label:'封禁与白名单'},{key:'network',label:'IP网络与在线轨迹'},{key:'behavior',label:'申诉、举报与反馈'},{key:'audit',label:'全站双向审计'}];
+const TABS = [
+  {key:'overview',label:'档案总览'},
+  {key:'timeline',label:'完整时间线'},
+  {key:'access',label:'进服轨迹'},
+  {key:'status',label:'封禁与白名单'},
+  {key:'network',label:'IP关联网络'},
+  {key:'behavior',label:'申诉、举报与反馈'},
+  {key:'audit',label:'全站双向审计'},
+];
 
 export function PlayerDetailPage() {
   const { session } = useAuth();
@@ -333,7 +538,7 @@ export function PlayerDetailPage() {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [tab, setTab] = useState('status');
+  const [tab, setTab] = useState('overview');
   const [internalSaving, setInternalSaving] = useState(false);
   const [globalBans, setGlobalBans] = useState(null);
   const [showGlobalBans, setShowGlobalBans] = useState(false);
@@ -341,7 +546,7 @@ export function PlayerDetailPage() {
   // 加载玩家详情
   async function loadDetail(input, resetTab = true) {
     const q = input.trim(); if(!q){setError('请输入 SteamID。');return;}
-    try{setLoading(true);setError('');const r=await api.playerDetail(token,q);setDetail(r.data);setLastQuery(q);lastQueryRef.current=q;if(resetTab)setTab('status');}catch(e){setDetail(null);setError(e.message||'加载失败');}finally{setLoading(false);}
+    try{setLoading(true);setError('');const r=await api.playerDetail(token,q);setDetail(r.data);setLastQuery(q);lastQueryRef.current=q;if(resetTab)setTab('overview');}catch(e){setDetail(null);setError(e.message||'加载失败');}finally{setLoading(false);}
   }
   function refreshDetail() { const q = lastQueryRef.current || lastQuery; if(q) loadDetail(q, false); queryClient.invalidateQueries({queryKey:['whitelist']}); queryClient.invalidateQueries({queryKey:['bans']}); queryClient.invalidateQueries({queryKey:['banAppeals']}); queryClient.invalidateQueries({queryKey:['playerReports']}); queryClient.invalidateQueries({queryKey:['mapFeedback']}); }
   // 内部备注
@@ -409,8 +614,13 @@ export function PlayerDetailPage() {
         </div>
       </div>
 
+      <OverviewStrip detail={detail} globalBans={globalBans}/>
+
       <div className="profile-tabs">{TABS.map(t=><button key={t.key} className={`profile-tab ${tab===t.key?'active':''}`} onClick={()=>setTab(t.key)} type="button">{t.label}</button>)}</div>
       <div className="profile-tab-pane active">
+        {tab==='overview'&&<OverviewTab detail={detail} globalBans={globalBans}/>}
+        {tab==='timeline'&&<TimelineTab detail={detail}/>}
+        {tab==='access'&&<AccessTab detail={detail}/>}
         {tab==='status'&&<StatusTab detail={detail} token={token} onRefresh={refreshDetail}/>}
         {tab==='network'&&<NetworkTab detail={detail}/>}
         {tab==='behavior'&&<BehaviorTab detail={detail} token={token} onRefresh={refreshDetail}/>}

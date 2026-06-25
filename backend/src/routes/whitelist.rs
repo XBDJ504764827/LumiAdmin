@@ -16,6 +16,8 @@ pub(crate) struct WhitelistBody {
     pub steam_input: String,
     pub nickname: String,
     pub operator_name: Option<String>,
+    pub force: Option<bool>,
+    pub reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -30,6 +32,7 @@ pub(crate) struct RejectWhitelistBody {
 pub(crate) struct WhitelistActionBody {
     pub operator_name: Option<String>,
     pub reason: Option<String>,
+    pub force: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -142,11 +145,14 @@ pub(crate) async fn create_whitelist(
     }
     let operator_name = actor.display_name.clone();
     let resolver = &ctx.steam_resolver;
-    let item = whitelist_service::create_manual_whitelist(
+    let force = body.force.unwrap_or(false);
+    let mut item = whitelist_service::create_manual_whitelist(
         &ctx.db,
         whitelist_service::ManualWhitelistInput {
             nickname: body.nickname,
             steam_input: body.steam_input,
+            force,
+            force_reason: body.reason.clone(),
         },
         &operator_name,
         resolver,
@@ -162,6 +168,9 @@ pub(crate) async fn create_whitelist(
         &extract_client_ip(&headers),
     )
     .await;
+    item.risk_profile = whitelist_service::risk_profile_for_whitelist(&ctx.db, item.id)
+        .await
+        .ok();
     write_whitelist_audit(
         &ctx,
         &headers,
@@ -180,12 +189,17 @@ pub(crate) async fn create_whitelist(
             "status": item.status,
             "approved_at": item.approved_at,
             "approved_by": item.approved_by,
+            "force_approve": force,
+            "risk_profile": item.risk_profile,
             "operator_username": actor.username,
             "operator_role": actor.role,
         }),
     )
     .await;
-    Ok((axum::http::StatusCode::CREATED, Json(serde_json::json!({"item": item}))))
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(serde_json::json!({"item": item})),
+    ))
 }
 
 pub(crate) async fn approve_whitelist_request(
@@ -199,10 +213,21 @@ pub(crate) async fn approve_whitelist_request(
         return Err(AppError::forbidden());
     }
     let operator_name = actor.display_name.clone();
-    let item =
-        whitelist_service::approve_whitelist(&ctx.db, id, &operator_name, body.reason.as_deref())
-            .await
-            .map_err(AppError::bad_request)?;
+    let force = body.force.unwrap_or(false);
+    let mut item = whitelist_service::approve_whitelist(
+        &ctx.db,
+        id,
+        whitelist_service::ApproveWhitelistInput {
+            operator_name: &operator_name,
+            reason: body.reason.as_deref(),
+            force,
+        },
+    )
+    .await
+    .map_err(AppError::bad_request)?;
+    item.risk_profile = whitelist_service::risk_profile_for_whitelist(&ctx.db, item.id)
+        .await
+        .ok();
     log_service::log_action(
         &ctx.db,
         &operator_name,
@@ -229,6 +254,8 @@ pub(crate) async fn approve_whitelist_request(
             "approval_reason": item.approval_reason,
             "approved_at": item.approved_at,
             "approved_by": item.approved_by,
+            "force_approve": force,
+            "risk_profile": item.risk_profile,
             "operator_username": actor.username,
             "operator_role": actor.role,
         }),
@@ -289,16 +316,26 @@ pub(crate) async fn restore_whitelist_request(
     State(ctx): State<AppCtx>,
     headers: HeaderMap,
     Path(id): Path<Uuid>,
-    Json(_body): Json<WhitelistActionBody>,
+    Json(body): Json<WhitelistActionBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let actor = current_operator(&ctx, &headers).await?;
     if !permission_service::can_review_whitelist(&actor) {
         return Err(AppError::forbidden());
     }
     let operator_name = actor.display_name.clone();
-    let item = whitelist_service::restore_whitelist(&ctx.db, id, &operator_name)
+    let force = body.force.unwrap_or(false);
+    let mut item = whitelist_service::restore_whitelist(
+        &ctx.db,
+        id,
+        &operator_name,
+        body.reason.as_deref(),
+        force,
+    )
+    .await
+    .map_err(AppError::bad_request)?;
+    item.risk_profile = whitelist_service::risk_profile_for_whitelist(&ctx.db, item.id)
         .await
-        .map_err(AppError::bad_request)?;
+        .ok();
     log_service::log_action(
         &ctx.db,
         &operator_name,
@@ -324,6 +361,9 @@ pub(crate) async fn restore_whitelist_request(
             "status": item.status,
             "approved_at": item.approved_at,
             "approved_by": item.approved_by,
+            "approval_reason": item.approval_reason,
+            "force_approve": force,
+            "risk_profile": item.risk_profile,
             "operator_username": actor.username,
             "operator_role": actor.role,
         }),

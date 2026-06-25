@@ -23,6 +23,8 @@ const ACCESS_METHOD_MAP = {
 
 const FAILURE_CODE_MAP = {
   banned: '被封禁',
+  global_banned: '全球封禁',
+  linked_ip_banned: '同 IP 关联封禁',
   not_whitelisted: '白名单未通过',
   low_rating: 'Rating 不足',
   low_steam_level: 'Steam 等级不足',

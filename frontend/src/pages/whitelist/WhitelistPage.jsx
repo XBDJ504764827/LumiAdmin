@@ -10,11 +10,11 @@ import { Pagination } from '../../shared/Pagination.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { notifyPendingReviewsUpdated, usePendingReviewIndicators } from '../../hooks/usePendingReviewIndicators.js';
 import { fetchGlobalBansBatch, parseBanData, inferGlobalBanRisk } from './whitelistGlobalBans.js';
-import { ManualCreateModal, RejectModal, ApproveModal, BanDetailModal, PlayerDetailModal } from './WhitelistModals.jsx';
+import { ManualCreateModal, RejectModal, ApproveModal, BanDetailModal, PlayerDetailModal, RiskDetailModal } from './WhitelistModals.jsx';
 import { InternalNoteInline } from '../../shared/InternalNote.jsx';
 import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 
-const emptyManualForm = { nickname: '', steam_input: '' };
+const emptyManualForm = { nickname: '', steam_input: '', force: false, reason: '' };
 const APPROVE_REVIEW_SECONDS = 5;
 const PLAYER_LINK_TARGETS = [
   { key: 'gokz', label: 'GOKZ.TOP', href: (steamid64) => `https://kzcharm.com/profile/${steamid64}` },
@@ -23,14 +23,44 @@ const PLAYER_LINK_TARGETS = [
 const PLAYER_CONTEXT_MENU_SIZE = { width: 180, height: 112 };
 
 function emptyApproveModal() {
-  return { open: false, item: null, reason: '', error: '', bans: [], secondsRemaining: APPROVE_REVIEW_SECONDS };
+  return { open: false, mode: 'approve', item: null, reason: '', error: '', bans: [], riskProfile: null, secondsRemaining: APPROVE_REVIEW_SECONDS };
+}
+
+function riskAction(item) {
+  return item?.risk_profile?.action || 'allow';
+}
+
+function hasApprovalRisk(item, globalBans) {
+  const action = riskAction(item);
+  const bans = globalBans[item.steamid64];
+  return action !== 'allow' || (Array.isArray(bans) && bans.length > 0);
+}
+
+function riskTone(item) {
+  const action = riskAction(item);
+  if (action === 'deny' || action === 'require_force') return 'danger';
+  if (action === 'warn') return 'warning';
+  return 'default';
+}
+
+function RiskBadge({ item, onClick }) {
+  const profile = item?.risk_profile;
+  if (!profile || riskAction(item) === 'allow') return null;
+  const tone = riskTone(item);
+  const text = riskAction(item) === 'deny' ? '需强制通过' : riskAction(item) === 'require_force' ? '需强制通过' : '风险提示';
+  return (
+    <button type="button" className={`whitelist-risk-badge ${tone}`} title={profile.summary || '查看风险详情'} onClick={() => onClick?.(item)}>
+      <span>⚠</span>
+      <span>{text}</span>
+    </button>
+  );
 }
 
 // ---------------------------------------------------------------------------
 // 表格内联辅助函数（消除三个 tab 分支的重复 JSX）
 // ---------------------------------------------------------------------------
 
-function renderNicknameCell(item, globalBans, openBanDetail) {
+function renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail) {
   const itemBans = globalBans[item.steamid64];
   const hasGlobalBan = Array.isArray(itemBans) && itemBans.length > 0;
   return (
@@ -43,6 +73,7 @@ function renderNicknameCell(item, globalBans, openBanDetail) {
           <span className="global-ban-count">{itemBans.length}</span>
         </button>
       )}
+      <RiskBadge item={item} onClick={openRiskDetail} />
       <InternalNoteInline steamid64={item.steamid64} />
     </td>
   );
@@ -69,6 +100,7 @@ function renderSteamNameCell(item, canRefreshSteam, refreshing, onRefresh) {
 
 function rowClassName(item, globalBans) {
   const itemBans = globalBans[item.steamid64];
+  if (riskAction(item) === 'deny' || riskAction(item) === 'require_force') return 'row-global-ban';
   return Array.isArray(itemBans) && itemBans.length > 0 ? 'row-global-ban' : '';
 }
 
@@ -106,6 +138,7 @@ export function WhitelistPage() {
   const [globalBansLoading, setGlobalBansLoading] = useState(false);
   const fetchedSteamIdsRef = useRef(new Set());
   const [banDetailModal, setBanDetailModal] = useState({ open: false, steamid64: '', bans: [] });
+  const [riskDetailModal, setRiskDetailModal] = useState({ open: false, item: null });
   const [detailModal, setDetailModal] = useState({ open: false, item: null });
   const [refreshing, setRefreshing] = useState(false);
   const [playerContextMenu, setPlayerContextMenu] = useState({
@@ -205,9 +238,8 @@ export function WhitelistPage() {
 
   async function handleApprove(item) {
     const itemBans = globalBans[item.steamid64];
-    const hasGlobalBan = Array.isArray(itemBans) && itemBans.length > 0;
-    if (hasGlobalBan) {
-      setApproveModal({ ...emptyApproveModal(), open: true, item, bans: itemBans });
+    if (hasApprovalRisk(item, globalBans)) {
+      setApproveModal({ ...emptyApproveModal(), mode: 'approve', open: true, item, bans: itemBans || [], riskProfile: item.risk_profile || null });
       return;
     }
     try {
@@ -225,21 +257,26 @@ export function WhitelistPage() {
   async function handleApproveWithReason() {
     if (!approveModal.item) return;
     if (approveModal.secondsRemaining > 0) {
-      setApproveModal((prev) => ({ ...prev, error: `请先查看全球封禁详情，${prev.secondsRemaining} 秒后才能确认通过。` }));
+      setApproveModal((prev) => ({ ...prev, error: `请先查看风险详情，${prev.secondsRemaining} 秒后才能确认通过。` }));
       return;
     }
     if (!approveModal.reason.trim()) {
-      setApproveModal((prev) => ({ ...prev, error: '该玩家有全球封禁记录，请说明通过理由。' }));
+      setApproveModal((prev) => ({ ...prev, error: '该玩家命中风险，请说明通过理由。' }));
       return;
     }
     try {
       setSubmitting(true);
-      await api.approveWhitelist(token, approveModal.item.id, { reason: approveModal.reason.trim() });
+      const force = ['deny', 'require_force'].includes(approveModal.riskProfile?.action) || approveModal.bans.length > 0;
+      if (approveModal.mode === 'restore') {
+        await api.restoreWhitelist(token, approveModal.item.id, { reason: approveModal.reason.trim(), force });
+      } else {
+        await api.approveWhitelist(token, approveModal.item.id, { reason: approveModal.reason.trim(), force });
+      }
       setApproveModal(emptyApproveModal());
       await invalidateWhitelist();
       notifyPendingReviewsUpdated({ source: 'whitelist', action: 'approve' });
       closeDetailModal();
-      toast({ title: '审核通过', message: `${approveModal.item.nickname} 的白名单申请已通过。` });
+      toast({ title: '审核通过', message: `${approveModal.item.nickname} 的白名单已通过。` });
     } catch (actionError) {
       setApproveModal((prev) => ({ ...prev, error: actionError.message }));
     } finally { setSubmitting(false); }
@@ -269,6 +306,11 @@ export function WhitelistPage() {
   }
 
   async function handleRestore(item) {
+    const itemBans = globalBans[item.steamid64];
+    if (hasApprovalRisk(item, globalBans)) {
+      setApproveModal({ ...emptyApproveModal(), mode: 'restore', open: true, item, bans: itemBans || [], riskProfile: item.risk_profile || null });
+      return;
+    }
     const confirmed = await confirm({
       title: '恢复白名单',
       message: `确定恢复 ${item.nickname} 的白名单吗？恢复后该玩家可正常进入服务器。`,
@@ -307,12 +349,15 @@ export function WhitelistPage() {
   async function handleManualCreate() {
     if (!manualForm.nickname.trim()) { setManualError('请输入玩家名称。'); return; }
     if (!manualForm.steam_input.trim()) { setManualError('请输入玩家标识。'); return; }
+    if (manualForm.force && !manualForm.reason.trim()) { setManualError('强制通过时必须填写原因。'); return; }
     try {
       setSubmitting(true);
       setManualError('');
       await api.createManualWhitelist(token, {
         nickname: manualForm.nickname.trim(),
         steam_input: manualForm.steam_input.trim(),
+        force: manualForm.force,
+        reason: manualForm.reason.trim() || undefined,
       });
       setManualModalOpen(false);
       setManualForm(emptyManualForm);
@@ -326,6 +371,10 @@ export function WhitelistPage() {
 
   function openBanDetail(steamid64) {
     setBanDetailModal({ open: true, steamid64, bans: globalBans[steamid64] || [] });
+  }
+
+  function openRiskDetail(item) {
+    setRiskDetailModal({ open: true, item });
   }
 
   function openPlayerContextMenu(event, item) {
@@ -385,6 +434,7 @@ export function WhitelistPage() {
   const total = data?.total ?? 0;
   const hasPendingWhitelist = (pendingCounts.whitelist ?? 0) > 0;
   const approveGlobalBanRisk = inferGlobalBanRisk(approveModal.bans);
+  const approveRiskProfile = approveModal.riskProfile;
 
   // ---------------------------------------------------------------------------
   // 渲染
@@ -393,6 +443,7 @@ export function WhitelistPage() {
   const closeRejectModal = () => setRejectModal({ open: false, item: null, reason: '', error: '' });
   const closeApproveModal = () => setApproveModal(emptyApproveModal());
   const closeBanDetailModal = () => setBanDetailModal({ open: false, steamid64: '', bans: [] });
+  const closeRiskDetailModal = () => setRiskDetailModal({ open: false, item: null });
   const closeDetailModal = () => setDetailModal({ open: false, item: null });
   const closeManualModal = () => { setManualModalOpen(false); setManualForm(emptyManualForm); setManualError(''); };
   const setRejectReason = (reason) => setRejectModal((prev) => ({ ...prev, reason, error: '' }));
@@ -456,7 +507,7 @@ export function WhitelistPage() {
                   ) : null}
                   {tab === 'pending' ? items.map((item) => (
                     <tr key={item.id} className={rowClassName(item, globalBans)} onContextMenu={(event) => handlePendingRowContextMenu(event, item)}>
-                      {renderNicknameCell(item, globalBans, openBanDetail)}
+                      {renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail)}
                       {renderSteamNameCell(item, canRefreshSteam, refreshing, handleRefreshSteamName)}
                       <td className="steam-id" data-player-info="true">{item.steamid64}</td>
                       <td className="steam-id" data-player-info="true">{item.steamid ?? '-'}</td>
@@ -471,7 +522,7 @@ export function WhitelistPage() {
                   )) : null}
                   {tab === 'approved' ? items.map((item) => (
                     <tr key={item.id} className={rowClassName(item, globalBans)}>
-                      {renderNicknameCell(item, globalBans, openBanDetail)}
+                      {renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail)}
                       {renderSteamNameCell(item, canRefreshSteam, refreshing, handleRefreshSteamName)}
                       <td className="steam-id">{item.steamid64}</td>
                       <td className="steam-id">{item.steamid ?? '-'}</td>
@@ -487,7 +538,7 @@ export function WhitelistPage() {
                   )) : null}
                   {tab === 'rejected' ? items.map((item) => (
                     <tr key={item.id} className={rowClassName(item, globalBans)}>
-                      {renderNicknameCell(item, globalBans, openBanDetail)}
+                      {renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail)}
                       {renderSteamNameCell(item, canRefreshSteam, refreshing, handleRefreshSteamName)}
                       <td className="steam-id">{item.steamid64}</td>
                       <td className="steam-id">{item.steamid ?? '-'}</td>
@@ -549,9 +600,11 @@ export function WhitelistPage() {
       <ApproveModal
         open={approveModal.open}
         onClose={closeApproveModal}
+        mode={approveModal.mode}
         item={approveModal.item}
         bans={approveModal.bans}
         risk={approveGlobalBanRisk}
+        riskProfile={approveRiskProfile}
         reason={approveModal.reason}
         setReason={setApproveReason}
         error={approveModal.error}
@@ -564,6 +617,11 @@ export function WhitelistPage() {
         onClose={closeBanDetailModal}
         steamid64={banDetailModal.steamid64}
         bans={banDetailModal.bans}
+      />
+      <RiskDetailModal
+        open={riskDetailModal.open}
+        onClose={closeRiskDetailModal}
+        item={riskDetailModal.item}
       />
       <PlayerDetailModal
         open={detailModal.open}

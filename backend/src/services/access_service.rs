@@ -4,8 +4,8 @@ use crate::{
     http_client,
     services::{
         access_cache::{ActiveBanCache, WhitelistCache},
-        access_snapshot_service, player_access_rule_service, plugin_ban_service,
-        server_config_cache,
+        access_snapshot_service, player_access_rule_service, player_risk_service,
+        plugin_ban_service, server_config_cache,
     },
 };
 use chrono::{DateTime, Duration, Utc};
@@ -87,12 +87,26 @@ pub async fn check_access(
     input: AccessCheckInput,
 ) -> anyhow::Result<AccessCheckResult> {
     let steam_id64 = normalize_steamid64(&input.steam_id64)?;
-    match check_access_live(db, config, input.clone(), &steam_id64, server_cache, ban_cache, wl_cache).await {
+    match check_access_live(
+        db,
+        config,
+        input.clone(),
+        &steam_id64,
+        server_cache,
+        ban_cache,
+        wl_cache,
+    )
+    .await
+    {
         Ok(result) => Ok(result),
         Err(error) => {
             warn!(%error, "live access check failed, trying snapshot fallback");
             let Some(snapshot) = snapshot_store.read_snapshot().await? else {
-                return Ok(reject_with_method("访问控制服务暂时不可用，请稍后再试。", "snapshot_fallback", "snapshot_unavailable"));
+                return Ok(reject_with_method(
+                    "访问控制服务暂时不可用，请稍后再试。",
+                    "snapshot_fallback",
+                    "snapshot_unavailable",
+                ));
             };
             let decision = access_snapshot_service::evaluate_access_snapshot(
                 &snapshot,
@@ -165,19 +179,44 @@ async fn check_access_live(
         ));
     }
 
+    if let Some(reason) = active_global_ban(db, steam_id64).await? {
+        return Ok(reject_with_method(
+            &format!(
+                "你已被全球封禁，无法进入服务器。\n原因：{reason}\n如有异议请先处理全球封禁记录。"
+            ),
+            "banned",
+            "global_banned",
+        ));
+    }
+
+    if let Some(ip_risk) =
+        player_risk_service::evaluate_ip_ban_for_access(db, steam_id64, input.ip_address.as_deref())
+            .await?
+    {
+        return Ok(reject_with_method(
+            &format!(
+                "当前 IP 存在高风险关联，无法进入服务器。\n原因：{}",
+                ip_risk.message
+            ),
+            "banned",
+            "linked_ip_banned",
+        ));
+    }
+
     // 2. 检查玩家进服权限规则（优先级最高）
-    let (access_allowed, access_reason, has_custom_rule) = player_access_rule_service::check_player_access(
-        db,
-        steam_id64,
-        server.id,
-        server.community_id,
-    )
-    .await?;
+    let (access_allowed, access_reason, has_custom_rule) =
+        player_access_rule_service::check_player_access(
+            db,
+            steam_id64,
+            server.id,
+            server.community_id,
+        )
+        .await?;
     if !access_allowed {
         return Ok(reject_with_method(
             access_reason.as_deref().unwrap_or("您被禁止进入该服务器"),
             "custom_rule_rejected",
-            "custom_rule_rejected"
+            "custom_rule_rejected",
         ));
     }
     // 如果自定义规则明确放行，记录为 custom_rule（直接跳过后续白名单/限制检查）
@@ -224,7 +263,11 @@ async fn check_access_live(
     if !effective_whitelist && effective_restriction {
         return match load_player_profile(db, config, steam_id64).await? {
             Some(profile) => evaluate_restriction(&server, &profile),
-            None => Ok(reject_with_method("无法验证您的进入资格，请稍后再试。", "restriction_rejected", "profile_fetch_failed")),
+            None => Ok(reject_with_method(
+                "无法验证您的进入资格，请稍后再试。",
+                "restriction_rejected",
+                "profile_fetch_failed",
+            )),
         };
     }
 
@@ -299,6 +342,25 @@ async fn active_ban(
         id,
         reason,
         expires_at,
+    }))
+}
+
+async fn active_global_ban(db: &Database, steam_id64: &str) -> anyhow::Result<Option<String>> {
+    let row: Option<(String, Option<String>)> = sqlx::query_as(
+        r#"SELECT ban_type, notes
+           FROM global_bans
+           WHERE steam_id64 = $1
+             AND is_expired = false
+             AND manual_unbanned = false
+           ORDER BY created_on DESC NULLS LAST, synced_at DESC
+           LIMIT 1"#,
+    )
+    .bind(steam_id64)
+    .fetch_optional(&db.pool)
+    .await?;
+    Ok(row.map(|(ban_type, notes)| match notes {
+        Some(notes) if !notes.trim().is_empty() => format!("{ban_type} / {notes}"),
+        _ => ban_type,
     }))
 }
 
@@ -571,8 +633,12 @@ mod tests {
         )
         .unwrap();
         assert!(!result.allowed);
-        assert!(result.message.contains("你的GOKZ rating未达到进入服务器最低要求"));
-        assert!(result.message.contains("申请地址:https://zzzxbdjbans.cngokz.com/public/apply"));
+        assert!(result
+            .message
+            .contains("你的GOKZ rating未达到进入服务器最低要求"));
+        assert!(result
+            .message
+            .contains("申请地址:https://zzzxbdjbans.cngokz.com/public/apply"));
     }
 
     #[test]
@@ -586,16 +652,18 @@ mod tests {
         )
         .unwrap();
         assert!(!result.allowed);
-        assert!(result.message.contains("你的steam等级未达到进入服务器最低要求"));
-        assert!(result.message.contains("申请地址:https://zzzxbdjbans.cngokz.com/public/apply"));
+        assert!(result
+            .message
+            .contains("你的steam等级未达到进入服务器最低要求"));
+        assert!(result
+            .message
+            .contains("申请地址:https://zzzxbdjbans.cngokz.com/public/apply"));
     }
 
     #[test]
     fn gokz_player_response_accepts_decimal_rating() {
-        let response: GokzPlayerResponse = serde_json::from_str(
-            r#"{"steam_name":"PlayerOne","rating":8.352655}"#,
-        )
-        .unwrap();
+        let response: GokzPlayerResponse =
+            serde_json::from_str(r#"{"steam_name":"PlayerOne","rating":8.352655}"#).unwrap();
         assert_eq!(response.steam_name.as_deref(), Some("PlayerOne"));
         assert_eq!(response.rating.map(|rating| rating.trunc() as i32), Some(8));
     }

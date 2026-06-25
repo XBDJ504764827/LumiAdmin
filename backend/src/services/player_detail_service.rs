@@ -1,7 +1,8 @@
 use crate::{
     db::Database,
     services::{
-        map_feedback_service::{MapFeedbackItem, query_feedback_by_steam_id},
+        map_feedback_service::{query_feedback_by_steam_id, MapFeedbackItem},
+        player_risk_service::{self, PlayerRiskProfile},
         r2_storage::R2Storage,
         steam_service::{ParsedSteamIdentity, SteamResolver},
     },
@@ -15,11 +16,13 @@ use uuid::Uuid;
 pub struct PlayerDetail {
     pub profile: PlayerProfile,
     pub summary: PlayerSummary,
+    pub risk_profile: PlayerRiskProfile,
     pub whitelist: Vec<WhitelistRecord>,
     pub bans: Vec<PlayerBanRecord>,
     pub appeals: Vec<PlayerAppealRecord>,
     pub reports: Vec<PlayerReportRecord>,
     pub online_records: Vec<OnlineRecord>,
+    pub access_logs: Vec<PlayerAccessRecord>,
     pub ip_history: Vec<IpHistoryEntry>,
     pub admin_actions: Vec<AdminAction>,
     pub audit_logs: Vec<PlayerAuditLog>,
@@ -46,6 +49,13 @@ pub struct PlayerSummary {
     pub appeal_count: usize,
     pub report_count: usize,
     pub online_server_count: usize,
+    pub current_online_count: usize,
+    pub access_log_count: usize,
+    pub access_success_count: usize,
+    pub access_failure_count: usize,
+    pub unique_ip_count: usize,
+    pub linked_account_count: usize,
+    pub linked_banned_account_count: usize,
     pub evidence_file_count: usize,
     pub admin_action_count: usize,
     pub last_seen_at: Option<DateTime<Utc>>,
@@ -152,6 +162,26 @@ pub struct OnlineRecord {
     pub reported_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct PlayerAccessRecord {
+    pub id: Uuid,
+    pub steam_id64: String,
+    pub player_name: Option<String>,
+    pub ip_address: Option<String>,
+    pub server_id: Uuid,
+    pub server_name: String,
+    pub server_port: i32,
+    pub community_id: Uuid,
+    pub community_name: Option<String>,
+    pub allowed: bool,
+    pub access_method: String,
+    pub failure_code: Option<String>,
+    pub reject_reason: Option<String>,
+    pub rating: Option<i32>,
+    pub steam_level: Option<i32>,
+    pub created_at: DateTime<Utc>,
+}
+
 /// IP 登录历史条目（玩家使用某 IP 登录的服务器列表 + 该 IP 关联的其他账号）
 #[derive(Debug, Clone, Serialize)]
 pub struct IpHistoryEntry {
@@ -185,6 +215,16 @@ pub struct LinkedAccount {
     pub last_seen: Option<DateTime<Utc>>,
     /// 是否有当前系统中的活跃封禁
     pub has_local_ban: bool,
+    /// 该关联账号最近一条白名单申请状态
+    pub whitelist_status: Option<String>,
+    /// 该关联账号白名单申请总数
+    pub whitelist_count: i64,
+    /// 最近一条白名单申请时间
+    pub whitelist_applied_at: Option<DateTime<Utc>>,
+    /// 最近一条白名单审核/撤销时间
+    pub whitelist_reviewed_at: Option<DateTime<Utc>>,
+    /// 最近一条白名单审核/撤销操作人
+    pub whitelist_reviewer: Option<String>,
     /// 该账号登录过的服务器列表
     pub servers: Vec<String>,
     /// 使用该 IP 的次数（近似）
@@ -289,16 +329,35 @@ pub async fn get_player_detail(
     let steamid64 = resolve_player_input(db, resolver, steam_input).await?;
     let identity = resolver.resolve(&steamid64).await?;
 
-    // 并行查询互不依赖的数据（8 个独立查询同时进行）
-    let (whitelists, bans, appeals, reports, online_records, ip_history, map_feedback, internal_profile) = tokio::try_join!(
+    // 并行查询互不依赖的数据
+    let (
+        whitelists,
+        bans,
+        appeals,
+        reports,
+        online_records,
+        access_logs,
+        ip_history,
+        map_feedback,
+        internal_profile,
+        risk_profile,
+    ) = tokio::try_join!(
         fetch_whitelist_records(db, &steamid64),
         fetch_ban_records(db, &steamid64),
         fetch_appeal_records(db, &steamid64),
         fetch_report_records(db, &steamid64),
         fetch_online_records(db, &steamid64),
+        fetch_access_records(db, &steamid64),
         fetch_ip_history(db, &steamid64),
-        async { Ok::<_, anyhow::Error>(query_feedback_by_steam_id(db, &steamid64).await.unwrap_or_default()) },
+        async {
+            Ok::<_, anyhow::Error>(
+                query_feedback_by_steam_id(db, &steamid64)
+                    .await
+                    .unwrap_or_default(),
+            )
+        },
         fetch_internal_profile(db, &steamid64),
+        player_risk_service::build_player_risk_profile(db, &steamid64),
     )?;
     // evidence_files 依赖 bans/appeals/reports，需在第一批完成后执行
     let evidence_files = fetch_evidence_files(db, r2, &bans, &appeals, &reports).await?;
@@ -310,6 +369,7 @@ pub async fn get_player_detail(
         &appeals,
         &reports,
         &online_records,
+        &access_logs,
     );
     let (admin_actions, audit_logs) = tokio::try_join!(
         fetch_admin_actions(db, &search_terms),
@@ -324,6 +384,32 @@ pub async fn get_player_detail(
         profile_url: identity.profile_url,
         display_name,
     };
+    let linked_ids: HashSet<&str> = ip_history
+        .iter()
+        .flat_map(|entry| {
+            entry
+                .linked_accounts
+                .iter()
+                .map(|account| account.steam_id64.as_str())
+        })
+        .collect();
+    let linked_banned_ids: HashSet<&str> = ip_history
+        .iter()
+        .flat_map(|entry| {
+            entry
+                .linked_accounts
+                .iter()
+                .filter(|account| account.has_local_ban)
+                .map(|account| account.steam_id64.as_str())
+        })
+        .collect();
+    let last_seen_at = [
+        online_records.first().map(|item| item.reported_at),
+        access_logs.first().map(|item| item.created_at),
+    ]
+    .into_iter()
+    .flatten()
+    .max();
     let summary = PlayerSummary {
         whitelist_status: whitelists.first().map(|item| item.status.clone()),
         active_ban_count: bans.iter().filter(|ban| is_active_ban(ban)).count(),
@@ -331,9 +417,16 @@ pub async fn get_player_detail(
         appeal_count: appeals.len(),
         report_count: reports.len(),
         online_server_count: online_records.len(),
+        current_online_count: online_records.len(),
+        access_log_count: access_logs.len(),
+        access_success_count: access_logs.iter().filter(|item| item.allowed).count(),
+        access_failure_count: access_logs.iter().filter(|item| !item.allowed).count(),
+        unique_ip_count: ip_history.len(),
+        linked_account_count: linked_ids.len(),
+        linked_banned_account_count: linked_banned_ids.len(),
         evidence_file_count: evidence_files.len(),
         admin_action_count: admin_actions.len() + audit_logs.len(),
-        last_seen_at: online_records.first().map(|item| item.reported_at),
+        last_seen_at,
     };
 
     let timeline = build_timeline(
@@ -342,19 +435,23 @@ pub async fn get_player_detail(
         &appeals,
         &reports,
         &online_records,
+        &access_logs,
         &admin_actions,
         &audit_logs,
         &evidence_files,
+        &map_feedback,
     );
 
     Ok(PlayerDetail {
         profile,
         summary,
+        risk_profile,
         whitelist: whitelists,
         bans,
         appeals,
         reports,
         online_records,
+        access_logs,
         ip_history,
         admin_actions,
         audit_logs,
@@ -694,6 +791,25 @@ async fn fetch_online_records(db: &Database, steamid64: &str) -> anyhow::Result<
     Ok(rows)
 }
 
+async fn fetch_access_records(
+    db: &Database,
+    steamid64: &str,
+) -> anyhow::Result<Vec<PlayerAccessRecord>> {
+    let rows = sqlx::query_as::<_, PlayerAccessRecord>(
+        r#"SELECT id, steam_id64, player_name, ip_address, server_id, server_name,
+                  server_port, community_id, community_name, allowed, access_method,
+                  failure_code, reject_reason, rating, steam_level, created_at
+           FROM player_access_logs
+           WHERE steam_id64 = $1
+           ORDER BY created_at DESC
+           LIMIT 200"#,
+    )
+    .bind(steamid64)
+    .fetch_all(&db.pool)
+    .await?;
+    Ok(rows)
+}
+
 // ---------------------------------------------------------------------------
 // 批量查询的辅助 FromRow 结构（带分组键 ip / steam_id）
 // ---------------------------------------------------------------------------
@@ -737,6 +853,16 @@ struct LinkedCountRow {
 }
 
 #[derive(sqlx::FromRow)]
+struct LinkedWhitelistRow {
+    steam_id: String,
+    status: String,
+    applied_at: DateTime<Utc>,
+    reviewed_at: Option<DateTime<Utc>>,
+    reviewer: Option<String>,
+    whitelist_count: i64,
+}
+
+#[derive(sqlx::FromRow)]
 struct LinkedServerRow {
     steam_id: String,
     server_name: Option<String>,
@@ -757,10 +883,7 @@ struct LinkedTimeRow {
 /// 优化说明：原实现对每个 IP/关联账号逐条查询（N+1），最坏情况下单次请求会发起
 /// 数千次数据库查询。现改为基于 `= ANY($n)` 的批量查询，在内存中按 ip / steam_id
 /// 分组聚合，总查询数从 ~6000+ 降到 ~12 次（且分两批并行）。
-async fn fetch_ip_history(
-    db: &Database,
-    steamid64: &str,
-) -> anyhow::Result<Vec<IpHistoryEntry>> {
+async fn fetch_ip_history(db: &Database, steamid64: &str) -> anyhow::Result<Vec<IpHistoryEntry>> {
     // ① 收集该玩家所有使用过的 IP（来源：player_access_logs + server_online_players + ban_records）
     //    使用 UNION 去重后获取唯一的 IP 列表
     let ip_rows: Vec<(String,)> = sqlx::query_as(
@@ -796,13 +919,16 @@ async fn fetch_ip_history(
     // 按 IP 分组：服务器列表（每个 IP 保留前 50 条，已由 SQL 窗口函数保证）
     let mut servers_by_ip: HashMap<String, Vec<IpServerRecord>> = HashMap::new();
     for row in ip_server_rows {
-        servers_by_ip.entry(row.ip).or_default().push(IpServerRecord {
-            server_name: row.server_name,
-            server_port: row.server_port,
-            player_name: row.player_name,
-            last_seen: row.last_seen,
-            source: row.source,
-        });
+        servers_by_ip
+            .entry(row.ip)
+            .or_default()
+            .push(IpServerRecord {
+                server_name: row.server_name,
+                server_port: row.server_port,
+                player_name: row.player_name,
+                last_seen: row.last_seen,
+                source: row.source,
+            });
     }
 
     // 按 IP 分组：最早/最晚时间
@@ -836,10 +962,7 @@ async fn fetch_ip_history(
     // 组装每个 IP 的 IpHistoryEntry
     let mut entries = Vec::with_capacity(player_ips.len());
     for ip in &player_ips {
-        let (first_seen, last_seen) = times_by_ip
-            .get(ip)
-            .copied()
-            .unwrap_or((None, None));
+        let (first_seen, last_seen) = times_by_ip.get(ip).copied().unwrap_or((None, None));
         let mut linked_accounts: Vec<LinkedAccount> = linked_by_ip
             .get(ip)
             .map(|ids| {
@@ -964,72 +1087,103 @@ async fn fetch_linked_accounts(
     linked_ids: &[String],
 ) -> anyhow::Result<HashMap<String, LinkedAccount>> {
     // ⑤ 玩家名：四个来源各自取每个账号最新的一条，再在内存中按优先级合并
-    let (name_access, name_online, name_ban, name_wl, ban_rows, server_rows, time_rows, count_rows) =
-        tokio::try_join!(
-            async {
-                sqlx::query_as::<_, LinkedNameRow>(
-                    r#"SELECT DISTINCT ON (steam_id64) steam_id64, player_name
+    let (
+        name_access,
+        name_online,
+        name_ban,
+        name_wl,
+        ban_rows,
+        whitelist_rows,
+        server_rows,
+        time_rows,
+        count_rows,
+    ) = tokio::try_join!(
+        async {
+            sqlx::query_as::<_, LinkedNameRow>(
+                r#"SELECT DISTINCT ON (steam_id64) steam_id64, player_name
                        FROM player_access_logs
                        WHERE steam_id64 = ANY($1)
                        ORDER BY steam_id64, created_at DESC"#,
-                )
-                .bind(linked_ids)
-                .fetch_all(&db.pool)
-                .await
-                .map_err(anyhow::Error::from)
-            },
-            async {
-                sqlx::query_as::<_, LinkedNameRow>(
-                    r#"SELECT DISTINCT ON (steam_id64) steam_id64, name AS player_name
+            )
+            .bind(linked_ids)
+            .fetch_all(&db.pool)
+            .await
+            .map_err(anyhow::Error::from)
+        },
+        async {
+            sqlx::query_as::<_, LinkedNameRow>(
+                r#"SELECT DISTINCT ON (steam_id64) steam_id64, name AS player_name
                        FROM server_online_players
                        WHERE steam_id64 = ANY($1)
                        ORDER BY steam_id64, reported_at DESC"#,
-                )
-                .bind(linked_ids)
-                .fetch_all(&db.pool)
-                .await
-                .map_err(anyhow::Error::from)
-            },
-            async {
-                sqlx::query_as::<_, LinkedNameRow>(
-                    r#"SELECT DISTINCT ON (steam_id) steam_id AS steam_id64, player AS player_name
+            )
+            .bind(linked_ids)
+            .fetch_all(&db.pool)
+            .await
+            .map_err(anyhow::Error::from)
+        },
+        async {
+            sqlx::query_as::<_, LinkedNameRow>(
+                r#"SELECT DISTINCT ON (steam_id) steam_id AS steam_id64, player AS player_name
                        FROM ban_records
                        WHERE steam_id = ANY($1)
                        ORDER BY steam_id, created_at DESC"#,
-                )
-                .bind(linked_ids)
-                .fetch_all(&db.pool)
-                .await
-                .map_err(anyhow::Error::from)
-            },
-            async {
-                sqlx::query_as::<_, LinkedNameRow>(
-                    r#"SELECT DISTINCT ON (steamid64) steamid64 AS steam_id64, nickname AS player_name
+            )
+            .bind(linked_ids)
+            .fetch_all(&db.pool)
+            .await
+            .map_err(anyhow::Error::from)
+        },
+        async {
+            sqlx::query_as::<_, LinkedNameRow>(
+                r#"SELECT DISTINCT ON (steamid64) steamid64 AS steam_id64, nickname AS player_name
                        FROM whitelist_requests
                        WHERE steamid64 = ANY($1)
                        ORDER BY steamid64, COALESCE(updated_at, applied_at) DESC"#,
-                )
-                .bind(linked_ids)
-                .fetch_all(&db.pool)
-                .await
-                .map_err(anyhow::Error::from)
-            },
-            // ⑥ 活跃封禁数
-            async {
-                sqlx::query_as::<_, LinkedCountRow>(
-                    r#"SELECT steam_id, COUNT(*) AS cnt FROM ban_records
+            )
+            .bind(linked_ids)
+            .fetch_all(&db.pool)
+            .await
+            .map_err(anyhow::Error::from)
+        },
+        // ⑥ 活跃封禁数
+        async {
+            sqlx::query_as::<_, LinkedCountRow>(
+                r#"SELECT steam_id, COUNT(*) AS cnt FROM ban_records
                        WHERE status = 'active' AND steam_id = ANY($1)
                        GROUP BY steam_id"#,
+            )
+            .bind(linked_ids)
+            .fetch_all(&db.pool)
+            .await
+            .map_err(anyhow::Error::from)
+        },
+        // ⑦ 最近白名单状态与申请次数
+        async {
+            sqlx::query_as::<_, LinkedWhitelistRow>(
+                    r#"SELECT steam_id, status, applied_at, reviewed_at, reviewer, whitelist_count FROM (
+                        SELECT steamid64 AS steam_id, status, applied_at,
+                               COALESCE(approved_at, rejected_at, revoked_at) AS reviewed_at,
+                               COALESCE(approved_by, rejected_by, revoked_by) AS reviewer,
+                               COUNT(*) OVER (PARTITION BY steamid64) AS whitelist_count,
+                               ROW_NUMBER() OVER (
+                                 PARTITION BY steamid64
+                                 ORDER BY COALESCE(updated_at, approved_at, rejected_at, revoked_at, applied_at) DESC
+                               ) AS rn
+                        FROM whitelist_requests
+                        WHERE steamid64 = ANY($1)
+                    ) AS ranked
+                    WHERE rn = 1"#,
                 )
                 .bind(linked_ids)
                 .fetch_all(&db.pool)
                 .await
                 .map_err(anyhow::Error::from)
-            },
-            // ⑦ 登录过的服务器（每个账号前 20 个）
-            async {
-                sqlx::query_as::<_, LinkedServerRow>(
-                    r#"SELECT steam_id, server_name FROM (
+        },
+        // ⑧ 登录过的服务器（每个账号前 20 个）
+        async {
+            sqlx::query_as::<_, LinkedServerRow>(
+                r#"SELECT steam_id, server_name FROM (
                         SELECT steam_id, server_name,
                                ROW_NUMBER() OVER (PARTITION BY steam_id ORDER BY server_name) AS rn
                         FROM (
@@ -1043,16 +1197,16 @@ async fn fetch_linked_accounts(
                         ) AS servers
                     ) AS ranked
                     WHERE rn <= 20"#,
-                )
-                .bind(linked_ids)
-                .fetch_all(&db.pool)
-                .await
-                .map_err(anyhow::Error::from)
-            },
-            // ⑧ 最近活跃时间
-            async {
-                sqlx::query_as::<_, LinkedTimeRow>(
-                    r#"SELECT steam_id, max(ts) AS last_seen FROM (
+            )
+            .bind(linked_ids)
+            .fetch_all(&db.pool)
+            .await
+            .map_err(anyhow::Error::from)
+        },
+        // ⑨ 最近活跃时间
+        async {
+            sqlx::query_as::<_, LinkedTimeRow>(
+                r#"SELECT steam_id, max(ts) AS last_seen FROM (
                         SELECT steam_id64 AS steam_id, created_at AS ts FROM player_access_logs
                         WHERE steam_id64 = ANY($1)
                         UNION ALL
@@ -1063,15 +1217,15 @@ async fn fetch_linked_accounts(
                         WHERE steam_id = ANY($1)
                     ) AS times
                     GROUP BY steam_id"#,
-                )
-                .bind(linked_ids)
-                .fetch_all(&db.pool)
-                .await
-                .map_err(anyhow::Error::from)
-            },
-            // ⑨ 访问次数（player_access_logs + server_online_players 行数之和）
-            async {
-                sqlx::query_as::<_, LinkedCountRow>(
+            )
+            .bind(linked_ids)
+            .fetch_all(&db.pool)
+            .await
+            .map_err(anyhow::Error::from)
+        },
+        // ⑩ 访问次数（player_access_logs + server_online_players 行数之和）
+        async {
+            sqlx::query_as::<_, LinkedCountRow>(
                     r#"SELECT steam_id, COUNT(*) AS cnt FROM (
                         SELECT steam_id64 AS steam_id FROM player_access_logs WHERE steam_id64 = ANY($1)
                         UNION ALL
@@ -1083,8 +1237,8 @@ async fn fetch_linked_accounts(
                 .fetch_all(&db.pool)
                 .await
                 .map_err(anyhow::Error::from)
-            },
-        )?;
+        },
+    )?;
 
     // 合并玩家名（优先级：access_log > online > ban > whitelist，与原逻辑一致）
     let mut name_map: HashMap<String, String> = HashMap::new();
@@ -1104,6 +1258,11 @@ async fn fetch_linked_accounts(
     let ban_map: HashMap<String, bool> = ban_rows
         .into_iter()
         .map(|r| (r.steam_id, r.cnt > 0))
+        .collect();
+
+    let whitelist_map: HashMap<String, LinkedWhitelistRow> = whitelist_rows
+        .into_iter()
+        .map(|r| (r.steam_id.clone(), r))
         .collect();
 
     // 关联服务器按账号分组
@@ -1127,17 +1286,40 @@ async fn fetch_linked_accounts(
     // 组装 LinkedAccount 映射（覆盖所有 linked_ids，缺失字段使用默认值）
     let mut account_map = HashMap::with_capacity(linked_ids.len());
     for id in linked_ids {
-        account_map.insert(
-            id.clone(),
+        account_map.insert(id.clone(), {
+            let whitelist = whitelist_map.get(id);
+            let (
+                whitelist_status,
+                whitelist_count,
+                whitelist_applied_at,
+                whitelist_reviewed_at,
+                whitelist_reviewer,
+            ) = whitelist
+                .map(|row| {
+                    (
+                        Some(row.status.clone()),
+                        row.whitelist_count,
+                        Some(row.applied_at),
+                        row.reviewed_at,
+                        row.reviewer.clone(),
+                    )
+                })
+                .unwrap_or((None, 0, None, None, None));
+
             LinkedAccount {
                 steam_id64: id.clone(),
                 player_name: name_map.get(id).cloned(),
                 last_seen: time_map.get(id).copied().flatten(),
                 has_local_ban: ban_map.get(id).copied().unwrap_or(false),
+                whitelist_status,
+                whitelist_count,
+                whitelist_applied_at,
+                whitelist_reviewed_at,
+                whitelist_reviewer,
                 servers: servers_by_steam.remove(id).unwrap_or_default(),
                 access_count: count_map.get(id).copied().unwrap_or(0),
-            },
-        );
+            }
+        });
     }
     Ok(account_map)
 }
@@ -1378,6 +1560,7 @@ fn build_search_terms(
     appeals: &[PlayerAppealRecord],
     reports: &[PlayerReportRecord],
     online_records: &[OnlineRecord],
+    access_logs: &[PlayerAccessRecord],
 ) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut terms = Vec::new();
@@ -1400,6 +1583,9 @@ fn build_search_terms(
     }
     for item in online_records {
         add_search_term(&mut terms, &mut seen, Some(&item.name));
+    }
+    for item in access_logs {
+        add_search_term(&mut terms, &mut seen, item.player_name.as_deref());
     }
 
     terms.truncate(12);
@@ -1426,30 +1612,15 @@ fn display_name(
     whitelists
         .iter()
         .find_map(|item| item.steam_persona_name.clone())
-        .or_else(|| {
-            whitelists
-                .iter()
-                .map(|item| item.nickname.clone())
-                .next()
-        })
-        .or_else(|| {
-            online_records
-                .iter()
-                .map(|item| item.name.clone())
-                .next()
-        })
+        .or_else(|| whitelists.iter().map(|item| item.nickname.clone()).next())
+        .or_else(|| online_records.iter().map(|item| item.name.clone()).next())
         .or_else(|| bans.iter().find_map(|item| item.player.clone()))
         .or_else(|| {
             reports
                 .iter()
                 .find_map(|item| item.target_player_name.clone())
         })
-        .or_else(|| {
-            appeals
-                .iter()
-                .map(|item| item.player_name.clone())
-                .next()
-        })
+        .or_else(|| appeals.iter().map(|item| item.player_name.clone()).next())
 }
 
 fn is_active_ban(ban: &PlayerBanRecord) -> bool {
@@ -1469,9 +1640,11 @@ fn build_timeline(
     appeals: &[PlayerAppealRecord],
     reports: &[PlayerReportRecord],
     online_records: &[OnlineRecord],
+    access_logs: &[PlayerAccessRecord],
     admin_actions: &[AdminAction],
     audit_logs: &[PlayerAuditLog],
     evidence_files: &[EvidenceFile],
+    map_feedback: &[MapFeedbackItem],
 ) -> Vec<TimelineEvent> {
     let mut events = Vec::new();
 
@@ -1623,6 +1796,68 @@ fn build_timeline(
         });
     }
 
+    for item in access_logs {
+        events.push(TimelineEvent {
+            event_type: if item.allowed {
+                "access_allowed".to_string()
+            } else {
+                "access_denied".to_string()
+            },
+            category: "access".to_string(),
+            title: if item.allowed {
+                "进服成功".to_string()
+            } else {
+                "进服失败".to_string()
+            },
+            description: Some(if item.allowed {
+                format!(
+                    "{}:{} / {}",
+                    item.server_name, item.server_port, item.access_method
+                )
+            } else {
+                item.reject_reason.clone().unwrap_or_else(|| {
+                    item.failure_code
+                        .clone()
+                        .unwrap_or_else(|| "未知失败原因".to_string())
+                })
+            }),
+            occurred_at: item.created_at,
+            actor: item.player_name.clone(),
+            status: Some(if item.allowed { "success" } else { "failed" }.to_string()),
+            source: Some(item.access_method.clone()),
+            related_id: Some(item.id),
+        });
+    }
+
+    for item in map_feedback {
+        if let Some(created_at) = parse_rfc3339_utc(&item.created_at) {
+            events.push(TimelineEvent {
+                event_type: "map_feedback_created".to_string(),
+                category: "map_feedback".to_string(),
+                title: "提交地图反馈".to_string(),
+                description: Some(item.detail.clone()),
+                occurred_at: created_at,
+                actor: item.steam_persona_name.clone(),
+                status: Some(item.status.clone()),
+                source: Some(item.feedback_type.clone()),
+                related_id: Some(item.id),
+            });
+        }
+        if let Some(reviewed_at) = item.reviewed_at.as_deref().and_then(parse_rfc3339_utc) {
+            events.push(TimelineEvent {
+                event_type: "map_feedback_reviewed".to_string(),
+                category: "map_feedback".to_string(),
+                title: "处理地图反馈".to_string(),
+                description: item.review_note.clone(),
+                occurred_at: reviewed_at,
+                actor: item.reviewed_by.clone(),
+                status: Some(item.status.clone()),
+                source: Some(item.feedback_type.clone()),
+                related_id: Some(item.id),
+            });
+        }
+    }
+
     for item in admin_actions {
         events.push(TimelineEvent {
             event_type: "admin_action".to_string(),
@@ -1672,4 +1907,10 @@ fn build_timeline(
     events.sort_by_key(|b| std::cmp::Reverse(b.occurred_at));
     events.truncate(250);
     events
+}
+
+fn parse_rfc3339_utc(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
 }

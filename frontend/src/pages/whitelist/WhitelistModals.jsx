@@ -7,7 +7,7 @@ import { InternalNoteBadge } from '../../shared/InternalNote.jsx';
 // 全球封禁记录列表（共享组件）
 // ---------------------------------------------------------------------------
 
-function GlobalBanRecordList({ bans }) {
+function GlobalBanRecordList({ bans = [] }) {
   if (!bans.length) {
     return <div className="global-ban-empty">暂无封禁记录</div>;
   }
@@ -68,6 +68,56 @@ function GlobalBanRecordList({ bans }) {
   );
 }
 
+function riskActionLabel(action) {
+  if (action === 'deny') return '必须强制通过';
+  if (action === 'require_force') return '必须强制通过';
+  if (action === 'warn') return '需要备注';
+  return '低风险';
+}
+
+function riskTone(profile) {
+  if (profile?.action === 'deny' || profile?.action === 'require_force') return 'danger';
+  if (profile?.action === 'warn') return 'warning';
+  return 'default';
+}
+
+function RiskProfilePanel({ profile }) {
+  if (!profile || profile.action === 'allow') return null;
+  const tone = riskTone(profile);
+  return (
+    <div className={`whitelist-risk-panel ${tone}`}>
+      <div className="whitelist-risk-panel-head">
+        <span>⚠</span>
+        <strong>{riskActionLabel(profile.action)}</strong>
+      </div>
+      <div className="whitelist-risk-summary">{profile.summary}</div>
+      {profile.recommendation ? <div className="whitelist-risk-recommendation">{profile.recommendation}</div> : null}
+      {profile.reasons?.length > 0 ? (
+        <div className="whitelist-risk-reason-list">
+          {profile.reasons.map((reason, index) => (
+            <div key={`${reason.code}-${index}`} className="whitelist-risk-reason">
+              <span>{reason.message}</span>
+              {reason.ip ? <code>{reason.ip}</code> : null}
+              {reason.steamid64 ? <code>{reason.steamid64}</code> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {profile.linked_accounts?.length > 0 ? (
+        <div className="whitelist-risk-linked">
+          {profile.linked_accounts.slice(0, 5).map((account) => (
+            <div key={account.steamid64} className="whitelist-risk-linked-row">
+              <span>{account.player_name || '(未知)'}</span>
+              <code>{account.steamid64}</code>
+              <span>{account.has_active_global_ban ? '全球封禁' : account.has_active_local_ban ? '本地封禁' : '历史风险'}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // 手动添加白名单 Modal
 // ---------------------------------------------------------------------------
@@ -105,6 +155,26 @@ export function ManualCreateModal({ open, onClose, form, setForm, error, onSubmi
           placeholder="SteamID64 / SteamID / Steam 个人主页链接"
         />
       </div>
+      <label className="checkbox-line mb-12">
+        <input
+          type="checkbox"
+          checked={Boolean(form.force)}
+          onChange={(event) => setForm((prev) => ({ ...prev, force: event.target.checked }))}
+        />
+        <span>强制通过风险检查</span>
+      </label>
+      {form.force ? (
+        <div className="form-group">
+          <label>强制通过原因</label>
+          <textarea
+            className="form-control"
+            rows={3}
+            value={form.reason || ''}
+            onChange={(event) => setForm((prev) => ({ ...prev, reason: event.target.value }))}
+            placeholder="请说明为什么需要绕过同 IP 风险或历史风险"
+          />
+        </div>
+      ) : null}
       {error ? <div className="text-accent">{error}</div> : null}
     </Modal>
   );
@@ -143,17 +213,22 @@ export function RejectModal({ open, onClose, reason, setReason, error, onSubmit,
 }
 
 // ---------------------------------------------------------------------------
-// 通过白名单申请（含全球封禁检查）Modal
+// 通过白名单申请（含风险检查）Modal
 // ---------------------------------------------------------------------------
 
-export function ApproveModal({ open, onClose, item, bans, risk, reason, setReason, error, secondsRemaining, onSubmit, submitting }) {
+export function ApproveModal({ open, onClose, mode = 'approve', item, bans = [], risk, riskProfile, reason, setReason, error, secondsRemaining, onSubmit, submitting }) {
+  const forceRequired = ['deny', 'require_force'].includes(riskProfile?.action) || bans.length > 0;
+  const titleText = mode === 'restore'
+    ? forceRequired ? '恢复白名单（强制通过）' : '恢复白名单（风险确认）'
+    : forceRequired ? '通过白名单申请（强制通过）' : '通过白名单申请（风险确认）';
+  const submitText = forceRequired ? '确认强制通过' : '确认通过';
   return (
     <Modal
       open={open}
       title={
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ fontSize: 20, color: 'var(--accent)' }}>⚠</span>
-          <span>通过白名单申请（全球封禁）</span>
+          <span>{titleText}</span>
         </div>
       }
       onClose={onClose}
@@ -165,7 +240,7 @@ export function ApproveModal({ open, onClose, item, bans, risk, reason, setReaso
             onClick={onSubmit}
             disabled={submitting || secondsRemaining > 0}
           >
-            {secondsRemaining > 0 ? `${secondsRemaining} 秒后可通过` : submitting ? '处理中...' : '确认通过'}
+            {secondsRemaining > 0 ? `${secondsRemaining} 秒后可${forceRequired ? '强制通过' : '通过'}` : submitting ? '处理中...' : submitText}
           </button>
         </>
       }
@@ -173,9 +248,10 @@ export function ApproveModal({ open, onClose, item, bans, risk, reason, setReaso
       <div className="global-ban-alert mb-12">
         <div className="global-ban-alert-icon">⚠</div>
         <div className="global-ban-alert-text">
-          该玩家在全球 KZ 封禁库中有 <strong>{bans.length}</strong> 条封禁记录。请完整查看下方封禁详情，倒计时结束并填写通过理由后才可正式通过。
+          该玩家命中白名单风险策略。请完整查看下方风险详情，倒计时结束并填写通过理由后才可继续。
         </div>
       </div>
+      <RiskProfilePanel profile={riskProfile} />
       {risk ? (
         <div className={`global-ban-risk global-ban-risk-${risk.tone}`}>
           <div className="global-ban-risk-title">{risk.title}</div>
@@ -193,20 +269,42 @@ export function ApproveModal({ open, onClose, item, bans, risk, reason, setReaso
         <div><strong>SteamID64:</strong> <code>{item?.steamid64 ?? '-'}</code></div>
       </div>
       <InternalNoteBadge steamid64={item?.steamid64} />
-      <div className="mb-16">
-        <GlobalBanRecordList bans={bans} />
-      </div>
+      {bans.length > 0 ? (
+        <div className="mb-16">
+          <GlobalBanRecordList bans={bans} />
+        </div>
+      ) : null}
       <div className="form-group">
-        <label>通过理由</label>
+        <label>{forceRequired ? '强制通过理由' : '通过理由'}</label>
         <textarea
           className="form-control"
           rows={4}
           value={reason}
           onChange={(event) => setReason(event.target.value)}
-          placeholder="请说明为什么在有全球封禁记录的情况下仍然通过"
+          placeholder={forceRequired ? '请说明为什么需要强制通过该玩家' : '请说明为什么在命中风险的情况下仍然通过'}
         />
       </div>
       {error ? <div className="text-accent">{error}</div> : null}
+    </Modal>
+  );
+}
+
+export function RiskDetailModal({ open, onClose, item }) {
+  return (
+    <Modal
+      open={open}
+      title="关联账号风险"
+      onClose={onClose}
+      footer={<button className="btn btn-primary" type="button" onClick={onClose}>关闭</button>}
+    >
+      <div className="global-ban-info">
+        <div><strong>玩家:</strong> {item?.nickname ?? '-'}</div>
+        <div><strong>SteamID64:</strong> <code>{item?.steamid64 ?? '-'}</code></div>
+      </div>
+      <RiskProfilePanel profile={item?.risk_profile} />
+      {!item?.risk_profile || item.risk_profile.action === 'allow' ? (
+        <div className="global-ban-empty">当前没有关联账号风险。</div>
+      ) : null}
     </Modal>
   );
 }
@@ -321,6 +419,7 @@ export function PlayerDetailModal({ open, onClose, item, canReview, submitting, 
     if (open && item?.steamid64) React.startTransition(() => { loadStats(); });
     if (!open) React.startTransition(() => { setError(''); });
   }, [open, item?.steamid64, loadStats]);
+  const forceApprove = item?.risk_profile?.action === 'deny';
 
   return (
     <Modal
@@ -332,7 +431,7 @@ export function PlayerDetailModal({ open, onClose, item, canReview, submitting, 
           <>
             <button className="btn btn-outline" onClick={onClose}>关闭</button>
             <button className="action-btn action-btn-danger" onClick={() => { onClose(); onReject(item); }} disabled={submitting}>拒绝</button>
-            <button className="action-btn action-btn-success" style={{ color: '#22c55e' }} onClick={() => { onClose(); onApprove(item); }} disabled={submitting}>通过</button>
+            <button className="action-btn action-btn-success" style={{ color: forceApprove ? 'var(--danger-text)' : '#22c55e' }} onClick={() => { onClose(); onApprove(item); }} disabled={submitting} title={forceApprove ? '需要填写理由后强制通过' : undefined}>{forceApprove ? '强制通过' : '通过'}</button>
           </>
         ) : (
           <button className="btn btn-outline" onClick={onClose}>关闭</button>
@@ -358,6 +457,8 @@ export function PlayerDetailModal({ open, onClose, item, canReview, submitting, 
               <div>申请时间：{item.applied_at ? formatChinaDateTime(item.applied_at) : '-'}</div>
             </div>
           </div>
+
+          <RiskProfilePanel profile={item.risk_profile} />
 
           <div className="form-group">
             <label className="mb-4">GOKZ.TOP 统计</label>

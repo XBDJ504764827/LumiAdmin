@@ -1,10 +1,14 @@
 use crate::{
     db::Database,
     routes::ListQuery,
-    services::steam_service::{ParsedSteamIdentity, SteamResolver},
+    services::{
+        player_risk_service::{self, PlayerRiskProfile},
+        steam_service::{ParsedSteamIdentity, SteamResolver},
+    },
 };
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize)]
@@ -24,6 +28,8 @@ pub struct WhitelistItem {
     pub rejected_at: Option<String>,
     pub rejected_by: Option<String>,
     pub rejection_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub risk_profile: Option<PlayerRiskProfile>,
 }
 
 #[derive(Clone)]
@@ -36,6 +42,15 @@ pub struct PublicWhitelistRequestInput {
 pub struct ManualWhitelistInput {
     pub nickname: String,
     pub steam_input: String,
+    pub force: bool,
+    pub force_reason: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct ApproveWhitelistInput<'a> {
+    pub operator_name: &'a str,
+    pub reason: Option<&'a str>,
+    pub force: bool,
 }
 
 #[derive(sqlx::FromRow)]
@@ -157,7 +172,7 @@ pub async fn list_whitelist(
     let display_map =
         crate::services::display_name::resolve_display_names(db, &reviewer_names).await?;
 
-    let items = rows
+    let mut items: Vec<WhitelistItem> = rows
         .into_iter()
         .map(|row_with_total| {
             let mut item = map_whitelist_row(row_with_total.base);
@@ -175,6 +190,7 @@ pub async fn list_whitelist(
             item
         })
         .collect();
+    attach_risk_profiles(db, &mut items).await?;
 
     Ok(crate::routes::PaginatedResponse {
         items,
@@ -271,6 +287,9 @@ pub async fn create_manual_whitelist(
     anyhow::ensure!(!operator_name.trim().is_empty(), "缺少审核管理员信息");
 
     let identity = resolver.resolve(&input.steam_input).await?;
+    let risk_profile =
+        player_risk_service::build_player_risk_profile(db, &identity.steamid64).await?;
+    ensure_can_approve_with_risk(&risk_profile, input.force, input.force_reason.as_deref())?;
     if let Some(existing) = find_by_steamid64(db, &identity.steamid64).await? {
         anyhow::ensure!(
             existing.status == "revoked",
@@ -281,6 +300,7 @@ pub async fn create_manual_whitelist(
             existing.id,
             nickname,
             operator_name,
+            input.force_reason.as_deref(),
             &identity,
             resolver,
         )
@@ -298,9 +318,9 @@ pub async fn create_manual_whitelist(
         r#"
         INSERT INTO whitelist_requests (
             id, steam_id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
-            applied_at, approved_at, approved_by, source, updated_at
+            applied_at, approved_at, approved_by, approval_reason, source, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'approved', now(), now(), $9, 'manual', now())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'approved', now(), now(), $9, $10, 'manual', now())
         RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
                   applied_at, approved_at, approved_by, approval_reason,
                   rejected_at, rejected_by, rejection_reason
@@ -315,6 +335,10 @@ pub async fn create_manual_whitelist(
     .bind(nickname)
     .bind(steam_persona_name.as_deref())
     .bind(operator_name.trim())
+    .bind(input.force_reason.as_deref().and_then(|r| {
+        let trimmed = r.trim();
+        (!trimmed.is_empty()).then_some(trimmed)
+    }))
     .fetch_one(&db.pool)
     .await?;
 
@@ -324,11 +348,13 @@ pub async fn create_manual_whitelist(
 pub async fn approve_whitelist(
     db: &Database,
     id: Uuid,
-    operator_name: &str,
-    reason: Option<&str>,
+    input: ApproveWhitelistInput<'_>,
 ) -> anyhow::Result<WhitelistItem> {
     let current = find_by_id(db, id).await?;
     anyhow::ensure!(current.status == "pending", "只有待审核记录可以通过");
+    let risk_profile =
+        player_risk_service::build_player_risk_profile(db, &current.steamid64).await?;
+    ensure_can_approve_with_risk(&risk_profile, input.force, input.reason)?;
 
     let row = sqlx::query_as::<_, WhitelistRow>(
         r#"
@@ -350,8 +376,8 @@ pub async fn approve_whitelist(
         "#,
     )
     .bind(id)
-    .bind(operator_name.trim())
-    .bind(reason.and_then(|r| if r.trim().is_empty() { None } else { Some(r.trim()) }))
+    .bind(input.operator_name.trim())
+    .bind(input.reason.and_then(|r| if r.trim().is_empty() { None } else { Some(r.trim()) }))
     .fetch_one(&db.pool)
     .await?;
 
@@ -400,9 +426,14 @@ pub async fn restore_whitelist(
     db: &Database,
     id: Uuid,
     operator_name: &str,
+    reason: Option<&str>,
+    force: bool,
 ) -> anyhow::Result<WhitelistItem> {
     let current = find_by_id(db, id).await?;
     anyhow::ensure!(current.status == "rejected", "只有未通过记录可以恢复通过");
+    let risk_profile =
+        player_risk_service::build_player_risk_profile(db, &current.steamid64).await?;
+    ensure_can_approve_with_risk(&risk_profile, force, reason)?;
 
     let row = sqlx::query_as::<_, WhitelistRow>(
         r#"
@@ -410,7 +441,7 @@ pub async fn restore_whitelist(
         SET status = 'approved',
             approved_at = now(),
             approved_by = $2,
-            approval_reason = NULL,
+            approval_reason = $3,
             rejected_at = NULL,
             rejected_by = NULL,
             rejection_reason = NULL,
@@ -425,6 +456,7 @@ pub async fn restore_whitelist(
     )
     .bind(id)
     .bind(operator_name.trim())
+    .bind(reason.and_then(|r| if r.trim().is_empty() { None } else { Some(r.trim()) }))
     .fetch_one(&db.pool)
     .await?;
 
@@ -517,6 +549,7 @@ async fn approve_existing_record(
     id: Uuid,
     nickname: &str,
     operator_name: &str,
+    approval_reason: Option<&str>,
     identity: &ParsedSteamIdentity,
     resolver: &SteamResolver,
 ) -> anyhow::Result<WhitelistItem> {
@@ -539,7 +572,7 @@ async fn approve_existing_record(
             applied_at = now(),
             approved_at = now(),
             approved_by = $7,
-            approval_reason = NULL,
+            approval_reason = $8,
             rejected_at = NULL,
             rejected_by = NULL,
             rejection_reason = NULL,
@@ -560,6 +593,10 @@ async fn approve_existing_record(
     .bind(identity.profile_url.as_deref())
     .bind(steam_persona_name.as_deref())
     .bind(operator_name.trim())
+    .bind(approval_reason.and_then(|r| {
+        let trimmed = r.trim();
+        (!trimmed.is_empty()).then_some(trimmed)
+    }))
     .fetch_one(&db.pool)
     .await?;
 
@@ -605,6 +642,56 @@ async fn find_by_id(db: &Database, id: Uuid) -> anyhow::Result<WhitelistStatusRo
     .fetch_one(&db.pool)
     .await
     .map_err(Into::into)
+}
+
+pub async fn risk_profile_for_whitelist(
+    db: &Database,
+    id: Uuid,
+) -> anyhow::Result<PlayerRiskProfile> {
+    let current = find_by_id(db, id).await?;
+    player_risk_service::build_player_risk_profile(db, &current.steamid64).await
+}
+
+async fn attach_risk_profiles(db: &Database, items: &mut [WhitelistItem]) -> anyhow::Result<()> {
+    let steamids: Vec<String> = items
+        .iter()
+        .map(|item| item.steamid64.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    let profiles = futures::future::try_join_all(steamids.iter().map(|steamid64| async move {
+        player_risk_service::build_player_risk_profile(db, steamid64)
+            .await
+            .map(|profile| (steamid64.clone(), profile))
+    }))
+    .await?;
+    let profile_map: HashMap<String, PlayerRiskProfile> = profiles.into_iter().collect();
+
+    for item in items {
+        item.risk_profile = profile_map.get(&item.steamid64).cloned();
+    }
+
+    Ok(())
+}
+
+fn ensure_can_approve_with_risk(
+    risk_profile: &PlayerRiskProfile,
+    force: bool,
+    reason: Option<&str>,
+) -> anyhow::Result<()> {
+    let reason = reason.map(str::trim).unwrap_or_default();
+    let force_required = risk_profile.denies() || risk_profile.requires_force();
+    if force_required && !force {
+        anyhow::bail!("命中高风险，必须走强制通过流程：{}", risk_profile.summary);
+    }
+    if (force_required || risk_profile.action == player_risk_service::RiskAction::Warn)
+        && reason.is_empty()
+    {
+        anyhow::bail!("命中风险，必须填写通过理由：{}", risk_profile.summary);
+    }
+
+    Ok(())
 }
 
 /// 更新单条白名单记录的Steam名称
@@ -732,6 +819,7 @@ fn map_whitelist_row(row: WhitelistRow) -> WhitelistItem {
         rejected_at: row.rejected_at.map(|value| value.to_rfc3339()),
         rejected_by: row.rejected_by,
         rejection_reason: row.rejection_reason,
+        risk_profile: None,
     }
 }
 
@@ -948,6 +1036,8 @@ mod tests {
                 ManualWhitelistInput {
                     nickname: "管理员添加玩家".to_string(),
                     steam_input: "STEAM_0:1:12345".to_string(),
+                    force: false,
+                    force_reason: None,
                 },
                 "Alex",
                 &SteamResolver::for_tests(),
@@ -1057,7 +1147,9 @@ mod tests {
             )
             .await;
 
-            let item = restore_whitelist(&db, id, "Alex").await.unwrap();
+            let item = restore_whitelist(&db, id, "Alex", None, false)
+                .await
+                .unwrap();
 
             assert_eq!(item.status, "approved");
             let applied_at_from_item = chrono::DateTime::parse_from_rfc3339(&item.applied_at)

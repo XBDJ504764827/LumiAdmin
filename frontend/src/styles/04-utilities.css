@@ -339,6 +339,7 @@
 @media (max-width: 768px) {
   .sidebar { width: var(--sidebar-collapsed); }
   .sidebar .nav-text, .sidebar-footer .nav-text, .sidebar-footer .user-info, .logout-text { display: none !important; }
+  .sidebar-footer .logout-btn { display: none !important; }
   .sidebar-logo .logo-text, .brand-text { opacity: 0; width: 0; display: none; }
   .sidebar-collapse-btn { display: none; }
   .main, .app-main { margin-left: var(--sidebar-collapsed); }
@@ -358,6 +359,14 @@
   .public-stat { padding: 6px 10px; font-size: 12px; }
   .public-table th, .public-table td { padding: 10px 10px; }
   .search-box, .searchbar { max-width: 160px; }
+  .app-search-panel {
+    left: 0;
+    right: auto;
+    width: min(360px, calc(100vw - 90px));
+    min-width: 0;
+  }
+  .app-search-result-key { display: none; }
+  .topbar-profile-menu { width: min(236px, calc(100vw - 92px)); }
   .filter-bar { flex-direction: column; gap: 8px; }
   .filter-bar .searchbar, .filter-bar .search-box { max-width: 100%; }
   .filter-select { width: 100%; }
@@ -379,6 +388,8 @@
   .topbar { padding: 0 10px; gap: 8px; height: 52px; }
   .search-box, .searchbar { max-width: 120px; padding: 5px 10px; }
   .search-box input, .searchbar input { font-size: 12px; }
+  .app-search-panel { width: calc(100vw - 88px); }
+  .topbar-profile-menu { right: 0; width: calc(100vw - 90px); }
 
   .content-section, .page { padding: 16px 10px 24px; }
   .page-title, .page h1 { font-size: 18px; }
@@ -386,6 +397,11 @@
   .card-header { padding: 14px 16px 12px; }
   .card-body { padding: 12px 16px 16px; }
   .player-search-card { padding: 12px; }
+  .player-detail-search { align-items: stretch; flex-direction: column; }
+  .player-search-combobox { width: 100%; max-width: 380px; min-width: 0; flex-basis: auto; }
+  .player-candidate-menu { max-height: min(340px, 56vh); }
+  .player-candidate-main { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .player-candidate-id { max-width: 100%; overflow-wrap: anywhere; }
   .player-profile-panel { padding: 14px; }
   .player-profile-main { align-items: flex-start; }
   .player-profile-avatar { width: 42px; height: 42px; }
@@ -702,4 +718,3 @@
   font-size: 14px;
   user-select: none;
 }
-

@@ -41,6 +41,19 @@ pub struct PlayerProfile {
     pub display_name: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct PlayerSearchCandidate {
+    pub steamid64: String,
+    pub steamid: Option<String>,
+    pub steamid3: Option<String>,
+    pub profile_url: Option<String>,
+    pub display_name: Option<String>,
+    pub sources: Vec<String>,
+    pub whitelist_status: Option<String>,
+    pub active_ban_count: i64,
+    pub last_seen_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct PlayerSummary {
     pub whitelist_status: Option<String>,
@@ -476,6 +489,74 @@ pub async fn get_player_detail(
     })
 }
 
+pub async fn search_player_candidates(
+    db: &Database,
+    resolver: &SteamResolver,
+    query: &str,
+) -> anyhow::Result<Vec<PlayerSearchCandidate>> {
+    let query = query.trim();
+    if query.len() < 2 {
+        return Ok(Vec::new());
+    }
+
+    let exact_identity = resolver.parse_local(query).ok();
+    let exact_steamid64 = exact_identity
+        .as_ref()
+        .map(|identity| identity.steamid64.clone())
+        .unwrap_or_default();
+    let pattern = like_pattern(query);
+
+    let rows = fetch_player_candidate_rows(db, &pattern, &exact_steamid64).await?;
+    let mut candidates: HashMap<String, PlayerSearchCandidateBuilder> = HashMap::new();
+
+    if let Some(identity) = exact_identity {
+        candidates.insert(
+            identity.steamid64.clone(),
+            PlayerSearchCandidateBuilder::from_exact_identity(identity),
+        );
+    }
+
+    for row in rows {
+        let Ok(identity) = resolver.parse_local(&row.steamid64) else {
+            continue;
+        };
+        candidates
+            .entry(identity.steamid64.clone())
+            .or_insert_with(|| PlayerSearchCandidateBuilder::from_identity(identity))
+            .merge(row);
+    }
+
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let steamids: Vec<String> = candidates.keys().cloned().collect();
+    let active_bans = fetch_active_ban_counts(db, &steamids).await?;
+    for (steamid64, count) in active_bans {
+        if let Some(candidate) = candidates.get_mut(&steamid64) {
+            candidate.active_ban_count = count;
+        }
+    }
+
+    let mut items: Vec<PlayerSearchCandidate> = candidates
+        .into_values()
+        .map(PlayerSearchCandidateBuilder::finish)
+        .collect();
+    items.sort_by(|a, b| {
+        let a_exact = !exact_steamid64.is_empty() && a.steamid64 == exact_steamid64;
+        let b_exact = !exact_steamid64.is_empty() && b.steamid64 == exact_steamid64;
+        b_exact
+            .cmp(&a_exact)
+            .then_with(|| b.active_ban_count.cmp(&a.active_ban_count))
+            .then_with(|| b.sources.len().cmp(&a.sources.len()))
+            .then_with(|| b.last_seen_at.cmp(&a.last_seen_at))
+            .then_with(|| a.display_name.cmp(&b.display_name))
+            .then_with(|| a.steamid64.cmp(&b.steamid64))
+    });
+    items.truncate(80);
+    Ok(items)
+}
+
 /// 解析玩家输入：支持 SteamID64/2/3、Steam 主页链接、玩家名称、IP 地址
 /// 返回 SteamID64
 async fn resolve_player_input(
@@ -544,6 +625,291 @@ async fn lookup_steamid_by_name(db: &Database, name: &str) -> anyhow::Result<Opt
     .fetch_optional(&db.pool)
     .await?;
     Ok(row.map(|(s,)| s))
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct PlayerSearchCandidateRow {
+    steamid64: String,
+    display_name: Option<String>,
+    source: String,
+    whitelist_status: Option<String>,
+    last_seen_at: Option<DateTime<Utc>>,
+}
+
+struct PlayerSearchCandidateBuilder {
+    steamid64: String,
+    steamid: Option<String>,
+    steamid3: Option<String>,
+    profile_url: Option<String>,
+    display_name: Option<String>,
+    sources: Vec<String>,
+    source_seen: HashSet<String>,
+    whitelist_status: Option<String>,
+    active_ban_count: i64,
+    last_seen_at: Option<DateTime<Utc>>,
+}
+
+impl PlayerSearchCandidateBuilder {
+    fn from_identity(identity: ParsedSteamIdentity) -> Self {
+        Self {
+            steamid64: identity.steamid64,
+            steamid: identity.steamid,
+            steamid3: identity.steamid3,
+            profile_url: identity.profile_url,
+            display_name: None,
+            sources: Vec::new(),
+            source_seen: HashSet::new(),
+            whitelist_status: None,
+            active_ban_count: 0,
+            last_seen_at: None,
+        }
+    }
+
+    fn from_exact_identity(identity: ParsedSteamIdentity) -> Self {
+        let mut candidate = Self::from_identity(identity);
+        candidate.add_source("直接匹配");
+        candidate
+    }
+
+    fn merge(&mut self, row: PlayerSearchCandidateRow) {
+        if let Some(display_name) = normalize_candidate_name(row.display_name) {
+            if self.display_name.is_none() || matches!(row.source.as_str(), "在线" | "进服") {
+                self.display_name = Some(display_name);
+            }
+        }
+        self.add_source(&row.source);
+        if self.whitelist_status.is_none() {
+            self.whitelist_status = row.whitelist_status;
+        }
+        if let Some(last_seen_at) = row.last_seen_at {
+            self.last_seen_at = Some(
+                self.last_seen_at
+                    .map_or(last_seen_at, |current| current.max(last_seen_at)),
+            );
+        }
+    }
+
+    fn add_source(&mut self, source: &str) {
+        if self.source_seen.insert(source.to_string()) {
+            self.sources.push(source.to_string());
+        }
+    }
+
+    fn finish(self) -> PlayerSearchCandidate {
+        PlayerSearchCandidate {
+            steamid64: self.steamid64,
+            steamid: self.steamid,
+            steamid3: self.steamid3,
+            profile_url: self.profile_url,
+            display_name: self.display_name,
+            sources: self.sources,
+            whitelist_status: self.whitelist_status,
+            active_ban_count: self.active_ban_count,
+            last_seen_at: self.last_seen_at,
+        }
+    }
+}
+
+async fn fetch_player_candidate_rows(
+    db: &Database,
+    pattern: &str,
+    exact_steamid64: &str,
+) -> anyhow::Result<Vec<PlayerSearchCandidateRow>> {
+    let rows = sqlx::query_as::<_, PlayerSearchCandidateRow>(
+        r#"SELECT * FROM (
+            SELECT wr.steamid64,
+                   COALESCE(NULLIF(wr.steam_persona_name, ''), NULLIF(wr.nickname, '')) AS display_name,
+                   '白名单'::TEXT AS source,
+                   wr.status AS whitelist_status,
+                   COALESCE(wr.updated_at, wr.approved_at, wr.rejected_at, wr.revoked_at, wr.applied_at) AS last_seen_at
+            FROM whitelist_requests wr
+            WHERE wr.steamid64 IS NOT NULL
+              AND btrim(wr.steamid64) <> ''
+              AND (
+                wr.steamid64 = NULLIF($2, '')
+                OR wr.steamid64 ILIKE $1 ESCAPE '\'
+                OR wr.steamid ILIKE $1 ESCAPE '\'
+                OR wr.steamid3 ILIKE $1 ESCAPE '\'
+                OR wr.nickname ILIKE $1 ESCAPE '\'
+                OR wr.steam_persona_name ILIKE $1 ESCAPE '\'
+              )
+            ORDER BY COALESCE(wr.updated_at, wr.applied_at) DESC NULLS LAST
+            LIMIT 80
+        ) whitelist_matches
+        UNION ALL
+        SELECT * FROM (
+            SELECT br.steam_id AS steamid64,
+                   NULLIF(br.player, '') AS display_name,
+                   '封禁'::TEXT AS source,
+                   NULL::TEXT AS whitelist_status,
+                   br.created_at AS last_seen_at
+            FROM ban_records br
+            WHERE br.steam_id IS NOT NULL
+              AND btrim(br.steam_id) <> ''
+              AND (
+                br.steam_id = NULLIF($2, '')
+                OR br.steam_id ILIKE $1 ESCAPE '\'
+                OR br.player ILIKE $1 ESCAPE '\'
+                OR br.ip_address ILIKE $1 ESCAPE '\'
+              )
+            ORDER BY br.created_at DESC
+            LIMIT 80
+        ) ban_matches
+        UNION ALL
+        SELECT * FROM (
+            SELECT sop.steam_id64,
+                   NULLIF(sop.name, '') AS display_name,
+                   '在线'::TEXT AS source,
+                   NULL::TEXT AS whitelist_status,
+                   sop.reported_at AS last_seen_at
+            FROM server_online_players sop
+            WHERE sop.steam_id64 IS NOT NULL
+              AND btrim(sop.steam_id64) <> ''
+              AND (
+                sop.steam_id64 = NULLIF($2, '')
+                OR sop.steam_id64 ILIKE $1 ESCAPE '\'
+                OR sop.name ILIKE $1 ESCAPE '\'
+                OR sop.ip ILIKE $1 ESCAPE '\'
+              )
+            ORDER BY sop.reported_at DESC
+            LIMIT 80
+        ) online_matches
+        UNION ALL
+        SELECT * FROM (
+            SELECT pal.steam_id64,
+                   NULLIF(pal.player_name, '') AS display_name,
+                   '进服'::TEXT AS source,
+                   NULL::TEXT AS whitelist_status,
+                   pal.created_at AS last_seen_at
+            FROM player_access_logs pal
+            WHERE pal.steam_id64 IS NOT NULL
+              AND btrim(pal.steam_id64) <> ''
+              AND (
+                pal.steam_id64 = NULLIF($2, '')
+                OR pal.steam_id64 ILIKE $1 ESCAPE '\'
+                OR pal.player_name ILIKE $1 ESCAPE '\'
+                OR pal.ip_address ILIKE $1 ESCAPE '\'
+              )
+            ORDER BY pal.created_at DESC
+            LIMIT 80
+        ) access_matches
+        UNION ALL
+        SELECT * FROM (
+            SELECT pr.target_steam_id AS steamid64,
+                   NULLIF(pr.target_player_name, '') AS display_name,
+                   '举报'::TEXT AS source,
+                   NULL::TEXT AS whitelist_status,
+                   pr.created_at AS last_seen_at
+            FROM player_reports pr
+            WHERE pr.target_steam_id IS NOT NULL
+              AND btrim(pr.target_steam_id) <> ''
+              AND (
+                pr.target_steam_id = NULLIF($2, '')
+                OR pr.target_steam_id ILIKE $1 ESCAPE '\'
+                OR pr.target_player_name ILIKE $1 ESCAPE '\'
+              )
+            ORDER BY pr.created_at DESC
+            LIMIT 80
+        ) report_matches
+        UNION ALL
+        SELECT * FROM (
+            SELECT ba.steam_id AS steamid64,
+                   NULLIF(ba.player_name, '') AS display_name,
+                   '申诉'::TEXT AS source,
+                   NULL::TEXT AS whitelist_status,
+                   ba.created_at AS last_seen_at
+            FROM ban_appeals ba
+            WHERE ba.steam_id IS NOT NULL
+              AND btrim(ba.steam_id) <> ''
+              AND (
+                ba.steam_id = NULLIF($2, '')
+                OR ba.steam_id ILIKE $1 ESCAPE '\'
+                OR ba.player_name ILIKE $1 ESCAPE '\'
+              )
+            ORDER BY ba.created_at DESC
+            LIMIT 80
+        ) appeal_matches
+        UNION ALL
+        SELECT * FROM (
+            SELECT mf.steam_id AS steamid64,
+                   NULLIF(mf.steam_persona_name, '') AS display_name,
+                   '地图反馈'::TEXT AS source,
+                   NULL::TEXT AS whitelist_status,
+                   mf.created_at AS last_seen_at
+            FROM map_feedback mf
+            WHERE mf.steam_id IS NOT NULL
+              AND btrim(mf.steam_id) <> ''
+              AND (
+                mf.steam_id = NULLIF($2, '')
+                OR mf.steam_id ILIKE $1 ESCAPE '\'
+                OR mf.steam_persona_name ILIKE $1 ESCAPE '\'
+              )
+            ORDER BY mf.created_at DESC
+            LIMIT 80
+        ) feedback_matches
+        UNION ALL
+        SELECT * FROM (
+            SELECT gb.steam_id64,
+                   NULLIF(gb.player_name, '') AS display_name,
+                   '全球封禁'::TEXT AS source,
+                   NULL::TEXT AS whitelist_status,
+                   gb.synced_at AS last_seen_at
+            FROM global_bans gb
+            WHERE gb.steam_id64 IS NOT NULL
+              AND btrim(gb.steam_id64) <> ''
+              AND (
+                gb.steam_id64 = NULLIF($2, '')
+                OR gb.steam_id64 ILIKE $1 ESCAPE '\'
+                OR gb.steam_id ILIKE $1 ESCAPE '\'
+                OR gb.player_name ILIKE $1 ESCAPE '\'
+              )
+            ORDER BY gb.synced_at DESC
+            LIMIT 80
+        ) global_ban_matches"#,
+    )
+    .bind(pattern)
+    .bind(exact_steamid64)
+    .fetch_all(&db.pool)
+    .await?;
+    Ok(rows)
+}
+
+async fn fetch_active_ban_counts(
+    db: &Database,
+    steamids: &[String],
+) -> anyhow::Result<Vec<(String, i64)>> {
+    if steamids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query_as::<_, (String, i64)>(
+        r#"SELECT steam_id, COUNT(*)::BIGINT AS active_ban_count
+           FROM ban_records
+           WHERE steam_id = ANY($1)
+             AND status = 'active'
+             AND (expires_at IS NULL OR expires_at > now())
+           GROUP BY steam_id"#,
+    )
+    .bind(steamids)
+    .fetch_all(&db.pool)
+    .await?;
+    Ok(rows)
+}
+
+fn like_pattern(value: &str) -> String {
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    format!("%{escaped}%")
+}
+
+fn normalize_candidate_name(value: Option<String>) -> Option<String> {
+    let value = value?.trim().to_string();
+    if value.is_empty() || value.eq_ignore_ascii_case("unknown") {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 pub async fn upsert_player_internal_profile(

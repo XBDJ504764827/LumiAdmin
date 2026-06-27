@@ -49,6 +49,8 @@ pub struct Config {
     pub r2_secret_access_key: Option<String>,
     pub r2_custom_domain: Option<String>,
     pub appeal_file_max_size_bytes: usize,
+    // QQ 机器人集成令牌（用于插件查询待审核数量等只读统计接口）
+    pub qq_integration_token: Option<String>,
 }
 
 impl Config {
@@ -181,6 +183,9 @@ impl Config {
                 .ok()
                 .filter(|v| !v.is_empty()),
             appeal_file_max_size_bytes,
+            qq_integration_token: std::env::var("QQ_INTEGRATION_TOKEN")
+                .ok()
+                .filter(|v| !v.is_empty()),
         };
 
         // 跨字段校验

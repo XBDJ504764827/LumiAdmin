@@ -266,6 +266,10 @@ pub fn router(
         // -- player detail --
         .route("/api/player-detail", get(player_detail::get_player_detail))
         .route(
+            "/api/player-detail/search",
+            get(player_detail::search_player_candidates),
+        )
+        .route(
             "/api/player-detail/internal/:steamid64",
             get(player_detail::get_player_internal_profile)
                 .put(player_detail::update_player_internal_profile),
@@ -482,6 +486,19 @@ pub fn router(
         .route(
             "/api/public/gokz/player-stats/preload",
             post(public::preload_gokz_stats),
+        )
+        // -- QQ 机器人集成 --
+        .route(
+            "/api/integration/qq/review-stats",
+            get(public::qq_review_stats),
+        )
+        .route(
+            "/api/integration/qq/pending-whitelist",
+            get(public::qq_pending_whitelist),
+        )
+        .route(
+            "/api/integration/qq/pending-all",
+            get(public::qq_pending_all),
         )
         .with_state(AppCtx {
             config: config.clone(),

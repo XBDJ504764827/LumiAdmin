@@ -38,8 +38,14 @@ function AppBootstrap() {
   return null;
 }
 
+function defaultProtectedPath(role) {
+  return protectedRoutes.find((route) => route.roles.includes(role))?.path ?? '/';
+}
+
 function GuardedRoute({ route, session }) {
-  return route.roles.includes(session?.role) ? route.element : <Navigate to="/dashboard" replace />;
+  return route.roles.includes(session?.role)
+    ? route.element
+    : <Navigate to={defaultProtectedPath(session?.role)} replace />;
 }
 
 function LoginScreen() {
@@ -170,6 +176,7 @@ function LoginScreen() {
 function AppRoutes() {
   const { session, bootstrapLoading, logout } = useAuth();
   const navigate = useNavigate();
+  const initialProtectedPath = session ? defaultProtectedPath(session.role) : '/dashboard';
 
   useEffect(() => {
     function handleUnauthorizedEvent() {
@@ -192,7 +199,7 @@ function AppRoutes() {
         element={session ? (
           <AppShell>
             <Routes>
-              <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/" element={<Navigate to={initialProtectedPath} replace />} />
               {protectedRoutes.map((route) => (
                 <Route key={route.path} path={route.path} element={<GuardedRoute route={route} session={session} />} />
               ))}

@@ -32,8 +32,9 @@ const icons = {
 
 export function sidebarSections(role) {
   const canSeeUserManagement = ['developer', 'admin', 'normal'].includes(role);
-  const canSeeLogs = ['developer', 'admin'].includes(role);
-  const canReviewReports = ['developer', 'admin'].includes(role);
+  const canUseAdminTools = ['developer', 'admin'].includes(role);
+  const canSeeLogs = canUseAdminTools;
+  const canReviewReports = canUseAdminTools;
 
   const systemItems = canSeeLogs ? [
     {
@@ -59,18 +60,17 @@ export function sidebarSections(role) {
     { path: '/external-servers', label: '外部服务器', icon: icons.externalServer },
   ] : [
     { path: '/audit', label: '审计日志', icon: icons.audit },
-    { path: '/external-servers', label: '外部服务器', icon: icons.externalServer },
   ];
 
   return [
     {
       label: '核心管理',
       items: [
-        { path: '/dashboard', label: '仪表盘', icon: icons.grid },
+        ...(canUseAdminTools ? [{ path: '/dashboard', label: '仪表盘', icon: icons.grid }] : []),
         { path: '/community', label: '社区组管理', icon: icons.community },
         { path: '/whitelist', label: '白名单管理', icon: icons.whitelist, pendingKey: 'whitelist' },
         { path: '/ban', label: '封禁管理', icon: icons.ban },
-        { path: '/map-feedback', label: '地图反馈', icon: icons.table, pendingKey: 'mapFeedback' },
+        ...(canUseAdminTools ? [{ path: '/map-feedback', label: '地图反馈', icon: icons.table, pendingKey: 'mapFeedback' }] : []),
         { path: '/player-detail', label: '玩家详情', icon: icons.playerDetail },
         ...(canReviewReports ? [
           { path: '/ban-appeal', label: '封禁申诉', icon: icons.banAppeal, pendingKey: 'banAppeal' },

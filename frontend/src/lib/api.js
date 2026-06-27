@@ -33,6 +33,7 @@ export const api = {
   deleteExternalBanApiTarget: (token, id) => request(`/api/external-ban-api/targets/${id}`, { method: 'DELETE', headers: withAuth(token) }),
   testExternalBanApiTarget: (token, id) => request(`/api/external-ban-api/targets/${id}/test`, { method: 'POST', headers: withAuth(token), body: JSON.stringify({}) }),
   playerDetail: (token, steamInput) => request(`/api/player-detail${buildQueryString({ steam_input: steamInput })}`, { headers: withAuth(token) }),
+  playerDetailCandidates: (token, query) => request(`/api/player-detail/search${buildQueryString({ query })}`, { headers: withAuth(token) }),
   getPlayerInternalProfile: (token, steamid64) => request(`/api/player-detail/internal/${encodeURIComponent(steamid64)}`, { headers: withAuth(token) }),
   updatePlayerInternalProfile: (token, steamid64, body) => request(`/api/player-detail/internal/${encodeURIComponent(steamid64)}`, { method: 'PUT', headers: withAuth(token), body: JSON.stringify(body) }),
   updateEvidenceMetadata: (token, sourceType, fileId, body) => request(`/api/player-detail/evidence/${encodeURIComponent(sourceType)}/${fileId}`, { method: 'PUT', headers: withAuth(token), body: JSON.stringify(body) }),

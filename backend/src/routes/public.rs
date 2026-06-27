@@ -1,7 +1,8 @@
 use crate::routes::{invalid_request, AppCtx, ListQuery};
 use crate::services::{
-    ban_appeal_service, ban_service, global_ban_service, log_service, notification_service,
-    public_service, r2_storage, rate_limit_service::extract_client_ip, whitelist_service,
+    ban_appeal_service, ban_service, dashboard_service, global_ban_service, log_service,
+    map_feedback_service, notification_service, player_report_service, public_service, r2_storage,
+    rate_limit_service::extract_client_ip, whitelist_service,
 };
 use axum::{
     extract::{Multipart, Path, Query, State},
@@ -715,4 +716,290 @@ pub(crate) async fn upload_appeal_files(
         "uploaded": uploaded,
         "errors": if errors.is_empty() { None } else { Some(errors) },
     })))
+}
+
+// QQ 机器人集成：获取待审核统计
+pub(crate) async fn qq_review_stats(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // 验证 QQ 集成令牌
+    let token = headers
+        .get("x-qq-token")
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| {
+            headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "))
+        });
+
+    let expected_token = ctx.config.qq_integration_token.as_deref();
+
+    match (token, expected_token) {
+        (Some(provided), Some(expected))
+            if constant_time_eq(provided.as_bytes(), expected.as_bytes()) =>
+        {
+            // 令牌验证通过
+        }
+        (None, None) => {
+            // 未配置令牌，拒绝访问
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "QQ 集成未启用。请在后端配置 QQ_INTEGRATION_TOKEN 环境变量。"
+                })),
+            ));
+        }
+        _ => {
+            // 令牌不匹配或未提供
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error": "无效的集成令牌"})),
+            ));
+        }
+    }
+
+    // 获取待审核数量（包含所有类型）
+    let counts = dashboard_service::get_review_counts(&ctx.db, true)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "QQ 集成：获取待审核数量失败");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "获取待审核数量失败"})),
+            )
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "whitelist": counts.whitelist,
+        "ban_appeal": counts.ban_appeal,
+        "player_report": counts.player_report,
+        "map_feedback": counts.map_feedback,
+        "total": counts.whitelist + counts.ban_appeal + counts.player_report + counts.map_feedback,
+    })))
+}
+
+// QQ 机器人集成：获取待审核白名单详情
+pub(crate) async fn qq_pending_whitelist(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // 验证 QQ 集成令牌（复用 qq_review_stats 的验证逻辑）
+    let token = headers
+        .get("x-qq-token")
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| {
+            headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "))
+        });
+
+    let expected_token = ctx.config.qq_integration_token.as_deref();
+
+    match (token, expected_token) {
+        (Some(provided), Some(expected))
+            if constant_time_eq(provided.as_bytes(), expected.as_bytes()) =>
+        {
+            // 令牌验证通过
+        }
+        (None, None) => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "QQ 集成未启用。请在后端配置 QQ_INTEGRATION_TOKEN 环境变量。"
+                })),
+            ));
+        }
+        _ => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error": "无效的集成令牌"})),
+            ));
+        }
+    }
+
+    // 获取待审核白名单列表（只返回 pending 状态，最多 20 条）
+    let query = ListQuery {
+        status: Some("pending".to_string()),
+        search: None,
+        page: Some(1),
+        page_size: Some(20),
+    };
+
+    let result = whitelist_service::list_whitelist(&ctx.db, &query)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "QQ 集成：获取待审核白名单失败");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "获取待审核白名单失败"})),
+            )
+        })?;
+
+    // 简化返回数据，只保留必要字段
+    let simplified: Vec<serde_json::Value> = result
+        .items
+        .into_iter()
+        .map(|item| {
+            serde_json::json!({
+                "steamid64": item.steamid64,
+                "steamid": item.steamid,
+                "nickname": item.nickname,
+                "steam_persona_name": item.steam_persona_name,
+                "applied_at": item.applied_at,
+                "profile_url": item.profile_url,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "items": simplified,
+        "total": result.total,
+    })))
+}
+
+// QQ 机器人集成：获取所有类型的待审核详情（综合视图）
+pub(crate) async fn qq_pending_all(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // 验证 QQ 集成令牌
+    let token = headers
+        .get("x-qq-token")
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| {
+            headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "))
+        });
+
+    let expected_token = ctx.config.qq_integration_token.as_deref();
+
+    match (token, expected_token) {
+        (Some(provided), Some(expected))
+            if constant_time_eq(provided.as_bytes(), expected.as_bytes()) => {}
+        (None, None) => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "QQ 集成未启用。请在后端配置 QQ_INTEGRATION_TOKEN 环境变量。"
+                })),
+            ));
+        }
+        _ => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error": "无效的集成令牌"})),
+            ));
+        }
+    }
+
+    // 并发获取所有类型的待审核数据（各取最多 10 条）
+    let query = ListQuery {
+        status: Some("pending".to_string()),
+        search: None,
+        page: Some(1),
+        page_size: Some(10),
+    };
+
+    let (whitelist_result, appeals_result, reports_result, feedback_result) = tokio::join!(
+        whitelist_service::list_whitelist(&ctx.db, &query),
+        ban_appeal_service::list_appeals(&ctx.db, &query),
+        player_report_service::list_reports(&ctx.db, &query),
+        map_feedback_service::list_feedback(&ctx.db, &query),
+    );
+
+    // 格式化白名单申请
+    let whitelist_items: Vec<serde_json::Value> = whitelist_result
+        .map(|r| r.items)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| {
+            serde_json::json!({
+                "type": "whitelist",
+                "steamid": item.steamid,
+                "nickname": item.nickname,
+                "steam_persona_name": item.steam_persona_name,
+                "applied_at": item.applied_at,
+            })
+        })
+        .collect();
+
+    // 格式化封禁申诉
+    let appeal_items: Vec<serde_json::Value> = appeals_result
+        .map(|r| r.items)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| {
+            serde_json::json!({
+                "type": "ban_appeal",
+                "steam_id": item.steam_id,
+                "player_name": item.player_name,
+                "appeal_reason": item.appeal_reason,
+                "ban_reason": item.ban_reason,
+                "created_at": item.created_at,
+            })
+        })
+        .collect();
+
+    // 格式化玩家举报
+    let report_items: Vec<serde_json::Value> = reports_result
+        .map(|r| r.items)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| {
+            serde_json::json!({
+                "type": "player_report",
+                "target_steam_id": item.target_steam_id,
+                "target_player_name": item.target_player_name,
+                "report_reason": item.report_reason,
+                "created_at": item.created_at,
+            })
+        })
+        .collect();
+
+    // 格式化地图反馈
+    let feedback_items: Vec<serde_json::Value> = feedback_result
+        .map(|r| r.items)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| {
+            serde_json::json!({
+                "type": "map_feedback",
+                "feedback_type": item.feedback_type,
+                "steam_persona_name": item.steam_persona_name,
+                "detail": item.detail,
+                "created_at": item.created_at,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "whitelist": whitelist_items,
+        "ban_appeal": appeal_items,
+        "player_report": report_items,
+        "map_feedback": feedback_items,
+        "counts": {
+            "whitelist": whitelist_items.len(),
+            "ban_appeal": appeal_items.len(),
+            "player_report": report_items.len(),
+            "map_feedback": feedback_items.len(),
+            "total": whitelist_items.len() + appeal_items.len() + report_items.len() + feedback_items.len(),
+        }
+    })))
+}
+
+/// 常量时间比较，防止通过响应时间差异推断令牌内容
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut result = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        result |= x ^ y;
+    }
+    result == 0
 }

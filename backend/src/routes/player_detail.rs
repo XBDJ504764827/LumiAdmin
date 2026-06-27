@@ -17,6 +17,11 @@ pub(crate) struct PlayerDetailQuery {
 }
 
 #[derive(Deserialize)]
+pub(crate) struct PlayerSearchQuery {
+    pub query: String,
+}
+
+#[derive(Deserialize)]
 pub(crate) struct PlayerInternalBody {
     pub note: Option<String>,
     pub tags: Vec<String>,
@@ -48,6 +53,24 @@ pub(crate) async fn get_player_detail(
     .map_err(invalid_request)?;
 
     Ok(Json(serde_json::json!({ "data": detail })))
+}
+
+pub(crate) async fn search_player_candidates(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Query(query): Query<PlayerSearchQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let actor = current_operator(&ctx, &headers).await?;
+    if !permission_service::can_view_audit_logs(&actor) {
+        return Err(forbidden());
+    }
+
+    let items =
+        player_detail_service::search_player_candidates(&ctx.db, &ctx.steam_resolver, &query.query)
+            .await
+            .map_err(invalid_request)?;
+
+    Ok(Json(serde_json::json!({ "items": items })))
 }
 
 /// 获取玩家内部备注（管理员只读）

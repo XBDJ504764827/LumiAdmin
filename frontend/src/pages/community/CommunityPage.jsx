@@ -14,6 +14,18 @@ import {
   normalizeReportTokenResponse,
 } from './communityToken.js';
 import {
+  DEFAULT_RELOAD_PLUGINS,
+  MAX_PLUGIN_INFO_PROBES_PER_SERVER,
+  SOURCE_MOD_PLUGIN_LIST_COMMAND,
+  addPluginOption,
+  buildPluginInfoCommand,
+  buildPluginReloadCommands,
+  normalizePluginList,
+  parseSourceModPluginInfo,
+  parseSourceModPluginList,
+  pluginIdentityKey,
+} from './communityPlugins.js';
+import {
   buildServerPayloadWithAccess,
   buildCommunityAccessPayload,
   emptyAccessConfig,
@@ -46,7 +58,6 @@ export function CommunityPage() {
   const { toast } = useToast();
   const token = session?.token ?? null;
   const canMutate = session?.role === 'developer' || session?.role === 'admin';
-  const isDeveloper = session?.role === 'developer';
   const canManageToken = canManageServerReportToken(session?.role);
 
   const [groups, setGroups] = useState([]);
@@ -68,6 +79,17 @@ export function CommunityPage() {
   const [groupError, setGroupError] = useState('');
   const [tokenPanel, setTokenPanel] = useState({ serverId: null, token: '', loading: false, error: '' });
   const [rconModal, setRconModal] = useState({ open: false, serverId: null, serverName: '', executing: '', customCommand: '' });
+  const [reloadPluginsModal, setReloadPluginsModal] = useState({
+    open: false,
+    group: null,
+    selectedPlugins: [...DEFAULT_RELOAD_PLUGINS],
+    customPlugin: '',
+    detectedPlugins: [],
+    error: '',
+    executing: false,
+    detecting: false,
+    detectMessage: '',
+  });
 
   const loadGroups = useCallback(async () => {
     try {
@@ -166,23 +188,150 @@ export function CommunityPage() {
     }
   }
 
-  async function handleReloadPlugins(group) {
+  function closeReloadPluginsModal() {
+    setReloadPluginsModal((prev) => {
+      if (prev.executing) return prev;
+      return {
+        open: false,
+        group: null,
+        selectedPlugins: [...DEFAULT_RELOAD_PLUGINS],
+        customPlugin: '',
+        detectedPlugins: [],
+        error: '',
+        executing: false,
+        detecting: false,
+        detectMessage: '',
+      };
+    });
+  }
+
+  function openReloadPluginsModal(group) {
+    if (!canMutate) return;
     const serverCount = (group.servers || []).length;
     if (serverCount === 0) {
       toast({ title: '该社区没有服务器', message: '无需重启。', tone: 'warning' });
       return;
     }
+    setReloadPluginsModal({
+      open: true,
+      group,
+      selectedPlugins: [...DEFAULT_RELOAD_PLUGINS],
+      customPlugin: '',
+      detectedPlugins: [],
+      error: '',
+      executing: false,
+      detecting: false,
+      detectMessage: '',
+    });
+  }
+
+  function handleReloadPluginToggle(pluginName, checked) {
+    setReloadPluginsModal((prev) => ({
+      ...prev,
+      selectedPlugins: checked
+        ? normalizePluginList([...prev.selectedPlugins, pluginName])
+        : prev.selectedPlugins.filter((plugin) => pluginIdentityKey(plugin) !== pluginIdentityKey(pluginName)),
+      error: '',
+    }));
+  }
+
+  function handleReloadPluginCustomChange(value) {
+    setReloadPluginsModal((prev) => ({ ...prev, customPlugin: value, error: '' }));
+  }
+
+  function handleReloadPluginAdd() {
+    setReloadPluginsModal((prev) => {
+      try {
+        return {
+          ...prev,
+          selectedPlugins: addPluginOption(prev.selectedPlugins, prev.customPlugin),
+          customPlugin: '',
+          error: '',
+        };
+      } catch (addError) {
+        return { ...prev, error: addError.message };
+      }
+    });
+  }
+
+  async function detectPluginsForServer(server) {
+    const listResponse = await api.executeRcon(token, server.id, { command: SOURCE_MOD_PLUGIN_LIST_COMMAND });
+    const parsedList = parseSourceModPluginList(listResponse?.response ?? '');
+    const plugins = [...parsedList.filenames];
+
+    for (const pluginId of parsedList.ids.slice(0, MAX_PLUGIN_INFO_PROBES_PER_SERVER)) {
+      try {
+        const infoResponse = await api.executeRcon(token, server.id, { command: buildPluginInfoCommand(pluginId) });
+        const plugin = parseSourceModPluginInfo(infoResponse?.response ?? '');
+        if (plugin) plugins.push(plugin);
+      } catch {
+        // A single plugin info failure should not discard the whole server's list response.
+      }
+    }
+
+    return normalizePluginList(plugins);
+  }
+
+  async function handleDetectReloadPlugins() {
+    const group = reloadPluginsModal.group;
+    if (!group) return;
+
+    const servers = group.servers || [];
+    setReloadPluginsModal((prev) => ({
+      ...prev,
+      detecting: true,
+      error: '',
+      detectMessage: `正在探测 ${servers.length} 台服务器的插件列表...`,
+    }));
+
+    const detected = [];
+    let successServers = 0;
+    let failServers = 0;
+
+    for (const server of servers) {
+      try {
+        const serverPlugins = await detectPluginsForServer(server);
+        if (serverPlugins.length > 0) successServers++;
+        detected.push(...serverPlugins);
+      } catch {
+        failServers++;
+      }
+    }
+
+    const detectedPlugins = normalizePluginList(detected);
+    setReloadPluginsModal((prev) => ({
+      ...prev,
+      detecting: false,
+      detectedPlugins,
+      error: detectedPlugins.length === 0 ? '未能从服务器返回中识别插件文件名，可继续手动添加。' : '',
+      detectMessage: `已识别 ${detectedPlugins.length} 个插件；成功 ${successServers} 台，失败 ${failServers} 台。`,
+    }));
+  }
+
+  async function handleReloadPlugins() {
+    const group = reloadPluginsModal.group;
+    if (!group) return;
+
+    const requestedPlugins = reloadPluginsModal.customPlugin.trim()
+      ? [...reloadPluginsModal.selectedPlugins, reloadPluginsModal.customPlugin]
+      : reloadPluginsModal.selectedPlugins;
+    let commands;
+    try {
+      commands = buildPluginReloadCommands(requestedPlugins);
+    } catch (buildError) {
+      setReloadPluginsModal((prev) => ({ ...prev, error: buildError.message }));
+      return;
+    }
+
+    const serverCount = (group.servers || []).length;
     const confirmed = await confirm({
       title: '重启服务器插件',
-      message: `即将对社区「${group.name}」下的 ${serverCount} 个服务器依次执行插件重启命令：\n\nsm plugins reload manger_edge_sync\nsm plugins reload manger_online_reporter\n\n此操作将重新加载所有配套插件，确定继续？`,
+      message: `即将对社区「${group.name}」下的 ${serverCount} 个服务器依次执行以下插件重启命令：\n\n${commands.join('\n')}\n\n确定继续？`,
       confirmText: '确认重启',
     });
     if (!confirmed) return;
 
-    const commands = [
-      'sm plugins reload manger_edge_sync',
-      'sm plugins reload manger_online_reporter',
-    ];
+    setReloadPluginsModal((prev) => ({ ...prev, executing: true, error: '' }));
     let successCount = 0;
     let failCount = 0;
 
@@ -197,9 +346,20 @@ export function CommunityPage() {
       }
     }
 
+    setReloadPluginsModal({
+      open: false,
+      group: null,
+      selectedPlugins: [...DEFAULT_RELOAD_PLUGINS],
+      customPlugin: '',
+      detectedPlugins: [],
+      error: '',
+      executing: false,
+      detecting: false,
+      detectMessage: '',
+    });
     toast({
       title: '插件重启完成',
-      message: `成功执行 ${successCount} 条命令，失败 ${failCount} 条。`,
+      message: `目标 ${serverCount} 台服务器、${commands.length} 个插件；成功执行 ${successCount} 条命令，失败 ${failCount} 条。`,
       tone: failCount > 0 ? 'warning' : 'success',
     });
   }
@@ -566,6 +726,104 @@ export function CommunityPage() {
     );
   }
 
+  // ── 渲染：社区插件重启弹窗 ──
+  function renderReloadPluginsModal() {
+    const group = reloadPluginsModal.group;
+    const serverCount = (group?.servers || []).length;
+    const selectedSet = new Set(reloadPluginsModal.selectedPlugins.map(pluginIdentityKey));
+    const defaultKeys = new Set(DEFAULT_RELOAD_PLUGINS.map(pluginIdentityKey));
+    const detectedKeys = new Set(reloadPluginsModal.detectedPlugins.map(pluginIdentityKey));
+    const pluginOptions = normalizePluginList([
+      ...DEFAULT_RELOAD_PLUGINS,
+      ...reloadPluginsModal.detectedPlugins,
+      ...reloadPluginsModal.selectedPlugins,
+    ]);
+
+    return (
+      <Modal
+        open={reloadPluginsModal.open}
+        title={`重启插件${group ? ` — ${group.name}` : ''}`}
+        onClose={closeReloadPluginsModal}
+        wide
+        footer={(
+          <>
+            <button className="btn btn-outline" onClick={closeReloadPluginsModal} disabled={reloadPluginsModal.executing}>取消</button>
+            <button className="btn btn-primary" onClick={handleReloadPlugins} disabled={reloadPluginsModal.executing || (reloadPluginsModal.selectedPlugins.length === 0 && !reloadPluginsModal.customPlugin.trim())}>
+              {reloadPluginsModal.executing ? '执行中...' : '确认重启'}
+            </button>
+          </>
+        )}
+      >
+        <FormSectionCard
+          icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" /><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" /></svg>}
+          title="插件选择"
+        >
+          <div className="form-hint mb-12">
+            将对社区下 {serverCount} 台服务器执行 SourceMod 插件 reload 命令。
+          </div>
+          <div className="reload-plugin-toolbar mb-12">
+            <button
+              className="btn btn-outline btn-sm"
+              type="button"
+              onClick={handleDetectReloadPlugins}
+              disabled={reloadPluginsModal.executing || reloadPluginsModal.detecting}
+            >
+              {reloadPluginsModal.detecting ? '探测中...' : '自动探测'}
+            </button>
+            {reloadPluginsModal.detectMessage ? <span className="form-hint">{reloadPluginsModal.detectMessage}</span> : null}
+          </div>
+          <div className="reload-plugin-options">
+            {pluginOptions.map((plugin) => (
+              <label className="checkbox-line reload-plugin-option" key={plugin}>
+                <input
+                  type="checkbox"
+                  checked={selectedSet.has(pluginIdentityKey(plugin))}
+                  disabled={reloadPluginsModal.executing || reloadPluginsModal.detecting}
+                  onChange={(event) => handleReloadPluginToggle(plugin, event.target.checked)}
+                />
+                <span className="reload-plugin-name">{plugin}</span>
+                <span className="reload-plugin-command">sm plugins reload {plugin}</span>
+                {defaultKeys.has(pluginIdentityKey(plugin)) ? <span className="reload-plugin-source">默认</span> : null}
+                {!defaultKeys.has(pluginIdentityKey(plugin)) && detectedKeys.has(pluginIdentityKey(plugin)) ? <span className="reload-plugin-source">探测</span> : null}
+              </label>
+            ))}
+          </div>
+          {reloadPluginsModal.selectedPlugins.length === 0 ? (
+            <div className="form-hint form-hint-warning mt-8">请至少选择一个插件。</div>
+          ) : null}
+          <div className="form-row mt-12">
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label>添加其他插件</label>
+              <input
+                type="text"
+                className="form-control"
+                value={reloadPluginsModal.customPlugin}
+                onChange={(event) => handleReloadPluginCustomChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    if (reloadPluginsModal.customPlugin.trim()) handleReloadPluginAdd();
+                  }
+                }}
+                placeholder="例如 custom_plugin 或 disabled/custom_plugin.smx"
+                disabled={reloadPluginsModal.executing || reloadPluginsModal.detecting}
+              />
+            </div>
+            <button
+              className="btn btn-outline flex-shrink-0"
+              style={{ alignSelf: 'flex-end' }}
+              onClick={handleReloadPluginAdd}
+              disabled={reloadPluginsModal.executing || reloadPluginsModal.detecting || !reloadPluginsModal.customPlugin.trim()}
+            >
+              添加
+            </button>
+          </div>
+          {reloadPluginsModal.error ? <div className="text-accent mt-8">{reloadPluginsModal.error}</div> : null}
+        </FormSectionCard>
+      </Modal>
+    );
+  }
+
   // ── 渲染：Token 列 ──
   function renderTokenCell(server) {
     const isViewing = tokenPanel.serverId === server.id && !tokenPanel.loading;
@@ -653,9 +911,7 @@ export function CommunityPage() {
             </div>
             {canMutate ? (
               <div className="action-btn-group">
-                {isDeveloper ? (
-                  <button className="action-btn" onClick={() => handleReloadPlugins(group)}>重启插件</button>
-                ) : null}
+                <button className="action-btn" onClick={() => openReloadPluginsModal(group)}>重启插件</button>
                 <button className="action-btn" onClick={() => openCommunityAccessModal(group)}>访问限制</button>
                 <button className="action-btn" onClick={() => openCreateServerModal(group.id)}>+ 添加服务器</button>
               </div>
@@ -730,6 +986,9 @@ export function CommunityPage() {
 
       {/* 服务器编辑弹窗 */}
       {renderServerModal()}
+
+      {/* 社区插件重启弹窗 */}
+      {renderReloadPluginsModal()}
 
       {/* 在线玩家弹窗 */}
       <Modal
@@ -847,4 +1106,3 @@ export function CommunityPage() {
     </div>
   );
 }
-

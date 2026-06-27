@@ -651,7 +651,7 @@ input[type="checkbox"], input[type="radio"] {
   gap: 16px;
   position: sticky;
   top: 0;
-  z-index: 50;
+  z-index: 900;
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   background: color-mix(in srgb, var(--surface) 88%, transparent);

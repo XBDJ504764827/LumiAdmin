@@ -5,7 +5,8 @@ import { useAuth } from '../../state/store.js';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { StatusPill } from '../../shared/StatusPill.jsx';
-import { TableLoading, TableEmpty } from '../../shared/TableState.jsx';
+import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
+import { FilterToolbar } from '../../shared/SearchBar.jsx';
 
 const ACCESS_METHOD_MAP = {
   // 进服成功
@@ -98,10 +99,9 @@ export function AccessLogPage() {
 
   const items = data?.items || [];
   const total = data?.total || 0;
-  const hasFilters = Object.values(filters).some((v) => v);
 
   function handleSearch(e) {
-    e.preventDefault();
+    e?.preventDefault();
     setPage(1);
   }
 
@@ -123,80 +123,66 @@ export function AccessLogPage() {
         </div>
       </div>
 
-      <div className="card" style={{ marginBottom: 16 }}>
-        <div className="filter-bar">
-          <select
-            className="filter-select"
-            value={filters.allowed}
-            onChange={(e) => { setFilters((f) => ({ ...f, allowed: e.target.value })); setPage(1); }}
-          >
-            {ALLOWED_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-          <input
-            className="search-bar-input"
-            style={{ maxWidth: 180 }}
-            placeholder="SteamID64"
-            value={filters.steam_id64}
-            onChange={(e) => setFilters((f) => ({ ...f, steam_id64: e.target.value }))}
-          />
-          <input
-            className="search-bar-input"
-            style={{ maxWidth: 180 }}
-            placeholder="服务器 ID"
-            value={filters.server_id}
-            onChange={(e) => setFilters((f) => ({ ...f, server_id: e.target.value }))}
-          />
-          <input
-            className="search-bar-input"
-            style={{ maxWidth: 180 }}
-            placeholder="社区组 ID"
-            value={filters.community_id}
-            onChange={(e) => setFilters((f) => ({ ...f, community_id: e.target.value }))}
-          />
-          <input
-            className="search-bar-input"
-            style={{ maxWidth: 160 }}
-            placeholder="IP 地址"
-            value={filters.ip_address}
-            onChange={(e) => setFilters((f) => ({ ...f, ip_address: e.target.value }))}
-          />
-          <select
-            className="filter-select"
-            value={filters.access_method}
-            onChange={(e) => { setFilters((f) => ({ ...f, access_method: e.target.value })); setPage(1); }}
-          >
-            {ACCESS_METHOD_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-          <select
-            className="filter-select"
-            value={filters.failure_code}
-            onChange={(e) => { setFilters((f) => ({ ...f, failure_code: e.target.value })); setPage(1); }}
-          >
-            {FAILURE_CODE_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-          <input
-            className="search-bar-input"
-            style={{ maxWidth: 200 }}
-            placeholder="搜索玩家/服务器..."
-            value={filters.search}
-            onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
-          />
-          <button className="btn btn-primary" type="submit" onClick={handleSearch}>查询</button>
-          {hasFilters && (
-            <button className="btn btn-outline" type="button" onClick={clearFilters}>清除</button>
-          )}
-        </div>
-      </div>
+      <FilterToolbar
+        search={filters.search}
+        onSearchChange={(value) => setFilters((f) => ({ ...f, search: value }))}
+        searchPlaceholder="搜索玩家 / 服务器..."
+        autoSubmit={false}
+        onSubmit={() => handleSearch()}
+        onReset={clearFilters}
+        activeCount={Object.values(filters).filter(Boolean).length}
+        filters={[
+          {
+            key: 'allowed',
+            type: 'select',
+            value: filters.allowed,
+            options: ALLOWED_OPTIONS,
+            onChange: (value) => { setFilters((f) => ({ ...f, allowed: value ?? '' })); setPage(1); },
+          },
+          {
+            key: 'steam_id64',
+            placeholder: 'SteamID64',
+            value: filters.steam_id64,
+            onChange: (value) => setFilters((f) => ({ ...f, steam_id64: value })),
+          },
+          {
+            key: 'server_id',
+            placeholder: '服务器 ID',
+            value: filters.server_id,
+            onChange: (value) => setFilters((f) => ({ ...f, server_id: value })),
+          },
+          {
+            key: 'community_id',
+            placeholder: '社区组 ID',
+            value: filters.community_id,
+            onChange: (value) => setFilters((f) => ({ ...f, community_id: value })),
+          },
+          {
+            key: 'ip_address',
+            placeholder: 'IP 地址',
+            value: filters.ip_address,
+            onChange: (value) => setFilters((f) => ({ ...f, ip_address: value })),
+          },
+          {
+            key: 'access_method',
+            type: 'select',
+            value: filters.access_method,
+            options: ACCESS_METHOD_OPTIONS,
+            onChange: (value) => { setFilters((f) => ({ ...f, access_method: value ?? '' })); setPage(1); },
+          },
+          {
+            key: 'failure_code',
+            type: 'select',
+            value: filters.failure_code,
+            options: FAILURE_CODE_OPTIONS,
+            onChange: (value) => { setFilters((f) => ({ ...f, failure_code: value ?? '' })); setPage(1); },
+          },
+        ]}
+      />
 
       <div className="card">
         <div className="table-responsive">
-          <table className="data-table">
+          <table className="data-table mobile-card-table">
             <thead>
               <tr>
                 <th>时间</th>
@@ -216,33 +202,31 @@ export function AccessLogPage() {
               {isLoading ? (
                 <TableLoading colSpan={COL_COUNT} text="正在加载进服记录..." />
               ) : error ? (
-                <tr><td colSpan={COL_COUNT} className="table-state-cell">
-                  <div className="table-state-inner table-state-inner--error">加载失败: {error.message}</div>
-                </td></tr>
+                <TableError colSpan={COL_COUNT} message={`加载失败: ${error.message}`} />
               ) : items.length === 0 ? (
                 <TableEmpty colSpan={COL_COUNT} text="暂无进服记录" />
               ) : (
                 items.map((item) => (
                   <tr key={item.id} className={!item.allowed ? 'row-access-denied' : undefined}>
-                    <td style={{ whiteSpace: 'nowrap' }}>{formatChinaDateTime(item.created_at, { seconds: false })}</td>
-                    <td>
+                    <td className="text-muted-light" style={{ whiteSpace: 'nowrap' }} data-label="时间">{formatChinaDateTime(item.created_at, { seconds: false })}</td>
+                    <td data-label="结果">
                       <StatusPill kind={item.allowed ? 'success' : 'danger'}>
                         {item.allowed ? '成功' : '失败'}
                       </StatusPill>
                     </td>
-                    <td className="fw-600">{item.player_name || '-'}</td>
-                    <td className="steam-id">{item.steam_id64}</td>
-                    <td className="steam-id">{item.ip_address || '-'}</td>
-                    <td>{item.server_name} :{item.server_port}</td>
-                    <td>{item.community_name || '-'}</td>
-                    <td><StatusPill kind={methodKind(item.access_method)}>{methodLabel(item.access_method)}</StatusPill></td>
-                    <td style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.reject_reason || ''}>
+                    <td className="fw-600 mobile-card-primary" data-label="玩家">{item.player_name || '-'}</td>
+                    <td className="steam-id" data-label="SteamID64">{item.steam_id64}</td>
+                    <td className="steam-id" data-label="IP">{item.ip_address || '-'}</td>
+                    <td data-label="服务器">{item.server_name} :{item.server_port}</td>
+                    <td data-label="社区组">{item.community_name || '-'}</td>
+                    <td data-label="进服方式"><StatusPill kind={methodKind(item.access_method)}>{methodLabel(item.access_method)}</StatusPill></td>
+                    <td data-label="失败原因" style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.reject_reason || ''}>
                       {item.failure_code
                         ? (FAILURE_CODE_MAP[item.failure_code] || item.failure_code)
                         : (item.reject_reason || '-')}
                     </td>
-                    <td>{item.rating ?? '-'}</td>
-                    <td>{item.steam_level ?? '-'}</td>
+                    <td data-label="Rating">{item.rating ?? '-'}</td>
+                    <td data-label="Steam 等级">{item.steam_level ?? '-'}</td>
                   </tr>
                 ))
               )}

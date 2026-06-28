@@ -3,7 +3,7 @@ import { api } from '../../lib/api.js';
 import { useAsync } from '../../shared/useAsync.js';
 import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
-import { TableLoading, TableEmpty } from '../../shared/TableState.jsx';
+import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { formatChinaMonthDayTime } from '../../shared/time.js';
 
@@ -153,7 +153,7 @@ export function ExternalServerPage() {
       <div className="card">
         <div className="card-body p-0">
           <div className="table-responsive">
-            <table className="data-table">
+            <table className="data-table mobile-card-table">
               <thead>
                 <tr>
                   <th>名称</th>
@@ -168,22 +168,22 @@ export function ExternalServerPage() {
               </thead>
               <tbody>
                 {serversState.loading && <TableLoading colSpan={8} text="正在加载外部服务器..." />}
-                {serversState.error && <tr><td colSpan={8} className="table-state-cell"><div className="table-state-inner table-state-inner--error">{serversState.error.message}</div></td></tr>}
+                {serversState.error && <TableError colSpan={8} message={serversState.error.message} />}
                 {!serversState.loading && !serversState.error && servers.length === 0 && (
                   <TableEmpty colSpan={8} text="暂无外部服务器，点击上方“添加服务器”按钮创建。" />
                 )}
                 {servers.map((server) => (
                   <React.Fragment key={server.id}>
                     <tr>
-                      <td className="fw-600">{server.name}{!server.enabled && <span className="tag-badge muted" style={{ marginLeft: 8 }}>已禁用</span>}</td>
-                      <td className="steam-id">{server.ip}:{server.port}</td>
-                      <td>
+                      <td className="fw-600 mobile-card-primary" data-label="名称">{server.name}{!server.enabled && <span className="tag-badge muted" style={{ marginLeft: 8 }}>已禁用</span>}</td>
+                      <td className="steam-id" data-label="地址">{server.ip}:{server.port}</td>
+                      <td data-label="状态">
                         {server.statusQueriedAt
                           ? <span className="status-pill pill-online">已查询</span>
                           : <span className="text-muted-light">未查询</span>}
                       </td>
-                      <td className="text-muted">{server.currentMap || '-'}</td>
-                      <td>
+                      <td className="text-muted" data-label="地图">{server.currentMap || '-'}</td>
+                      <td data-label="玩家">
                         <span
                           style={{ cursor: server.playerCount > 0 ? 'pointer' : 'default' }}
                           onClick={() => server.playerCount > 0 && setExpandedPlayers(expandedPlayers === server.id ? null : server.id)}
@@ -196,9 +196,9 @@ export function ExternalServerPage() {
                           )}
                         </span>
                       </td>
-                      <td style={{ fontSize: 13, color: 'var(--text2)' }}>{server.pollInterval}s</td>
-                      <td style={{ fontSize: 12, color: 'var(--text3)' }}>{formatChinaMonthDayTime(server.lastQueriedAt)}</td>
-                      <td>
+                      <td style={{ fontSize: 13, color: 'var(--text2)' }} data-label="轮询间隔">{server.pollInterval}s</td>
+                      <td style={{ fontSize: 12, color: 'var(--text3)' }} data-label="上次查询">{formatChinaMonthDayTime(server.lastQueriedAt)}</td>
+                      <td className="mobile-card-actions" data-label="操作">
                         <div className="action-btn-group">
                           <button className="action-btn action-btn-accent" onClick={() => handleTest(server)} disabled={testing === server.id}>
                             {testing === server.id ? '...' : '测试'}
@@ -210,7 +210,7 @@ export function ExternalServerPage() {
                     </tr>
                     {expandedPlayers === server.id && server.players.length > 0 && (
                       <tr>
-                        <td colSpan={8} className="p-0">
+                        <td colSpan={8} className="p-0 mobile-card-full" data-label="在线玩家">
                           <div style={{
                             display: 'flex',
                             flexWrap: 'wrap',

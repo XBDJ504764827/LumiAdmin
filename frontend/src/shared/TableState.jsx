@@ -12,7 +12,7 @@ import { IconSearch } from './Icons.jsx';
  */
 export function TableLoading({ colSpan, text = '正在加载数据...' }) {
   return (
-    <tr>
+    <tr className="table-state-row">
       <td colSpan={colSpan} className="table-state-cell">
         <div className="table-state-inner">
           <div className="table-state-spinner" />
@@ -29,7 +29,7 @@ export function TableLoading({ colSpan, text = '正在加载数据...' }) {
  */
 export function TableError({ colSpan, message = '加载失败，请稍后重试' }) {
   return (
-    <tr>
+    <tr className="table-state-row">
       <td colSpan={colSpan} className="table-state-cell">
         <div className="table-state-inner table-state-inner--error">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -50,7 +50,7 @@ export function TableError({ colSpan, message = '加载失败，请稍后重试'
  */
 export function TableEmpty({ colSpan, text = '暂无数据', icon: Icon }) {
   return (
-    <tr>
+    <tr className="table-state-row">
       <td colSpan={colSpan} className="table-state-cell">
         <div className="table-state-inner table-state-inner--empty">
           <div className="table-state-icon">

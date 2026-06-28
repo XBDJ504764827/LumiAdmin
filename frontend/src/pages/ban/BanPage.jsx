@@ -176,7 +176,7 @@ export function BanPage() {
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {canManageAll ? <button className="btn btn-outline" onClick={() => setApiModalOpen(true)}>API 接入</button> : null}
-          {canCreate ? <button className="btn btn-danger" onClick={openCreateModal}>手动添加封禁</button> : null}
+          {canCreate ? <button className="btn btn-primary" onClick={openCreateModal}>手动添加封禁</button> : null}
         </div>
       </div>
 
@@ -192,7 +192,7 @@ export function BanPage() {
       <div className="card">
         <div className="card-body p-0">
           <div className="table-responsive">
-            <table className="data-table">
+            <table className="data-table mobile-card-table">
               <thead>
                 <tr><th>玩家</th><th>SteamID64</th><th>封禁属性</th><th>封禁理由</th><th>时长 / 到期</th><th>状态</th><th>封禁时间</th><th className="text-right">操作</th></tr>
               </thead>
@@ -201,20 +201,20 @@ export function BanPage() {
                 {!isLoading && loadError ? <TableError colSpan={8} message={loadError.message} /> : null}
                 {!isLoading && items.map((x) => (
                   <tr key={x.id}>
-                    <td>
+                    <td className="mobile-card-primary" data-label="玩家">
                       <div className="fw-600 text-ellipsis-160" title={x.player || '待自动获取'}>{x.player || '待自动获取'}</div>
                       <InternalNoteInline steamid64={x.steam_id} />
                     </td>
-                    <td className="steam-id">{x.steam_id}</td>
-                    <td>{x.ban_type === 'ip' ? 'IP 封禁' : 'Steam 账号封禁'}</td>
-                    <td className="text-muted text-ellipsis-260" title={x.reason}>{x.reason}</td>
-                    <td>
+                    <td className="steam-id" data-label="SteamID64">{x.steam_id}</td>
+                    <td data-label="封禁属性">{x.ban_type === 'ip' ? 'IP 封禁' : 'Steam 账号封禁'}</td>
+                    <td className="text-muted text-ellipsis-260" title={x.reason} data-label="封禁理由">{x.reason}</td>
+                    <td data-label="时长 / 到期">
                       <div>{formatBanDuration(x.duration_minutes)}</div>
                       <div style={{ color: 'var(--text3)', fontSize: 12 }}>{formatExpiresAt(x.expires_at)}</div>
                     </td>
-                    <td><span className={`status-pill ${x.status === 'active' ? 'pill-danger' : 'pill-offline'}`}>{x.status === 'active' ? '生效中' : '已失效'}</span></td>
-                    <td className="text-muted-light">{formatChinaDateTime(x.created_at)}</td>
-                    <td className="text-right">
+                    <td data-label="状态"><span className={`status-pill ${x.status === 'active' ? 'pill-danger' : 'pill-offline'}`}>{x.status === 'active' ? '生效中' : '已失效'}</span></td>
+                    <td className="text-muted-light" data-label="封禁时间">{formatChinaDateTime(x.created_at)}</td>
+                    <td className="text-right mobile-card-actions" data-label="操作">
                       <div className="action-btn-group">
                         <button className="action-btn" onClick={() => setDetailItem(x)}>详细</button>
                         {canManageAll ? <button className="action-btn action-btn-accent" onClick={() => openEditModal(x)}>编辑</button> : null}

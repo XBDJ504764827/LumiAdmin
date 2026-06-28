@@ -277,7 +277,7 @@ export function UsersPage() {
       <div className="card">
         <div className="card-body p-0">
           <div className="table-responsive">
-            <table className="data-table">
+            <table className="data-table mobile-card-table">
               <thead>
                 <tr><th>用户名</th><th>权限</th><th>状态</th><th>备注</th><th>steamid</th><th>创建时间</th><th className="text-right">操作</th></tr>
               </thead>
@@ -293,18 +293,18 @@ export function UsersPage() {
                 ) : null}
                 {!isLoading && !error && items.map((item) => (
                   <tr key={item.id}>
-                    <td>
+                    <td className="mobile-card-primary" data-label="用户名">
                       <div className="user-cell">
                         <div className="avatar avatar-info">{getAvatarText(item.display_name, item.username)}</div>
                         <div>{item.display_name || item.username}{item.id === session?.userId ? ' (您)' : ''}</div>
                       </div>
                     </td>
-                    <td><span className={`role-badge ${roleClass(item.role)}`}>{getRoleLabel(item.role)}</span></td>
-                    <td><span className={`status-pill ${item.enabled ? 'pill-online' : 'pill-offline'}`}>{item.enabled ? '已启用' : '已禁用'}</span></td>
-                    <td className="text-muted-light">{item.remark ?? '-'}</td>
-                    <td className="steam-id">{item.steam_id ?? '-'}</td>
-                    <td className="text-muted-light">{formatChinaDateTime(item.created_at)}</td>
-                    <td className="text-right">
+                    <td data-label="权限"><span className={`role-badge ${roleClass(item.role)}`}>{getRoleLabel(item.role)}</span></td>
+                    <td data-label="状态"><span className={`status-pill ${item.enabled ? 'pill-online' : 'pill-offline'}`}>{item.enabled ? '已启用' : '已禁用'}</span></td>
+                    <td className="text-muted-light" data-label="备注">{item.remark ?? '-'}</td>
+                    <td className="steam-id" data-label="SteamID">{item.steam_id ?? '-'}</td>
+                    <td className="text-muted-light" data-label="创建时间">{formatChinaDateTime(item.created_at)}</td>
+                    <td className="text-right mobile-card-actions" data-label="操作">
                       <div className="action-btn-group">
                         {canToggleEnabled(item) ? <button className={`action-btn ${item.enabled ? 'action-btn-danger' : 'action-btn-success'}`} onClick={() => handleToggleEnabled(item)}>{item.enabled ? '禁用' : '启用'}</button> : null}
                         {canRevokeSessions(item) ? <button className="action-btn" onClick={() => handleRevokeSessions(item)}>强制登出</button> : null}

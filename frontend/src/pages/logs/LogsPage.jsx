@@ -55,17 +55,17 @@ export function LogsPage() {
       />
 
       <div className="card"><div className="card-body p-0">
-        <div className="table-responsive"><table className="data-table"><thead><tr><th>操作人</th><th>模块</th><th>操作动作</th><th>目标详情</th><th>操作IP</th><th>操作时间</th></tr></thead><tbody>
+        <div className="table-responsive"><table className="data-table mobile-card-table"><thead><tr><th>操作人</th><th>模块</th><th>操作动作</th><th>目标详情</th><th>操作IP</th><th>操作时间</th></tr></thead><tbody>
           {isLoading ? <TableLoading colSpan={6} text="正在加载日志..." /> : null}
           {!isLoading && error ? <TableError colSpan={6} message={error.message} /> : null}
           {!isLoading && !error && items.map((x) => (
             <tr key={`${x.operator_name}-${x.created_at}`}>
-              <td className="fw-500">{x.operator_name}</td>
-              <td><span className={`status-pill ${modulePillClass(x.module)}`}>{x.module}</span></td>
-              <td style={{ fontWeight: 600, color: 'var(--text)' }}>{x.action}</td>
-              <td className="text-muted">{x.target_detail}</td>
-              <td className="steam-id">{x.ip_address}</td>
-              <td className="text-muted-light">{formatChinaDateTime(x.created_at, { seconds: false })}</td>
+              <td className="fw-500" data-label="操作人">{x.operator_name}</td>
+              <td data-label="模块"><span className={`status-pill ${modulePillClass(x.module)}`}>{x.module}</span></td>
+              <td className="mobile-card-primary" style={{ fontWeight: 600, color: 'var(--text)' }} data-label="操作动作">{x.action}</td>
+              <td className="text-muted" data-label="目标详情">{x.target_detail}</td>
+              <td className="steam-id" data-label="操作IP">{x.ip_address}</td>
+              <td className="text-muted-light" data-label="操作时间">{formatChinaDateTime(x.created_at, { seconds: false })}</td>
             </tr>
           ))}
           {!isLoading && !error && items.length === 0 ? <TableEmpty colSpan={6} text="暂无日志记录" /> : null}

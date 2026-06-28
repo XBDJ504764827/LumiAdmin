@@ -25,6 +25,7 @@ function flattenNavItems(sections) {
 
 export function AppShell({ children }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
@@ -93,6 +94,7 @@ export function AppShell({ children }) {
       if (event.key === 'Escape') {
         setSearchOpen(false);
         setProfileOpen(false);
+        setMobileNavOpen(false);
         searchInputRef.current?.blur();
       }
     }
@@ -133,6 +135,7 @@ export function AppShell({ children }) {
     navigate(path);
     setSearchOpen(false);
     setSearchTerm('');
+    setMobileNavOpen(false);
   }, [navigate]);
 
   function handleSearchKeyDown(event) {
@@ -171,7 +174,10 @@ export function AppShell({ children }) {
         type="button"
         key={item.path}
         className={`nav-item ${isSubItem ? 'nav-sub-item' : ''} ${isActive ? 'active' : ''}`}
-        onClick={() => navigate(item.path)}
+        onClick={() => {
+          navigate(item.path);
+          setMobileNavOpen(false);
+        }}
         title={collapsed ? item.label : undefined}
         aria-current={isActive ? 'page' : undefined}
       >
@@ -223,7 +229,13 @@ export function AppShell({ children }) {
 
   return (
     <PendingReviewProvider value={pendingReviews}>
-      <div className={`app-shell ${collapsed ? 'sidebar-collapsed' : ''}`}>
+      <div className={`app-shell ${collapsed ? 'sidebar-collapsed' : ''} ${mobileNavOpen ? 'mobile-nav-open' : ''}`}>
+      <button
+        type="button"
+        className="mobile-nav-scrim"
+        aria-label="关闭导航"
+        onClick={() => setMobileNavOpen(false)}
+      />
       <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`} id="sidebar">
         <div className="sidebar-logo">
           <div className="logo-mark">
@@ -278,6 +290,23 @@ export function AppShell({ children }) {
 
       <div className="main" id="main">
         <header className="topbar">
+          <button
+            className="icon-btn mobile-menu-btn"
+            type="button"
+            onClick={() => {
+              setCollapsed(false);
+              setMobileNavOpen(true);
+            }}
+            aria-label="打开导航"
+            aria-expanded={mobileNavOpen}
+            aria-controls="sidebar"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="3" y1="6" x2="21" y2="6" />
+              <line x1="3" y1="12" x2="21" y2="12" />
+              <line x1="3" y1="18" x2="21" y2="18" />
+            </svg>
+          </button>
           <div className={`search-box app-search ${searchOpen ? 'is-open' : ''}`} ref={searchRef}>
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5L14 14" /></svg>
             <input

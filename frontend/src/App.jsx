@@ -6,6 +6,7 @@ import { ToastProvider } from './shared/Toast.jsx';
 import { AppShell } from './components/layout/AppShell.jsx';
 import { publicRoutes, protectedRoutes } from './routes/routeConfig.jsx';
 import { NotFoundPage } from './pages/notFound/NotFoundPage.jsx';
+import { PageState } from './shared/PageState.jsx';
 
 // 创建 React Query 客户端，配置默认选项
 const queryClient = new QueryClient({
@@ -96,7 +97,7 @@ function LoginScreen() {
               <path d="M2 12l10 5 10-5" />
             </svg>
           </div>
-          <div className="login-brand-text">Manger</div>
+          <div className="login-brand-text">LumiAdmin</div>
         </div>
 
         <div className="login-card">
@@ -150,7 +151,7 @@ function LoginScreen() {
           </form>
         </div>
 
-        <div className="login-footer">Manger Admin Panel</div>
+        <div className="login-footer">LumiAdmin Admin Panel</div>
       </div>
 
       {error && (
@@ -188,7 +189,11 @@ function AppRoutes() {
   }, [logout, navigate]);
 
   if (bootstrapLoading) {
-    return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: 'var(--bg)', color: 'var(--text3)', fontFamily: "'Inter','Noto Sans SC',sans-serif" }}>正在加载登录状态...</div>;
+    return (
+      <div className="app-bootstrap-state">
+        <PageState title="正在加载登录状态..." />
+      </div>
+    );
   }
 
   return (

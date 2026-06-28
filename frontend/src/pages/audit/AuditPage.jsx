@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useApiQuery } from '../../shared/useApiQuery.js';
-import { SearchBar } from '../../shared/SearchBar.jsx';
+import { FilterToolbar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
@@ -33,6 +33,22 @@ const SOURCE_LABELS = {
   manual_sync: '手动同步',
   manual_retry: '手动重试',
 };
+
+const OPERATION_OPTIONS = [
+  { value: '', label: '全部操作' },
+  ...Object.entries(OPERATION_LABELS).map(([value, label]) => ({ value, label })),
+];
+
+const SOURCE_OPTIONS = [
+  { value: '', label: '全部来源' },
+  ...Object.entries(SOURCE_LABELS).map(([value, label]) => ({ value, label })),
+];
+
+const SUCCESS_OPTIONS = [
+  { value: '', label: '全部状态' },
+  { value: 'true', label: '成功' },
+  { value: 'false', label: '失败' },
+];
 
 function detailsPreview(details) {
   if (!details || typeof details !== 'object') return null;
@@ -86,6 +102,43 @@ export function AuditPage() {
         </div>
       </div>
 
+      <FilterToolbar
+        search={search}
+        onSearchChange={(value) => { setSearch(value); setPage(1); }}
+        searchPlaceholder="搜索目标、玩家、操作人、IP、原因..."
+        activeCount={[search, operationFilter, sourceFilter, successFilter].filter(Boolean).length}
+        onReset={() => {
+          setSearch('');
+          setOperationFilter('');
+          setSourceFilter('');
+          setSuccessFilter('');
+          setPage(1);
+        }}
+        filters={[
+          {
+            key: 'operation',
+            type: 'select',
+            value: operationFilter,
+            options: OPERATION_OPTIONS,
+            onChange: (value) => handleFilterChange('operation', value ?? ''),
+          },
+          {
+            key: 'source',
+            type: 'select',
+            value: sourceFilter,
+            options: SOURCE_OPTIONS,
+            onChange: (value) => handleFilterChange('source', value ?? ''),
+          },
+          {
+            key: 'success',
+            type: 'select',
+            value: successFilter,
+            options: SUCCESS_OPTIONS,
+            onChange: (value) => handleFilterChange('success', value ?? ''),
+          },
+        ]}
+      />
+
       <div className="card">
         <div className="card-header">
           <div>
@@ -94,107 +147,50 @@ export function AuditPage() {
           </div>
         </div>
         <div className="card-body p-0">
-          {/* 过滤栏 */}
-          <div className="filter-bar">
-            <SearchBar
-              value={search}
-              onChange={(v) => { setSearch(v); setPage(1); }}
-              placeholder="搜索目标、玩家、操作人、IP、原因..."
-            />
-            <select
-              className="filter-select"
-              value={operationFilter}
-              onChange={(e) => handleFilterChange('operation', e.target.value)}
-            >
-              <option value="">全部操作</option>
-              <option value="ban">封禁</option>
-              <option value="ban_update">编辑封禁</option>
-              <option value="ban_delete">删除封禁</option>
-              <option value="ban_file_upload">上传封禁附件</option>
-              <option value="unban">解封</option>
-              <option value="whitelist_add">添加白名单</option>
-              <option value="whitelist_approve">通过白名单</option>
-              <option value="whitelist_reject">拒绝白名单</option>
-              <option value="whitelist_restore">恢复白名单</option>
-              <option value="whitelist_revoke">撤销白名单</option>
-              <option value="whitelist_remove">移除白名单</option>
-              <option value="whitelist_refresh_names">刷新白名单名称</option>
-              <option value="global_ban_sync">同步全球封禁</option>
-              <option value="global_ban_unban">全球封禁解封</option>
-              <option value="external_ban_sync">外部封禁同步</option>
-              <option value="external_ban_retry">重试外部同步</option>
-            </select>
-            <select
-              className="filter-select"
-              value={sourceFilter}
-              onChange={(e) => handleFilterChange('source', e.target.value)}
-            >
-              <option value="">全部来源</option>
-              <option value="web">网站</option>
-              <option value="game_plugin">游戏插件</option>
-              <option value="offline_sync">离线同步</option>
-              <option value="manual">手动操作</option>
-              <option value="manual_sync">手动同步</option>
-              <option value="manual_retry">手动重试</option>
-            </select>
-            <select
-              className="filter-select"
-              value={successFilter}
-              onChange={(e) => handleFilterChange('success', e.target.value)}
-            >
-              <option value="">全部状态</option>
-              <option value="true">成功</option>
-              <option value="false">失败</option>
-            </select>
-          </div>
-
-          {isLoading ? <TableLoading colSpan={9} text="正在加载审计日志..." /> : null}
-          {!isLoading && error ? <TableError colSpan={9} message={error.message} /> : null}
-          {!isLoading && !error ? (
-            <div className="table-responsive">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>时间</th>
-                    <th>操作</th>
-                    <th>目标</th>
-                    <th>操作人</th>
-                    <th>来源 / IP</th>
-                    <th>服务器</th>
-                    <th>状态</th>
-                    <th>备注</th>
-                    <th>详情</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.length === 0 ? (
-                    <TableEmpty colSpan={9} text="暂无审计记录" />
-                  ) : null}
-                  {items.map((item) => (
+          <div className="table-responsive">
+            <table className="data-table mobile-card-table">
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>操作</th>
+                  <th>目标</th>
+                  <th>操作人</th>
+                  <th>来源 / IP</th>
+                  <th>服务器</th>
+                  <th>状态</th>
+                  <th>备注</th>
+                  <th>详情</th>
+                </tr>
+              </thead>
+              <tbody>
+                {isLoading ? <TableLoading colSpan={9} text="正在加载审计日志..." /> : null}
+                {!isLoading && error ? <TableError colSpan={9} message={error.message} /> : null}
+                {!isLoading && !error && items.length === 0 ? <TableEmpty colSpan={9} text="暂无审计记录" /> : null}
+                {!isLoading && !error ? items.map((item) => (
                     <tr key={item.id}>
-                      <td style={{ color: 'var(--text3)', whiteSpace: 'nowrap' }}>{formatChinaDateTime(item.created_at)}</td>
-                      <td>
+                      <td className="text-muted-light" style={{ whiteSpace: 'nowrap' }} data-label="时间">{formatChinaDateTime(item.created_at)}</td>
+                      <td className="mobile-card-primary" data-label="操作">
                         <span className={`status-pill ${item.operation === 'ban' ? 'pill-accent' : item.operation === 'unban' ? 'pill-online' : 'pill-default'}`}>
                           {OPERATION_LABELS[item.operation] || item.operation}
                         </span>
                       </td>
-                      <td>
+                      <td data-label="目标">
                         <div>
                           <code className="fs-12">{item.target}</code>
                           {item.player_name ? <div style={{ fontSize: 12, color: 'var(--text3)' }}>{item.player_name}</div> : null}
                         </div>
                       </td>
-                      <td>
+                      <td data-label="操作人">
                         <div>
                           <span className="fw-500">{item.operator_name}</span>
                           {item.operator_steamid ? <div style={{ fontSize: 11, color: 'var(--text3)' }}>{item.operator_steamid}</div> : null}
                         </div>
                       </td>
-                      <td>
+                      <td data-label="来源 / IP">
                         <span className="status-pill pill-default">{SOURCE_LABELS[item.source] || item.source}</span>
                         {item.client_ip ? <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>{item.client_ip}</div> : null}
                       </td>
-                      <td className="fs-13">
+                      <td className="fs-13" data-label="服务器">
                         {item.server_name ? (
                           <div>
                             <span>{item.server_name}</span>
@@ -202,12 +198,12 @@ export function AuditPage() {
                           </div>
                         ) : '-'}
                       </td>
-                      <td>
+                      <td data-label="状态">
                         <span className={`status-pill ${item.success ? 'pill-online' : 'pill-accent'}`}>
                           {item.success ? '成功' : '失败'}
                         </span>
                       </td>
-                      <td style={{ fontSize: 12, color: 'var(--text3)', maxWidth: 200 }}>
+                      <td style={{ fontSize: 12, color: 'var(--text3)', maxWidth: 200 }} data-label="备注">
                         {item.reason ? (
                           <div><strong>原因:</strong> {item.reason}</div>
                         ) : null}
@@ -218,7 +214,7 @@ export function AuditPage() {
                           <div className="mt-4">{item.message}</div>
                         ) : null}
                       </td>
-                      <td style={{ fontSize: 12, color: 'var(--text3)', maxWidth: 260 }}>
+                      <td style={{ fontSize: 12, color: 'var(--text3)', maxWidth: 260 }} data-label="详情">
                         {item.details ? (
                           <details>
                             <summary style={{ cursor: 'pointer', color: 'var(--accent)' }}>{detailsPreview(item.details) || '查看详情'}</summary>
@@ -227,11 +223,10 @@ export function AuditPage() {
                         ) : '-'}
                       </td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
+                )) : null}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 

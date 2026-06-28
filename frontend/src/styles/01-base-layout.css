@@ -298,7 +298,7 @@ input[type="checkbox"], input[type="radio"] {
 
 /* ── from: 02-sidebar.css (408 lines) ── */
 /* ── Logo 区域 ── */
-.sidebar-logo, .brand {
+.sidebar-logo {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -307,7 +307,7 @@ input[type="checkbox"], input[type="radio"] {
   white-space: nowrap;
   position: relative;
 }
-.logo-mark, .brand-mark {
+.logo-mark {
   width: 34px; height: 34px;
   background: linear-gradient(135deg, var(--accent), #f0a07a);
   border-radius: 10px;
@@ -318,8 +318,8 @@ input[type="checkbox"], input[type="radio"] {
   color: white;
   box-shadow: 0 3px 10px rgba(232,115,90,0.25);
 }
-.logo-mark svg, .brand-mark svg { width: 17px; height: 17px; }
-.logo-text, .brand-text {
+.logo-mark svg { width: 17px; height: 17px; }
+.logo-text {
   font-size: 15px;
   font-weight: 700;
   letter-spacing: -0.4px;
@@ -329,13 +329,13 @@ input[type="checkbox"], input[type="radio"] {
   background-clip: text;
   transition: opacity 0.2s;
 }
-.logo-text span, .brand-text span {
+.logo-text span {
   -webkit-text-fill-color: var(--accent);
   background: none;
 }
 
 /* ── 折叠按钮 ── */
-.sidebar-collapse-btn, .collapse-btn {
+.sidebar-collapse-btn {
   position: absolute;
   top: 22px; right: -12px;
   width: 24px; height: 24px;
@@ -350,13 +350,13 @@ input[type="checkbox"], input[type="radio"] {
   z-index: 10;
   box-shadow: 0 1px 4px rgba(0,0,0,0.06);
 }
-.sidebar-collapse-btn:hover, .collapse-btn:hover {
+.sidebar-collapse-btn:hover {
   background: var(--accent);
   border-color: var(--accent);
   box-shadow: 0 2px 8px rgba(232,115,90,0.25);
 }
-.sidebar-collapse-btn:hover svg, .collapse-btn:hover svg { color: #fff; }
-.sidebar-collapse-btn svg, .collapse-btn svg {
+.sidebar-collapse-btn:hover svg { color: #fff; }
+.sidebar-collapse-btn svg {
   width: 10px; height: 10px;
   color: var(--text2);
   transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1), color 0.2s;
@@ -641,6 +641,9 @@ input[type="checkbox"], input[type="radio"] {
 
 .main, .app-main { margin-left: var(--sidebar-w); flex: 1; transition: margin-left var(--transition); min-height: 100vh; display: flex; flex-direction: column; min-width: 0; }
 .sidebar-collapsed .main, .sidebar-collapsed .app-main { margin-left: var(--sidebar-collapsed); }
+.mobile-nav-scrim {
+  display: none;
+}
 .topbar {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
@@ -811,6 +814,7 @@ input[type="checkbox"], input[type="radio"] {
   font-size: 13px;
 }
 .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.mobile-menu-btn { display: none; }
 .topbar-divider { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
 .theme-toggle { height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 12px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); color: var(--text2); cursor: pointer; transition: background var(--transition), color var(--transition), border-color var(--transition); white-space: nowrap; }
 .theme-toggle:hover { background: var(--surface2); color: var(--text); border-color: var(--border2); }

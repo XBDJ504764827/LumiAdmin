@@ -65,7 +65,7 @@ function renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail) {
   const itemBans = globalBans[item.steamid64];
   const hasGlobalBan = Array.isArray(itemBans) && itemBans.length > 0;
   return (
-    <td className="fw-600" data-player-info="true">
+    <td className="fw-600 mobile-card-primary" data-player-info="true" data-label="游戏昵称">
       <div className="nickname-cell">{item.nickname}</div>
       {hasGlobalBan && (
         <button className="global-ban-btn" onClick={() => openBanDetail(item.steamid64)}>
@@ -82,7 +82,7 @@ function renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail) {
 
 function renderSteamNameCell(item, canRefreshSteam, refreshing, onRefresh) {
   return (
-    <td className={item.steam_persona_name ? 'text-accent' : 'text-muted-light'} data-player-info="true">
+    <td className={item.steam_persona_name ? 'text-accent' : 'text-muted-light'} data-player-info="true" data-label="Steam 名称">
       <div className="flex items-center gap-4">
         <span>{item.steam_persona_name ?? '-'}</span>
         {canRefreshSteam ? (
@@ -486,77 +486,73 @@ export function WhitelistPage() {
           </div>
         </div>
         <div className="card-body p-0">
-          {isLoading ? <table className="data-table"><tbody><TableLoading colSpan={tab === 'pending' ? 7 : 10} text="正在加载白名单数据..." /></tbody></table> : null}
-          {!isLoading && error ? <table className="data-table"><tbody><TableError colSpan={tab === 'pending' ? 7 : 10} message={error.message} /></tbody></table> : null}
-          {!isLoading && !error ? (
-            <div className="table-responsive">
-              <table className="data-table">
-                <thead>
-                  {tab === 'pending' ? (
-                    <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>申请时间</th><th className="text-right">操作</th></tr>
-                  ) : null}
-                  {tab === 'approved' ? (
-                    <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>申请时间</th><th>通过时间</th><th>审核管理员</th><th>通过理由</th><th className="text-right">操作</th></tr>
-                  ) : null}
-                  {tab === 'rejected' ? (
-                    <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>拒绝理由</th><th>申请时间</th><th>拒绝时间</th><th>审核管理员</th><th className="text-right">操作</th></tr>
-                  ) : null}
-                </thead>
-                <tbody>
-                  {items.length === 0 ? (
-                    <TableEmpty colSpan={tab === 'pending' ? 7 : 10} text="当前分区暂无记录" />
-                  ) : null}
-                  {tab === 'pending' ? items.map((item) => (
+          <div className="table-responsive">
+            <table className="data-table mobile-card-table">
+              <thead>
+                {tab === 'pending' ? (
+                  <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>申请时间</th><th className="text-right">操作</th></tr>
+                ) : null}
+                {tab === 'approved' ? (
+                  <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>申请时间</th><th>通过时间</th><th>审核管理员</th><th>通过理由</th><th className="text-right">操作</th></tr>
+                ) : null}
+                {tab === 'rejected' ? (
+                  <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>拒绝理由</th><th>申请时间</th><th>拒绝时间</th><th>审核管理员</th><th className="text-right">操作</th></tr>
+                ) : null}
+              </thead>
+              <tbody>
+                {isLoading ? <TableLoading colSpan={tab === 'pending' ? 7 : 10} text="正在加载白名单数据..." /> : null}
+                {!isLoading && error ? <TableError colSpan={tab === 'pending' ? 7 : 10} message={error.message} /> : null}
+                {!isLoading && !error && items.length === 0 ? <TableEmpty colSpan={tab === 'pending' ? 7 : 10} text="当前分区暂无记录" /> : null}
+                {!isLoading && !error && tab === 'pending' ? items.map((item) => (
                     <tr key={item.id} className={rowClassName(item, globalBans)} onContextMenu={(event) => handlePendingRowContextMenu(event, item)}>
                       {renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail)}
                       {renderSteamNameCell(item, canRefreshSteam, refreshing, handleRefreshSteamName)}
-                      <td className="steam-id" data-player-info="true">{item.steamid64}</td>
-                      <td className="steam-id" data-player-info="true">{item.steamid ?? '-'}</td>
-                      <td className="steam-id" data-player-info="true">{item.steamid3 ?? '-'}</td>
-                      <td className="text-muted-light" data-player-info="true">{formatChinaDateTime(item.applied_at)}</td>
-                      <td className="text-right">
+                      <td className="steam-id" data-player-info="true" data-label="SteamID64">{item.steamid64}</td>
+                      <td className="steam-id" data-player-info="true" data-label="SteamID2">{item.steamid ?? '-'}</td>
+                      <td className="steam-id" data-player-info="true" data-label="SteamID3">{item.steamid3 ?? '-'}</td>
+                      <td className="text-muted-light" data-player-info="true" data-label="申请时间">{formatChinaDateTime(item.applied_at)}</td>
+                      <td className="text-right mobile-card-actions" data-label="操作">
                         {canReview ? <div className="action-btn-group">
                           <button className="action-btn action-btn-accent" onClick={() => setDetailModal({ open: true, item })}>详细</button>
                         </div> : null}
                       </td>
                     </tr>
                   )) : null}
-                  {tab === 'approved' ? items.map((item) => (
+                {!isLoading && !error && tab === 'approved' ? items.map((item) => (
                     <tr key={item.id} className={rowClassName(item, globalBans)}>
                       {renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail)}
                       {renderSteamNameCell(item, canRefreshSteam, refreshing, handleRefreshSteamName)}
-                      <td className="steam-id">{item.steamid64}</td>
-                      <td className="steam-id">{item.steamid ?? '-'}</td>
-                      <td className="steam-id">{item.steamid3 ?? '-'}</td>
-                      <td className="text-muted-light">{formatChinaDateTime(item.applied_at)}</td>
-                      <td className="text-muted-light">{formatChinaDateTime(item.approved_at)}</td>
-                      <td>{item.approved_by ?? '-'}</td>
-                      <td className={`text-break ${item.approval_reason ? 'text-accent2' : 'text-muted-light'}`} style={{ maxWidth: 200 }}>{item.approval_reason ?? '-'}</td>
-                      <td className="text-right">
+                      <td className="steam-id" data-label="SteamID64">{item.steamid64}</td>
+                      <td className="steam-id" data-label="SteamID2">{item.steamid ?? '-'}</td>
+                      <td className="steam-id" data-label="SteamID3">{item.steamid3 ?? '-'}</td>
+                      <td className="text-muted-light" data-label="申请时间">{formatChinaDateTime(item.applied_at)}</td>
+                      <td className="text-muted-light" data-label="通过时间">{formatChinaDateTime(item.approved_at)}</td>
+                      <td data-label="审核管理员">{item.approved_by ?? '-'}</td>
+                      <td className={`text-break ${item.approval_reason ? 'text-accent2' : 'text-muted-light'}`} style={{ maxWidth: 200 }} data-label="通过理由">{item.approval_reason ?? '-'}</td>
+                      <td className="text-right mobile-card-actions" data-label="操作">
                         {canRevoke ? <button className="action-btn action-btn-danger" onClick={() => handleRevoke(item)} disabled={submitting}>删除审核</button> : null}
                       </td>
                     </tr>
                   )) : null}
-                  {tab === 'rejected' ? items.map((item) => (
+                {!isLoading && !error && tab === 'rejected' ? items.map((item) => (
                     <tr key={item.id} className={rowClassName(item, globalBans)}>
                       {renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail)}
                       {renderSteamNameCell(item, canRefreshSteam, refreshing, handleRefreshSteamName)}
-                      <td className="steam-id">{item.steamid64}</td>
-                      <td className="steam-id">{item.steamid ?? '-'}</td>
-                      <td className="steam-id">{item.steamid3 ?? '-'}</td>
-                      <td>{item.rejection_reason ?? '-'}</td>
-                      <td className="text-muted-light">{formatChinaDateTime(item.applied_at)}</td>
-                      <td className="text-muted-light">{formatChinaDateTime(item.rejected_at)}</td>
-                      <td>{item.rejected_by ?? '-'}</td>
-                      <td className="text-right">
+                      <td className="steam-id" data-label="SteamID64">{item.steamid64}</td>
+                      <td className="steam-id" data-label="SteamID2">{item.steamid ?? '-'}</td>
+                      <td className="steam-id" data-label="SteamID3">{item.steamid3 ?? '-'}</td>
+                      <td data-label="拒绝理由">{item.rejection_reason ?? '-'}</td>
+                      <td className="text-muted-light" data-label="申请时间">{formatChinaDateTime(item.applied_at)}</td>
+                      <td className="text-muted-light" data-label="拒绝时间">{formatChinaDateTime(item.rejected_at)}</td>
+                      <td data-label="审核管理员">{item.rejected_by ?? '-'}</td>
+                      <td className="text-right mobile-card-actions" data-label="操作">
                         {canReview ? <button className="action-btn action-btn-success" onClick={() => handleRestore(item)} disabled={submitting}>恢复通过</button> : null}
                       </td>
                     </tr>
                   )) : null}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 

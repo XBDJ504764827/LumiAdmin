@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { TableLoading, TableError, TableEmpty } from './TableState.jsx';
 
 /**
  * 增强型 DataTable 组件
@@ -31,7 +32,7 @@ export function DataTable({
 
   return (
     <div className={`table-wrap ${className}`.trim()}>
-      <table className={`data-table ${compact ? 'data-table--compact' : ''}`.trim()} role="table">
+      <table className={`data-table mobile-card-table ${compact ? 'data-table--compact' : ''}`.trim()} role="table">
         <thead>
           <tr role="row">
             {columns.map((col) => (
@@ -49,15 +50,9 @@ export function DataTable({
           </tr>
         </thead>
         <tbody>
-          {loading && (
-            <tr><td colSpan={colSpan} className="table-status-cell">正在加载数据...</td></tr>
-          )}
-          {error && (
-            <tr><td colSpan={colSpan} className="table-status-cell" style={{ color: 'var(--danger-text)' }}>{error}</td></tr>
-          )}
-          {!loading && keyedRows.length === 0 && (
-            <tr><td colSpan={colSpan} className="table-status-cell">{emptyText}</td></tr>
-          )}
+          {loading ? <TableLoading colSpan={colSpan} /> : null}
+          {!loading && error ? <TableError colSpan={colSpan} message={error} /> : null}
+          {!loading && !error && keyedRows.length === 0 ? <TableEmpty colSpan={colSpan} text={emptyText} /> : null}
           {!loading && keyedRows.map(({ row, key }) => {
             return (
               <tr
@@ -69,6 +64,8 @@ export function DataTable({
                 {columns.map((col) => (
                   <td
                     key={col.key}
+                    className={col.primary ? 'mobile-card-primary' : undefined}
+                    data-label={col.label}
                     style={{
                       textAlign: col.align || 'left',
                       width: col.width || undefined,

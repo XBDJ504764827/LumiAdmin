@@ -337,12 +337,56 @@
 
 /* 768px — 平板 / 移动横屏（增强已有） */
 @media (max-width: 768px) {
-  .sidebar { width: var(--sidebar-collapsed); }
-  .sidebar .nav-text, .sidebar-footer .nav-text, .sidebar-footer .user-info, .logout-text { display: none !important; }
-  .sidebar-footer .logout-btn { display: none !important; }
-  .sidebar-logo .logo-text, .brand-text { opacity: 0; width: 0; display: none; }
+  .sidebar,
+  .sidebar-collapsed .sidebar {
+    width: min(82vw, 288px);
+    transform: translateX(-104%);
+    box-shadow: var(--shadow-md);
+    transition: transform 0.24s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .mobile-nav-open .sidebar {
+    transform: translateX(0);
+  }
+  .mobile-nav-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 950;
+    border: 0;
+    background: rgba(26,25,23,0.34);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+  }
+  .mobile-nav-open .mobile-nav-scrim {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+  }
+  .mobile-menu-btn { display: inline-flex; }
+  .sidebar .nav-text,
+  .sidebar-footer .nav-text,
+  .sidebar-footer .user-info,
+  .logout-text,
+  .sidebar-logo .logo-text {
+    display: initial !important;
+    opacity: 1;
+    width: auto;
+  }
+  .sidebar-footer .logout-btn { display: inline-flex !important; }
+  .sidebar .nav-item span,
+  .sidebar .nav-chevron,
+  .sidebar .nav-sub-menu {
+    opacity: 1;
+    width: auto;
+    display: inline-flex;
+  }
+  .sidebar .nav-sub-menu {
+    display: block;
+  }
   .sidebar-collapse-btn { display: none; }
-  .main, .app-main { margin-left: var(--sidebar-collapsed); }
+  .main, .app-main, .sidebar-collapsed .main, .sidebar-collapsed .app-main { margin-left: 0; }
   .topbar { padding: 0 16px; gap: 12px; }
   .content-section, .page { padding: 20px 16px; }
   .metrics-grid, .metric-grid { grid-template-columns: 1fr; gap: 12px; }
@@ -350,7 +394,7 @@
   .dash-hero { flex-direction: column; align-items: flex-start; gap: 12px; padding: 20px; }
   .dash-hero-title { font-size: 18px; }
   .search-shortcut, .searchbar span { display: none; }
-  .icon-btn:not(.notif-btn) { display: none; }
+  .topbar-actions .icon-btn:not(.notif-btn) { display: none; }
   .public-nav-inner { padding: 0 14px; gap: 8px; }
   .public-nav-link span { display: none; }
   .public-main { padding: 20px 14px 36px; }
@@ -368,8 +412,27 @@
   .app-search-result-key { display: none; }
   .topbar-profile-menu { width: min(236px, calc(100vw - 92px)); }
   .filter-bar { flex-direction: column; gap: 8px; }
-  .filter-bar .searchbar, .filter-bar .search-box { max-width: 100%; }
+  .filter-bar .searchbar, .filter-bar .search-box, .filter-bar .search-bar { max-width: 100%; width: 100%; }
   .filter-select { width: 100%; }
+  .filter-toolbar,
+  .search-bar {
+    align-items: stretch;
+    padding: 10px;
+  }
+  .filter-toolbar-main,
+  .filter-toolbar-actions {
+    width: 100%;
+  }
+  .filter-search,
+  .filter-field,
+  .filter-input,
+  .filter-toolbar .filter-select {
+    width: 100%;
+    max-width: none;
+  }
+  .filter-toolbar-actions {
+    justify-content: flex-start;
+  }
   .modal { max-width: 95vw; max-height: 90vh; }
   .tabs { width: 100%; overflow-x: auto; }
   .action-btn-group { flex-wrap: wrap; }
@@ -379,6 +442,104 @@
   .online-player-card .ban-form-field select { width: 100%; }
 }
 
+@media (max-width: 720px) {
+  .data-table.mobile-card-table {
+    min-width: 0;
+    border-spacing: 0 10px;
+  }
+  .mobile-card-table thead {
+    display: none;
+  }
+  .mobile-card-table tbody,
+  .mobile-card-table tr,
+  .mobile-card-table td {
+    display: block;
+    width: 100%;
+  }
+  .mobile-card-table tbody {
+    display: grid;
+    gap: 10px;
+  }
+  .mobile-card-table tbody tr {
+    display: flex;
+    flex-direction: column;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+  }
+  .mobile-card-table tbody tr:nth-child(even) {
+    background: var(--surface);
+  }
+  .mobile-card-table tbody tr:hover {
+    background: var(--surface);
+  }
+  .mobile-card-table tbody tr:hover td:first-child {
+    box-shadow: none;
+  }
+  .mobile-card-table td {
+    display: grid;
+    grid-template-columns: minmax(82px, 34%) minmax(0, 1fr);
+    align-items: start;
+    gap: 10px;
+    padding: 7px 0;
+    border-bottom: 1px solid var(--border);
+    max-width: none !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere;
+  }
+  .mobile-card-table td:last-child {
+    border-bottom: 0;
+    padding-bottom: 0;
+  }
+  .mobile-card-table td::before {
+    content: attr(data-label);
+    color: var(--text3);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+  }
+  .mobile-card-table td.mobile-card-primary {
+    order: -1;
+    grid-template-columns: 1fr;
+    padding-top: 0;
+  }
+  .mobile-card-table td.mobile-card-primary::before {
+    display: none;
+  }
+  .mobile-card-table td.mobile-card-actions {
+    grid-template-columns: 1fr;
+  }
+  .mobile-card-table td.mobile-card-full {
+    grid-template-columns: 1fr;
+  }
+  .mobile-card-table td.mobile-card-full::before {
+    margin-bottom: 4px;
+  }
+  .mobile-card-table td.mobile-card-actions::before {
+    margin-bottom: 2px;
+  }
+  .mobile-card-table .action-btn-group {
+    justify-content: flex-start;
+  }
+  .mobile-card-table .text-right {
+    text-align: left;
+  }
+  .mobile-card-table .table-state-row {
+    padding: 0;
+    box-shadow: none;
+  }
+  .mobile-card-table .table-state-row .table-state-cell {
+    display: block;
+    padding: 0 !important;
+    border-bottom: 0;
+  }
+  .mobile-card-table .table-state-row .table-state-cell::before {
+    display: none;
+  }
+}
+
 /* 480px — 手机竖屏 */
 @media (max-width: 480px) {
   .login-container { padding: 16px; }
@@ -386,7 +547,7 @@
   .login-card-body { padding: 20px 20px 24px; }
 
   .topbar { padding: 0 10px; gap: 8px; height: 52px; }
-  .search-box, .searchbar { max-width: 120px; padding: 5px 10px; }
+  .search-box, .searchbar { max-width: none; padding: 5px 10px; }
   .search-box input, .searchbar input { font-size: 12px; }
   .app-search-panel { width: calc(100vw - 88px); }
   .topbar-profile-menu { right: 0; width: calc(100vw - 90px); }

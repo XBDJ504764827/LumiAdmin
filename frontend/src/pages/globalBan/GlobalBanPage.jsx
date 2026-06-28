@@ -5,7 +5,7 @@ import { useAuth } from '../../state/store.js';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { StatusPill } from '../../shared/StatusPill.jsx';
 import { Modal } from '../../shared/Modal.jsx';
-import { TableLoading, TableEmpty } from '../../shared/TableState.jsx';
+import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 
 const BAN_TYPE_MAP = { bhop_hack:'连跳作弊', cheat:'作弊', tool_assist:'辅助工具', other:'其他' };
 function banTypeLabel(t) { return BAN_TYPE_MAP[t] || t || '-'; }
@@ -174,13 +174,13 @@ export function GlobalBanPage() {
       {searchResult!==null&&searchResult.length>0&&(
         <div className="card" style={{marginBottom:16}}>
           <div className="card-header"><div><div className="card-title">搜索结果 ({searchResult.length} 条)</div><div className="card-sub">数据来源：{sourceLabel(searchSource)}</div></div></div>
-          <div className="card-body p-0"><div className="table-responsive"><table className="data-table"><thead><tr><th>玩家</th><th>SteamID64</th><th>封禁类型</th><th>到期时间</th><th>本地封禁</th><th>封禁时间</th><th>操作</th></tr></thead><tbody>
+          <div className="card-body p-0"><div className="table-responsive"><table className="data-table mobile-card-table"><thead><tr><th>玩家</th><th>SteamID64</th><th>封禁类型</th><th>到期时间</th><th>本地封禁</th><th>封禁时间</th><th>操作</th></tr></thead><tbody>
             {searchResult.map(item=>{const ban=item.ban;return(
-              <tr key={ban.id}><td className="fw-600">{ban.player_name||'-'}</td><td className="steam-id">{ban.steamid64}</td><td><StatusPill kind="danger">{banTypeLabel(ban.ban_type)}</StatusPill></td>
-              <td style={{whiteSpace:'nowrap'}}>{isPermaBan(ban.expires_on)?<span className="permanent-ban">永久</span>:expiresLabel(ban.expires_on)}</td>
-              <td>{item.manual_unbanned?<StatusPill kind="default">已解封</StatusPill>:item.local_ban_id?<StatusPill kind="danger">已封禁</StatusPill>:<StatusPill kind="success">未封禁</StatusPill>}</td>
-              <td style={{whiteSpace:'nowrap'}}>{ban.created_on?formatChinaDateTime(ban.created_on,{seconds:false}):'-'}</td>
-              <td><button className="action-btn" onClick={()=>setDetailItem(item)}>详细</button></td></tr>
+              <tr key={ban.id}><td className="fw-600 mobile-card-primary" data-label="玩家">{ban.player_name||'-'}</td><td className="steam-id" data-label="SteamID64">{ban.steamid64}</td><td data-label="封禁类型"><StatusPill kind="danger">{banTypeLabel(ban.ban_type)}</StatusPill></td>
+              <td style={{whiteSpace:'nowrap'}} data-label="到期时间">{isPermaBan(ban.expires_on)?<span className="permanent-ban">永久</span>:expiresLabel(ban.expires_on)}</td>
+              <td data-label="本地封禁">{item.manual_unbanned?<StatusPill kind="default">已解封</StatusPill>:item.local_ban_id?<StatusPill kind="danger">已封禁</StatusPill>:<StatusPill kind="success">未封禁</StatusPill>}</td>
+              <td style={{whiteSpace:'nowrap'}} data-label="封禁时间">{ban.created_on?formatChinaDateTime(ban.created_on,{seconds:false}):'-'}</td>
+              <td className="mobile-card-actions" data-label="操作"><button className="action-btn" onClick={()=>setDetailItem(item)}>详细</button></td></tr>
             );})}
           </tbody></table></div></div>
         </div>
@@ -189,17 +189,17 @@ export function GlobalBanPage() {
       {/* 全量列表 */}
       <div className="card">
         <div className="card-header"><div><div className="card-title">封禁列表</div><div className="card-sub">数据来源：{sourceLabel(source)}</div></div></div>
-        <div className="card-body p-0"><div className="table-responsive"><table className="data-table"><thead><tr><th>玩家</th><th>SteamID64</th><th>封禁类型</th><th>到期时间</th><th>备注</th><th>本地封禁</th><th>封禁时间</th><th>操作</th></tr></thead><tbody>
+        <div className="card-body p-0"><div className="table-responsive"><table className="data-table mobile-card-table"><thead><tr><th>玩家</th><th>SteamID64</th><th>封禁类型</th><th>到期时间</th><th>备注</th><th>本地封禁</th><th>封禁时间</th><th>操作</th></tr></thead><tbody>
         {isLoading?<TableLoading colSpan={8} text="正在加载全球封禁列表..."/>:
-         error?<tr><td colSpan={8} className="table-state-cell"><div className="table-state-inner table-state-inner--error">加载失败: {error.message}</div></td></tr>:
+         error?<TableError colSpan={8} message={`加载失败: ${error.message}`}/>:
          items.length===0?<TableEmpty colSpan={8} text="暂无全球封禁记录"/>:
          items.map(item=>{const ban=item.ban;return(
-           <tr key={ban.id}><td className="fw-600">{ban.player_name||'-'}</td><td className="steam-id">{ban.steamid64}</td><td><StatusPill kind="danger">{banTypeLabel(ban.ban_type)}</StatusPill></td>
-           <td style={{whiteSpace:'nowrap'}}>{isPermaBan(ban.expires_on)?<span className="permanent-ban">永久</span>:expiresLabel(ban.expires_on)}</td>
-           <td style={{maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={ban.notes||''}>{ban.notes||'-'}</td>
-           <td>{item.manual_unbanned?<StatusPill kind="default">已解封</StatusPill>:item.local_ban_id?<StatusPill kind="danger">已封禁</StatusPill>:<StatusPill kind="success">未封禁</StatusPill>}</td>
-           <td style={{whiteSpace:'nowrap'}}>{ban.created_on?formatChinaDateTime(ban.created_on,{seconds:false}):'-'}</td>
-           <td><button className="action-btn" onClick={()=>setDetailItem(item)}>详细</button></td></tr>
+           <tr key={ban.id}><td className="fw-600 mobile-card-primary" data-label="玩家">{ban.player_name||'-'}</td><td className="steam-id" data-label="SteamID64">{ban.steamid64}</td><td data-label="封禁类型"><StatusPill kind="danger">{banTypeLabel(ban.ban_type)}</StatusPill></td>
+           <td style={{whiteSpace:'nowrap'}} data-label="到期时间">{isPermaBan(ban.expires_on)?<span className="permanent-ban">永久</span>:expiresLabel(ban.expires_on)}</td>
+           <td style={{maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={ban.notes||''} data-label="备注">{ban.notes||'-'}</td>
+           <td data-label="本地封禁">{item.manual_unbanned?<StatusPill kind="default">已解封</StatusPill>:item.local_ban_id?<StatusPill kind="danger">已封禁</StatusPill>:<StatusPill kind="success">未封禁</StatusPill>}</td>
+           <td style={{whiteSpace:'nowrap'}} data-label="封禁时间">{ban.created_on?formatChinaDateTime(ban.created_on,{seconds:false}):'-'}</td>
+           <td className="mobile-card-actions" data-label="操作"><button className="action-btn" onClick={()=>setDetailItem(item)}>详细</button></td></tr>
          );})}
       </tbody></table></div></div></div>
 

@@ -106,7 +106,7 @@ export function MapFeedbackPage() {
       <div className="card">
         <div className="card-body p-0">
           <div className="table-responsive">
-            <table className="data-table">
+            <table className="data-table mobile-card-table">
               <thead>
                 <tr>
                   <th>类型</th>
@@ -127,11 +127,11 @@ export function MapFeedbackPage() {
                   const statusInfo = STATUS_MAP[item.status] || { label: item.status, pill: 'default' };
                   return (
                     <tr key={item.id}>
-                      <td><StatusPill kind={typeInfo.pill}>{typeInfo.label}</StatusPill></td>
-                      <td style={{ maxWidth: 300 }}>
+                      <td className="mobile-card-primary" data-label="类型"><StatusPill kind={typeInfo.pill}>{typeInfo.label}</StatusPill></td>
+                      <td style={{ maxWidth: 300 }} data-label="详细内容">
                         <div className="text-ellipsis-260" title={item.detail}>{item.detail}</div>
                       </td>
-                      <td>
+                      <td data-label="SteamID">
                         {item.steam_id
                           ? <div>
                               <code className="steam-id">{item.steam_id}</code>
@@ -139,10 +139,10 @@ export function MapFeedbackPage() {
                             </div>
                           : '-'}
                       </td>
-                      <td>{item.contact || '-'}</td>
-                      <td><StatusPill kind={statusInfo.pill}>{statusInfo.label}</StatusPill></td>
-                      <td style={{ whiteSpace: 'nowrap' }}>{formatChinaDateTime(item.created_at, { seconds: false })}</td>
-                      <td className="text-right">
+                      <td data-label="联系方式">{item.contact || '-'}</td>
+                      <td data-label="状态"><StatusPill kind={statusInfo.pill}>{statusInfo.label}</StatusPill></td>
+                      <td style={{ whiteSpace: 'nowrap' }} data-label="提交时间">{formatChinaDateTime(item.created_at, { seconds: false })}</td>
+                      <td className="text-right mobile-card-actions" data-label="操作">
                         <div className="action-btn-group">
                           <button className="action-btn" onClick={() => setDetailItem(item)}>详细</button>
                           {item.status === 'pending'

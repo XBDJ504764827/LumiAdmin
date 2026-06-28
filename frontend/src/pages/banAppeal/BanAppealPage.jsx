@@ -9,6 +9,7 @@ import { Modal } from '../../shared/Modal.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { StatusPill } from '../../shared/StatusPill.jsx';
+import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 import { FileItem, fileActionLabel } from '../../shared/FilePreview.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { notifyPendingReviewsUpdated, usePendingReviewIndicators } from '../../hooks/usePendingReviewIndicators.js';
@@ -201,7 +202,7 @@ export function BanAppealPage() {
       <div className="card">
         <div className="card-body p-0">
           <div className="table-responsive">
-            <table className="data-table" role="table" aria-label="封禁申诉列表">
+            <table className="data-table mobile-card-table" role="table" aria-label="封禁申诉列表">
               <thead>
                 <tr>
                   <th scope="col">玩家名称</th>
@@ -216,32 +217,28 @@ export function BanAppealPage() {
                 </tr>
               </thead>
               <tbody>
-                {isLoading ? (
-                  <tr><td colSpan={9} className="text-center text-muted">正在加载申诉数据...</td></tr>
-                ) : null}
-                {!isLoading && loadError ? (
-                  <tr><td colSpan={9} className="text-center text-danger">{loadError.message}</td></tr>
-                ) : null}
+                {isLoading ? <TableLoading colSpan={9} text="正在加载申诉数据..." /> : null}
+                {!isLoading && loadError ? <TableError colSpan={9} message={loadError.message} /> : null}
                 {!isLoading && items.map((item) => {
                   const st = STATUS_MAP[item.status] || { label: item.status, pill: '' };
                   return (
                     <tr key={item.id}>
-                      <td className="fw-600">
+                      <td className="fw-600 mobile-card-primary" data-label="玩家名称">
                         {item.player_name}
                         <InternalNoteInline steamid64={item.steam_id} />
                       </td>
-                      <td className="steam-id">{item.steam_id}</td>
-                      <td className="text-muted text-ellipsis" style={{ maxWidth: 200 }}>
+                      <td className="steam-id" data-label="SteamID64">{item.steam_id}</td>
+                      <td className="text-muted text-ellipsis" style={{ maxWidth: 200 }} data-label="申诉理由">
                         <span title={item.appeal_reason}>{item.appeal_reason}</span>
                       </td>
-                      <td className="text-muted text-ellipsis" style={{ maxWidth: 160 }}>
+                      <td className="text-muted text-ellipsis" style={{ maxWidth: 160 }} data-label="封禁原因">
                         <span title={item.ban_reason}>{item.ban_reason || '-'}</span>
                       </td>
-                      <td><StatusPill kind={st.pill}>{st.label}</StatusPill></td>
-                      <td className="text-muted-light">{formatChinaDateTime(item.created_at, { seconds: false })}</td>
-                      <td>{item.reviewed_by || '-'}</td>
-                      <td className="text-muted-light">{item.reviewed_at ? formatChinaDateTime(item.reviewed_at, { seconds: false }) : '-'}</td>
-                      <td className="text-right">
+                      <td data-label="状态"><StatusPill kind={st.pill}>{st.label}</StatusPill></td>
+                      <td className="text-muted-light" data-label="申诉时间">{formatChinaDateTime(item.created_at, { seconds: false })}</td>
+                      <td data-label="审核人">{item.reviewed_by || '-'}</td>
+                      <td className="text-muted-light" data-label="审核时间">{item.reviewed_at ? formatChinaDateTime(item.reviewed_at, { seconds: false }) : '-'}</td>
+                      <td className="text-right mobile-card-actions" data-label="操作">
                         <div className="action-btn-group">
                           <button className="action-btn action-btn-accent" onClick={() => openDetail(item)}>详情</button>
                         </div>
@@ -249,9 +246,7 @@ export function BanAppealPage() {
                     </tr>
                   );
                 })}
-                {!isLoading && items.length === 0 ? (
-                  <tr><td colSpan={9} className="text-center text-muted">暂无申诉记录</td></tr>
-                ) : null}
+                {!isLoading && !loadError && items.length === 0 ? <TableEmpty colSpan={9} text="暂无申诉记录" /> : null}
               </tbody>
             </table>
           </div>

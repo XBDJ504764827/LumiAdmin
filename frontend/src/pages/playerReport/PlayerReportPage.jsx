@@ -9,6 +9,7 @@ import { Modal } from '../../shared/Modal.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { StatusPill } from '../../shared/StatusPill.jsx';
+import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 import { FileItem, fileActionLabel } from '../../shared/FilePreview.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { notifyPendingReviewsUpdated, usePendingReviewIndicators } from '../../hooks/usePendingReviewIndicators.js';
@@ -192,7 +193,7 @@ export function PlayerReportPage() {
       <div className="card">
         <div className="card-body p-0">
           <div className="table-responsive">
-            <table className="data-table" role="table" aria-label="玩家举报列表">
+            <table className="data-table mobile-card-table" role="table" aria-label="玩家举报列表">
               <thead>
                 <tr>
                   <th scope="col">被举报玩家</th>
@@ -207,32 +208,28 @@ export function PlayerReportPage() {
                 </tr>
               </thead>
               <tbody>
-                {isLoading ? (
-                  <tr><td colSpan={9} className="text-center text-muted">正在加载玩家举报...</td></tr>
-                ) : null}
-                {!isLoading && loadError ? (
-                  <tr><td colSpan={9} className="text-center text-danger">{loadError.message}</td></tr>
-                ) : null}
+                {isLoading ? <TableLoading colSpan={9} text="正在加载玩家举报..." /> : null}
+                {!isLoading && loadError ? <TableError colSpan={9} message={loadError.message} /> : null}
                 {!isLoading && items.map((item) => {
                   const st = STATUS_MAP[item.status] || { label: item.status, pill: '' };
                   return (
                     <tr key={item.id}>
-                      <td className="fw-600">
+                      <td className="fw-600 mobile-card-primary" data-label="被举报玩家">
                         {item.target_player_name || '-'}
                         <InternalNoteInline steamid64={item.target_steam_id} />
                       </td>
-                      <td className="steam-id">{item.target_steam_id}</td>
-                      <td className="text-muted text-ellipsis" style={{ maxWidth: 240 }}>
+                      <td className="steam-id" data-label="SteamID64">{item.target_steam_id}</td>
+                      <td className="text-muted text-ellipsis" style={{ maxWidth: 240 }} data-label="举报理由">
                         <span title={item.report_reason}>{item.report_reason}</span>
                       </td>
-                      <td className="text-muted text-ellipsis" style={{ maxWidth: 160 }}>
+                      <td className="text-muted text-ellipsis" style={{ maxWidth: 160 }} data-label="联系方式">
                         <span title={item.reporter_contact || ''}>{item.reporter_contact || '-'}</span>
                       </td>
-                      <td><StatusPill kind={st.pill}>{st.label}</StatusPill></td>
-                      <td className="text-muted-light">{formatChinaDateTime(item.created_at, { seconds: false })}</td>
-                      <td>{item.reviewed_by || '-'}</td>
-                      <td className="text-muted-light">{item.reviewed_at ? formatChinaDateTime(item.reviewed_at, { seconds: false }) : '-'}</td>
-                      <td className="text-right">
+                      <td data-label="状态"><StatusPill kind={st.pill}>{st.label}</StatusPill></td>
+                      <td className="text-muted-light" data-label="提交时间">{formatChinaDateTime(item.created_at, { seconds: false })}</td>
+                      <td data-label="审核人">{item.reviewed_by || '-'}</td>
+                      <td className="text-muted-light" data-label="审核时间">{item.reviewed_at ? formatChinaDateTime(item.reviewed_at, { seconds: false }) : '-'}</td>
+                      <td className="text-right mobile-card-actions" data-label="操作">
                         <div className="action-btn-group">
                           <button className="action-btn action-btn-accent" onClick={() => openDetail(item)}>详情</button>
                         </div>
@@ -240,9 +237,7 @@ export function PlayerReportPage() {
                     </tr>
                   );
                 })}
-                {!isLoading && items.length === 0 ? (
-                  <tr><td colSpan={9} className="text-center text-muted">暂无玩家举报</td></tr>
-                ) : null}
+                {!isLoading && !loadError && items.length === 0 ? <TableEmpty colSpan={9} text="暂无玩家举报" /> : null}
               </tbody>
             </table>
           </div>

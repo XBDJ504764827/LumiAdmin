@@ -1100,6 +1100,7 @@ mod tests {
                 &crate::routes::ListQuery {
                     search: None,
                     status: Some("approved".to_string()),
+                    source: None,
                     page: None,
                     page_size: None,
                 },

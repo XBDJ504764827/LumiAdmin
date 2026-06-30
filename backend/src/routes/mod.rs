@@ -72,6 +72,7 @@ pub struct AppCtx {
 pub struct ListQuery {
     pub search: Option<String>,
     pub status: Option<String>,
+    pub source: Option<String>,
     pub page: Option<i64>,
     pub page_size: Option<i64>,
 }

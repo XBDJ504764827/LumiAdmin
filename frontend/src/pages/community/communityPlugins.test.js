@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  BUILT_IN_RELOAD_PLUGINS,
   DEFAULT_RELOAD_PLUGINS,
+  SAVED_RELOAD_PLUGINS_STORAGE_KEY,
   addPluginOption,
   buildPluginInfoCommand,
   buildPluginReloadCommand,
@@ -10,11 +12,14 @@ import {
   parseSourceModPluginInfo,
   parseSourceModPluginList,
   pluginIdentityKey,
+  readSavedReloadPluginOptions,
   validatePluginName,
+  writeSavedReloadPluginOptions,
 } from './communityPlugins.js';
 
-test('default reload plugins match the existing paired plugins', () => {
-  assert.deepEqual(DEFAULT_RELOAD_PLUGINS, ['manger_edge_sync', 'manger_online_reporter']);
+test('reload plugins are available but not selected by default', () => {
+  assert.deepEqual(DEFAULT_RELOAD_PLUGINS, []);
+  assert.deepEqual(BUILT_IN_RELOAD_PLUGINS, ['manger_edge_sync', 'manger_online_reporter']);
 });
 
 test('normalizePluginList trims and deduplicates plugin names', () => {
@@ -50,6 +55,20 @@ test('validatePluginName rejects empty and unsafe names', () => {
 test('addPluginOption validates and preserves existing options', () => {
   assert.deepEqual(addPluginOption(['manger_edge_sync'], ' custom '), ['manger_edge_sync', 'custom']);
   assert.throws(() => addPluginOption([], 'bad name'), /插件名称只能包含/);
+});
+
+test('saved reload plugin options persist normalized custom plugins', () => {
+  const store = new Map();
+  const storage = {
+    getItem: (key) => store.get(key) ?? null,
+    setItem: (key, value) => store.set(key, value),
+  };
+
+  const saved = writeSavedReloadPluginOptions([' custom_plugin ', 'CUSTOM_PLUGIN.smx', 'disabled/other.smx'], storage);
+
+  assert.deepEqual(saved, ['custom_plugin', 'disabled/other.smx']);
+  assert.equal(store.get(SAVED_RELOAD_PLUGINS_STORAGE_KEY), '["custom_plugin","disabled/other.smx"]');
+  assert.deepEqual(readSavedReloadPluginOptions(storage), ['custom_plugin', 'disabled/other.smx']);
 });
 
 test('buildPluginReloadCommands builds commands for selected plugins', () => {

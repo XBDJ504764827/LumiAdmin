@@ -475,6 +475,7 @@ async fn migrate_supports_legacy_whitelist_requests_without_created_at() {
             &crate::routes::ListQuery {
                 search: None,
                 status: None,
+                source: None,
                 page: None,
                 page_size: None,
             },
@@ -502,6 +503,7 @@ async fn migrate_supports_legacy_whitelist_requests_without_created_at() {
             &crate::routes::ListQuery {
                 search: None,
                 status: None,
+                source: None,
                 page: None,
                 page_size: None,
             },

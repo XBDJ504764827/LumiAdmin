@@ -1,10 +1,13 @@
-export const DEFAULT_RELOAD_PLUGINS = [
+export const DEFAULT_RELOAD_PLUGINS = [];
+
+export const BUILT_IN_RELOAD_PLUGINS = [
   'manger_edge_sync',
   'manger_online_reporter',
 ];
 
 export const SOURCE_MOD_PLUGIN_LIST_COMMAND = 'sm plugins list';
 export const MAX_PLUGIN_INFO_PROBES_PER_SERVER = 80;
+export const SAVED_RELOAD_PLUGINS_STORAGE_KEY = 'lumiadmin_reload_plugin_options';
 
 const PLUGIN_NAME_PATTERN = /^[A-Za-z0-9_./-]+$/;
 
@@ -42,6 +45,35 @@ export function normalizePluginList(values) {
   }
 
   return result;
+}
+
+function browserLocalStorage() {
+  try {
+    return typeof window !== 'undefined' ? window.localStorage : null;
+  } catch {
+    return null;
+  }
+}
+
+export function readSavedReloadPluginOptions(storage = browserLocalStorage()) {
+  if (!storage) return [];
+  try {
+    const parsed = JSON.parse(storage.getItem(SAVED_RELOAD_PLUGINS_STORAGE_KEY) || '[]');
+    return Array.isArray(parsed) ? normalizePluginList(parsed) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function writeSavedReloadPluginOptions(values, storage = browserLocalStorage()) {
+  const plugins = normalizePluginList(values);
+  if (!storage) return plugins;
+  try {
+    storage.setItem(SAVED_RELOAD_PLUGINS_STORAGE_KEY, JSON.stringify(plugins));
+  } catch {
+    // Storage may be unavailable in private browsing or restricted contexts.
+  }
+  return plugins;
 }
 
 export function addPluginOption(options, pluginName) {

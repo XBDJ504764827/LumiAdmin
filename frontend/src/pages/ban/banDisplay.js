@@ -9,7 +9,7 @@ export function formatBanDuration(minutes) {
 export function formatBanSource(source) {
   switch (source) {
     case 'global_ban':
-      return '全球封禁自动封禁';
+      return '全球封禁同步至网站';
     case 'game_plugin':
       return '游戏管理员手动封禁';
     case 'web':

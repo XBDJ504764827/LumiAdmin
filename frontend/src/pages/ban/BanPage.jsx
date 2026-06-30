@@ -6,7 +6,7 @@ import { InternalNoteInline } from '../../shared/InternalNote.jsx';
 import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
 import { buildBanFormFromRecord } from './banForm.js';
-import { formatBanDuration, formatExpiresAt } from './banDisplay.js';
+import { formatBanDuration, formatBanSource, formatExpiresAt } from './banDisplay.js';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -38,12 +38,20 @@ export function BanPage() {
   // 列表状态
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState(undefined);
+  const [sourceCategory, setSourceCategory] = useState('regular');
   const [page, setPage] = useState(1);
+  const sourceFilter = sourceCategory === 'global' ? 'global_ban' : 'non_global';
 
   // 使用 React Query 获取封禁列表
   const { data, isLoading, error: loadError, refetch } = useApiQuery(
-    ['bans', { page, search, status }],
-    (token) => api.bans(token, { page, page_size: 20, ...(search ? { search } : {}), ...(status ? { status } : {}) }),
+    ['bans', { page, search, status, sourceFilter }],
+    (token) => api.bans(token, {
+      page,
+      page_size: 20,
+      source: sourceFilter,
+      ...(search ? { search } : {}),
+      ...(status ? { status } : {}),
+    }),
   );
 
   // 表单弹窗状态
@@ -172,12 +180,29 @@ export function BanPage() {
       <div className="page-header">
         <div>
           <div className="page-title">玩家封禁管理</div>
-          <div className="page-sub">针对违规玩家进行账号或 IP 级别的封禁限制。</div>
+          <div className="page-sub">针对违规玩家进行账号或 IP 级别的封禁限制，全球同步封禁独立归类。</div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {canManageAll ? <button className="btn btn-outline" onClick={() => setApiModalOpen(true)}>API 接入</button> : null}
           {canCreate ? <button className="btn btn-primary" onClick={openCreateModal}>手动添加封禁</button> : null}
         </div>
+      </div>
+
+      <div className="tabs">
+        <button
+          type="button"
+          className={`tab ${sourceCategory === 'regular' ? 'active' : ''}`}
+          onClick={() => { setSourceCategory('regular'); setPage(1); }}
+        >
+          常规封禁
+        </button>
+        <button
+          type="button"
+          className={`tab ${sourceCategory === 'global' ? 'active' : ''}`}
+          onClick={() => { setSourceCategory('global'); setPage(1); }}
+        >
+          全球封禁同步至网站
+        </button>
       </div>
 
       <SearchBar
@@ -194,11 +219,11 @@ export function BanPage() {
           <div className="table-responsive">
             <table className="data-table mobile-card-table">
               <thead>
-                <tr><th>玩家</th><th>SteamID64</th><th>封禁属性</th><th>封禁理由</th><th>时长 / 到期</th><th>状态</th><th>封禁时间</th><th className="text-right">操作</th></tr>
+                <tr><th>玩家</th><th>SteamID64</th><th>封禁属性</th><th>来源</th><th>封禁理由</th><th>时长 / 到期</th><th>状态</th><th>封禁时间</th><th className="text-right">操作</th></tr>
               </thead>
               <tbody>
-                {isLoading ? <TableLoading colSpan={8} text="正在加载封禁数据..." /> : null}
-                {!isLoading && loadError ? <TableError colSpan={8} message={loadError.message} /> : null}
+                {isLoading ? <TableLoading colSpan={9} text="正在加载封禁数据..." /> : null}
+                {!isLoading && loadError ? <TableError colSpan={9} message={loadError.message} /> : null}
                 {!isLoading && items.map((x) => (
                   <tr key={x.id}>
                     <td className="mobile-card-primary" data-label="玩家">
@@ -207,6 +232,7 @@ export function BanPage() {
                     </td>
                     <td className="steam-id" data-label="SteamID64">{x.steam_id}</td>
                     <td data-label="封禁属性">{x.ban_type === 'ip' ? 'IP 封禁' : 'Steam 账号封禁'}</td>
+                    <td data-label="来源"><span className="status-pill pill-idle">{formatBanSource(x.source)}</span></td>
                     <td className="text-muted text-ellipsis-260" title={x.reason} data-label="封禁理由">{x.reason}</td>
                     <td data-label="时长 / 到期">
                       <div>{formatBanDuration(x.duration_minutes)}</div>
@@ -225,7 +251,7 @@ export function BanPage() {
                     </td>
                   </tr>
                 ))}
-                {!isLoading && !loadError && items.length === 0 ? <TableEmpty colSpan={8} text="暂无封禁记录" /> : null}
+                {!isLoading && !loadError && items.length === 0 ? <TableEmpty colSpan={9} text="暂无封禁记录" /> : null}
               </tbody>
             </table>
           </div>

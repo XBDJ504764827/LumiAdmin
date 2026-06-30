@@ -12,7 +12,7 @@ test('formatBanDuration formats minutes and hours', () => {
 });
 
 test('formatBanSource maps known ban sources to detailed labels', () => {
-  assert.equal(formatBanSource('global_ban'), '全球封禁自动封禁');
+  assert.equal(formatBanSource('global_ban'), '全球封禁同步至网站');
   assert.equal(formatBanSource('game_plugin', 'Admin'), '游戏管理员手动封禁');
   assert.equal(formatBanSource('game_plugin'), '游戏管理员手动封禁');
   assert.equal(formatBanSource('manual'), '网站管理员手动封禁');

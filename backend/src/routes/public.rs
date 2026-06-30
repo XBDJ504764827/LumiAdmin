@@ -824,6 +824,7 @@ pub(crate) async fn qq_pending_whitelist(
     let query = ListQuery {
         status: Some("pending".to_string()),
         search: None,
+        source: None,
         page: Some(1),
         page_size: Some(20),
     };
@@ -901,6 +902,7 @@ pub(crate) async fn qq_pending_all(
     let query = ListQuery {
         status: Some("pending".to_string()),
         search: None,
+        source: None,
         page: Some(1),
         page_size: Some(10),
     };

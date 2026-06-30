@@ -14,6 +14,7 @@ import {
   normalizeReportTokenResponse,
 } from './communityToken.js';
 import {
+  BUILT_IN_RELOAD_PLUGINS,
   DEFAULT_RELOAD_PLUGINS,
   MAX_PLUGIN_INFO_PROBES_PER_SERVER,
   SOURCE_MOD_PLUGIN_LIST_COMMAND,
@@ -24,6 +25,8 @@ import {
   parseSourceModPluginInfo,
   parseSourceModPluginList,
   pluginIdentityKey,
+  readSavedReloadPluginOptions,
+  writeSavedReloadPluginOptions,
 } from './communityPlugins.js';
 import {
   buildServerPayloadWithAccess,
@@ -79,6 +82,7 @@ export function CommunityPage() {
   const [groupError, setGroupError] = useState('');
   const [tokenPanel, setTokenPanel] = useState({ serverId: null, token: '', loading: false, error: '' });
   const [rconModal, setRconModal] = useState({ open: false, serverId: null, serverName: '', executing: '', customCommand: '' });
+  const [savedReloadPlugins, setSavedReloadPlugins] = useState(() => readSavedReloadPluginOptions());
   const [reloadPluginsModal, setReloadPluginsModal] = useState({
     open: false,
     group: null,
@@ -89,6 +93,13 @@ export function CommunityPage() {
     executing: false,
     detecting: false,
     detectMessage: '',
+  });
+  const [reloadConfirmModal, setReloadConfirmModal] = useState({
+    open: false,
+    group: null,
+    commands: [],
+    serverCount: 0,
+    countdown: 0,
   });
 
   const loadGroups = useCallback(async () => {
@@ -106,6 +117,16 @@ export function CommunityPage() {
   }, [token]);
 
   useEffect(() => { loadGroups(); }, [loadGroups]);
+
+  useEffect(() => {
+    if (!reloadConfirmModal.open || reloadConfirmModal.countdown <= 0) return undefined;
+    const timer = window.setTimeout(() => {
+      setReloadConfirmModal((prev) => (
+        prev.open ? { ...prev, countdown: Math.max(0, prev.countdown - 1) } : prev
+      ));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [reloadConfirmModal.open, reloadConfirmModal.countdown]);
 
   function openCreateGroupModal() {
     if (!canMutate) return;
@@ -189,6 +210,8 @@ export function CommunityPage() {
   }
 
   function closeReloadPluginsModal() {
+    if (reloadPluginsModal.executing) return;
+    setReloadConfirmModal({ open: false, group: null, commands: [], serverCount: 0, countdown: 0 });
     setReloadPluginsModal((prev) => {
       if (prev.executing) return prev;
       return {
@@ -240,18 +263,21 @@ export function CommunityPage() {
   }
 
   function handleReloadPluginAdd() {
-    setReloadPluginsModal((prev) => {
-      try {
-        return {
-          ...prev,
-          selectedPlugins: addPluginOption(prev.selectedPlugins, prev.customPlugin),
-          customPlugin: '',
-          error: '',
-        };
-      } catch (addError) {
-        return { ...prev, error: addError.message };
-      }
-    });
+    const pluginName = reloadPluginsModal.customPlugin.trim();
+    if (!pluginName) return;
+    try {
+      const selectedPlugins = addPluginOption(reloadPluginsModal.selectedPlugins, pluginName);
+      const nextSavedPlugins = writeSavedReloadPluginOptions([...savedReloadPlugins, pluginName]);
+      setSavedReloadPlugins(nextSavedPlugins);
+      setReloadPluginsModal((prev) => ({
+        ...prev,
+        selectedPlugins,
+        customPlugin: '',
+        error: '',
+      }));
+    } catch (addError) {
+      setReloadPluginsModal((prev) => ({ ...prev, error: addError.message }));
+    }
   }
 
   async function detectPluginsForServer(server) {
@@ -308,29 +334,41 @@ export function CommunityPage() {
     }));
   }
 
-  async function handleReloadPlugins() {
+  function handleReloadPlugins() {
     const group = reloadPluginsModal.group;
     if (!group) return;
 
-    const requestedPlugins = reloadPluginsModal.customPlugin.trim()
-      ? [...reloadPluginsModal.selectedPlugins, reloadPluginsModal.customPlugin]
+    const customPlugin = reloadPluginsModal.customPlugin.trim();
+    const requestedPlugins = customPlugin
+      ? [...reloadPluginsModal.selectedPlugins, customPlugin]
       : reloadPluginsModal.selectedPlugins;
     let commands;
     try {
       commands = buildPluginReloadCommands(requestedPlugins);
+      if (customPlugin) {
+        const nextSavedPlugins = writeSavedReloadPluginOptions([...savedReloadPlugins, customPlugin]);
+        setSavedReloadPlugins(nextSavedPlugins);
+      }
     } catch (buildError) {
       setReloadPluginsModal((prev) => ({ ...prev, error: buildError.message }));
       return;
     }
 
     const serverCount = (group.servers || []).length;
-    const confirmed = await confirm({
-      title: '重启服务器插件',
-      message: `即将对社区「${group.name}」下的 ${serverCount} 个服务器依次执行以下插件重启命令：\n\n${commands.join('\n')}\n\n确定继续？`,
-      confirmText: '确认重启',
+    setReloadConfirmModal({
+      open: true,
+      group,
+      commands,
+      serverCount,
+      countdown: 5,
     });
-    if (!confirmed) return;
+  }
 
+  async function executeReloadPlugins() {
+    const { group, commands, serverCount, countdown } = reloadConfirmModal;
+    if (!group || commands.length === 0 || countdown > 0) return;
+
+    setReloadConfirmModal({ open: false, group: null, commands: [], serverCount: 0, countdown: 0 });
     setReloadPluginsModal((prev) => ({ ...prev, executing: true, error: '' }));
     let successCount = 0;
     let failCount = 0;
@@ -731,10 +769,11 @@ export function CommunityPage() {
     const group = reloadPluginsModal.group;
     const serverCount = (group?.servers || []).length;
     const selectedSet = new Set(reloadPluginsModal.selectedPlugins.map(pluginIdentityKey));
-    const defaultKeys = new Set(DEFAULT_RELOAD_PLUGINS.map(pluginIdentityKey));
+    const builtInKeys = new Set(BUILT_IN_RELOAD_PLUGINS.map(pluginIdentityKey));
     const detectedKeys = new Set(reloadPluginsModal.detectedPlugins.map(pluginIdentityKey));
     const pluginOptions = normalizePluginList([
-      ...DEFAULT_RELOAD_PLUGINS,
+      ...BUILT_IN_RELOAD_PLUGINS,
+      ...savedReloadPlugins,
       ...reloadPluginsModal.detectedPlugins,
       ...reloadPluginsModal.selectedPlugins,
     ]);
@@ -783,12 +822,12 @@ export function CommunityPage() {
                 />
                 <span className="reload-plugin-name">{plugin}</span>
                 <span className="reload-plugin-command">sm plugins reload {plugin}</span>
-                {defaultKeys.has(pluginIdentityKey(plugin)) ? <span className="reload-plugin-source">默认</span> : null}
-                {!defaultKeys.has(pluginIdentityKey(plugin)) && detectedKeys.has(pluginIdentityKey(plugin)) ? <span className="reload-plugin-source">探测</span> : null}
+                {builtInKeys.has(pluginIdentityKey(plugin)) ? <span className="reload-plugin-source">内置</span> : null}
+                {!builtInKeys.has(pluginIdentityKey(plugin)) && detectedKeys.has(pluginIdentityKey(plugin)) ? <span className="reload-plugin-source">探测</span> : null}
               </label>
             ))}
           </div>
-          {reloadPluginsModal.selectedPlugins.length === 0 ? (
+          {reloadPluginsModal.selectedPlugins.length === 0 && !reloadPluginsModal.customPlugin.trim() ? (
             <div className="form-hint form-hint-warning mt-8">请至少选择一个插件。</div>
           ) : null}
           <div className="form-row mt-12">
@@ -820,6 +859,59 @@ export function CommunityPage() {
           </div>
           {reloadPluginsModal.error ? <div className="text-accent mt-8">{reloadPluginsModal.error}</div> : null}
         </FormSectionCard>
+      </Modal>
+    );
+  }
+
+  function renderReloadConfirmModal() {
+    if (!reloadConfirmModal.open) return null;
+    const groupName = reloadConfirmModal.group?.name || '当前社区';
+    const confirmText = reloadConfirmModal.countdown > 0
+      ? `请等待 ${reloadConfirmModal.countdown} 秒`
+      : '确认执行重启';
+
+    return (
+      <Modal
+        open
+        title="确认重启插件"
+        onClose={() => setReloadConfirmModal({ open: false, group: null, commands: [], serverCount: 0, countdown: 0 })}
+        wide
+        footer={(
+          <>
+            <button
+              className="btn btn-outline"
+              type="button"
+              onClick={() => setReloadConfirmModal({ open: false, group: null, commands: [], serverCount: 0, countdown: 0 })}
+              disabled={reloadPluginsModal.executing}
+            >
+              取消
+            </button>
+            <button
+              className="btn btn-danger"
+              type="button"
+              onClick={executeReloadPlugins}
+              disabled={reloadPluginsModal.executing || reloadConfirmModal.countdown > 0}
+            >
+              {confirmText}
+            </button>
+          </>
+        )}
+      >
+        <div className="alert alert-error mb-12">
+          <span className="alert-icon">!</span>
+          <div className="alert-content">
+            <div className="alert-title">即将通过 RCON 重载 SourceMod 插件</div>
+            <div className="alert-text">
+              请确认插件名称和目标社区无误。重载过程中插件可能短暂不可用，在线上报、封禁同步或准入校验可能出现短暂中断。
+            </div>
+          </div>
+        </div>
+        <div className="detail-grid">
+          <span className="detail-label">目标社区</span><span className="detail-value">{groupName}</span>
+          <span className="detail-label">服务器数量</span><span className="detail-value">{reloadConfirmModal.serverCount}</span>
+          <span className="detail-label">执行命令</span>
+          <span className="detail-value pre">{reloadConfirmModal.commands.join('\n')}</span>
+        </div>
       </Modal>
     );
   }
@@ -989,6 +1081,7 @@ export function CommunityPage() {
 
       {/* 社区插件重启弹窗 */}
       {renderReloadPluginsModal()}
+      {renderReloadConfirmModal()}
 
       {/* 在线玩家弹窗 */}
       <Modal

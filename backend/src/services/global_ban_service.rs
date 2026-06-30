@@ -6,7 +6,8 @@
 //   1. global_bans 表以 kzt_ban_id 为 UNIQUE 键
 //   2. 同步时拉取 KZTimer 活跃封禁，仅对本地 global_bans 表中不存在的 kzt_ban_id 创建记录
 //   3. 已存在的 global_bans 记录：仅更新元数据（名称/备注等），不改变 ban_records 状态
-//   4. 管理员在 LumiAdmin 中解封后，永远不会被同步重新封禁（per-steam_id 标记）
+//   4. 管理员在 LumiAdmin 中解封某条全球封禁后，仅该 kzt_ban_id 不会被同步封回
+//      同一玩家后续产生新的 KZTimer 封禁 ID 时仍会同步到本地封禁管理
 //   5. 不再做"全量比对过期"逻辑：旧封禁在 KZTimer 过期后，本地不自动解封
 //      （避免解封后又被重新封禁的问题）
 //
@@ -897,7 +898,8 @@ fn parse_kzt_datetime(s: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
 }
 
 /// 管理员手动解封全球封禁对应的本地封禁
-/// 设置 manual_unbanned=true（per-steam_id 标记），防止下次同步重新封禁
+/// 设置 manual_unbanned=true（per-ban 标记），防止同一 KZTimer 封禁下次同步封回
+/// 同一玩家后续产生新的 KZTimer 封禁 ID 时仍会同步。
 pub async fn manual_unban(
     db: &Database,
     ban_cache: &crate::services::access_cache::ActiveBanCache,
@@ -1168,4 +1170,71 @@ pub fn start_global_ban_sync_loop(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{config::Config, db::Database};
+    use uuid::Uuid;
+
+    async fn with_test_db(test: impl AsyncFnOnce(Database) -> anyhow::Result<()>) {
+        let config = Config::from_env();
+        let base_url = config.database_url.clone();
+        let schema = format!("test_{}", Uuid::new_v4().simple());
+        let scoped_url = crate::test_util::schema_url(&base_url, &schema);
+        crate::test_util::create_schema(&base_url, &schema).await;
+
+        let result = async {
+            let db = Database::connect_for_test(&scoped_url).await?;
+            db.migrate().await?;
+            test(db).await
+        }
+        .await;
+
+        crate::test_util::drop_schema(&base_url, &schema).await;
+        result.unwrap();
+    }
+
+    #[tokio::test]
+    async fn new_global_ban_can_sync_after_previous_global_ban_was_unbanned() {
+        with_test_db(async |db| {
+            let steam_id = "76561198000000001";
+            let old_local_id = Uuid::new_v4();
+            sqlx::query(
+                r#"INSERT INTO ban_records (
+                       id, player, steam_id, ban_type, duration_minutes, reason,
+                       status, operator_name, source, created_at, removed_at, removed_by
+                   )
+                   VALUES ($1, 'Player A', $2, 'steam', 0, '[全球封禁] old',
+                           'inactive', 'KZTimer Global', 'global_ban', now(), now(), 'Admin')"#,
+            )
+            .bind(old_local_id)
+            .bind(steam_id)
+            .execute(&db.pool)
+            .await?;
+
+            let new_local_id = create_local_ban(
+                &db,
+                steam_id,
+                &Some("Player A".to_string()),
+                "cheat",
+                &Some("new global ban".to_string()),
+                Some("2026-06-30T00:00:00Z"),
+                None,
+            )
+            .await?
+            .expect("new global ban should create a local ban");
+
+            let row: (String, String) =
+                sqlx::query_as("SELECT status, source FROM ban_records WHERE id = $1")
+                    .bind(new_local_id)
+                    .fetch_one(&db.pool)
+                    .await?;
+            assert_eq!(row, ("active".to_string(), "global_ban".to_string()));
+
+            Ok(())
+        })
+        .await;
+    }
 }

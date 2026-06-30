@@ -38,6 +38,7 @@ pub struct BanListItem {
     pub reason: String,
     pub status: String,
     pub operator_name: String,
+    pub source: String,
     pub created_at: String,
 }
 
@@ -89,6 +90,7 @@ struct BanListRow {
     pub reason: String,
     pub status: String,
     pub operator_name: String,
+    pub source: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -118,7 +120,7 @@ pub struct UpdateBanInput {
 const BAN_DISPLAY_FIELDS: &str = "br.id, br.player, br.steam_id, br.ip_address, br.server_name, br.ban_type, br.duration_minutes, br.expires_at, br.reason, br.status, COALESCE(operator_user.display_name, br.operator_name) AS operator_name, br.source, br.server_id, br.server_port, br.removed_reason, COALESCE(removed_user.display_name, br.removed_by) AS removed_by, br.removed_at, br.created_at";
 // 列表查询不再使用逐行 LATERAL JOIN 解析 operator_name，改为取原始值后在应用层批量解析。
 // 详见 services::display_name::resolve_display_names。
-const BAN_LIST_DISPLAY_FIELDS: &str = "br.id, br.player, br.steam_id, br.ip_address, br.ban_type, br.duration_minutes, br.expires_at, br.reason, br.status, br.operator_name, br.created_at";
+const BAN_LIST_DISPLAY_FIELDS: &str = "br.id, br.player, br.steam_id, br.ip_address, br.ban_type, br.duration_minutes, br.expires_at, br.reason, br.status, br.operator_name, br.source, br.created_at";
 // 使用共享的 SQL 片段（仅单条详情查询仍在使用 LATERAL；列表查询已改为应用层解析）
 use crate::sql_fragments::{
     OPERATOR_DISPLAY_JOIN as BAN_OPERATOR_DISPLAY_JOIN,
@@ -160,6 +162,7 @@ fn list_row_to_item(row: BanListRow) -> BanListItem {
         reason: row.reason,
         status: row.status,
         operator_name: row.operator_name,
+        source: row.source,
         created_at: row.created_at.to_rfc3339(),
     }
 }
@@ -182,6 +185,19 @@ pub async fn list_bans(
         if !status.trim().is_empty() {
             conditions.push(format!("status = ${param_idx}"));
             param_idx += 1;
+        }
+    }
+    if let Some(ref source) = query.source {
+        match source.trim() {
+            "global_ban" => {
+                conditions.push(format!("source = ${param_idx}"));
+                param_idx += 1;
+            }
+            "non_global" => {
+                conditions.push(format!("source <> ${param_idx}"));
+                param_idx += 1;
+            }
+            _ => {}
         }
     }
 
@@ -207,6 +223,14 @@ pub async fn list_bans(
     if let Some(ref status) = query.status {
         if !status.trim().is_empty() {
             data_query = data_query.bind(status.trim());
+        }
+    }
+    if let Some(ref source) = query.source {
+        match source.trim() {
+            "global_ban" | "non_global" => {
+                data_query = data_query.bind("global_ban");
+            }
+            _ => {}
         }
     }
     data_query = data_query.bind(query.page_size()).bind(query.offset());

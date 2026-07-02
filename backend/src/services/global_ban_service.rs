@@ -440,8 +440,10 @@ async fn apply_authoritative_global_bans(
     db: &Database,
     all_bans: &[KZTBan],
 ) -> anyhow::Result<SyncResult> {
-    let mut result = SyncResult::default();
-    result.total_fetched = all_bans.len() as i64;
+    let mut result = SyncResult {
+        total_fetched: all_bans.len() as i64,
+        ..Default::default()
+    };
 
     for ban in all_bans {
         let (local_ban_id, manual_unbanned) = upsert_global_ban_metadata(db, ban).await?;

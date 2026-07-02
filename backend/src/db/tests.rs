@@ -385,6 +385,7 @@ async fn migrate_expands_whitelist_requests_schema() {
         assert!(names.contains(&"rejection_reason".to_string()));
         assert!(names.contains(&"revoked_at".to_string()));
         assert!(names.contains(&"approved_by".to_string()));
+        assert!(names.contains(&"contact".to_string()));
 
         Ok::<(), anyhow::Error>(())
     }

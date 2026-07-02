@@ -7,7 +7,7 @@ const RECENT_IP_LINK_DAYS: i64 = 90;
 const OLD_IP_LINK_DAYS: i64 = 365;
 const MAX_LINKED_ACCOUNT_ITEMS: usize = 20;
 
-type AccessRiskLinkedRow = (String, Option<String>, bool, bool, Option<DateTime<Utc>>);
+type AccessRiskLinkedRow = (String, Option<String>, bool, Option<DateTime<Utc>>);
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -256,12 +256,6 @@ pub async fn evaluate_ip_ban_for_access(
                       AND br.status = 'active'
                       AND (br.expires_at IS NULL OR br.expires_at > now())
                   ) AS has_local_ban,
-                  EXISTS (
-                    SELECT 1 FROM global_bans gb
-                    WHERE gb.steam_id64 = linked.steam_id
-                      AND gb.is_expired = false
-                      AND gb.manual_unbanned = false
-                  ) AS has_global_ban,
                   linked.last_seen_at
            FROM (
              SELECT steam_id, max(player_name) AS player_name, max(last_seen_at) AS last_seen_at
@@ -286,13 +280,7 @@ pub async fn evaluate_ip_ban_for_access(
                AND br.status = 'active'
                AND (br.expires_at IS NULL OR br.expires_at > now())
            )
-           OR EXISTS (
-             SELECT 1 FROM global_bans gb
-             WHERE gb.steam_id64 = linked.steam_id
-               AND gb.is_expired = false
-               AND gb.manual_unbanned = false
-           )
-           ORDER BY has_global_ban DESC, has_local_ban DESC, linked.last_seen_at DESC NULLS LAST
+           ORDER BY has_local_ban DESC, linked.last_seen_at DESC NULLS LAST
            LIMIT 1"#,
     )
     .bind(ip_address)
@@ -301,17 +289,8 @@ pub async fn evaluate_ip_ban_for_access(
     .await?;
 
     Ok(row.map(
-        |(linked_steamid, player_name, has_local_ban, has_global_ban, last_seen_at)| {
-            let message = if has_global_ban {
-                format!(
-                    "同 IP 关联账号 {}{} 存在全球封禁",
-                    player_name
-                        .as_deref()
-                        .map(|name| format!("{name} / "))
-                        .unwrap_or_default(),
-                    linked_steamid
-                )
-            } else if has_local_ban {
+        |(linked_steamid, player_name, has_local_ban, last_seen_at)| {
+            let message = if has_local_ban {
                 format!(
                     "同 IP 关联账号 {}{} 存在本地有效封禁",
                     player_name
@@ -324,11 +303,7 @@ pub async fn evaluate_ip_ban_for_access(
                 format!("同 IP 关联账号 {linked_steamid} 存在封禁风险")
             };
             RiskReason {
-                code: if has_global_ban {
-                    "linked_ip_global_ban".to_string()
-                } else {
-                    "linked_ip_local_ban".to_string()
-                },
+                code: "linked_ip_local_ban".to_string(),
                 severity: RiskSeverity::Block,
                 message,
                 steamid64: Some(linked_steamid),

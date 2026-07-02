@@ -178,16 +178,6 @@ async fn check_access_live(
         ));
     }
 
-    if let Some(reason) = active_global_ban(db, steam_id64).await? {
-        return Ok(reject_with_method(
-            &format!(
-                "你已被全球封禁，无法进入服务器。\n原因：{reason}\n如有异议请先处理全球封禁记录。"
-            ),
-            "banned",
-            "global_banned",
-        ));
-    }
-
     if let Some(ip_risk) =
         player_risk_service::evaluate_ip_ban_for_access(db, steam_id64, input.ip_address.as_deref())
             .await?
@@ -315,25 +305,6 @@ async fn active_ban(
         id,
         reason,
         expires_at,
-    }))
-}
-
-async fn active_global_ban(db: &Database, steam_id64: &str) -> anyhow::Result<Option<String>> {
-    let row: Option<(String, Option<String>)> = sqlx::query_as(
-        r#"SELECT ban_type, notes
-           FROM global_bans
-           WHERE steam_id64 = $1
-             AND is_expired = false
-             AND manual_unbanned = false
-           ORDER BY created_on DESC NULLS LAST, synced_at DESC
-           LIMIT 1"#,
-    )
-    .bind(steam_id64)
-    .fetch_optional(&db.pool)
-    .await?;
-    Ok(row.map(|(ban_type, notes)| match notes {
-        Some(notes) if !notes.trim().is_empty() => format!("{ban_type} / {notes}"),
-        _ => ban_type,
     }))
 }
 

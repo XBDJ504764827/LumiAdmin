@@ -454,6 +454,7 @@ export function PlayerDetailModal({ open, onClose, item, canReview, submitting, 
           <div className="form-group">
             <label className="mb-4">申请信息</label>
             <div style={{ color: 'var(--text2)', fontSize: 13 }}>
+              <div>联系方式：{item.contact || '-'}</div>
               <div>申请时间：{item.applied_at ? formatChinaDateTime(item.applied_at) : '-'}</div>
             </div>
           </div>

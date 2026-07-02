@@ -75,6 +75,7 @@ impl Database {
           id UUID PRIMARY KEY,
           steam_id TEXT NOT NULL,
           nickname TEXT NOT NULL,
+          contact TEXT,
           status TEXT NOT NULL,
           reviewer TEXT,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now()

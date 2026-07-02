@@ -1,10 +1,14 @@
 import { useState } from 'react';
 import { publicApi } from '../../lib/publicApi.js';
+import { Modal } from '../../shared/Modal.jsx';
 import { PublicPageShell } from './PublicPageShell.jsx';
 
 export function PublicApplyPage() {
   const [steamInput, setSteamInput] = useState('');
   const [nickname, setNickname] = useState('');
+  const [contact, setContact] = useState('');
+  const [contactPromptOpen, setContactPromptOpen] = useState(false);
+  const [contactPromptValue, setContactPromptValue] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -34,23 +38,49 @@ export function PublicApplyPage() {
     setResolveError('');
   }
 
-  const submit = async () => {
+  const submit = async (options = {}) => {
+    const contactValue = options.contactValue ?? contact;
     if (!steamInput.trim()) { setError('请输入 Steam 标识符。'); return; }
     if (!nickname.trim()) { setError('请输入游戏昵称。'); return; }
+    if (!options.allowEmptyContact && !contactValue.trim()) {
+      setContactPromptValue(contact);
+      setContactPromptOpen(true);
+      return;
+    }
     try {
       setSubmitting(true);
       setError('');
       setMessage('');
-      await publicApi.submitWhitelist({ steam_input: steamInput.trim(), nickname: nickname.trim() });
+      await publicApi.submitWhitelist({
+        steam_input: steamInput.trim(),
+        nickname: nickname.trim(),
+        contact: contactValue.trim() || undefined,
+      });
       setMessage('申请已提交，请等待管理员审核。');
       setSteamInput('');
       setNickname('');
+      setContact('');
+      setContactPromptValue('');
+      setContactPromptOpen(false);
       setResolveError('');
     } catch (submitError) {
       setError(submitError.message);
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const submitWithPromptContact = () => {
+    setContact(contactPromptValue);
+    setContactPromptOpen(false);
+    submit({ allowEmptyContact: true, contactValue: contactPromptValue });
+  };
+
+  const submitWithoutContact = () => {
+    setContact('');
+    setContactPromptValue('');
+    setContactPromptOpen(false);
+    submit({ allowEmptyContact: true, contactValue: '' });
   };
 
   function getErrorType(msg) {
@@ -146,6 +176,18 @@ export function PublicApplyPage() {
                   : '输入 Steam 标识符后将自动获取昵称'}
               </div>
             </div>
+            <div className="form-group">
+              <label>联系方式</label>
+              <input
+                type="text"
+                className="form-control"
+                value={contact}
+                onChange={(e) => setContact(e.target.value)}
+                placeholder="QQ / 微信 / 邮箱等"
+                disabled={submitting}
+              />
+              <div className="form-hint">非必填，但建议填写，方便审核员后续与您联系。</div>
+            </div>
 
             {renderFeedback()}
 
@@ -153,7 +195,7 @@ export function PublicApplyPage() {
               className="btn btn-accent"
               style={{ width: '100%', padding: 12, fontSize: 14, marginTop: 6 }}
               type="button"
-              onClick={submit}
+              onClick={() => submit()}
               disabled={submitting || resolving}
             >
               {submitting ? '提交中...' : '提交白名单申请'}
@@ -165,6 +207,38 @@ export function PublicApplyPage() {
           提交后可在「白名单公示」页查看审核状态
         </div>
       </div>
+
+      <Modal
+        open={contactPromptOpen}
+        title="建议填写联系方式"
+        onClose={() => setContactPromptOpen(false)}
+        footer={
+          <>
+            <button className="btn btn-outline" type="button" onClick={submitWithoutContact} disabled={submitting}>不填写，继续提交</button>
+            <button className="btn btn-primary" type="button" onClick={submitWithPromptContact} disabled={submitting || !contactPromptValue.trim()}>{submitting ? '提交中...' : '填写并提交'}</button>
+          </>
+        }
+      >
+        <div className="alert alert-warning">
+          <span className="alert-icon">!</span>
+          <div className="alert-content">
+            <div className="alert-title">强烈建议您填写联系方式</div>
+            <div className="alert-text">QQ / 微信 / 邮箱等联系方式可以帮助管理员在审核时与您确认信息。不填写也可以继续提交申请。</div>
+          </div>
+        </div>
+        <div className="form-group">
+          <label>联系方式</label>
+          <input
+            type="text"
+            className="form-control"
+            value={contactPromptValue}
+            onChange={(e) => setContactPromptValue(e.target.value)}
+            placeholder="QQ / 微信 / 邮箱等"
+            disabled={submitting}
+            autoFocus
+          />
+        </div>
+      </Modal>
     </PublicPageShell>
   );
 }

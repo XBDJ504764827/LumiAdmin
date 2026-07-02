@@ -9,6 +9,7 @@ impl Database {
             r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS steamid3 TEXT"#,
             r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS profile_url TEXT"#,
             r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS steam_persona_name TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS contact TEXT"#,
             r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS applied_at TIMESTAMPTZ"#,
             r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ"#,
             r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS approved_by TEXT"#,

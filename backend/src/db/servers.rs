@@ -296,16 +296,18 @@ impl Database {
             .execute(&self.pool)
             .await?;
         }
-        // 每个 steam_id 最多只有一条 source='global_ban' 的活跃封禁
+        // 允许同一玩家存在多条 source='global_ban' 活跃封禁；每条 KZTimer 封禁独立同步。
+        sqlx::query(r#"DROP INDEX IF EXISTS idx_ban_records_global_ban_steam_id"#)
+            .execute(&self.pool)
+            .await?;
         sqlx::query(
-            r#"CREATE UNIQUE INDEX IF NOT EXISTS idx_ban_records_global_ban_steam_id
+            r#"CREATE INDEX IF NOT EXISTS idx_ban_records_global_ban_steam_id
            ON ban_records (steam_id) WHERE source = 'global_ban' AND status = 'active'"#,
         )
         .execute(&self.pool)
         .await?;
 
-        // 全球封禁同步配置（单行表）
-        // sync_since 记录部署这版后端的时间，只有该时间之后新增的全球封禁才会被同步到 LumiAdmin
+        // 全球封禁同步配置（单行表，保留 sync_since 兼容旧部署数据；当前同步不再按该字段过滤）
         sqlx::query(
             r#"CREATE TABLE IF NOT EXISTS global_ban_config (
           id BOOLEAN PRIMARY KEY DEFAULT true,

@@ -20,6 +20,7 @@ pub struct WhitelistItem {
     pub profile_url: Option<String>,
     pub nickname: String,
     pub steam_persona_name: Option<String>,
+    pub contact: Option<String>,
     pub status: String,
     pub applied_at: String,
     pub approved_at: Option<String>,
@@ -36,6 +37,7 @@ pub struct WhitelistItem {
 pub struct PublicWhitelistRequestInput {
     pub nickname: String,
     pub steam_input: String,
+    pub contact: Option<String>,
 }
 
 #[derive(Clone)]
@@ -69,6 +71,7 @@ struct WhitelistRow {
     profile_url: Option<String>,
     nickname: String,
     steam_persona_name: Option<String>,
+    contact: Option<String>,
     status: String,
     applied_at: DateTime<Utc>,
     approved_at: Option<DateTime<Utc>>,
@@ -89,6 +92,7 @@ struct WhitelistStatusRow {
     profile_url: Option<String>,
     nickname: String,
     steam_persona_name: Option<String>,
+    contact: Option<String>,
     status: String,
     applied_at: DateTime<Utc>,
     approved_at: Option<DateTime<Utc>>,
@@ -134,7 +138,7 @@ pub async fn list_whitelist(
     // 详见 services::display_name::resolve_display_names。
     let order_clause = whitelist_order_clause(query.status.as_deref());
     let data_sql = format!(
-        r#"SELECT wr.id, wr.steamid64, wr.steamid, wr.steamid3, wr.profile_url, wr.nickname, wr.steam_persona_name, wr.status,
+        r#"SELECT wr.id, wr.steamid64, wr.steamid, wr.steamid3, wr.profile_url, wr.nickname, wr.steam_persona_name, wr.contact, wr.status,
                   wr.applied_at, wr.approved_at, wr.approved_by, wr.approval_reason,
                   wr.rejected_at, wr.rejected_by, wr.rejection_reason,
                   COUNT(*) OVER() as total_count
@@ -219,6 +223,7 @@ pub async fn create_public_whitelist_request(
 ) -> anyhow::Result<WhitelistItem> {
     let nickname = input.nickname.trim();
     anyhow::ensure!(!nickname.is_empty(), "请输入玩家名称");
+    let contact = super::normalize_optional_string(input.contact);
 
     let identity = resolver.resolve(&input.steam_input).await?;
     if let Some(existing) = find_by_steamid64(db, &identity.steamid64).await? {
@@ -232,8 +237,15 @@ pub async fn create_public_whitelist_request(
                     .unwrap_or_else(|| "未填写拒绝理由".to_string())
             ),
             "revoked" => {
-                return reopen_revoked_whitelist(db, existing.id, nickname, &identity, resolver)
-                    .await
+                return reopen_revoked_whitelist(
+                    db,
+                    existing.id,
+                    nickname,
+                    contact.as_deref(),
+                    &identity,
+                    resolver,
+                )
+                .await
             }
             _ => anyhow::bail!("白名单状态异常，无法重复申请"),
         }
@@ -253,11 +265,11 @@ pub async fn create_public_whitelist_request(
     let row = sqlx::query_as::<_, WhitelistRow>(
         r#"
         INSERT INTO whitelist_requests (
-            id, steam_id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
+            id, steam_id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
             applied_at, source, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', now(), 'public', now())
-        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', now(), 'public', now())
+        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
                   applied_at, approved_at, approved_by, approval_reason,
                   rejected_at, rejected_by, rejection_reason
         "#,
@@ -270,6 +282,7 @@ pub async fn create_public_whitelist_request(
     .bind(identity.profile_url.as_deref())
     .bind(nickname)
     .bind(steam_persona_name.as_deref())
+    .bind(contact.as_deref())
     .fetch_one(&db.pool)
     .await?;
 
@@ -321,7 +334,7 @@ pub async fn create_manual_whitelist(
             applied_at, approved_at, approved_by, approval_reason, source, updated_at
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'approved', now(), now(), $9, $10, 'manual', now())
-        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
+        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
                   applied_at, approved_at, approved_by, approval_reason,
                   rejected_at, rejected_by, rejection_reason
         "#,
@@ -370,7 +383,7 @@ pub async fn approve_whitelist(
             revoked_by = NULL,
             updated_at = now()
         WHERE id = $1
-        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
+        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
                   applied_at, approved_at, approved_by, approval_reason,
                   rejected_at, rejected_by, rejection_reason
         "#,
@@ -408,7 +421,7 @@ pub async fn reject_whitelist(
             revoked_by = NULL,
             updated_at = now()
         WHERE id = $1
-        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
+        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
                   applied_at, approved_at, approved_by, approval_reason,
                   rejected_at, rejected_by, rejection_reason
         "#,
@@ -449,7 +462,7 @@ pub async fn restore_whitelist(
             revoked_by = NULL,
             updated_at = now()
         WHERE id = $1
-        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
+        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
                   applied_at, approved_at, approved_by, approval_reason,
                   rejected_at, rejected_by, rejection_reason
         "#,
@@ -479,7 +492,7 @@ pub async fn revoke_whitelist(
             revoked_by = $2,
             updated_at = now()
         WHERE id = $1
-        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
+        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
                   applied_at, approved_at, approved_by, approval_reason,
                   rejected_at, rejected_by, rejection_reason
         "#,
@@ -496,6 +509,7 @@ async fn reopen_revoked_whitelist(
     db: &Database,
     id: Uuid,
     nickname: &str,
+    contact: Option<&str>,
     identity: &ParsedSteamIdentity,
     resolver: &SteamResolver,
 ) -> anyhow::Result<WhitelistItem> {
@@ -514,6 +528,7 @@ async fn reopen_revoked_whitelist(
             steamid3 = $4,
             profile_url = $5,
             steam_persona_name = $6,
+            contact = $7,
             status = 'pending',
             applied_at = now(),
             approved_at = NULL,
@@ -527,7 +542,7 @@ async fn reopen_revoked_whitelist(
             source = 'public',
             updated_at = now()
         WHERE id = $1
-        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
+        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
                   applied_at, approved_at, approved_by, approval_reason,
                   rejected_at, rejected_by, rejection_reason
         "#,
@@ -538,6 +553,7 @@ async fn reopen_revoked_whitelist(
     .bind(identity.steamid3.as_deref())
     .bind(identity.profile_url.as_deref())
     .bind(steam_persona_name.as_deref())
+    .bind(contact)
     .fetch_one(&db.pool)
     .await?;
 
@@ -581,7 +597,7 @@ async fn approve_existing_record(
             source = 'manual',
             updated_at = now()
         WHERE id = $1
-        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
+        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
                   applied_at, approved_at, approved_by, approval_reason,
                   rejected_at, rejected_by, rejection_reason
         "#,
@@ -609,7 +625,7 @@ async fn find_by_steamid64(
 ) -> anyhow::Result<Option<WhitelistStatusRow>> {
     sqlx::query_as::<_, WhitelistStatusRow>(
         r#"
-        SELECT id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
+        SELECT id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
                applied_at, approved_at, approved_by, approval_reason,
                rejected_at, rejected_by, rejection_reason,
                revoked_at, revoked_by, source
@@ -630,7 +646,7 @@ async fn find_by_steamid64(
 async fn find_by_id(db: &Database, id: Uuid) -> anyhow::Result<WhitelistStatusRow> {
     sqlx::query_as::<_, WhitelistStatusRow>(
         r#"
-        SELECT id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
+        SELECT id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
                applied_at, approved_at, approved_by, approval_reason,
                rejected_at, rejected_by, rejection_reason,
                revoked_at, revoked_by, source
@@ -811,6 +827,7 @@ fn map_whitelist_row(row: WhitelistRow) -> WhitelistItem {
         profile_url: row.profile_url,
         nickname: row.nickname,
         steam_persona_name: row.steam_persona_name,
+        contact: row.contact,
         status: row.status,
         applied_at: row.applied_at.to_rfc3339(),
         approved_at: row.approved_at.map(|value| value.to_rfc3339()),
@@ -925,6 +942,7 @@ mod tests {
                 PublicWhitelistRequestInput {
                     nickname: "玩家甲".to_string(),
                     steam_input: "76561198000000001".to_string(),
+                    contact: None,
                 },
                 &SteamResolver::for_tests(),
             )
@@ -955,6 +973,7 @@ mod tests {
                 PublicWhitelistRequestInput {
                     nickname: "玩家乙".to_string(),
                     steam_input: "76561198000000002".to_string(),
+                    contact: None,
                 },
                 &SteamResolver::for_tests(),
             )
@@ -985,6 +1004,7 @@ mod tests {
                 PublicWhitelistRequestInput {
                     nickname: "玩家丙".to_string(),
                     steam_input: "76561198000000003".to_string(),
+                    contact: None,
                 },
                 &SteamResolver::for_tests(),
             )
@@ -1015,6 +1035,7 @@ mod tests {
                 PublicWhitelistRequestInput {
                     nickname: "玩家丁".to_string(),
                     steam_input: "76561198000000004".to_string(),
+                    contact: None,
                 },
                 &SteamResolver::for_tests(),
             )
@@ -1023,6 +1044,42 @@ mod tests {
 
             assert_eq!(item.status, "pending");
             assert_eq!(item.steamid64, "76561198000000004");
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn create_whitelist_request_saves_optional_contact() {
+        with_test_db(async |db| {
+            let item = create_public_whitelist_request(
+                &db,
+                PublicWhitelistRequestInput {
+                    nickname: "玩家联系方式".to_string(),
+                    steam_input: "76561198000000005".to_string(),
+                    contact: Some("  QQ 123456  ".to_string()),
+                },
+                &SteamResolver::for_tests(),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(item.contact.as_deref(), Some("QQ 123456"));
+
+            let result = list_whitelist(
+                &db,
+                &crate::routes::ListQuery {
+                    search: Some("玩家联系方式".to_string()),
+                    status: Some("pending".to_string()),
+                    source: None,
+                    page: None,
+                    page_size: None,
+                },
+            )
+            .await?;
+            assert_eq!(result.items.len(), 1);
+            assert_eq!(result.items[0].contact.as_deref(), Some("QQ 123456"));
+
             Ok(())
         })
         .await;

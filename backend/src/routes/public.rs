@@ -18,6 +18,7 @@ use uuid::Uuid;
 pub(crate) struct WhitelistBody {
     steam_input: String,
     nickname: String,
+    contact: Option<String>,
     operator_name: Option<String>,
 }
 
@@ -80,6 +81,7 @@ pub(crate) async fn submit_whitelist(
         whitelist_service::PublicWhitelistRequestInput {
             nickname: body.nickname,
             steam_input: body.steam_input,
+            contact: body.contact,
         },
         resolver,
     )

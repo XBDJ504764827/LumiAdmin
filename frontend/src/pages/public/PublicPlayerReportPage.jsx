@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { publicApi } from '../../lib/publicApi.js';
+import { Modal } from '../../shared/Modal.jsx';
 import { PublicPageShell } from './PublicPageShell.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 
@@ -66,6 +67,8 @@ export function PublicPlayerReportPage() {
   const [steamInput, setSteamInput] = useState('');
   const [targetName, setTargetName] = useState('');
   const [contact, setContact] = useState('');
+  const [contactPromptOpen, setContactPromptOpen] = useState(false);
+  const [contactPromptValue, setContactPromptValue] = useState('');
   const [reason, setReason] = useState('');
   const [files, setFiles] = useState([]);
   const [phase, setPhase] = useState('idle');
@@ -130,8 +133,15 @@ export function PublicPlayerReportPage() {
     }
   }
 
-  async function handleSubmit() {
+  async function handleSubmit(options = {}) {
     if (!steamInput.trim() || !reason.trim() || phase !== 'idle') return;
+    const contactValue = options.contactValue ?? contact;
+    if (!options.allowEmptyContact && !contactValue.trim()) {
+      setContactPromptValue(contact);
+      setContactPromptOpen(true);
+      return;
+    }
+
     setPhase('submitting');
     setError('');
     setMessage('');
@@ -143,7 +153,7 @@ export function PublicPlayerReportPage() {
       const result = await publicApi.submitPlayerReport({
         steam_input: steamInput.trim(),
         target_player_name: targetName.trim() || null,
-        reporter_contact: contact.trim() || null,
+        reporter_contact: contactValue.trim() || null,
         report_reason: reason.trim(),
       });
       reportId = result.report_id ?? result.id ?? result.item?.id;
@@ -197,6 +207,19 @@ export function PublicPlayerReportPage() {
     }
 
     setPhase('done');
+  }
+
+  function submitWithPromptContact() {
+    setContact(contactPromptValue);
+    setContactPromptOpen(false);
+    handleSubmit({ allowEmptyContact: true, contactValue: contactPromptValue });
+  }
+
+  function submitWithoutContact() {
+    setContact('');
+    setContactPromptValue('');
+    setContactPromptOpen(false);
+    handleSubmit({ allowEmptyContact: true, contactValue: '' });
   }
 
   const busy = phase === 'submitting' || phase === 'uploading';
@@ -431,13 +454,47 @@ export function PublicPlayerReportPage() {
             {message ? <div className="alert alert-success"><span className="alert-icon">✓</span><div className="alert-content"><div className="alert-title">举报已提交</div><div className="alert-text">{message}</div></div></div> : null}
 
             {phase !== 'done' ? (
-              <button className="btn btn-accent" type="button" style={{ width: '100%', padding: 12 }} disabled={busy || !steamInput.trim() || !reason.trim()} onClick={handleSubmit}>
+              <button className="btn btn-accent" type="button" style={{ width: '100%', padding: 12 }} disabled={busy || !steamInput.trim() || !reason.trim()} onClick={() => handleSubmit()}>
                 {phase === 'submitting' ? '正在提交...' : phase === 'uploading' ? `正在上传 (${progress}%)...` : '提交举报'}
               </button>
             ) : null}
           </div>
         </div>
       </div>
+
+      <Modal
+        open={contactPromptOpen}
+        title="建议填写联系方式"
+        onClose={() => setContactPromptOpen(false)}
+        footer={
+          <>
+            <button className="btn btn-outline" type="button" onClick={submitWithoutContact} disabled={busy}>不填写，继续提交</button>
+            <button className="btn btn-primary" type="button" onClick={submitWithPromptContact} disabled={busy || !contactPromptValue.trim()}>
+              {busy ? '提交中...' : '填写并提交'}
+            </button>
+          </>
+        }
+      >
+        <div className="alert alert-warning">
+          <span className="alert-icon">!</span>
+          <div className="alert-content">
+            <div className="alert-title">强烈建议您填写联系方式</div>
+            <div className="alert-text">QQ / 微信 / 邮箱等联系方式可以帮助管理员在处理举报时与您确认信息。不填写也可以继续提交举报。</div>
+          </div>
+        </div>
+        <div className="form-group">
+          <label>联系方式</label>
+          <input
+            type="text"
+            className="form-control"
+            value={contactPromptValue}
+            onChange={(event) => setContactPromptValue(event.target.value)}
+            placeholder="QQ / 微信 / 邮箱等"
+            disabled={busy}
+            autoFocus
+          />
+        </div>
+      </Modal>
     </PublicPageShell>
   );
 }

@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { publicApi } from '../../lib/publicApi.js';
+import { Modal } from '../../shared/Modal.jsx';
 import { PublicPageShell } from './PublicPageShell.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { formatBanSource } from '../ban/banDisplay.js';
@@ -102,6 +103,8 @@ export function PublicBanAppealPage() {
   const [steamInput, setSteamInput] = useState('');
   const [nickname, setNickname] = useState('');
   const [contact, setContact] = useState('');
+  const [contactPromptOpen, setContactPromptOpen] = useState(false);
+  const [contactPromptValue, setContactPromptValue] = useState('');
   const [resolving, setResolving] = useState(false);
   const [resolveError, setResolveError] = useState('');
   const [steamid64, setSteamid64] = useState('');
@@ -207,9 +210,15 @@ export function PublicBanAppealPage() {
     setSelectedFiles((prev) => prev.filter((f) => f.id !== id));
   }, []);
 
-  async function handleSubmit() {
+  async function handleSubmit(options = {}) {
     if (!selectedBanId || !reason.trim() || !steamid64 || !nickname.trim()) return;
     if (phase !== 'idle') return;
+    const contactValue = options.contactValue ?? contact;
+    if (!options.allowEmptyContact && !contactValue.trim()) {
+      setContactPromptValue(contact);
+      setContactPromptOpen(true);
+      return;
+    }
 
     setPhase('submitting');
     setError('');
@@ -223,7 +232,7 @@ export function PublicBanAppealPage() {
         ban_id: selectedBanId,
         steam_id: steamid64,
         player_name: nickname.trim(),
-        contact: contact.trim() || null,
+        contact: contactValue.trim() || null,
         appeal_reason: reason.trim(),
       });
       ({ appealId, uploadToken } = normalizeAppealCreateResponse(result));
@@ -298,6 +307,19 @@ export function PublicBanAppealPage() {
     }
 
     setPhase('done');
+  }
+
+  function submitWithPromptContact() {
+    setContact(contactPromptValue);
+    setContactPromptOpen(false);
+    handleSubmit({ allowEmptyContact: true, contactValue: contactPromptValue });
+  }
+
+  function submitWithoutContact() {
+    setContact('');
+    setContactPromptValue('');
+    setContactPromptOpen(false);
+    handleSubmit({ allowEmptyContact: true, contactValue: '' });
   }
 
   function isSubmitting() {
@@ -676,7 +698,7 @@ export function PublicBanAppealPage() {
                 style={{ width: '100%', padding: 12, fontSize: 14, marginTop: 6 }}
                 type="button"
                 disabled={isSubmitting() || resolving || !selectedBanId || !reason.trim()}
-                onClick={handleSubmit}
+                onClick={() => handleSubmit()}
               >
                 {phase === 'submitting' ? '正在创建申诉...' :
                  phase === 'uploading' ? `正在上传文件 (${uploadProgress}%)...` :
@@ -690,6 +712,40 @@ export function PublicBanAppealPage() {
           提交申诉后请耐心等待，管理员会尽快审核
         </div>
       </div>
+
+      <Modal
+        open={contactPromptOpen}
+        title="建议填写联系方式"
+        onClose={() => setContactPromptOpen(false)}
+        footer={
+          <>
+            <button className="btn btn-outline" type="button" onClick={submitWithoutContact} disabled={isSubmitting()}>不填写，继续提交</button>
+            <button className="btn btn-primary" type="button" onClick={submitWithPromptContact} disabled={isSubmitting() || !contactPromptValue.trim()}>
+              {isSubmitting() ? '提交中...' : '填写并提交'}
+            </button>
+          </>
+        }
+      >
+        <div className="alert alert-warning">
+          <span className="alert-icon">!</span>
+          <div className="alert-content">
+            <div className="alert-title">强烈建议您填写联系方式</div>
+            <div className="alert-text">QQ / 微信 / 邮箱等联系方式可以帮助管理员在审核申诉时与您确认信息。不填写也可以继续提交申诉。</div>
+          </div>
+        </div>
+        <div className="form-group">
+          <label>联系方式</label>
+          <input
+            type="text"
+            className="form-control"
+            value={contactPromptValue}
+            onChange={(event) => setContactPromptValue(event.target.value)}
+            placeholder="QQ / 微信 / 邮箱等"
+            disabled={isSubmitting()}
+            autoFocus
+          />
+        </div>
+      </Modal>
     </PublicPageShell>
   );
 }

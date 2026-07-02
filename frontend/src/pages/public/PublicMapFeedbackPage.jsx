@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { publicApi } from '../../lib/publicApi.js';
+import { Modal } from '../../shared/Modal.jsx';
 import { PublicPageShell } from './PublicPageShell.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 
@@ -37,6 +38,8 @@ export function PublicMapFeedbackPage() {
   const [feedbackType, setFeedbackType] = useState('');
   const [steamInput, setSteamInput] = useState('');
   const [contact, setContact] = useState('');
+  const [contactPromptOpen, setContactPromptOpen] = useState(false);
+  const [contactPromptValue, setContactPromptValue] = useState('');
   const [detail, setDetail] = useState('');
   const [phase, setPhase] = useState('idle');
   const [error, setError] = useState('');
@@ -64,8 +67,15 @@ export function PublicMapFeedbackPage() {
     }
   }
 
-  async function handleSubmit() {
+  async function handleSubmit(options = {}) {
     if (!feedbackType || !detail.trim() || phase !== 'idle') return;
+    const contactValue = options.contactValue ?? contact;
+    if (!options.allowEmptyContact && !contactValue.trim()) {
+      setContactPromptValue(contact);
+      setContactPromptOpen(true);
+      return;
+    }
+
     setPhase('submitting');
     setError('');
     setMessage('');
@@ -74,7 +84,7 @@ export function PublicMapFeedbackPage() {
       await publicApi.submitMapFeedback({
         feedback_type: feedbackType,
         steam_input: steamInput.trim() || null,
-        contact: contact.trim() || null,
+        contact: contactValue.trim() || null,
         detail: detail.trim(),
       });
       setMessage('反馈已提交，管理员将会尽快处理。');
@@ -83,6 +93,19 @@ export function PublicMapFeedbackPage() {
       setError(submitError.message || '提交失败，请稍后重试。');
       setPhase('idle');
     }
+  }
+
+  function submitWithPromptContact() {
+    setContact(contactPromptValue);
+    setContactPromptOpen(false);
+    handleSubmit({ allowEmptyContact: true, contactValue: contactPromptValue });
+  }
+
+  function submitWithoutContact() {
+    setContact('');
+    setContactPromptValue('');
+    setContactPromptOpen(false);
+    handleSubmit({ allowEmptyContact: true, contactValue: '' });
   }
 
   const busy = phase === 'submitting';
@@ -221,7 +244,7 @@ export function PublicMapFeedbackPage() {
                 type="button"
                 style={{ width: '100%', padding: 12 }}
                 disabled={busy || !feedbackType || !detail.trim()}
-                onClick={handleSubmit}
+                onClick={() => handleSubmit()}
               >
                 {busy ? '正在提交...' : '提交反馈'}
               </button>
@@ -229,6 +252,40 @@ export function PublicMapFeedbackPage() {
           </div>
         </div>
       </div>
+
+      <Modal
+        open={contactPromptOpen}
+        title="建议填写联系方式"
+        onClose={() => setContactPromptOpen(false)}
+        footer={
+          <>
+            <button className="btn btn-outline" type="button" onClick={submitWithoutContact} disabled={busy}>不填写，继续提交</button>
+            <button className="btn btn-primary" type="button" onClick={submitWithPromptContact} disabled={busy || !contactPromptValue.trim()}>
+              {busy ? '提交中...' : '填写并提交'}
+            </button>
+          </>
+        }
+      >
+        <div className="alert alert-warning">
+          <span className="alert-icon">!</span>
+          <div className="alert-content">
+            <div className="alert-title">强烈建议您填写联系方式</div>
+            <div className="alert-text">QQ / 微信 / 邮箱等联系方式可以帮助管理员在处理地图反馈时与您确认信息。不填写也可以继续提交反馈。</div>
+          </div>
+        </div>
+        <div className="form-group">
+          <label>联系方式</label>
+          <input
+            type="text"
+            className="form-control"
+            value={contactPromptValue}
+            onChange={(event) => setContactPromptValue(event.target.value)}
+            placeholder="QQ / 微信 / 邮箱等"
+            disabled={busy}
+            autoFocus
+          />
+        </div>
+      </Modal>
     </PublicPageShell>
   );
 }

@@ -401,16 +401,16 @@ pub async fn get_player_detail(
     // evidence_files 依赖 bans/appeals/reports，需在第一批完成后执行
     let evidence_files = fetch_evidence_files(db, r2, &bans, &appeals, &reports).await?;
 
-    let search_terms = build_search_terms(
-        &identity,
-        &whitelists,
-        &bans,
-        &appeals,
-        &reports,
-        &online_records,
-        &player_sessions,
-        &access_logs,
-    );
+    let search_terms = build_search_terms(SearchTermSources {
+        identity: &identity,
+        whitelists: &whitelists,
+        bans: &bans,
+        appeals: &appeals,
+        reports: &reports,
+        online_records: &online_records,
+        player_sessions: &player_sessions,
+        access_logs: &access_logs,
+    });
     let (admin_actions, audit_logs) = tokio::try_join!(
         fetch_admin_actions(db, &search_terms),
         fetch_audit_logs(db, &search_terms),
@@ -2099,42 +2099,48 @@ async fn fetch_audit_logs(
     Ok(query.fetch_all(&db.pool).await?)
 }
 
-fn build_search_terms(
-    identity: &ParsedSteamIdentity,
-    whitelists: &[WhitelistRecord],
-    bans: &[PlayerBanRecord],
-    appeals: &[PlayerAppealRecord],
-    reports: &[PlayerReportRecord],
-    online_records: &[OnlineRecord],
-    player_sessions: &[PlayerServerSession],
-    access_logs: &[PlayerAccessRecord],
-) -> Vec<String> {
+struct SearchTermSources<'a> {
+    identity: &'a ParsedSteamIdentity,
+    whitelists: &'a [WhitelistRecord],
+    bans: &'a [PlayerBanRecord],
+    appeals: &'a [PlayerAppealRecord],
+    reports: &'a [PlayerReportRecord],
+    online_records: &'a [OnlineRecord],
+    player_sessions: &'a [PlayerServerSession],
+    access_logs: &'a [PlayerAccessRecord],
+}
+
+fn build_search_terms(sources: SearchTermSources<'_>) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut terms = Vec::new();
-    add_search_term(&mut terms, &mut seen, Some(identity.steamid64.as_str()));
-    add_search_term(&mut terms, &mut seen, identity.steamid.as_deref());
-    add_search_term(&mut terms, &mut seen, identity.steamid3.as_deref());
+    add_search_term(
+        &mut terms,
+        &mut seen,
+        Some(sources.identity.steamid64.as_str()),
+    );
+    add_search_term(&mut terms, &mut seen, sources.identity.steamid.as_deref());
+    add_search_term(&mut terms, &mut seen, sources.identity.steamid3.as_deref());
 
-    for item in whitelists {
+    for item in sources.whitelists {
         add_search_term(&mut terms, &mut seen, Some(&item.nickname));
         add_search_term(&mut terms, &mut seen, item.steam_persona_name.as_deref());
     }
-    for item in bans {
+    for item in sources.bans {
         add_search_term(&mut terms, &mut seen, item.player.as_deref());
     }
-    for item in appeals {
+    for item in sources.appeals {
         add_search_term(&mut terms, &mut seen, Some(&item.player_name));
     }
-    for item in reports {
+    for item in sources.reports {
         add_search_term(&mut terms, &mut seen, item.target_player_name.as_deref());
     }
-    for item in online_records {
+    for item in sources.online_records {
         add_search_term(&mut terms, &mut seen, Some(&item.name));
     }
-    for item in player_sessions {
+    for item in sources.player_sessions {
         add_search_term(&mut terms, &mut seen, item.player_name.as_deref());
     }
-    for item in access_logs {
+    for item in sources.access_logs {
         add_search_term(&mut terms, &mut seen, item.player_name.as_deref());
     }
 

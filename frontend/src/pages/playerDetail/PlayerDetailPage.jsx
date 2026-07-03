@@ -11,10 +11,12 @@ import { formatChinaDateTime } from '../../shared/time.js';
 const STATUS_LABELS = { active:'生效中', inactive:'已失效', pending:'待审核', approved:'已通过', rejected:'已驳回', revoked:'已撤销', resolved:'已解决', online:'在线', success:'成功', failed:'失败' };
 const ACCESS_METHOD_LABELS = { unrestricted:'无限制放行', whitelist:'白名单放行', restriction:'Rating 限制通过', custom_rule:'自定义规则放行', banned:'封禁拒绝', whitelist_rejected:'白名单拒绝', restriction_rejected:'Rating/等级拒绝', custom_rule_rejected:'自定义规则拒绝', snapshot_fallback:'快照回退' };
 const FAILURE_CODE_LABELS = { banned:'存在有效封禁', not_whitelisted:'未通过白名单', low_rating:'Rating 不足', low_steam_level:'Steam 等级不足', custom_rule_rejected:'自定义规则拒绝', profile_fetch_failed:'无法获取玩家资料', snapshot_unavailable:'访问控制服务不可用' };
-const CATEGORY_LABELS = { whitelist:'白名单', ban:'封禁', appeal:'申诉', report:'举报', online:'在线', access:'进服', admin:'后台操作', audit:'审计', evidence:'证据', map_feedback:'地图反馈' };
+const CATEGORY_LABELS = { whitelist:'白名单', ban:'封禁', appeal:'申诉', report:'举报', online:'在线', session:'会话', access:'进服', admin:'后台操作', audit:'审计', evidence:'证据', map_feedback:'地图反馈' };
 function stKind(s,c){if(s==='active'||c==='ban')return s==='inactive'?'offline':'danger';if(s==='online'||s==='approved'||s==='success'||s==='resolved')return'success';if(s==='pending')return'warning';if(s==='failed'||s==='rejected')return'danger';if(s==='revoked'||s==='inactive')return'offline';return'default'}
 function stLabel(s){return STATUS_LABELS[s]||s||'-'}
 function durLabel(m){const v=Number(m);if(!Number.isFinite(v))return'-';if(v===0)return'永久';if(v<60)return`${v} 分钟`;if(v%1440===0)return`${v/1440} 天`;if(v%60===0)return`${v/60} 小时`;return`${v} 分钟`}
+function sessionDurationLabel(seconds){const v=Number(seconds);if(!Number.isFinite(v)||v<0)return'-';if(v<60)return`${Math.round(v)} 秒`;const minutes=Math.floor(v/60);if(minutes<60)return`${minutes} 分钟`;const hours=Math.floor(minutes/60);const restMinutes=minutes%60;if(hours<24)return restMinutes?`${hours} 小时 ${restMinutes} 分钟`:`${hours} 小时`;const days=Math.floor(hours/24);const restHours=hours%24;return restHours?`${days} 天 ${restHours} 小时`:`${days} 天`}
+function sessionEndLabel(item){return item?.left_at?formatChinaDateTime(item.left_at,{seconds:false}):'仍在线'}
 function tagsToText(t=[]){return t.join(', ')}
 function textToTags(v){return v.split(/[,，\n]/).map(t=>t.trim().replace(/^#/,'')).filter(Boolean).filter((t,i,a)=>a.findIndex(n=>n.toLowerCase()===t.toLowerCase())===i)}
 function Empty({children}){return<div className="player-detail-empty">{children}</div>}
@@ -22,7 +24,7 @@ function feedbackTypeLabel(t){const m={missing:'地图缺失',broken:'地图损�
 function methodLabel(method){return ACCESS_METHOD_LABELS[method]||method||'-'}
 function failureLabel(item){return FAILURE_CODE_LABELS[item?.failure_code]||item?.reject_reason||item?.failure_code||'-'}
 function categoryLabel(category){return CATEGORY_LABELS[category]||category||'事件'}
-function categoryKind(category,status){if(status==='failed'||category==='ban')return'danger';if(status==='pending')return'warning';if(status==='success'||status==='approved'||status==='online')return'success';if(category==='access')return status==='success'?'success':'danger';return'default'}
+function categoryKind(category,status){if(status==='failed'||category==='ban')return'danger';if(status==='pending')return'warning';if(status==='success'||status==='approved'||status==='online')return'success';if(category==='session')return status==='online'?'success':'offline';if(category==='access')return status==='success'?'success':'danger';return'default'}
 function count(v){return Number(v||0)}
 function countActiveGlobalBans(items=[]){return items.filter(item=>{const e=item.ban?.expires_on;if(!e||e.startsWith('9999'))return true;const d=new Date(e);return !Number.isNaN(d.getTime())&&d>new Date();}).length}
 function riskTone(action){if(action==='deny'||action==='require_force')return'danger';if(action==='warn')return'warning';return'success'}
@@ -308,9 +310,25 @@ function TimelineTab({detail}) {
   </div>;
 }
 
+function SessionTable({sessions=[], emptyText='暂无服务器会话记录。'}) {
+  return sessions.length===0?<Empty>{emptyText}</Empty>:<div className="table-responsive"><table className="data-table player-record-table"><thead><tr><th>服务器</th><th>进入时间</th><th>退出时间</th><th>时长</th><th>IP</th><th>Ping</th><th>地图</th><th>玩家名</th></tr></thead><tbody>
+    {sessions.map(item=><tr key={item.id}>
+      <td className="fw-600">{item.server_name}:{item.server_port}<br/><span style={{color:'var(--text3)',fontSize:'11.5px'}}>{item.community_name||'-'}</span></td>
+      <td style={{fontFamily:'var(--mono)',fontSize:'12px',whiteSpace:'nowrap'}}>{formatChinaDateTime(item.first_seen_at,{seconds:false})}</td>
+      <td style={{fontFamily:'var(--mono)',fontSize:'12px',whiteSpace:'nowrap'}}><StatusPill kind={item.left_at?'offline':'success'}>{item.left_at?'已退出':'在线'}</StatusPill><div className="player-table-sub">{sessionEndLabel(item)}</div></td>
+      <td>{sessionDurationLabel(item.duration_seconds)}</td>
+      <td className="steam-id">{item.ip||'-'}</td>
+      <td>{item.last_ping??'-'}</td>
+      <td>{item.last_map||'-'}</td>
+      <td>{item.player_name||'-'}</td>
+    </tr>)}
+  </tbody></table></div>
+}
+
 function AccessTab({detail}) {
   const accessLogs = detail.access_logs || [];
   const currentOnline = detail.online_records || [];
+  const sessions = detail.player_sessions || [];
   return <>
     <div className="card"><div className="card-header"><div><div className="card-title">进服成功 / 失败明细</div><div className="card-sub">展示进入服务器的判定方式、失败原因、IP、Rating 和 Steam 等级。</div></div></div><div className="card-body p-0">
       {accessLogs.length===0?<Empty>暂无进服尝试日志。</Empty>:<div className="table-responsive"><table className="data-table player-record-table"><thead><tr><th>时间</th><th>结果</th><th>服务器</th><th>IP</th><th>方式 / 原因</th><th>Rating</th><th>Steam等级</th><th>玩家名</th></tr></thead><tbody>
@@ -325,6 +343,10 @@ function AccessTab({detail}) {
           <td>{item.player_name||'-'}</td>
         </tr>)}
       </tbody></table></div>}
+    </div></div>
+
+    <div className="card"><div className="card-header"><div><div className="card-title">服务器会话历史</div><div className="card-sub">由在线快照生成，包含进入服务器和退出服务器时间。</div></div></div><div className="card-body p-0">
+      <SessionTable sessions={sessions}/>
     </div></div>
 
     <div className="card"><div className="card-header"><div><div className="card-title">当前在线服务器</div><div className="card-sub">来自服务器实时上报快照。</div></div></div><div className="card-body p-0">
@@ -456,7 +478,7 @@ function PlayerSummaryRail({detail, globalBans, canEdit, onSaveInternal, interna
 
 function NetworkTab({detail}) {
   const ipHistory = detail.ip_history || [];
-  const onlineRecords = detail.online_records || [];
+  const sessions = detail.player_sessions || [];
   return <>
     <div className="card"><div className="card-header"><div><div className="card-title">深度 IP 交叉与设备追踪表</div><div className="card-sub"><strong style={{color:'var(--accent)'}}>逆向检索同 IP 的关联 Steam 账号</strong>，包含关联账号白名单和封禁状态。</div></div></div><div className="card-body p-0">
       {ipHistory.length===0?<Empty>暂无 IP 登录记录。</Empty>:<div className="table-responsive"><table className="data-table tree-table"><thead><tr><th>IP</th><th>首次/最后活跃</th><th>服务器</th><th>关联账号 / 白名单</th></tr></thead><tbody>
@@ -481,11 +503,7 @@ function NetworkTab({detail}) {
       </tbody></table></div>}
     </div></div>
     <div className="card"><div className="card-header"><div><div className="card-title">服务器会话与在线记录</div></div></div><div className="card-body p-0">
-      {onlineRecords.length===0?<Empty>暂无在线记录。</Empty>:<div className="table-responsive"><table className="data-table player-record-table"><thead><tr><th>服务器</th><th>上报时间</th><th>IP</th><th>Ping</th><th>地图</th></tr></thead><tbody>
-        {onlineRecords.map((item,i)=><tr key={`${item.server_id}-${item.reported_at}-${i}`}>
-          <td className="fw-600">{item.server_name}</td><td style={{fontFamily:'var(--mono)',fontSize:'12px',whiteSpace:'nowrap'}}>{formatChinaDateTime(item.reported_at,{seconds:false})}</td>
-          <td className="steam-id">{item.ip}</td><td>{item.ping}</td><td>{item.current_map||'-'}</td></tr>)}
-      </tbody></table></div>}
+      <SessionTable sessions={sessions} emptyText="暂无服务器会话记录。"/>
     </div></div>
   </>;
 }

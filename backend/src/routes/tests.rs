@@ -1032,7 +1032,7 @@ async fn normal_admin_cannot_manage_player_api_config() {
 async fn plugin_report_updates_online_players_when_token_and_port_match() {
     with_test_app(async |db, config| {
             let (_, server_id) = insert_community_with_server(&db, "插件上报").await;
-            let app = test_app(config, db.clone());
+            let app = test_app(config.clone(), db.clone());
 
             let request = Request::builder()
                 .method("POST")
@@ -1041,13 +1041,15 @@ async fn plugin_report_updates_online_players_when_token_and_port_match() {
                 .body(Body::from(json!({
                     "report_token": "plugin-token",
                     "port": 25575,
+                    "current_map": "kz_begin",
                     "players": [
                         {
                             "name": "Alice",
                             "steam_id64": "76561198000000001",
                             "ip": "203.0.113.10",
                             "ping": 28,
-                            "server_port": 25575
+                            "server_port": 25575,
+                            "connected_seconds": 120
                         }
                     ]
                 }).to_string()))
@@ -1077,6 +1079,60 @@ async fn plugin_report_updates_online_players_when_token_and_port_match() {
             assert_eq!(player.2, "203.0.113.10");
             assert_eq!(player.3, 28);
             assert_eq!(player.4, 25575);
+
+            let active_session: (
+                String,
+                Option<chrono::DateTime<chrono::Utc>>,
+                chrono::DateTime<chrono::Utc>,
+                chrono::DateTime<chrono::Utc>,
+                String,
+            ) = sqlx::query_as(
+                r#"SELECT server_name, left_at, first_seen_at, last_seen_at, last_map
+                   FROM player_server_sessions
+                   WHERE server_id = $1 AND steam_id64 = $2"#,
+            )
+            .bind(server_id)
+            .bind("76561198000000001")
+            .fetch_one(&db.pool)
+            .await?;
+            assert_eq!(active_session.0, "一号服");
+            assert!(active_session.1.is_none());
+            assert!(
+                active_session
+                    .3
+                    .signed_duration_since(active_session.2)
+                    .num_seconds()
+                    >= 100
+            );
+            assert_eq!(active_session.4, "kz_begin");
+
+            let app = test_app(config, db.clone());
+            let empty_report = Request::builder()
+                .method("POST")
+                .uri("/api/plugin/online-players/report")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({
+                    "report_token": "plugin-token",
+                    "port": 25575,
+                    "current_map": "kz_empty",
+                    "players": []
+                }).to_string()))
+                .unwrap();
+            let empty_response = app.oneshot(empty_report).await.unwrap();
+            assert_eq!(empty_response.status(), StatusCode::OK);
+
+            let closed_session: (Option<chrono::DateTime<chrono::Utc>>, Option<String>) =
+                sqlx::query_as(
+                    r#"SELECT left_at, end_reason
+                       FROM player_server_sessions
+                       WHERE server_id = $1 AND steam_id64 = $2"#,
+                )
+                .bind(server_id)
+                .bind("76561198000000001")
+                .fetch_one(&db.pool)
+                .await?;
+            assert!(closed_session.0.is_some());
+            assert_eq!(closed_session.1.as_deref(), Some("snapshot_missing"));
             Ok(())
         }).await;
 }

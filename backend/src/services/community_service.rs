@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
 use crate::{db::Database, services::observability_service};
+use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
+use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 const OFFLINE_AFTER_SECONDS: i64 = 60;
@@ -94,6 +96,7 @@ pub struct OnlinePlayerInput {
     pub ip: Option<String>,
     pub ping: i32,
     pub server_port: Option<u16>,
+    pub connected_seconds: Option<i64>,
 }
 
 struct NormalizedOnlinePlayer {
@@ -102,6 +105,7 @@ struct NormalizedOnlinePlayer {
     ip: String,
     ping: i32,
     server_port: u16,
+    first_seen_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Serialize)]
@@ -167,6 +171,15 @@ struct ServerDetailRow {
     min_steam_level: i32,
     whitelist_mode_enabled: bool,
     use_custom_access: bool,
+}
+
+#[derive(sqlx::FromRow)]
+struct OnlineReportServer {
+    id: Uuid,
+    name: String,
+    port: i32,
+    community_id: Uuid,
+    community_name: Option<String>,
 }
 
 pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
@@ -544,26 +557,29 @@ pub async fn report_online_players(
     let report_token = input.report_token.trim();
     anyhow::ensure!(!report_token.is_empty(), "report_token 不能为空");
 
-    let server_id: Uuid = sqlx::query_as::<_, (Uuid,)>(
+    let server: OnlineReportServer = sqlx::query_as(
         r#"
-        SELECT id
-        FROM servers
-        WHERE report_token = $1 AND port = $2
+        SELECT s.id, s.name, s.port, s.community_id, c.name AS community_name
+        FROM servers s
+        LEFT JOIN communities c ON c.id = s.community_id
+        WHERE s.report_token = $1 AND s.port = $2
         "#,
     )
     .bind(report_token)
     .bind(i32::from(input.port))
     .fetch_optional(&db.pool)
     .await?
-    .map(|row| row.0)
     .ok_or_else(|| anyhow::anyhow!("服务器 token 或端口不匹配"))?;
+
+    let mut tx = db.pool.begin().await?;
+    let (report_time,): (DateTime<Utc>,) =
+        sqlx::query_as("SELECT now()").fetch_one(&mut *tx).await?;
 
     let mut normalized_players = Vec::with_capacity(input.players.len());
     for player in input.players {
-        normalized_players.push(normalize_online_player(player, input.port)?);
+        normalized_players.push(normalize_online_player(player, input.port, report_time)?);
     }
 
-    let mut tx = db.pool.begin().await?;
     let player_names = normalized_players
         .iter()
         .map(|player| player.name.clone())
@@ -572,17 +588,27 @@ pub async fn report_online_players(
     sqlx::query(
         r#"
         UPDATE servers
-        SET status = 'online', players = $2, last_reported_at = now()
+        SET status = 'online', players = $2, last_reported_at = $3
         WHERE id = $1
         "#,
     )
-    .bind(server_id)
+    .bind(server.id)
     .bind(&player_names)
+    .bind(report_time)
     .execute(&mut *tx)
     .await?;
 
+    sync_player_sessions(
+        &mut tx,
+        &server,
+        &normalized_players,
+        report_time,
+        &input.current_map,
+    )
+    .await?;
+
     sqlx::query(r#"DELETE FROM server_online_players WHERE server_id = $1"#)
-        .bind(server_id)
+        .bind(server.id)
         .execute(&mut *tx)
         .await?;
 
@@ -601,24 +627,96 @@ pub async fn report_online_players(
         let current_map = &input.current_map;
 
         sqlx::query(
-            r#"INSERT INTO server_online_players (server_id, name, steam_id64, ip, ping, server_port, current_map)
-               SELECT $1, u.name, u.steam_id64, u.ip, u.ping, u.server_port, $3
+            r#"INSERT INTO server_online_players (server_id, name, steam_id64, ip, ping, server_port, current_map, reported_at)
+               SELECT $1, u.name, u.steam_id64, u.ip, u.ping, u.server_port, $3, $8
                FROM UNNEST($2::TEXT[], $4::TEXT[], $5::TEXT[], $6::INTEGER[], $7::INTEGER[]) AS u(name, steam_id64, ip, ping, server_port)"#,
         )
-        .bind(server_id)
+        .bind(server.id)
         .bind(&names)
         .bind(current_map)
         .bind(&steam_ids)
         .bind(&ips)
         .bind(&pings)
         .bind(&ports)
+        .bind(report_time)
         .execute(&mut *tx)
         .await?;
     }
 
     tx.commit().await?;
 
-    Ok(OnlinePlayersReportResult { server_id })
+    Ok(OnlinePlayersReportResult {
+        server_id: server.id,
+    })
+}
+
+async fn sync_player_sessions(
+    tx: &mut Transaction<'_, Postgres>,
+    server: &OnlineReportServer,
+    players: &[NormalizedOnlinePlayer],
+    report_time: DateTime<Utc>,
+    current_map: &str,
+) -> anyhow::Result<()> {
+    let active_steamids: Vec<String> = players
+        .iter()
+        .map(|player| player.steam_id64.clone())
+        .collect();
+
+    sqlx::query(
+        r#"UPDATE player_server_sessions
+           SET left_at = $2,
+               end_reason = 'snapshot_missing',
+               updated_at = $2
+           WHERE server_id = $1
+             AND left_at IS NULL
+             AND NOT (steam_id64 = ANY($3))"#,
+    )
+    .bind(server.id)
+    .bind(report_time)
+    .bind(&active_steamids)
+    .execute(&mut **tx)
+    .await?;
+
+    for player in players {
+        let first_seen_at = player.first_seen_at.unwrap_or(report_time);
+        sqlx::query(
+            r#"INSERT INTO player_server_sessions (
+                 server_id, server_name, server_port, community_id, community_name,
+                 steam_id64, player_name, ip, first_seen_at, last_seen_at,
+                 last_ping, last_map, created_at, updated_at
+               )
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $10, $10)
+               ON CONFLICT (server_id, steam_id64) WHERE left_at IS NULL DO UPDATE SET
+                 server_name = EXCLUDED.server_name,
+                 server_port = EXCLUDED.server_port,
+                 community_id = EXCLUDED.community_id,
+                 community_name = EXCLUDED.community_name,
+                 player_name = EXCLUDED.player_name,
+                 ip = EXCLUDED.ip,
+                 first_seen_at = LEAST(player_server_sessions.first_seen_at, EXCLUDED.first_seen_at),
+                 last_seen_at = EXCLUDED.last_seen_at,
+                 end_reason = NULL,
+                 last_ping = EXCLUDED.last_ping,
+                 last_map = EXCLUDED.last_map,
+                 updated_at = EXCLUDED.updated_at"#,
+        )
+        .bind(server.id)
+        .bind(&server.name)
+        .bind(server.port)
+        .bind(server.community_id)
+        .bind(&server.community_name)
+        .bind(&player.steam_id64)
+        .bind(&player.name)
+        .bind(&player.ip)
+        .bind(first_seen_at)
+        .bind(report_time)
+        .bind(player.ping)
+        .bind(current_map)
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    Ok(())
 }
 
 pub async fn list_online_players(
@@ -645,6 +743,7 @@ pub async fn list_online_players(
 fn normalize_online_player(
     player: OnlinePlayerInput,
     report_port: u16,
+    report_time: DateTime<Utc>,
 ) -> anyhow::Result<NormalizedOnlinePlayer> {
     let name = player.name.trim();
     anyhow::ensure!(!name.is_empty(), "玩家名称不能为空");
@@ -685,6 +784,11 @@ fn normalize_online_player(
             .to_string(),
         ping: player.ping,
         server_port,
+        first_seen_at: player
+            .connected_seconds
+            .filter(|seconds| *seconds >= 0)
+            .and_then(TimeDelta::try_seconds)
+            .map(|duration| report_time - duration),
     })
 }
 
@@ -705,6 +809,23 @@ fn is_report_stale(last_reported_at: Option<chrono::DateTime<chrono::Utc>>) -> b
 }
 
 async fn mark_stale_servers_offline(db: &Database) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE player_server_sessions
+        SET left_at = now(),
+            end_reason = 'server_stale',
+            updated_at = now()
+        WHERE left_at IS NULL
+          AND server_id IN (
+              SELECT id FROM servers
+              WHERE last_reported_at IS NOT NULL
+                AND last_reported_at < now() - interval '60 seconds'
+          )
+        "#,
+    )
+    .execute(&db.pool)
+    .await?;
+
     sqlx::query(
         r#"
         UPDATE servers

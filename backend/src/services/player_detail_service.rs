@@ -22,6 +22,7 @@ pub struct PlayerDetail {
     pub appeals: Vec<PlayerAppealRecord>,
     pub reports: Vec<PlayerReportRecord>,
     pub online_records: Vec<OnlineRecord>,
+    pub player_sessions: Vec<PlayerServerSession>,
     pub access_logs: Vec<PlayerAccessRecord>,
     pub ip_history: Vec<IpHistoryEntry>,
     pub admin_actions: Vec<AdminAction>,
@@ -174,6 +175,26 @@ pub struct OnlineRecord {
     pub server_port: i32,
     pub current_map: String,
     pub reported_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct PlayerServerSession {
+    pub id: Uuid,
+    pub server_id: Uuid,
+    pub server_name: String,
+    pub community_id: Uuid,
+    pub community_name: Option<String>,
+    pub player_name: Option<String>,
+    pub steam_id64: String,
+    pub ip: String,
+    pub server_port: i32,
+    pub first_seen_at: DateTime<Utc>,
+    pub last_seen_at: DateTime<Utc>,
+    pub left_at: Option<DateTime<Utc>>,
+    pub end_reason: Option<String>,
+    pub last_ping: Option<i32>,
+    pub last_map: String,
+    pub duration_seconds: i64,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -352,6 +373,7 @@ pub async fn get_player_detail(
         appeals,
         reports,
         online_records,
+        player_sessions,
         access_logs,
         ip_history,
         map_feedback,
@@ -363,6 +385,7 @@ pub async fn get_player_detail(
         fetch_appeal_records(db, &steamid64),
         fetch_report_records(db, &steamid64),
         fetch_online_records(db, &steamid64),
+        fetch_player_sessions(db, &steamid64),
         fetch_access_records(db, &steamid64),
         fetch_ip_history(db, &steamid64),
         async {
@@ -385,6 +408,7 @@ pub async fn get_player_detail(
         &appeals,
         &reports,
         &online_records,
+        &player_sessions,
         &access_logs,
     );
     let (admin_actions, audit_logs) = tokio::try_join!(
@@ -392,7 +416,14 @@ pub async fn get_player_detail(
         fetch_audit_logs(db, &search_terms),
     )?;
 
-    let display_name = display_name(&whitelists, &bans, &appeals, &reports, &online_records);
+    let display_name = display_name(
+        &whitelists,
+        &bans,
+        &appeals,
+        &reports,
+        &online_records,
+        &player_sessions,
+    );
     let profile = PlayerProfile {
         steamid64: steamid64.clone(),
         steamid: identity.steamid,
@@ -431,6 +462,9 @@ pub async fn get_player_detail(
         .collect();
     let last_seen_at = [
         online_records.first().map(|item| item.reported_at),
+        player_sessions
+            .first()
+            .map(|item| item.left_at.unwrap_or(item.last_seen_at)),
         access_logs.first().map(|item| item.created_at),
     ]
     .into_iter()
@@ -462,6 +496,7 @@ pub async fn get_player_detail(
         &appeals,
         &reports,
         &online_records,
+        &player_sessions,
         &access_logs,
         &admin_actions,
         &audit_logs,
@@ -478,6 +513,7 @@ pub async fn get_player_detail(
         appeals,
         reports,
         online_records,
+        player_sessions,
         access_logs,
         ip_history,
         admin_actions,
@@ -599,6 +635,8 @@ async fn lookup_steamid_by_ip(db: &Database, ip: &str) -> anyhow::Result<Option<
             UNION
             SELECT steam_id64 FROM server_online_players WHERE ip = $1
             UNION
+            SELECT steam_id64 FROM player_server_sessions WHERE ip = $1
+            UNION
             SELECT steam_id AS steam_id64 FROM ban_records WHERE ip_address = $1
         ) AS ids LIMIT 1"#,
     )
@@ -619,6 +657,8 @@ async fn lookup_steamid_by_name(db: &Database, name: &str) -> anyhow::Result<Opt
             SELECT steam_id64 FROM player_access_logs WHERE player_name ILIKE $1
             UNION
             SELECT steam_id64 FROM server_online_players WHERE name ILIKE $1
+            UNION
+            SELECT steam_id64 FROM player_server_sessions WHERE player_name ILIKE $1
         ) AS ids LIMIT 1"#,
     )
     .bind(&pattern)
@@ -774,6 +814,25 @@ async fn fetch_player_candidate_rows(
             ORDER BY sop.reported_at DESC
             LIMIT 80
         ) online_matches
+        UNION ALL
+        SELECT * FROM (
+            SELECT pss.steam_id64,
+                   NULLIF(pss.player_name, '') AS display_name,
+                   '会话'::TEXT AS source,
+                   NULL::TEXT AS whitelist_status,
+                   COALESCE(pss.left_at, pss.last_seen_at) AS last_seen_at
+            FROM player_server_sessions pss
+            WHERE pss.steam_id64 IS NOT NULL
+              AND btrim(pss.steam_id64) <> ''
+              AND (
+                pss.steam_id64 = NULLIF($2, '')
+                OR pss.steam_id64 ILIKE $1 ESCAPE '\'
+                OR pss.player_name ILIKE $1 ESCAPE '\'
+                OR pss.ip ILIKE $1 ESCAPE '\'
+              )
+            ORDER BY COALESCE(pss.left_at, pss.last_seen_at) DESC
+            LIMIT 80
+        ) session_matches
         UNION ALL
         SELECT * FROM (
             SELECT pal.steam_id64,
@@ -1171,6 +1230,29 @@ async fn fetch_online_records(db: &Database, steamid64: &str) -> anyhow::Result<
     Ok(rows)
 }
 
+async fn fetch_player_sessions(
+    db: &Database,
+    steamid64: &str,
+) -> anyhow::Result<Vec<PlayerServerSession>> {
+    let rows = sqlx::query_as::<_, PlayerServerSession>(
+        r#"SELECT id, server_id, server_name, community_id, community_name,
+                  player_name, steam_id64, ip, server_port, first_seen_at,
+                  last_seen_at, left_at, end_reason, last_ping, last_map,
+                  GREATEST(
+                    0,
+                    EXTRACT(EPOCH FROM (COALESCE(left_at, last_seen_at) - first_seen_at))::BIGINT
+                  ) AS duration_seconds
+           FROM player_server_sessions
+           WHERE steam_id64 = $1
+           ORDER BY COALESCE(left_at, last_seen_at) DESC
+           LIMIT 200"#,
+    )
+    .bind(steamid64)
+    .fetch_all(&db.pool)
+    .await?;
+    Ok(rows)
+}
+
 async fn fetch_access_records(
     db: &Database,
     steamid64: &str,
@@ -1258,13 +1340,13 @@ struct LinkedTimeRow {
 /// - 每个 IP 登录过哪些服务器
 /// - 每个 IP 关联的其他账号（同 IP 不同 SteamID64）
 ///
-/// 数据来源：player_access_logs + server_online_players + ban_records
+/// 数据来源：player_access_logs + server_online_players + player_server_sessions + ban_records
 ///
 /// 优化说明：原实现对每个 IP/关联账号逐条查询（N+1），最坏情况下单次请求会发起
 /// 数千次数据库查询。现改为基于 `= ANY($n)` 的批量查询，在内存中按 ip / steam_id
 /// 分组聚合，总查询数从 ~6000+ 降到 ~12 次（且分两批并行）。
 async fn fetch_ip_history(db: &Database, steamid64: &str) -> anyhow::Result<Vec<IpHistoryEntry>> {
-    // ① 收集该玩家所有使用过的 IP（来源：player_access_logs + server_online_players + ban_records）
+    // ① 收集该玩家所有使用过的 IP（来源：player_access_logs + server_online_players + player_server_sessions + ban_records）
     //    使用 UNION 去重后获取唯一的 IP 列表
     let ip_rows: Vec<(String,)> = sqlx::query_as(
         r#"SELECT DISTINCT ip FROM (
@@ -1272,6 +1354,9 @@ async fn fetch_ip_history(db: &Database, steamid64: &str) -> anyhow::Result<Vec<
             WHERE steam_id64 = $1 AND ip_address IS NOT NULL AND btrim(ip_address) <> ''
             UNION
             SELECT ip FROM server_online_players
+            WHERE steam_id64 = $1 AND ip IS NOT NULL AND btrim(ip) <> ''
+            UNION
+            SELECT ip FROM player_server_sessions
             WHERE steam_id64 = $1 AND ip IS NOT NULL AND btrim(ip) <> ''
             UNION
             SELECT ip_address AS ip FROM ban_records
@@ -1393,6 +1478,13 @@ async fn fetch_ip_server_rows(
                 JOIN servers s ON s.id = sop.server_id
                 WHERE sop.steam_id64 = $1 AND sop.ip = ANY($2)
                 GROUP BY sop.ip, s.name, sop.server_port, sop.name
+                UNION ALL
+                SELECT pss.ip AS ip, pss.server_name, pss.server_port::INTEGER AS server_port,
+                       pss.player_name, max(COALESCE(pss.left_at, pss.last_seen_at)) AS last_seen,
+                       'server_session' AS source
+                FROM player_server_sessions pss
+                WHERE pss.steam_id64 = $1 AND pss.ip = ANY($2)
+                GROUP BY pss.ip, pss.server_name, pss.server_port, pss.player_name
             ) AS combined
         ) AS ranked
         WHERE rn <= 50"#,
@@ -1416,6 +1508,12 @@ async fn fetch_ip_time_rows(
             WHERE steam_id64 = $1 AND ip_address = ANY($2)
             UNION ALL
             SELECT ip, reported_at AS ts FROM server_online_players
+            WHERE steam_id64 = $1 AND ip = ANY($2)
+            UNION ALL
+            SELECT ip, first_seen_at AS ts FROM player_server_sessions
+            WHERE steam_id64 = $1 AND ip = ANY($2)
+            UNION ALL
+            SELECT ip, COALESCE(left_at, last_seen_at) AS ts FROM player_server_sessions
             WHERE steam_id64 = $1 AND ip = ANY($2)
             UNION ALL
             SELECT ip_address AS ip, created_at AS ts FROM ban_records
@@ -1447,6 +1545,9 @@ async fn fetch_ip_linked_rows(
                 SELECT ip, steam_id64 AS steam_id FROM server_online_players
                 WHERE steam_id64 <> $1 AND ip = ANY($2)
                 UNION
+                SELECT ip, steam_id64 AS steam_id FROM player_server_sessions
+                WHERE steam_id64 <> $1 AND ip = ANY($2)
+                UNION
                 SELECT ip_address AS ip, steam_id AS steam_id FROM ban_records
                 WHERE steam_id <> $1 AND ip_address = ANY($2)
             ) AS ids
@@ -1470,6 +1571,7 @@ async fn fetch_linked_accounts(
     let (
         name_access,
         name_online,
+        name_session,
         name_ban,
         name_wl,
         ban_rows,
@@ -1498,6 +1600,18 @@ async fn fetch_linked_accounts(
                        FROM server_online_players
                        WHERE steam_id64 = ANY($1)
                        ORDER BY steam_id64, reported_at DESC"#,
+            )
+            .bind(linked_ids)
+            .fetch_all(&db.pool)
+            .await
+            .map_err(anyhow::Error::from)
+        },
+        async {
+            sqlx::query_as::<_, LinkedNameRow>(
+                r#"SELECT DISTINCT ON (steam_id64) steam_id64, player_name
+                       FROM player_server_sessions
+                       WHERE steam_id64 = ANY($1)
+                       ORDER BY steam_id64, COALESCE(left_at, last_seen_at) DESC"#,
             )
             .bind(linked_ids)
             .fetch_all(&db.pool)
@@ -1606,6 +1720,10 @@ async fn fetch_linked_accounts(
                             FROM server_online_players sop
                             JOIN servers s ON s.id = sop.server_id
                             WHERE sop.steam_id64 = ANY($1)
+                            UNION
+                            SELECT steam_id64 AS steam_id, server_name
+                            FROM player_server_sessions
+                            WHERE steam_id64 = ANY($1)
                         ) AS servers
                     ) AS ranked
                     WHERE rn <= 20"#,
@@ -1625,6 +1743,9 @@ async fn fetch_linked_accounts(
                         SELECT steam_id64 AS steam_id, reported_at AS ts FROM server_online_players
                         WHERE steam_id64 = ANY($1)
                         UNION ALL
+                        SELECT steam_id64 AS steam_id, COALESCE(left_at, last_seen_at) AS ts FROM player_server_sessions
+                        WHERE steam_id64 = ANY($1)
+                        UNION ALL
                         SELECT steam_id AS steam_id, created_at AS ts FROM ban_records
                         WHERE steam_id = ANY($1)
                     ) AS times
@@ -1642,6 +1763,8 @@ async fn fetch_linked_accounts(
                         SELECT steam_id64 AS steam_id FROM player_access_logs WHERE steam_id64 = ANY($1)
                         UNION ALL
                         SELECT steam_id64 AS steam_id FROM server_online_players WHERE steam_id64 = ANY($1)
+                        UNION ALL
+                        SELECT steam_id64 AS steam_id FROM player_server_sessions WHERE steam_id64 = ANY($1)
                     ) AS c
                     GROUP BY steam_id"#,
                 )
@@ -1652,7 +1775,7 @@ async fn fetch_linked_accounts(
         },
     )?;
 
-    // 合并玩家名（优先级：access_log > online > ban > whitelist，与原逻辑一致）
+    // 合并玩家名（优先级：access_log > online > session > ban > whitelist）
     let mut name_map: HashMap<String, String> = HashMap::new();
     let merge = |map: &mut HashMap<String, String>, rows: Vec<LinkedNameRow>| {
         for row in rows {
@@ -1664,6 +1787,7 @@ async fn fetch_linked_accounts(
     };
     merge(&mut name_map, name_access);
     merge(&mut name_map, name_online);
+    merge(&mut name_map, name_session);
     merge(&mut name_map, name_ban);
     merge(&mut name_map, name_wl);
 
@@ -1982,6 +2106,7 @@ fn build_search_terms(
     appeals: &[PlayerAppealRecord],
     reports: &[PlayerReportRecord],
     online_records: &[OnlineRecord],
+    player_sessions: &[PlayerServerSession],
     access_logs: &[PlayerAccessRecord],
 ) -> Vec<String> {
     let mut seen = HashSet::new();
@@ -2005,6 +2130,9 @@ fn build_search_terms(
     }
     for item in online_records {
         add_search_term(&mut terms, &mut seen, Some(&item.name));
+    }
+    for item in player_sessions {
+        add_search_term(&mut terms, &mut seen, item.player_name.as_deref());
     }
     for item in access_logs {
         add_search_term(&mut terms, &mut seen, item.player_name.as_deref());
@@ -2030,12 +2158,18 @@ fn display_name(
     appeals: &[PlayerAppealRecord],
     reports: &[PlayerReportRecord],
     online_records: &[OnlineRecord],
+    player_sessions: &[PlayerServerSession],
 ) -> Option<String> {
     whitelists
         .iter()
         .find_map(|item| item.steam_persona_name.clone())
         .or_else(|| whitelists.iter().map(|item| item.nickname.clone()).next())
         .or_else(|| online_records.iter().map(|item| item.name.clone()).next())
+        .or_else(|| {
+            player_sessions
+                .iter()
+                .find_map(|item| item.player_name.clone())
+        })
         .or_else(|| bans.iter().find_map(|item| item.player.clone()))
         .or_else(|| {
             reports
@@ -2062,6 +2196,7 @@ fn build_timeline(
     appeals: &[PlayerAppealRecord],
     reports: &[PlayerReportRecord],
     online_records: &[OnlineRecord],
+    player_sessions: &[PlayerServerSession],
     access_logs: &[PlayerAccessRecord],
     admin_actions: &[AdminAction],
     audit_logs: &[PlayerAuditLog],
@@ -2216,6 +2351,46 @@ fn build_timeline(
             source: Some("server_online_players".to_string()),
             related_id: Some(item.server_id),
         });
+    }
+
+    for item in player_sessions {
+        events.push(TimelineEvent {
+            event_type: "server_session_started".to_string(),
+            category: "session".to_string(),
+            title: "进入服务器".to_string(),
+            description: Some(format!(
+                "{}:{} / {}",
+                item.server_name,
+                item.server_port,
+                if item.last_map.is_empty() {
+                    "-"
+                } else {
+                    item.last_map.as_str()
+                }
+            )),
+            occurred_at: item.first_seen_at,
+            actor: None,
+            status: Some(if item.left_at.is_some() {
+                "inactive".to_string()
+            } else {
+                "online".to_string()
+            }),
+            source: Some("player_server_sessions".to_string()),
+            related_id: Some(item.id),
+        });
+        if let Some(left_at) = item.left_at {
+            events.push(TimelineEvent {
+                event_type: "server_session_left".to_string(),
+                category: "session".to_string(),
+                title: "退出服务器".to_string(),
+                description: Some(format!("{}:{}", item.server_name, item.server_port)),
+                occurred_at: left_at,
+                actor: None,
+                status: Some("inactive".to_string()),
+                source: item.end_reason.clone(),
+                related_id: Some(item.id),
+            });
+        }
     }
 
     for item in access_logs {

@@ -208,6 +208,12 @@ test('online reporter access checks guard disconnected clients and send server_p
   assert.match(source, /JSONObject BuildPluginAccessCheckPayload[\s\S]*?payload\.SetInt\("server_port", port\)/);
 });
 
+test('online reporter includes connected seconds in online snapshots', () => {
+  const source = read(onlineSourcePath);
+
+  assert.match(source, /entry\.SetInt\("connected_seconds", RoundToNearest\(GetClientTime\(client\)\)\)/);
+});
+
 test('shared include file exists and contains common functions', () => {
   const shared = read(sharedIncludePath);
 

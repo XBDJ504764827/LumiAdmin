@@ -72,6 +72,46 @@ impl Database {
         sqlx::query(r#"ALTER TABLE server_online_players ADD COLUMN IF NOT EXISTS current_map TEXT NOT NULL DEFAULT ''"#)
         .execute(&self.pool).await?;
 
+        // player_server_sessions 玩家服务器会话历史表
+        sqlx::query(
+            r#"CREATE TABLE IF NOT EXISTS player_server_sessions (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+          server_name TEXT NOT NULL,
+          server_port INTEGER NOT NULL,
+          community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+          community_name TEXT,
+          steam_id64 TEXT NOT NULL,
+          player_name TEXT,
+          ip TEXT NOT NULL,
+          first_seen_at TIMESTAMPTZ NOT NULL,
+          last_seen_at TIMESTAMPTZ NOT NULL,
+          left_at TIMESTAMPTZ,
+          end_reason TEXT,
+          last_ping INTEGER,
+          last_map TEXT NOT NULL DEFAULT '',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )"#,
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            r#"ALTER TABLE player_server_sessions ADD COLUMN IF NOT EXISTS end_reason TEXT"#,
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(r#"ALTER TABLE player_server_sessions ADD COLUMN IF NOT EXISTS last_map TEXT NOT NULL DEFAULT ''"#)
+        .execute(&self.pool).await?;
+        sqlx::query(r#"CREATE UNIQUE INDEX IF NOT EXISTS idx_player_server_sessions_active_unique ON player_server_sessions (server_id, steam_id64) WHERE left_at IS NULL"#)
+        .execute(&self.pool).await?;
+        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_player_server_sessions_steamid64 ON player_server_sessions (steam_id64, (COALESCE(left_at, last_seen_at)) DESC)"#)
+        .execute(&self.pool).await?;
+        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_player_server_sessions_server_id ON player_server_sessions (server_id)"#)
+        .execute(&self.pool).await?;
+        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_player_server_sessions_left_at ON player_server_sessions (left_at)"#)
+        .execute(&self.pool).await?;
+
         Ok(())
     }
 

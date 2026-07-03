@@ -2316,6 +2316,7 @@ JSONObject BuildReportPayload(const char[] reportToken)
         entry.SetString("ip", playerIp);
         entry.SetInt("ping", RoundToNearest(GetClientAvgLatency(client, NetFlow_Both) * 1000.0));
         entry.SetInt("server_port", currentPort);
+        entry.SetInt("connected_seconds", RoundToNearest(GetClientTime(client)));
         players.Push(entry);
         delete entry;
     }

@@ -28,6 +28,9 @@ use uuid::Uuid;
 
 const KZT_GLOBAL_BANS_API_KEY: &str = "kztimer_global_bans";
 const KZT_GLOBAL_BANS_API_NAME: &str = "KZTimer GlobalAPI";
+const KZT_GLOBAL_BAN_PAGE_LIMIT: i64 = 500;
+const DEFAULT_KZT_GLOBAL_BAN_MAX_PAGES: i64 = 1000;
+const GLOBAL_BAN_SYNC_MAX_PAGES_ENV: &str = "GLOBAL_BAN_SYNC_MAX_PAGES";
 
 /// KZTimer API 返回的封禁记录
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -409,31 +412,76 @@ async fn sync_global_bans_locked(db: &Database) -> anyhow::Result<SyncResult> {
 }
 
 async fn fetch_all_active_kzt_bans() -> anyhow::Result<Vec<KZTBan>> {
-    const LIMIT: i64 = 500;
-    const MAX_PAGES: i64 = 100;
+    fetch_all_active_kzt_bans_with(
+        KZT_GLOBAL_BAN_PAGE_LIMIT,
+        configured_kzt_global_ban_max_pages(),
+        |offset, limit| fetch_kzt_bans(offset, limit, Some(false)),
+    )
+    .await
+}
+
+fn configured_kzt_global_ban_max_pages() -> i64 {
+    match std::env::var(GLOBAL_BAN_SYNC_MAX_PAGES_ENV) {
+        Ok(value) => match value.trim().parse::<i64>() {
+            Ok(n) if n > 0 => n,
+            Ok(n) => {
+                tracing::warn!(
+                    key = GLOBAL_BAN_SYNC_MAX_PAGES_ENV,
+                    value = n,
+                    default = DEFAULT_KZT_GLOBAL_BAN_MAX_PAGES,
+                    "全球封禁分页上限必须大于 0，使用默认值"
+                );
+                DEFAULT_KZT_GLOBAL_BAN_MAX_PAGES
+            }
+            Err(_) => {
+                tracing::warn!(
+                    key = GLOBAL_BAN_SYNC_MAX_PAGES_ENV,
+                    value = %value,
+                    default = DEFAULT_KZT_GLOBAL_BAN_MAX_PAGES,
+                    "全球封禁分页上限解析失败，使用默认值"
+                );
+                DEFAULT_KZT_GLOBAL_BAN_MAX_PAGES
+            }
+        },
+        Err(_) => DEFAULT_KZT_GLOBAL_BAN_MAX_PAGES,
+    }
+}
+
+async fn fetch_all_active_kzt_bans_with<F, Fut>(
+    limit: i64,
+    max_pages: i64,
+    mut fetch_page: F,
+) -> anyhow::Result<Vec<KZTBan>>
+where
+    F: FnMut(i64, i64) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<Vec<KZTBan>>>,
+{
+    let limit = limit.max(1);
+    let max_pages = max_pages.max(1);
     let mut all_bans: Vec<KZTBan> = Vec::new();
 
-    for page in 0..MAX_PAGES {
-        let offset = page * LIMIT;
-        let bans = fetch_kzt_bans(offset, LIMIT, Some(false))
-            .await
-            .map_err(|error| {
-                tracing::warn!(
-                    offset,
-                    already_fetched = all_bans.len(),
-                    %error,
-                    "KZTimer 全球封禁分页拉取失败，本轮不同步"
-                );
-                error
-            })?;
+    for page in 0..max_pages {
+        let offset = page * limit;
+        let bans = fetch_page(offset, limit).await.map_err(|error| {
+            tracing::warn!(
+                offset,
+                already_fetched = all_bans.len(),
+                %error,
+                "KZTimer 全球封禁分页拉取失败，本轮不同步"
+            );
+            error
+        })?;
         let len = bans.len();
         all_bans.extend(bans);
-        if len < LIMIT as usize {
+        if len < limit as usize {
             return Ok(all_bans);
         }
     }
 
-    anyhow::bail!("KZTimer 全球封禁分页超过 {MAX_PAGES} 页，本轮同步终止以避免不完整数据")
+    anyhow::bail!(
+        "KZTimer 全球封禁分页超过 {max_pages} 页（已拉取 {} 条），本轮同步终止以避免不完整数据；可通过 {GLOBAL_BAN_SYNC_MAX_PAGES_ENV} 调整上限",
+        all_bans.len()
+    )
 }
 
 async fn apply_authoritative_global_bans(
@@ -1025,6 +1073,56 @@ mod tests {
             created_on: Some(created_on.to_string()),
             updated_on: None,
         }
+    }
+
+    #[tokio::test]
+    async fn active_ban_fetch_can_continue_past_legacy_100_page_limit() {
+        let limit = 2;
+        let active_pages = 101;
+        let result =
+            fetch_all_active_kzt_bans_with(limit, active_pages + 1, |offset, limit| async move {
+                let page = offset / limit;
+                if page >= active_pages {
+                    return Ok(Vec::new());
+                }
+
+                Ok((0..limit)
+                    .map(|index| {
+                        test_kzt_ban(
+                            offset + index + 1,
+                            "76561198000000999",
+                            "2099-06-30T00:00:00Z",
+                            None,
+                        )
+                    })
+                    .collect())
+            })
+            .await
+            .expect("fetch should continue beyond 100 full pages");
+
+        assert_eq!(result.len(), (limit * active_pages) as usize);
+    }
+
+    #[tokio::test]
+    async fn active_ban_fetch_still_errors_when_page_limit_is_exhausted() {
+        let error = fetch_all_active_kzt_bans_with(2, 3, |offset, limit| async move {
+            Ok((0..limit)
+                .map(|index| {
+                    test_kzt_ban(
+                        offset + index + 1,
+                        "76561198000000998",
+                        "2099-06-30T00:00:00Z",
+                        None,
+                    )
+                })
+                .collect())
+        })
+        .await
+        .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("分页超过 3 页"));
+        assert!(message.contains(GLOBAL_BAN_SYNC_MAX_PAGES_ENV));
     }
 
     #[tokio::test]

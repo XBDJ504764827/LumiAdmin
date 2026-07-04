@@ -87,6 +87,8 @@ pub struct DependencyOverview {
 #[derive(Debug, Clone, Serialize)]
 pub struct RuntimeConfigOverview {
     pub request_timeout_secs: u64,
+    pub rcon_connect_timeout_secs: u64,
+    pub rcon_io_timeout_secs: u64,
     pub max_request_body_bytes: usize,
     pub status_history_retention_secs: u64,
     pub access_log_retention_days: i64,
@@ -297,6 +299,8 @@ pub fn overview(db: &Database, config: &Config) -> ObservabilityOverview {
         },
         config: RuntimeConfigOverview {
             request_timeout_secs: config.request_timeout_secs,
+            rcon_connect_timeout_secs: config.rcon_connect_timeout_secs,
+            rcon_io_timeout_secs: config.rcon_io_timeout_secs,
             max_request_body_bytes: config.max_request_body_bytes,
             status_history_retention_secs: config.status_history_retention_secs,
             access_log_retention_days: config.access_log_retention_days,

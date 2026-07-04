@@ -1,9 +1,34 @@
 // 社区 RCON 命令执行服务
 // 从 community_service.rs 拆分出来，负责 RCON 连接测试和命令执行。
 
+use crate::config::Config;
 use crate::db::Database;
 use crate::services::community_service::ServerInput;
 use uuid::Uuid;
+
+#[derive(Clone, Copy)]
+pub struct RconTimeouts {
+    pub connect_secs: u64,
+    pub io_secs: u64,
+}
+
+impl RconTimeouts {
+    pub fn from_config(config: &Config) -> Self {
+        Self {
+            connect_secs: config.rcon_connect_timeout_secs,
+            io_secs: config.rcon_io_timeout_secs,
+        }
+    }
+}
+
+impl Default for RconTimeouts {
+    fn default() -> Self {
+        Self {
+            connect_secs: 10,
+            io_secs: 10,
+        }
+    }
+}
 
 /// RCON 连接测试结果
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -14,11 +39,22 @@ pub struct RconTestResult {
 }
 
 /// 测试服务器 RCON 连接
+#[cfg(test)]
 pub async fn test_server_input(input: ServerInput) -> anyhow::Result<RconTestResult> {
-    test_rcon_connection(&input).await
+    test_rcon_connection(&input, RconTimeouts::default()).await
 }
 
-pub(crate) async fn test_rcon_connection(input: &ServerInput) -> anyhow::Result<RconTestResult> {
+pub async fn test_server_input_with_timeouts(
+    input: ServerInput,
+    timeouts: RconTimeouts,
+) -> anyhow::Result<RconTestResult> {
+    test_rcon_connection(&input, timeouts).await
+}
+
+pub(crate) async fn test_rcon_connection(
+    input: &ServerInput,
+    timeouts: RconTimeouts,
+) -> anyhow::Result<RconTestResult> {
     let name = input.name.trim();
     let ip = input.ip.trim();
     let password = input.rcon_password.trim();
@@ -29,10 +65,17 @@ pub(crate) async fn test_rcon_connection(input: &ServerInput) -> anyhow::Result<
 
     let address = format!("{}:{}", ip, input.port);
 
-    match crate::rcon::RconConnection::connect(&address, password, 3).await {
+    match crate::rcon::RconConnection::connect_with_timeouts(
+        &address,
+        password,
+        timeouts.connect_secs,
+        timeouts.io_secs,
+    )
+    .await
+    {
         Ok(mut conn) => {
             let players = conn
-                .execute("listplayers")
+                .execute_with_timeout("listplayers", timeouts.io_secs)
                 .await
                 .map(|response| parse_players_from_response(&response))
                 .unwrap_or_default();
@@ -109,6 +152,7 @@ pub async fn execute_rcon_command(
     db: &Database,
     server_id: Uuid,
     command: &str,
+    timeouts: RconTimeouts,
 ) -> anyhow::Result<String> {
     validate_rcon_command(command)?;
 
@@ -127,12 +171,17 @@ pub async fn execute_rcon_command(
             .ok_or_else(|| anyhow::anyhow!("服务器不存在"))?;
 
     let address = format!("{}:{}", server.ip, server.port);
-    let mut conn = crate::rcon::RconConnection::connect(&address, &server.rcon_password, 3)
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let mut conn = crate::rcon::RconConnection::connect_with_timeouts(
+        &address,
+        &server.rcon_password,
+        timeouts.connect_secs,
+        timeouts.io_secs,
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     let response = conn
-        .execute(command)
+        .execute_with_timeout(command, timeouts.io_secs)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 

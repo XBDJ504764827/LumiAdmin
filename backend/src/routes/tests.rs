@@ -514,6 +514,63 @@ async fn admin_can_delete_community_group_and_cascade_servers() {
 }
 
 #[tokio::test]
+async fn admin_can_delete_server_with_existing_logs() {
+    with_test_app(async |db, config| {
+        let (_, server_id) = insert_community_with_server(&db, "可删除有关联日志的服务器").await;
+        sqlx::query(
+            r#"
+            INSERT INTO audit_logs (operation, target, target_type, operator_name, source, server_id)
+            VALUES ('ban', '76561198000000000', 'steam', 'Admin', 'plugin', $1)
+            "#,
+        )
+        .bind(server_id)
+        .execute(&db.pool)
+        .await?;
+        sqlx::query(
+            r#"
+            INSERT INTO offline_operations (
+                operation, target, target_type, operator_name, server_id, server_port, created_at, idempotency_key
+            )
+            VALUES ('ban', '76561198000000000', 'steam', 'Admin', $1, 25575, now(), $2)
+            "#,
+        )
+        .bind(server_id)
+        .bind(Uuid::new_v4().to_string())
+        .execute(&db.pool)
+        .await?;
+
+        let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
+        let app = test_app(config, db.clone());
+
+        let request = Request::builder()
+            .method("DELETE")
+            .uri(format!("/api/community/servers/{server_id}"))
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        let audit_log_server_id: (Option<Uuid>,) =
+            sqlx::query_as(r#"SELECT server_id FROM audit_logs WHERE target = $1"#)
+                .bind("76561198000000000")
+                .fetch_one(&db.pool)
+                .await?;
+        let offline_operation_count: (i64,) =
+            sqlx::query_as(r#"SELECT COUNT(*) FROM offline_operations WHERE server_id = $1"#)
+                .bind(server_id)
+                .fetch_one(&db.pool)
+                .await?;
+
+        assert_eq!(audit_log_server_id.0, None);
+        assert_eq!(offline_operation_count.0, 0);
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn admin_can_view_and_reset_server_report_token() {
     with_test_app(async |db, config| {
         let (_, server_id) = insert_community_with_server(&db, "Token 管理").await;

@@ -22,6 +22,9 @@ pub struct Config {
     pub http_connect_timeout_secs: u64,
     // 请求超时
     pub request_timeout_secs: u64,
+    // RCON 连接/读写超时
+    pub rcon_connect_timeout_secs: u64,
+    pub rcon_io_timeout_secs: u64,
     // CORS 允许的来源
     pub cors_origin: Option<String>,
     // MySQL 数据库（地图等级同步）
@@ -139,6 +142,9 @@ impl Config {
             http_connect_timeout_secs: env_u64("HTTP_CONNECT_TIMEOUT_SECS", 5),
             // 请求超时
             request_timeout_secs: env_u64("REQUEST_TIMEOUT_SECS", 300),
+            // RCON 连接/读写超时
+            rcon_connect_timeout_secs: env_u64("RCON_CONNECT_TIMEOUT_SECS", 10),
+            rcon_io_timeout_secs: env_u64("RCON_IO_TIMEOUT_SECS", 10),
             // CORS 允许的来源
             cors_origin: std::env::var("CORS_ORIGIN").ok().filter(|v| !v.is_empty()),
             mysql_database_url: std::env::var("MYSQL_DATABASE_URL")
@@ -217,6 +223,16 @@ impl Config {
             config.request_timeout_secs = 300;
         }
 
+        if config.rcon_connect_timeout_secs == 0 {
+            tracing::warn!("RCON_CONNECT_TIMEOUT_SECS 为 0，已自动修正为 10");
+            config.rcon_connect_timeout_secs = 10;
+        }
+
+        if config.rcon_io_timeout_secs == 0 {
+            tracing::warn!("RCON_IO_TIMEOUT_SECS 为 0，已自动修正为 10");
+            config.rcon_io_timeout_secs = 10;
+        }
+
         if config.http_timeout_secs == 0 {
             tracing::warn!("HTTP_TIMEOUT_SECS 为 0，已自动修正为 300");
             config.http_timeout_secs = 300;
@@ -271,6 +287,8 @@ impl Config {
             db_min_connections = config.db_min_connections,
             session_ttl_hours = config.session_ttl_hours,
             request_timeout_secs = config.request_timeout_secs,
+            rcon_connect_timeout_secs = config.rcon_connect_timeout_secs,
+            rcon_io_timeout_secs = config.rcon_io_timeout_secs,
             app_env = %config.app_env,
             is_production = config.is_production,
             r2_enabled = config.r2_storage_enabled(),

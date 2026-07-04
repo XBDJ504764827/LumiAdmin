@@ -15,25 +15,52 @@ pub struct RconConnection {
 
 impl RconConnection {
     pub async fn connect(address: &str, password: &str, timeout_secs: u64) -> Result<Self, String> {
+        Self::connect_with_timeouts(address, password, timeout_secs, timeout_secs).await
+    }
+
+    pub async fn connect_with_timeouts(
+        address: &str,
+        password: &str,
+        connect_timeout_secs: u64,
+        io_timeout_secs: u64,
+    ) -> Result<Self, String> {
         let connect_result = timeout(
-            Duration::from_secs(timeout_secs),
+            Duration::from_secs(connect_timeout_secs),
             TcpStream::connect(address),
         )
         .await;
         let mut stream = match connect_result {
             Ok(Ok(stream)) => stream,
             Ok(Err(error)) => return Err(format!("无法连接到服务器 {}: {}", address, error)),
-            Err(_) => return Err(format!("连接服务器 {} 超时", address)),
+            Err(_) => {
+                return Err(format!(
+                    "连接服务器 {} 超时（TCP 连接在 {} 秒内未建立，请检查运行后端的机器到该地址的出站网络、防火墙/安全组，以及游戏服是否开放 TCP RCON 端口）",
+                    address, connect_timeout_secs
+                ))
+            }
         };
 
-        send_rcon_packet(&mut stream, AUTH_REQUEST_ID, AUTH_PACKET_TYPE, password)
-            .await
-            .map_err(|error| format!("发送 RCON 认证请求失败: {}", error))?;
+        timeout(
+            Duration::from_secs(io_timeout_secs),
+            send_rcon_packet(&mut stream, AUTH_REQUEST_ID, AUTH_PACKET_TYPE, password),
+        )
+        .await
+        .map_err(|_| format!("发送 RCON 认证请求超时（{} 秒）", io_timeout_secs))?
+        .map_err(|error| format!("发送 RCON 认证请求失败: {}", error))?;
 
         loop {
-            let (request_id, packet_type, _) = read_rcon_packet(&mut stream)
-                .await
-                .map_err(|error| format!("读取 RCON 认证响应失败: {}", error))?;
+            let (request_id, packet_type, _) = timeout(
+                Duration::from_secs(io_timeout_secs),
+                read_rcon_packet(&mut stream),
+            )
+            .await
+            .map_err(|_| {
+                format!(
+                    "读取 RCON 认证响应超时（TCP 已连接，但服务器 {} 秒内没有返回认证响应）",
+                    io_timeout_secs
+                )
+            })?
+            .map_err(|error| format!("读取 RCON 认证响应失败: {}", error))?;
 
             if packet_type != AUTH_RESPONSE_PACKET_TYPE {
                 continue;
@@ -49,18 +76,34 @@ impl RconConnection {
     }
 
     pub async fn execute(&mut self, command: &str) -> Result<String, String> {
-        send_rcon_packet(
-            &mut self.stream,
-            AUTH_REQUEST_ID,
-            EXEC_COMMAND_PACKET_TYPE,
-            command,
+        self.execute_with_timeout(command, 10).await
+    }
+
+    pub async fn execute_with_timeout(
+        &mut self,
+        command: &str,
+        io_timeout_secs: u64,
+    ) -> Result<String, String> {
+        timeout(
+            Duration::from_secs(io_timeout_secs),
+            send_rcon_packet(
+                &mut self.stream,
+                AUTH_REQUEST_ID,
+                EXEC_COMMAND_PACKET_TYPE,
+                command,
+            ),
         )
         .await
+        .map_err(|_| format!("发送 RCON 命令超时（{} 秒）", io_timeout_secs))?
         .map_err(|error| format!("发送 RCON 命令失败: {}", error))?;
 
-        let (request_id, packet_type, body) = read_rcon_packet(&mut self.stream)
-            .await
-            .map_err(|error| format!("读取 RCON 命令响应失败: {}", error))?;
+        let (request_id, packet_type, body) = timeout(
+            Duration::from_secs(io_timeout_secs),
+            read_rcon_packet(&mut self.stream),
+        )
+        .await
+        .map_err(|_| format!("读取 RCON 命令响应超时（{} 秒）", io_timeout_secs))?
+        .map_err(|error| format!("读取 RCON 命令响应失败: {}", error))?;
 
         if request_id != AUTH_REQUEST_ID || packet_type != RESPONSE_VALUE_PACKET_TYPE {
             return Err("服务器返回了无效的 RCON 命令响应".to_string());
@@ -215,6 +258,7 @@ fn extract_quoted_name(line: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::net::TcpListener;
 
     #[test]
     fn parse_csgo_kz_status() {
@@ -255,5 +299,24 @@ players: 5/24
         assert_eq!(result.player_count, 5);
         assert_eq!(result.max_players, 24);
         assert_eq!(result.players, vec!["Alice", "Bob"]);
+    }
+
+    #[tokio::test]
+    async fn connect_times_out_when_auth_response_never_arrives() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        });
+
+        let result =
+            RconConnection::connect_with_timeouts(&address.to_string(), "secret", 1, 1).await;
+
+        server.abort();
+        match result {
+            Ok(_) => panic!("expected auth response timeout"),
+            Err(error) => assert!(error.contains("认证响应超时")),
+        }
     }
 }

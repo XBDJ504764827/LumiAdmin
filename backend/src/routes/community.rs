@@ -73,7 +73,8 @@ pub(crate) async fn create_community_server(
     if !permission_service::can_manage_community_mutation(&actor) {
         return Err(forbidden());
     }
-    let server = community_service::create_server(&ctx.db, group_id, body)
+    let rcon_timeouts = community_rcon::RconTimeouts::from_config(&ctx.config);
+    let server = community_service::create_server(&ctx.db, group_id, body, rcon_timeouts)
         .await
         .map_err(invalid_request)?;
     // 新服务器创建后刷新缓存
@@ -178,9 +179,12 @@ pub(crate) async fn test_server_rcon(
     if !permission_service::can_manage_community_mutation(&actor) {
         return Err(forbidden());
     }
-    let result = community_rcon::test_server_input(body)
-        .await
-        .map_err(invalid_request)?;
+    let result = community_rcon::test_server_input_with_timeouts(
+        body,
+        community_rcon::RconTimeouts::from_config(&ctx.config),
+    )
+    .await
+    .map_err(invalid_request)?;
     Ok(Json(serde_json::json!({"result": result})))
 }
 
@@ -194,7 +198,8 @@ pub(crate) async fn update_community_server(
     if !permission_service::can_manage_community_mutation(&actor) {
         return Err(forbidden());
     }
-    let server = community_service::update_server(&ctx.db, server_id, body)
+    let rcon_timeouts = community_rcon::RconTimeouts::from_config(&ctx.config);
+    let server = community_service::update_server(&ctx.db, server_id, body, rcon_timeouts)
         .await
         .map_err(invalid_request)?;
     // 服务器配置更新后失效缓存
@@ -331,9 +336,14 @@ pub(crate) async fn execute_rcon(
         return Err(forbidden());
     }
 
-    let response = community_rcon::execute_rcon_command(&ctx.db, server_id, &body.command)
-        .await
-        .map_err(invalid_request)?;
+    let response = community_rcon::execute_rcon_command(
+        &ctx.db,
+        server_id,
+        &body.command,
+        community_rcon::RconTimeouts::from_config(&ctx.config),
+    )
+    .await
+    .map_err(invalid_request)?;
     if let Err(e) = log_service::create_log(
         &ctx.db,
         &actor.display_name,

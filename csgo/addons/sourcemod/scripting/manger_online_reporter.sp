@@ -13,6 +13,7 @@ native int EdgeSync_GetPendingCount();
 #define DEFAULT_ACCESS_SNAPSHOT_INTERVAL "300.0"
 #define DEFAULT_STATUS_REPORT_INTERVAL "30.0"
 #define DEFAULT_DEBUG_LOG "0"
+#define DEFAULT_ACCESS_FAIL_OPEN "1"
 #define ACCESS_SNAPSHOT_DB "manger_access_snapshot"
 #define MAX_SERVER_TOKEN 256
 
@@ -21,6 +22,7 @@ ConVar g_ReportInterval;
 ConVar g_AccessSnapshotInterval;
 ConVar g_StatusReportInterval;
 ConVar g_DebugLog;
+ConVar g_AccessFailOpen;
 ConVar g_CpuUsageCvar;
 ConVar g_HostPortCvar = null;
 ConVar g_TickrateCvar = null;
@@ -69,6 +71,7 @@ public void OnPluginStart()
     g_AccessSnapshotInterval = CreateConVar("manger_access_snapshot_interval", DEFAULT_ACCESS_SNAPSHOT_INTERVAL, "Access snapshot refresh interval in seconds.", _, true, 30.0);
     g_StatusReportInterval = CreateConVar("manger_status_report_interval", DEFAULT_STATUS_REPORT_INTERVAL, "Server status report interval in seconds.", _, true, 10.0);
     g_DebugLog = CreateConVar("manger_debug_log", DEFAULT_DEBUG_LOG, "Enable verbose Manger plugin debug logs.", _, true, 0.0, true, 1.0);
+    g_AccessFailOpen = CreateConVar("manger_access_fail_open", DEFAULT_ACCESS_FAIL_OPEN, "Allow players when the Manger access API and local access snapshot are unavailable.", _, true, 0.0, true, 1.0);
 
     // sys_cpu_usage: SourceMod 内置的 CPU 使用率 ConVar（需要 csgo/csgo_8225 或更高游戏版本）
     g_CpuUsageCvar = FindConVar("sys_cpu_usage");
@@ -2119,6 +2122,11 @@ void OfflineAccessCheck(any userId)
 
     if (g_AccessSnapshotDb == null || !IsAccessSnapshotUsable())
     {
+        if (ShouldFailOpenAccessCheck())
+        {
+            DebugLog("Access check fallback allowed userId %d because local snapshot is unavailable.", userId);
+            return;
+        }
         KickClient(client, "访问控制服务暂时不可用，请稍后再试。");
         return;
     }
@@ -2137,9 +2145,19 @@ void OfflineAccessCheck(any userId)
 
     if (!OfflineRulesAllowClient(steamId))
     {
+        if (ShouldFailOpenAccessCheck())
+        {
+            DebugLog("Access check fallback allowed userId %d because offline whitelist/access rules could not confirm eligibility.", userId);
+            return;
+        }
         KickClient(client, "你的白名单状态无法确认，请稍后再试。");
         return;
     }
+}
+
+bool ShouldFailOpenAccessCheck()
+{
+    return g_AccessFailOpen == null || g_AccessFailOpen.BoolValue;
 }
 
 bool IsAccessSnapshotUsable()

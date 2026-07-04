@@ -17,6 +17,7 @@ impl Database {
             END IF;
         END $$;"#,
     ).execute(&self.pool).await?;
+        self.migrate_server_foreign_key_delete_actions().await?;
 
         // communities.created_by 外键约束
         sqlx::query(
@@ -79,6 +80,108 @@ impl Database {
 
         #[cfg(not(test))]
         self.migrate_query_performance_indexes().await?;
+
+        Ok(())
+    }
+
+    async fn migrate_server_foreign_key_delete_actions(&self) -> anyhow::Result<()> {
+        let server_fks = [
+            ("ban_records", "fk_ban_records_server_id", "SET NULL", "n"),
+            ("audit_logs", "fk_audit_logs_server_id", "SET NULL", "n"),
+            (
+                "server_status_history",
+                "fk_server_status_history_server_id",
+                "CASCADE",
+                "c",
+            ),
+            (
+                "offline_operations",
+                "fk_offline_operations_server_id",
+                "CASCADE",
+                "c",
+            ),
+            (
+                "server_online_players",
+                "fk_server_online_players_server_id",
+                "CASCADE",
+                "c",
+            ),
+            (
+                "player_server_sessions",
+                "fk_player_server_sessions_server_id",
+                "CASCADE",
+                "c",
+            ),
+            (
+                "player_access_logs",
+                "fk_player_access_logs_server_id",
+                "CASCADE",
+                "c",
+            ),
+        ];
+
+        for (table, constraint_name, delete_action, pg_delete_action) in server_fks {
+            let sql = format!(
+                r#"
+                DO $$
+                DECLARE
+                    existing_constraint TEXT;
+                BEGIN
+                    IF to_regclass('{table}') IS NULL THEN
+                        RETURN;
+                    END IF;
+
+                    FOR existing_constraint IN
+                        SELECT con.conname
+                        FROM pg_constraint con
+                        JOIN pg_attribute att
+                          ON att.attrelid = con.conrelid
+                         AND att.attnum = ANY(con.conkey)
+                        WHERE con.contype = 'f'
+                          AND con.conrelid = '{table}'::regclass
+                          AND con.confrelid = 'servers'::regclass
+                          AND att.attname = 'server_id'
+                          AND con.confdeltype <> '{pg_delete_action}'
+                    LOOP
+                        EXECUTE format('ALTER TABLE {table} DROP CONSTRAINT %I', existing_constraint);
+                    END LOOP;
+
+                    IF '{pg_delete_action}' = 'n' THEN
+                        UPDATE {table} child
+                        SET server_id = NULL
+                        WHERE server_id IS NOT NULL
+                          AND NOT EXISTS (
+                              SELECT 1 FROM servers parent WHERE parent.id = child.server_id
+                          );
+                    ELSE
+                        DELETE FROM {table} child
+                        WHERE server_id IS NOT NULL
+                          AND NOT EXISTS (
+                              SELECT 1 FROM servers parent WHERE parent.id = child.server_id
+                          );
+                    END IF;
+
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM pg_constraint con
+                        JOIN pg_attribute att
+                          ON att.attrelid = con.conrelid
+                         AND att.attnum = ANY(con.conkey)
+                        WHERE con.contype = 'f'
+                          AND con.conrelid = '{table}'::regclass
+                          AND con.confrelid = 'servers'::regclass
+                          AND att.attname = 'server_id'
+                          AND con.confdeltype = '{pg_delete_action}'
+                    ) THEN
+                        ALTER TABLE {table}
+                        ADD CONSTRAINT {constraint_name}
+                        FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE {delete_action};
+                    END IF;
+                END $$;
+                "#
+            );
+            sqlx::query(&sql).execute(&self.pool).await?;
+        }
 
         Ok(())
     }

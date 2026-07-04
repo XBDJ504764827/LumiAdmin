@@ -297,8 +297,10 @@ pub async fn create_server(
     db: &Database,
     community_id: Uuid,
     input: ServerInput,
+    rcon_timeouts: crate::services::community_rcon::RconTimeouts,
 ) -> anyhow::Result<ServerItem> {
-    let tested = crate::services::community_rcon::test_rcon_connection(&input).await?;
+    let tested =
+        crate::services::community_rcon::test_rcon_connection(&input, rcon_timeouts).await?;
     anyhow::ensure!(tested.ok, "RCON 测试未通过，无法保存服务器");
 
     let id = Uuid::new_v4();
@@ -369,6 +371,7 @@ pub async fn update_server(
     db: &Database,
     server_id: Uuid,
     input: ServerInput,
+    rcon_timeouts: crate::services::community_rcon::RconTimeouts,
 ) -> anyhow::Result<ServerItem> {
     let name = input.name.trim();
     let ip = input.ip.trim();
@@ -384,7 +387,8 @@ pub async fn update_server(
 
     let changing_password = !password.is_empty();
     let players_for_status = if changing_password {
-        let tested = crate::services::community_rcon::test_rcon_connection(&input).await?;
+        let tested =
+            crate::services::community_rcon::test_rcon_connection(&input, rcon_timeouts).await?;
         anyhow::ensure!(tested.ok, "RCON 测试未通过，无法保存服务器");
         tested.players
     } else {
@@ -484,10 +488,11 @@ pub async fn delete_group(db: &Database, group_id: Uuid) -> anyhow::Result<()> {
 }
 
 pub async fn delete_server(db: &Database, server_id: Uuid) -> anyhow::Result<()> {
-    sqlx::query(r#"DELETE FROM servers WHERE id = $1"#)
+    let result = sqlx::query(r#"DELETE FROM servers WHERE id = $1"#)
         .bind(server_id)
         .execute(&db.pool)
         .await?;
+    anyhow::ensure!(result.rows_affected() == 1, "服务器不存在");
     Ok(())
 }
 

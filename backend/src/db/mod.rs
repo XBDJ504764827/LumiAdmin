@@ -79,13 +79,15 @@ impl Database {
         self.migrate_player_reports_schema().await?;
         self.migrate_map_feedback_schema().await?;
         self.migrate_player_internal_notes_schema().await?;
-        self.migrate_adds_missing_constraints_and_indexes().await?;
         self.migrate_player_access_cache_extended().await?;
+        self.migrate_adds_missing_constraints_and_indexes().await?;
         Ok(())
     }
 
     async fn run_sqlx_migrations(&self) -> anyhow::Result<()> {
-        sqlx::migrate!("./migrations")
+        let mut migrator = sqlx::migrate!("./migrations");
+        migrator.set_ignore_missing(true);
+        migrator
             .run(&self.pool)
             .await
             .map_err(|e| anyhow::anyhow!("sqlx migrations failed: {e}"))?;

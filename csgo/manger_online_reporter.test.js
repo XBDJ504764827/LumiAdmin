@@ -33,10 +33,12 @@ test('online reporter parses all cfg-backed intervals and debug flag', () => {
 
   assert.match(source, /CreateConVar\("manger_status_report_interval"/);
   assert.match(source, /CreateConVar\("manger_debug_log"/);
+  assert.match(source, /CreateConVar\("manger_access_fail_open"/);
   // ParseConfigValueLine is now in shared include
   assert.match(source, /#include <manger_shared>/);
   assert.match(config, /manger_status_report_interval\s+"30\.0"/);
   assert.match(config, /manger_debug_log\s+"0"/);
+  assert.match(config, /manger_access_fail_open\s+"1"/);
   assert.match(config, /\/\/\s*manger_server\s+"10001"\s+"replace-with-report-token"/);
   assert.doesNotMatch(config, /^\s*manger_server\s+"[^"]+"\s+""/m);
 });
@@ -314,6 +316,15 @@ test('plugin HTTP requests use explicit timeouts', () => {
 
   assert.ok(requestCount > 0);
   assert.equal(timeoutCount, requestCount);
+});
+
+test('online reporter fail-opens uncertain access checks but still keeps offline ban checks', () => {
+  const source = read(onlineSourcePath);
+
+  assert.match(source, /bool ShouldFailOpenAccessCheck\(\)/);
+  assert.match(source, /g_AccessFailOpen == null \|\| g_AccessFailOpen\.BoolValue/);
+  assert.match(source, /if \(g_AccessSnapshotDb == null \|\| !IsAccessSnapshotUsable\(\)\)[\s\S]*?if \(ShouldFailOpenAccessCheck\(\)\)[\s\S]*?return;[\s\S]*?KickClient\(client, "访问控制服务暂时不可用，请稍后再试。"\)/);
+  assert.match(source, /if \(FindOfflineBan\(steamId, ipAddress, reason, sizeof\(reason\)\)\)[\s\S]*?KickClient\(client, "你已被封禁：%s", reason\);[\s\S]*?if \(!OfflineRulesAllowClient\(steamId\)\)[\s\S]*?if \(ShouldFailOpenAccessCheck\(\)\)[\s\S]*?return;[\s\S]*?KickClient\(client, "你的白名单状态无法确认，请稍后再试。"\)/);
 });
 
 test('edge sync failed operations do not increment retry count', () => {

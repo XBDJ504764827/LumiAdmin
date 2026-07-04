@@ -626,6 +626,12 @@ pub(crate) fn translate_db_error(error: &anyhow::Error) -> String {
                     }
                     return "该记录已存在，无法重复创建".to_string();
                 }
+                if message.contains("foreign key")
+                    && (message.contains("update or delete")
+                        || message.contains("still referenced"))
+                {
+                    return "该记录仍有关联数据，无法删除".to_string();
+                }
                 if message.contains("foreign key") {
                     return "关联数据不存在".to_string();
                 }

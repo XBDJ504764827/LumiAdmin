@@ -228,6 +228,8 @@ export function OpsOverviewPage() {
                 </div>
                 <div className="card-body">
                   <div className="ops-kv"><span>请求超时</span><strong>{config.request_timeout_secs}s</strong></div>
+                  <div className="ops-kv"><span>RCON 连接超时</span><strong>{config.rcon_connect_timeout_secs}s</strong></div>
+                  <div className="ops-kv"><span>RCON 读写超时</span><strong>{config.rcon_io_timeout_secs}s</strong></div>
                   <div className="ops-kv"><span>请求体上限</span><strong>{formatBytes(config.max_request_body_bytes)}</strong></div>
                   <div className="ops-kv"><span>性能历史保留</span><strong>{formatDuration(config.status_history_retention_secs)}</strong></div>
                   <div className="ops-kv"><span>进服记录保留</span><strong>{config.access_log_retention_days} 天</strong></div>

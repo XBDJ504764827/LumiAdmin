@@ -11,13 +11,14 @@
 #include <adt_array>
 #include <ripext>
 #include <manger_shared>
+#include <cngokz/core>
 
 native int MangerReporter_GetApiBaseUrl(char[] apiBaseUrl, int maxLen);
 native int MangerReporter_GetReportToken(char[] token, int maxLen);
 native int MangerReporter_GetServerPort();
 
 #define DEFAULT_API_BASE_URL "http://127.0.0.1:8080/api/plugin"
-#define EDGE_SYNC_DB "manger_edge_sync"
+#define EDGE_SYNC_DB "cngokz_sync"
 #define MAX_IDEMPOTENCY_KEY 64
 #define MAX_SERVER_TOKEN 256
 #define MAX_RETRY_COUNT 10
@@ -48,25 +49,25 @@ void SafeIntToString(int value, char[] buffer, int maxLen)
 
 public Plugin myinfo =
 {
-    name = "Manger Edge Sync Agent",
+    name = "CNGOKZ Sync",
     author = "XBDJ",
-    description = "Offline operation queue and sync engine for Manger",
-    version = "1.0.1",
+    description = "Offline operation queue and sync engine for LumiAdmin.",
+    version = "1.1.0",
     url = ""
 };
 
 public void OnPluginStart()
 {
-    g_ApiBaseUrl = FindConVar("manger_api_base_url");
+    g_ApiBaseUrl = FindConVar("cngokz_api_base_url");
     if (g_ApiBaseUrl == null)
     {
-        g_ApiBaseUrl = CreateConVar("manger_api_base_url", DEFAULT_API_BASE_URL, "Manger plugin API base URL.");
+        g_ApiBaseUrl = CreateConVar("cngokz_api_base_url", DEFAULT_API_BASE_URL, "CNGOKZ LumiAdmin plugin API base URL.");
     }
-    g_SyncInterval = CreateConVar("manger_edge_sync_interval", "30.0", "Offline queue sync interval in seconds.", _, true, 10.0);
+    g_SyncInterval = CreateConVar("cngokz_sync_interval", "30.0", "Offline queue sync interval in seconds.", _, true, 10.0);
     g_HostPortCvar = FindConVar("hostport");
     HookConVarChange(g_SyncInterval, OnSyncIntervalChanged);
 
-    RegServerCmd("manger_edge_set_token", CommandSetToken, "Set server report token for Edge Sync");
+    RegServerCmd("cngokz_sync_set_token", CommandSetToken, "Set server report token for CNGOKZ Sync fallback mode.");
     RegAdminCmd("sm_sync_status", CommandSyncStatus, ADMFLAG_RCON, "Show offline sync status");
     RegAdminCmd("sm_force_sync", CommandForceSync, ADMFLAG_RCON, "Force sync offline queue");
 
@@ -139,7 +140,7 @@ void LoadEdgeSyncConfig()
     GetCurrentServerPort(currentPort);
 
     char path[PLATFORM_MAX_PATH];
-    BuildPath(Path_SM, path, sizeof(path), "../../cfg/sourcemod/manger_online_reporter.cfg");
+    BuildPath(Path_SM, path, sizeof(path), "../../cfg/sourcemod/cngokz-lumiadmin/cngokz-core.cfg");
 
     File file = OpenFile(path, "r");
     if (file == null)
@@ -157,7 +158,7 @@ void LoadEdgeSyncConfig()
         }
 
         char value[256];
-        if (ParseConfigValueLine(line, "manger_api_base_url", value, sizeof(value)))
+        if (ParseConfigValueLine(line, "cngokz_api_base_url", value, sizeof(value)))
         {
             g_ApiBaseUrl.SetString(value);
             continue;
@@ -165,7 +166,7 @@ void LoadEdgeSyncConfig()
 
         int port = 0;
         char token[MAX_SERVER_TOKEN];
-        if (ParseServerMappingLine(line, port, token, sizeof(token)) && port == currentPort)
+        if (ParseCNGOKZServerMappingLine(line, port, token, sizeof(token)) && port == currentPort)
         {
             g_ServerPort = port;
             strcopy(g_ServerReportToken, sizeof(g_ServerReportToken), token);
@@ -175,27 +176,27 @@ void LoadEdgeSyncConfig()
     delete file;
 }
 
-bool LoadEdgeSyncConfigFromReporter()
+bool LoadEdgeSyncConfigFromCore()
 {
-    if (!LibraryExists("manger_online_reporter"))
+    if (!LibraryExists("cngokz-core"))
     {
         return false;
     }
 
-    int port = MangerReporter_GetServerPort();
+    int port = CNGOKZCore_GetServerPort();
     if (port <= 0)
     {
         return false;
     }
 
     char apiBaseUrl[512];
-    if (!MangerReporter_GetApiBaseUrl(apiBaseUrl, sizeof(apiBaseUrl)))
+    if (!CNGOKZCore_GetApiBaseUrl(apiBaseUrl, sizeof(apiBaseUrl)))
     {
         return false;
     }
 
     char token[MAX_SERVER_TOKEN];
-    if (!MangerReporter_GetReportToken(token, sizeof(token)))
+    if (!CNGOKZCore_GetReportToken(token, sizeof(token)))
     {
         return false;
     }
@@ -215,7 +216,7 @@ bool LoadEdgeSyncConfigFromReporter()
 
 void ResolveEdgeSyncConfig()
 {
-    if (LoadEdgeSyncConfigFromReporter())
+    if (LoadEdgeSyncConfigFromCore())
     {
         return;
     }
@@ -716,8 +717,12 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
     MarkNativeAsOptional("MangerReporter_GetApiBaseUrl");
     MarkNativeAsOptional("MangerReporter_GetReportToken");
     MarkNativeAsOptional("MangerReporter_GetServerPort");
+    MarkNativeAsOptional("CNGOKZCore_GetApiBaseUrl");
+    MarkNativeAsOptional("CNGOKZCore_GetReportToken");
+    MarkNativeAsOptional("CNGOKZCore_GetServerPort");
     CreateNative("EdgeSync_EnqueueOperation", Native_EnqueueOperation);
     CreateNative("EdgeSync_IsOnline", Native_IsOnline);
     CreateNative("EdgeSync_GetPendingCount", Native_GetPendingCount);
+    RegPluginLibrary("cngokz-sync");
     return APLRes_Success;
 }

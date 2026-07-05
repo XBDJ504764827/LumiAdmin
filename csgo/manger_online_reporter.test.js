@@ -4,12 +4,13 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '../');
-const onlineSourcePath = resolve(root, 'csgo/addons/sourcemod/scripting/manger_online_reporter.sp');
-const edgeSourcePath = resolve(root, 'csgo/addons/sourcemod/scripting/manger_edge_sync.sp');
+const onlineSourcePath = resolve(root, 'csgo/addons/sourcemod/scripting/cngokz-server.sp');
+const edgeSourcePath = resolve(root, 'csgo/addons/sourcemod/scripting/cngokz-sync.sp');
 const sharedIncludePath = resolve(root, 'csgo/addons/sourcemod/scripting/include/manger_shared.inc');
-const onlinePluginPath = resolve(root, 'csgo/addons/sourcemod/plugins/manger_online_reporter.smx');
-const edgePluginPath = resolve(root, 'csgo/addons/sourcemod/plugins/manger_edge_sync.smx');
-const configPath = resolve(root, 'csgo/cfg/sourcemod/manger_online_reporter.cfg');
+const onlinePluginPath = resolve(root, 'csgo/addons/sourcemod/plugins/cngokz-server.smx');
+const edgePluginPath = resolve(root, 'csgo/addons/sourcemod/plugins/cngokz-sync.smx');
+const configPath = resolve(root, 'csgo/cfg/sourcemod/cngokz-lumiadmin/cngokz-server.cfg');
+const coreConfigPath = resolve(root, 'csgo/cfg/sourcemod/cngokz-lumiadmin/cngokz-core.cfg');
 const buildScriptPath = resolve(root, 'csgo/build_plugins.sh');
 const deployWorkflowPath = resolve(root, '.github/workflows/deploy.yml');
 
@@ -20,7 +21,7 @@ function read(path) {
 test('online reporter uses row-based port token mappings from cfg', () => {
   const source = read(onlineSourcePath);
 
-  assert.match(source, /RegServerCmd\("manger_server",\s*CommandServerMapping/);
+  assert.match(source, /RegServerCmd\("cngokz_server_local",\s*CommandServerMapping/);
   assert.match(source, /IntToString\(currentPort, portKey, sizeof\(portKey\)\)/);
   assert.match(source, /g_ServerTokenMap\.GetString\(portKey, token, maxLen\)/);
   assert.doesNotMatch(source, /CreateConVar\("manger_report_identity"/);
@@ -30,17 +31,18 @@ test('online reporter uses row-based port token mappings from cfg', () => {
 test('online reporter parses all cfg-backed intervals and debug flag', () => {
   const source = read(onlineSourcePath);
   const config = read(configPath);
+  const coreConfig = read(coreConfigPath);
 
-  assert.match(source, /CreateConVar\("manger_status_report_interval"/);
-  assert.match(source, /CreateConVar\("manger_debug_log"/);
-  assert.match(source, /CreateConVar\("manger_access_fail_open"/);
+  assert.match(source, /CreateConVar\("cngokz_status_report_interval"/);
+  assert.match(source, /CreateConVar\("cngokz_server_debug"/);
+  assert.match(source, /CreateConVar\("cngokz_access_fail_open"/);
   // ParseConfigValueLine is now in shared include
   assert.match(source, /#include <manger_shared>/);
-  assert.match(config, /manger_status_report_interval\s+"30\.0"/);
-  assert.match(config, /manger_debug_log\s+"0"/);
-  assert.match(config, /manger_access_fail_open\s+"1"/);
-  assert.match(config, /\/\/\s*manger_server\s+"10001"\s+"replace-with-report-token"/);
-  assert.doesNotMatch(config, /^\s*manger_server\s+"[^"]+"\s+""/m);
+  assert.match(config, /cngokz_status_report_interval\s+"30\.0"/);
+  assert.match(config, /cngokz_server_debug\s+"0"/);
+  assert.match(config, /cngokz_access_fail_open\s+"1"/);
+  assert.match(coreConfig, /\/\/\s*cngokz_server\s+"10001"\s+"replace-with-report-token"/);
+  assert.doesNotMatch(coreConfig, /^\s*cngokz_server\s+"[^"]+"\s+""/m);
 });
 
 test('online reporter keeps repeat timer handles killable', () => {
@@ -222,15 +224,16 @@ test('shared include file exists and contains common functions', () => {
   assert.match(shared, /stock bool ParseConfigValueLine/);
   assert.match(shared, /stock bool CopyQuotedValue/);
   assert.match(shared, /stock bool ParseServerMappingLine/);
+  assert.match(shared, /stock bool ParseCNGOKZServerMappingLine/);
 });
 
 test('edge sync loads API and token from reporter cfg', () => {
   const source = read(edgeSourcePath);
 
-  assert.match(source, /g_ApiBaseUrl = FindConVar\("manger_api_base_url"\)/);
-  assert.match(source, /CreateConVar\("manger_api_base_url"/);
+  assert.match(source, /g_ApiBaseUrl = FindConVar\("cngokz_api_base_url"\)/);
+  assert.match(source, /CreateConVar\("cngokz_api_base_url"/);
   assert.match(source, /void LoadEdgeSyncConfig\(\)/);
-  assert.match(source, /BuildPath\(Path_SM, path, sizeof\(path\), "\.\.\/\.\.\/cfg\/sourcemod\/manger_online_reporter\.cfg"\)/);
+  assert.match(source, /BuildPath\(Path_SM, path, sizeof\(path\), "\.\.\/\.\.\/cfg\/sourcemod\/cngokz-lumiadmin\/cngokz-core\.cfg"\)/);
   // ParseServerMappingLine is now in shared include
   assert.match(source, /#include <manger_shared>/);
   assert.match(source, /port == currentPort/);
@@ -243,18 +246,22 @@ test('online reporter exposes config natives for edge sync', () => {
   assert.match(source, /CreateNative\("MangerReporter_GetApiBaseUrl", Native_GetApiBaseUrl\)/);
   assert.match(source, /CreateNative\("MangerReporter_GetReportToken", Native_GetReportToken\)/);
   assert.match(source, /CreateNative\("MangerReporter_GetServerPort", Native_GetServerPort\)/);
+  assert.match(source, /CreateNative\("CNGOKZServer_GetApiBaseUrl", Native_GetApiBaseUrl\)/);
+  assert.match(source, /CreateNative\("CNGOKZServer_GetReportToken", Native_GetReportToken\)/);
+  assert.match(source, /CreateNative\("CNGOKZServer_GetServerPort", Native_GetServerPort\)/);
+  assert.match(source, /RegPluginLibrary\("cngokz-server"\)/);
   assert.match(source, /RegPluginLibrary\("manger_online_reporter"\)/);
 });
 
-test('edge sync prefers reporter config natives and falls back to cfg', () => {
+test('edge sync prefers cngokz-core config natives and falls back to cfg', () => {
   const source = read(edgeSourcePath);
 
-  assert.match(source, /native int MangerReporter_GetApiBaseUrl/);
-  assert.match(source, /LibraryExists\("manger_online_reporter"\)/);
-  assert.match(source, /MarkNativeAsOptional\("MangerReporter_GetApiBaseUrl"\)/);
-  assert.match(source, /bool LoadEdgeSyncConfigFromReporter\(\)/);
+  assert.match(source, /#include <cngokz\/core>/);
+  assert.match(source, /LibraryExists\("cngokz-core"\)/);
+  assert.match(source, /MarkNativeAsOptional\("CNGOKZCore_GetApiBaseUrl"\)/);
+  assert.match(source, /bool LoadEdgeSyncConfigFromCore\(\)/);
   assert.match(source, /void ResolveEdgeSyncConfig\(\)/);
-  assert.match(source, /if \(LoadEdgeSyncConfigFromReporter\(\)\)[\s\S]*?return;[\s\S]*?LoadEdgeSyncConfig\(\);/);
+  assert.match(source, /if \(LoadEdgeSyncConfigFromCore\(\)\)[\s\S]*?return;[\s\S]*?LoadEdgeSyncConfig\(\);/);
 });
 
 test('edge sync enforces unique idempotency keys', () => {
@@ -280,18 +287,54 @@ test('plugin build script compiles both SourceMod plugins', () => {
   assert.match(script, /curl -fsSL "\$SOURCEMOD_DOWNLOAD_URL" -o "\$archive_path"/);
   assert.match(script, /spcomp64/);
   assert.match(script, /addons\/sourcemod\/plugins/);
-  assert.match(script, /manger_online_reporter\.sp/);
-  assert.match(script, /manger_online_reporter\.smx/);
-  assert.match(script, /manger_edge_sync\.sp/);
-  assert.match(script, /manger_edge_sync\.smx/);
+  assert.match(script, /GOKZ_INCLUDE_DIR/);
+  assert.match(script, /cngokz-core\.sp/);
+  assert.match(script, /cngokz-server\.sp/);
+  assert.match(script, /cngokz-sync\.sp/);
+  assert.match(script, /cngokz-recordguard\.sp/);
+  assert.match(script, /cngokz-global\.sp/);
 });
 
 test('deploy workflow rebuilds and tests SourceMod plugins', () => {
   const workflow = read(deployWorkflowPath);
 
+  assert.match(workflow, /workflow_dispatch:[\s\S]*?deploy_target:/);
+  assert.match(workflow, /default: 'ilian'/);
+  assert.match(workflow, /options:[\s\S]*?- ilian[\s\S]*?- cngokz[\s\S]*?- all/);
+  assert.match(workflow, /deploy-frontend-cngokz:[\s\S]*?inputs\.deploy_target == 'cngokz'[\s\S]*?inputs\.deploy_target == 'all'/);
+  assert.match(workflow, /deploy-backend-cngokz:[\s\S]*?inputs\.deploy_target == 'cngokz'[\s\S]*?inputs\.deploy_target == 'all'/);
+  assert.match(workflow, /deploy-plugin-cngokz:[\s\S]*?inputs\.deploy_target == 'cngokz'[\s\S]*?inputs\.deploy_target == 'all'/);
+  assert.match(workflow, /deploy-frontend-ilian:[\s\S]*?inputs\.deploy_target == 'ilian'[\s\S]*?inputs\.deploy_target == 'all'/);
+  assert.match(workflow, /deploy-backend-ilian:[\s\S]*?inputs\.deploy_target == 'ilian'[\s\S]*?inputs\.deploy_target == 'all'/);
+  assert.match(workflow, /deploy-plugin-ilian:[\s\S]*?inputs\.deploy_target == 'ilian'[\s\S]*?inputs\.deploy_target == 'all'/);
+  assert.match(workflow, /deploy-frontend-cngokz:[\s\S]*?github\.event_name == 'workflow_dispatch'/);
+  assert.match(workflow, /deploy-backend-cngokz:[\s\S]*?github\.event_name == 'workflow_dispatch'/);
+  assert.match(workflow, /deploy-plugin-cngokz:[\s\S]*?github\.event_name == 'workflow_dispatch'/);
+  assert.match(workflow, /deploy-frontend-ilian:[\s\S]*?github\.event_name == 'workflow_dispatch'/);
+  assert.match(workflow, /deploy-backend-ilian:[\s\S]*?github\.event_name == 'workflow_dispatch'/);
+  assert.match(workflow, /deploy-plugin-ilian:[\s\S]*?github\.event_name == 'workflow_dispatch'/);
   assert.match(workflow, /name: Cache SourceMod Compiler[\s\S]*?path: csgo\/\.build/);
+  assert.match(workflow, /name: Checkout GOKZ Includes[\s\S]*?XBDJ504764827\/gokz\.git/);
   assert.match(workflow, /name: Build SourceMod Plugins[\s\S]*?bash csgo\/build_plugins\.sh/);
-  assert.match(workflow, /name: Test Plugin Sources[\s\S]*?node --test csgo\/manger_online_reporter\.test\.js/);
+  assert.match(workflow, /GOKZ_INCLUDE_DIR="\$PWD\/csgo\/\.build\/gokz\/addons\/sourcemod\/scripting\/include"/);
+  assert.match(workflow, /name: Test Plugin Sources[\s\S]*?node --test csgo\/\*\.test\.js/);
+  assert.match(workflow, /mkdir -p "\$PLUGIN_DIR\/disabled"/);
+  assert.match(workflow, /mv "\$PLUGIN_DIR\/gokz-global\.smx" "\$PLUGIN_DIR\/disabled\/gokz-global\.smx"/);
+  assert.match(workflow, /sm plugins unload gokz-global/);
+  for (const plugin of [
+    'cngokz-core.smx',
+    'cngokz-server.smx',
+    'cngokz-sync.smx',
+    'cngokz-recordguard.smx',
+    'cngokz-global.smx',
+  ]) {
+    const escapedPlugin = plugin.replace('.', '\\.');
+    assert.match(workflow, new RegExp(`csgo/addons/sourcemod/plugins/${escapedPlugin}`));
+    assert.match(workflow, new RegExp(`plugins/${escapedPlugin}`));
+    assert.match(workflow, new RegExp(`sm plugins (reload|load) ${plugin.replace('.smx', '')}`));
+  }
+  assert.doesNotMatch(workflow, /plugins\/manger_/);
+  assert.doesNotMatch(workflow, /sm plugins reload manger_/);
 });
 
 test('edge sync retries transient failures and avoids concurrent syncs', () => {

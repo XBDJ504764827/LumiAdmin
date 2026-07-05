@@ -6,6 +6,8 @@ CSGO_DIR="$ROOT_DIR/csgo"
 SOURCE_DIR="$CSGO_DIR/addons/sourcemod/scripting"
 PLUGIN_DIR="$CSGO_DIR/addons/sourcemod/plugins"
 PROJECT_INCLUDE_DIR="$SOURCE_DIR/include"
+GOKZ_SOURCE_DIR="${GOKZ_SOURCE_DIR:-$HOME/gokz/addons/sourcemod/scripting}"
+GOKZ_INCLUDE_DIR="${GOKZ_INCLUDE_DIR:-$GOKZ_SOURCE_DIR/include}"
 SOURCEMOD_VERSION="${SOURCEMOD_VERSION:-1.11.0-git6970}"
 SOURCEMOD_SERIES="${SOURCEMOD_SERIES:-1.11}"
 SOURCEMOD_ARCHIVE="sourcemod-${SOURCEMOD_VERSION}-linux.tar.gz"
@@ -13,6 +15,7 @@ SOURCEMOD_DOWNLOAD_URL="${SOURCEMOD_DOWNLOAD_URL:-https://sm.alliedmods.net/smdr
 SOURCEMOD_BUILD_DIR="${SOURCEMOD_BUILD_DIR:-$CSGO_DIR/.build}"
 LEGACY_SOURCEMOD_ROOT="$CSGO_DIR/sourcemod-${SOURCEMOD_VERSION}-linux"
 DOWNLOADED_SOURCEMOD_ROOT="$SOURCEMOD_BUILD_DIR/sourcemod-${SOURCEMOD_VERSION}-linux"
+HOST_SOURCEMOD_ROOT="${HOST_SOURCEMOD_ROOT:-$HOME/gokz/sourcemod-${SOURCEMOD_VERSION}-linux}"
 
 find_compiler() {
   local sourcemod_dir="$1"
@@ -34,7 +37,7 @@ ensure_sourcemod() {
   local sourcemod_root
   local compiler
 
-  for sourcemod_root in "$LEGACY_SOURCEMOD_ROOT" "$DOWNLOADED_SOURCEMOD_ROOT"; do
+  for sourcemod_root in "$HOST_SOURCEMOD_ROOT" "$LEGACY_SOURCEMOD_ROOT" "$DOWNLOADED_SOURCEMOD_ROOT"; do
     if compiler="$(find_compiler "$sourcemod_root/addons/sourcemod")"; then
       SOURCEMOD_DIR="$sourcemod_root/addons/sourcemod"
       SPCOMP="$compiler"
@@ -65,6 +68,12 @@ ensure_sourcemod() {
 ensure_sourcemod
 SOURCEMOD_INCLUDE_DIR="$SOURCEMOD_DIR/scripting/include"
 
+if [[ ! -d "$GOKZ_INCLUDE_DIR" ]]; then
+  echo "GOKZ include directory not found: $GOKZ_INCLUDE_DIR" >&2
+  echo "Set GOKZ_INCLUDE_DIR to the server's GOKZ scripting/include directory." >&2
+  exit 1
+fi
+
 mkdir -p "$PLUGIN_DIR"
 
 compile_plugin() {
@@ -73,10 +82,14 @@ compile_plugin() {
 
   "$SPCOMP" \
     -i "$PROJECT_INCLUDE_DIR" \
+    -i "$GOKZ_INCLUDE_DIR" \
     -i "$SOURCEMOD_INCLUDE_DIR" \
     -o "$PLUGIN_DIR/$output_file" \
     "$SOURCE_DIR/$source_file"
 }
 
-compile_plugin "manger_online_reporter.sp" "manger_online_reporter.smx"
-compile_plugin "manger_edge_sync.sp" "manger_edge_sync.smx"
+compile_plugin "cngokz-core.sp" "cngokz-core.smx"
+compile_plugin "cngokz-server.sp" "cngokz-server.smx"
+compile_plugin "cngokz-sync.sp" "cngokz-sync.smx"
+compile_plugin "cngokz-recordguard.sp" "cngokz-recordguard.smx"
+compile_plugin "cngokz-global.sp" "cngokz-global.smx"

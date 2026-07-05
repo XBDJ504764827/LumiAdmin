@@ -14,6 +14,7 @@ const icons = {
   playerDetail: icon(<><circle cx="6" cy="4.5" r="2.5" /><path d="M2 13.5c0-3 1.8-5 4-5s4 2 4 5" /><path d="M11 3h4M11 7h4M11 11h4" strokeLinecap="round" /></>),
   banAppeal: icon(<><path d="M8 1.5C5.5 1.5 3.5 3.5 3 6c0 2.5-1 3.5-2.5 5h15C14 9.5 13 8.5 13 6c-.5-2.5-2.5-4.5-5-4.5z" /><path d="M6 12.5c.5 1 1 1.5 2 1.5s1.5-.5 2-1.5" strokeLinecap="round" /><path d="M3 1.5L13 11.5" strokeLinecap="round" /></>),
   playerReport: icon(<><path d="M8 1.5l6 2.5v4.5c0 3.5-2.4 5.5-6 6-3.6-.5-6-2.5-6-6V4l6-2.5z" /><path d="M8 5v4" strokeLinecap="round" /><path d="M8 12h.01" strokeLinecap="round" /></>),
+  abnormalRecord: icon(<><path d="M8 1.5l6.5 11.2a1.2 1.2 0 01-1 1.8h-11a1.2 1.2 0 01-1-1.8L8 1.5z" strokeLinejoin="round" /><path d="M8 5.5v4" strokeLinecap="round" /><path d="M8 12h.01" strokeLinecap="round" /></>),
   users: icon(<><circle cx="8" cy="5" r="3" /><path d="M2 14c0-3.314 2.686-5 6-5s6 1.686 6 5" /></>),
   audit: icon(<><path d="M8 2l6 3v5c0 3.5-2.5 6.5-6 8-3.5-1.5-6-4.5-6-8V5l6-3z" /><path d="M6 8l2 2 4-4" strokeLinecap="round" strokeLinejoin="round" /></>),
   notification: icon(<><path d="M8 1.5C5.5 1.5 3.5 3.5 3 6c0 2.5-1 3.5-2.5 5h15C14 9.5 13 8.5 13 6c-.5-2.5-2.5-4.5-5-4.5z" /><path d="M6 12.5c.5 1 1 1.5 2 1.5s1.5-.5 2-1.5" strokeLinecap="round" /></>),
@@ -75,6 +76,7 @@ export function sidebarSections(role) {
         ...(canReviewReports ? [
           { path: '/ban-appeal', label: '封禁申诉', icon: icons.banAppeal, pendingKey: 'banAppeal' },
           { path: '/player-reports', label: '玩家举报', icon: icons.playerReport, pendingKey: 'playerReport' },
+          { path: '/abnormal-records', label: '异常记录审核', icon: icons.abnormalRecord, pendingKey: 'abnormalRecord' },
         ] : []),
         ...(canSeeUserManagement ? [{ path: '/users', label: '网站用户管理', icon: icons.users }] : []),
       ],

@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use crate::config::Config;
 
+mod abnormal_records;
 mod ban_appeals;
 mod ban_records;
 mod core;
@@ -79,6 +80,7 @@ impl Database {
         self.migrate_player_reports_schema().await?;
         self.migrate_map_feedback_schema().await?;
         self.migrate_player_internal_notes_schema().await?;
+        self.migrate_abnormal_records_schema().await?;
         self.migrate_player_access_cache_extended().await?;
         self.migrate_adds_missing_constraints_and_indexes().await?;
         Ok(())

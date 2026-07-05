@@ -318,6 +318,10 @@ pub fn guess_content_type(filename: &str) -> &'static str {
         "audio/mp4"
     } else if lower.ends_with(".flac") {
         "audio/flac"
+    } else if lower.ends_with(".replay") {
+        "application/vnd.gokz.replay"
+    } else if lower.ends_with(".dem") {
+        "application/octet-stream"
     } else {
         "application/octet-stream"
     }
@@ -345,6 +349,9 @@ pub fn is_allowed_file_type(filename: &str) -> bool {
         || lower.ends_with(".ogg")
         || lower.ends_with(".m4a")
         || lower.ends_with(".flac")
+        // GOKZ / Source replay files
+        || lower.ends_with(".replay")
+        || lower.ends_with(".dem")
 }
 
 /// 基于文件扩展名返回文件分类
@@ -365,8 +372,19 @@ pub fn file_category(filename: &str) -> &'static str {
         || lower.ends_with(".bmp")
     {
         "image"
-    } else {
+    } else if lower.ends_with(".mp3")
+        || lower.ends_with(".wav")
+        || lower.ends_with(".ogg")
+        || lower.ends_with(".m4a")
+        || lower.ends_with(".flac")
+    {
         "audio"
+    } else if lower.ends_with(".replay") {
+        "replay"
+    } else if lower.ends_with(".dem") {
+        "demo"
+    } else {
+        "other"
     }
 }
 

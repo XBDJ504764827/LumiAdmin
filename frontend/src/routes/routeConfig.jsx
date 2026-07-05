@@ -10,6 +10,7 @@ const WhitelistPage = lazy(() => import('../pages/whitelist/WhitelistPage.jsx').
 const BanPage = lazy(() => import('../pages/ban/BanPage.jsx').then(m => ({ default: m.BanPage })));
 const BanAppealPage = lazy(() => import('../pages/banAppeal/BanAppealPage.jsx').then(m => ({ default: m.BanAppealPage })));
 const PlayerReportPage = lazy(() => import('../pages/playerReport/PlayerReportPage.jsx').then(m => ({ default: m.PlayerReportPage })));
+const AbnormalRecordPage = lazy(() => import('../pages/abnormalRecord/AbnormalRecordPage.jsx').then(m => ({ default: m.AbnormalRecordPage })));
 const UsersPage = lazy(() => import('../pages/users/UsersPage.jsx').then(m => ({ default: m.UsersPage })));
 const LogsPage = lazy(() => import('../pages/logs/LogsPage.jsx').then(m => ({ default: m.LogsPage })));
 const OpsOverviewPage = lazy(() => import('../pages/ops/OpsOverviewPage.jsx').then(m => ({ default: m.OpsOverviewPage })));
@@ -47,6 +48,7 @@ export const protectedRoutes = [
   { path: '/player-detail', element: <Lazy><PlayerDetailPage /></Lazy>, roles: ROUTE_ROLES.staff },
   { path: '/ban-appeal', element: <Lazy><BanAppealPage /></Lazy>, roles: ROUTE_ROLES.admin },
   { path: '/player-reports', element: <Lazy><PlayerReportPage /></Lazy>, roles: ROUTE_ROLES.admin },
+  { path: '/abnormal-records', element: <Lazy><AbnormalRecordPage /></Lazy>, roles: ROUTE_ROLES.admin },
   { path: '/users', element: <Lazy><UsersPage /></Lazy>, roles: ROUTE_ROLES.staff },
   { path: '/access-logs', element: <Lazy><AccessLogPage /></Lazy>, roles: ROUTE_ROLES.admin },
   { path: '/global-bans', element: <Lazy><GlobalBanPage /></Lazy>, roles: ROUTE_ROLES.admin },

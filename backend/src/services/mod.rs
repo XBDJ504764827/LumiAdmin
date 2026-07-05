@@ -1,3 +1,4 @@
+pub mod abnormal_record_service;
 pub mod access_cache;
 pub mod access_log_service;
 pub mod access_service;

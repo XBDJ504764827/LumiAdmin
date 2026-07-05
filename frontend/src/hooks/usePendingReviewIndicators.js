@@ -12,6 +12,7 @@ const EMPTY_COUNTS = {
   banAppeal: 0,
   playerReport: 0,
   mapFeedback: 0,
+  abnormalRecord: 0,
 };
 
 const PendingReviewContext = createContext({
@@ -52,6 +53,7 @@ export function usePendingReviewData() {
         banAppeal: canReviewReports ? Number(result?.ban_appeal ?? 0) : 0,
         playerReport: canReviewReports ? Number(result?.player_report ?? 0) : 0,
         mapFeedback: canReviewWhitelist ? Number(result?.map_feedback ?? 0) : 0,
+        abnormalRecord: canReviewReports ? Number(result?.abnormal_record ?? 0) : 0,
       });
     } catch {
       setCounts(EMPTY_COUNTS);
@@ -97,7 +99,7 @@ export function usePendingReviewData() {
         try {
           const msg = JSON.parse(event.data);
           const notificationType = msg?.data?.type ?? msg?.data?.notification_type;
-          if (msg.type === 'notification' && ['whitelist_apply', 'ban_appeal', 'player_report', 'map_feedback'].includes(notificationType)) {
+          if (msg.type === 'notification' && ['whitelist_apply', 'ban_appeal', 'player_report', 'map_feedback', 'abnormal_record'].includes(notificationType)) {
             refresh();
           }
         } catch {}

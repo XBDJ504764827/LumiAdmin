@@ -2,6 +2,7 @@
 #include <adt_array>
 #include <ripext>
 #include <manger_shared>
+#include <cngokz/core>
 
 // Edge Sync Agent Native函数声明
 native int EdgeSync_EnqueueOperation(const char[] operation, const char[] target, const char[] targetType, const char[] playerName, const char[] reason, const char[] operatorName, const char[] operatorSteamid, int durationMinutes);
@@ -52,26 +53,26 @@ char g_BanPollEtag[96];
 
 public Plugin myinfo =
 {
-    name = "Manger Online Reporter",
+    name = "CNGOKZ Server",
     author = "XBDJ",
-    description = "Reports CS:GO online players and server status to the Manger backend.",
-    version = "0.5.2",
+    description = "Reports CS:GO online players and server status to LumiAdmin.",
+    version = "0.6.0",
     url = ""
 };
 
 public void OnPluginStart()
 {
     PrintToServer("[Manger] Plugin v20260525 loaded - SteamID2 matching with universe-agnostic comparison");
-    g_ApiBaseUrl = FindConVar("manger_api_base_url");
+    g_ApiBaseUrl = FindConVar("cngokz_api_base_url");
     if (g_ApiBaseUrl == null)
     {
-        g_ApiBaseUrl = CreateConVar("manger_api_base_url", DEFAULT_API_BASE_URL, "Manger plugin API base URL.");
+        g_ApiBaseUrl = CreateConVar("cngokz_api_base_url", DEFAULT_API_BASE_URL, "CNGOKZ LumiAdmin plugin API base URL.");
     }
-    g_ReportInterval = CreateConVar("manger_report_interval", DEFAULT_REPORT_INTERVAL, "Online player report interval in seconds.", _, true, 5.0);
-    g_AccessSnapshotInterval = CreateConVar("manger_access_snapshot_interval", DEFAULT_ACCESS_SNAPSHOT_INTERVAL, "Access snapshot refresh interval in seconds.", _, true, 30.0);
-    g_StatusReportInterval = CreateConVar("manger_status_report_interval", DEFAULT_STATUS_REPORT_INTERVAL, "Server status report interval in seconds.", _, true, 10.0);
-    g_DebugLog = CreateConVar("manger_debug_log", DEFAULT_DEBUG_LOG, "Enable verbose Manger plugin debug logs.", _, true, 0.0, true, 1.0);
-    g_AccessFailOpen = CreateConVar("manger_access_fail_open", DEFAULT_ACCESS_FAIL_OPEN, "Allow players when the Manger access API and local access snapshot are unavailable.", _, true, 0.0, true, 1.0);
+    g_ReportInterval = CreateConVar("cngokz_report_interval", DEFAULT_REPORT_INTERVAL, "Online player report interval in seconds.", _, true, 5.0);
+    g_AccessSnapshotInterval = CreateConVar("cngokz_access_snapshot_interval", DEFAULT_ACCESS_SNAPSHOT_INTERVAL, "Access snapshot refresh interval in seconds.", _, true, 30.0);
+    g_StatusReportInterval = CreateConVar("cngokz_status_report_interval", DEFAULT_STATUS_REPORT_INTERVAL, "Server status report interval in seconds.", _, true, 10.0);
+    g_DebugLog = CreateConVar("cngokz_server_debug", DEFAULT_DEBUG_LOG, "Enable verbose CNGOKZ server plugin debug logs.", _, true, 0.0, true, 1.0);
+    g_AccessFailOpen = CreateConVar("cngokz_access_fail_open", DEFAULT_ACCESS_FAIL_OPEN, "Allow players when the LumiAdmin access API and local access snapshot are unavailable.", _, true, 0.0, true, 1.0);
 
     // sys_cpu_usage: SourceMod 内置的 CPU 使用率 ConVar（需要 csgo/csgo_8225 或更高游戏版本）
     g_CpuUsageCvar = FindConVar("sys_cpu_usage");
@@ -88,7 +89,7 @@ public void OnPluginStart()
     RegAdminCmd("sm_banip", CommandBanIp, ADMFLAG_BAN, "sm_banip <ip|#userid|name> <minutes|0> [reason]");
     RegAdminCmd("sm_addban", CommandAddBan, ADMFLAG_RCON, "sm_addban <minutes|0> <steamid> [reason]");
     RegAdminCmd("sm_unban", CommandUnban, ADMFLAG_UNBAN, "sm_unban <steamid|ip> [reason]");
-    RegServerCmd("manger_server", CommandServerMapping, "Register one reporter server mapping.");
+    RegServerCmd("cngokz_server_local", CommandServerMapping, "Register one CNGOKZ server mapping when cngokz-core is not loaded.");
     AddCommandListener(ChatHook, "say");
     AddCommandListener(ChatHook, "say_team");
 
@@ -99,7 +100,7 @@ public void OnPluginStart()
 
     g_ServerStartTime = GetTime();
     ResetServerTokenMappings();
-    AutoExecConfig(true, "manger_online_reporter");
+    AutoExecConfig(true, "cngokz-server", "sourcemod/cngokz-lumiadmin");
     InitAccessSnapshotDb();
     StartReportTimer();
     StartBanPollTimer();
@@ -112,6 +113,10 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int errMax)
     CreateNative("MangerReporter_GetApiBaseUrl", Native_GetApiBaseUrl);
     CreateNative("MangerReporter_GetReportToken", Native_GetReportToken);
     CreateNative("MangerReporter_GetServerPort", Native_GetServerPort);
+    CreateNative("CNGOKZServer_GetApiBaseUrl", Native_GetApiBaseUrl);
+    CreateNative("CNGOKZServer_GetReportToken", Native_GetReportToken);
+    CreateNative("CNGOKZServer_GetServerPort", Native_GetServerPort);
+    RegPluginLibrary("cngokz-server");
     RegPluginLibrary("manger_online_reporter");
     return APLRes_Success;
 }
@@ -120,6 +125,11 @@ public int Native_GetApiBaseUrl(Handle plugin, int numParams)
 {
     int maxLen = GetNativeCell(2);
     char apiBaseUrl[512];
+    if (LibraryExists("cngokz-core") && CNGOKZCore_GetApiBaseUrl(apiBaseUrl, sizeof(apiBaseUrl)))
+    {
+        SetNativeString(1, apiBaseUrl, maxLen);
+        return 1;
+    }
     g_ApiBaseUrl.GetString(apiBaseUrl, sizeof(apiBaseUrl));
     TrimString(apiBaseUrl);
     SetNativeString(1, apiBaseUrl, maxLen);
@@ -238,6 +248,15 @@ bool ShouldLogPluginConfigState(int state, int port, int entryIndex = -1)
 
 bool GetCurrentServerPort(int &port)
 {
+    if (LibraryExists("cngokz-core"))
+    {
+        port = CNGOKZCore_GetServerPort();
+        if (port > 0)
+        {
+            return true;
+        }
+    }
+
     if (g_HostPortCvar == null)
     {
         return false;
@@ -916,6 +935,11 @@ void CompletePolledBanDetails(int client)
 bool GetCurrentReportToken(char[] token, int maxLen)
 {
     token[0] = '\0';
+
+    if (LibraryExists("cngokz-core") && CNGOKZCore_GetReportToken(token, maxLen))
+    {
+        return token[0] != '\0';
+    }
 
     int currentPort = 0;
     if (!GetCurrentServerPort(currentPort))

@@ -9,6 +9,8 @@ export function fileIcon(category) {
   if (category === 'video') return '🎬';
   if (category === 'image') return '🖼';
   if (category === 'audio') return '🎵';
+  if (category === 'replay') return '▶';
+  if (category === 'demo') return '▣';
   return '📎';
 }
 
@@ -16,6 +18,8 @@ export function fileActionLabel(category) {
   if (category === 'image') return '打开原图';
   if (category === 'video') return '播放录像';
   if (category === 'audio') return '播放录音';
+  if (category === 'replay') return '查看 Replay';
+  if (category === 'demo') return '查看 Demo';
   return '下载文件';
 }
 
@@ -23,6 +27,8 @@ export function fileTypeLabel(category) {
   if (category === 'video') return '录像';
   if (category === 'image') return '图片';
   if (category === 'audio') return '录音';
+  if (category === 'replay') return 'Replay';
+  if (category === 'demo') return 'Demo';
   return '文件';
 }
 
@@ -73,6 +79,20 @@ export function FilePreview({ file }) {
           className="file-preview-image"
         />
       </a>
+    );
+  }
+
+  if (file.category === 'replay' || file.category === 'demo') {
+    return (
+      <div className="file-preview-replay">
+        <div>
+          <div className="file-preview-replay-title">{fileTypeLabel(file.category)} 存证文件</div>
+          <div className="file-preview-replay-meta">{file.file_name}</div>
+        </div>
+        <a href={file.url} target="_blank" rel="noopener noreferrer" className="action-btn action-btn-accent">
+          {fileActionLabel(file.category)}
+        </a>
+      </div>
     );
   }
 

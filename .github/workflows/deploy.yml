@@ -4,6 +4,16 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      deploy_target:
+        description: '选择部署目标服务器'
+        required: true
+        default: 'ilian'
+        type: choice
+        options:
+          - ilian
+          - cngokz
+          - all
 
 jobs:
   # ===== 检测变更模块 =====
@@ -156,25 +166,33 @@ jobs:
           path: csgo/.build
           key: ${{ runner.os }}-sourcemod-1.11.0-git6970
 
+      - name: Checkout GOKZ Includes
+        run: |
+          rm -rf csgo/.build/gokz
+          git clone --depth 1 https://github.com/XBDJ504764827/gokz.git csgo/.build/gokz
+
       - name: Build SourceMod Plugins
-        run: bash csgo/build_plugins.sh
+        run: GOKZ_INCLUDE_DIR="$PWD/csgo/.build/gokz/addons/sourcemod/scripting/include" bash csgo/build_plugins.sh
 
       - name: Test Plugin Sources
-        run: node --test csgo/manger_online_reporter.test.js
+        run: node --test csgo/*.test.js
 
       - name: Upload Plugin Artifact
         uses: actions/upload-artifact@v4
         with:
           name: plugin-output
           path: |
-            csgo/addons/sourcemod/plugins/manger_online_reporter.smx
-            csgo/addons/sourcemod/plugins/manger_edge_sync.smx
+            csgo/addons/sourcemod/plugins/cngokz-core.smx
+            csgo/addons/sourcemod/plugins/cngokz-server.smx
+            csgo/addons/sourcemod/plugins/cngokz-sync.smx
+            csgo/addons/sourcemod/plugins/cngokz-recordguard.smx
+            csgo/addons/sourcemod/plugins/cngokz-global.smx
           retention-days: 1
 
   # ===== 部署前端 → CNGOKZ =====
   deploy-frontend-cngokz:
     needs: [detect-changes, build-frontend]
-    if: needs.detect-changes.outputs.frontend == 'true'
+    if: needs.detect-changes.outputs.frontend == 'true' && github.event_name == 'workflow_dispatch' && (inputs.deploy_target == 'cngokz' || inputs.deploy_target == 'all')
     runs-on: ubuntu-latest
 
     steps:
@@ -198,7 +216,7 @@ jobs:
   # ===== 部署后端 → CNGOKZ =====
   deploy-backend-cngokz:
     needs: [detect-changes, build-backend]
-    if: needs.detect-changes.outputs.backend == 'true'
+    if: needs.detect-changes.outputs.backend == 'true' && github.event_name == 'workflow_dispatch' && (inputs.deploy_target == 'cngokz' || inputs.deploy_target == 'all')
     runs-on: ubuntu-latest
 
     steps:
@@ -232,7 +250,7 @@ jobs:
   # ===== 部署前端 → ILIAN =====
   deploy-frontend-ilian:
     needs: [detect-changes, build-frontend]
-    if: needs.detect-changes.outputs.frontend == 'true'
+    if: needs.detect-changes.outputs.frontend == 'true' && github.event_name == 'workflow_dispatch' && (inputs.deploy_target == 'ilian' || inputs.deploy_target == 'all')
     runs-on: ubuntu-latest
 
     steps:
@@ -256,7 +274,7 @@ jobs:
   # ===== 部署后端 → ILIAN =====
   deploy-backend-ilian:
     needs: [detect-changes, build-backend]
-    if: needs.detect-changes.outputs.backend == 'true'
+    if: needs.detect-changes.outputs.backend == 'true' && github.event_name == 'workflow_dispatch' && (inputs.deploy_target == 'ilian' || inputs.deploy_target == 'all')
     runs-on: ubuntu-latest
 
     steps:
@@ -290,7 +308,7 @@ jobs:
   # ===== 部署插件 → CNGOKZ =====
   deploy-plugin-cngokz:
     needs: [detect-changes, build-plugin]
-    if: needs.detect-changes.outputs.plugin == 'true'
+    if: needs.detect-changes.outputs.plugin == 'true' && github.event_name == 'workflow_dispatch' && (inputs.deploy_target == 'cngokz' || inputs.deploy_target == 'all')
     runs-on: ubuntu-latest
 
     steps:
@@ -309,7 +327,7 @@ jobs:
 
       - name: Deploy Plugin
         run: |
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugins/manger_online_reporter.smx plugins/manger_edge_sync.smx ${{ vars.GAME_USER_CNGOKZ }}@${{ vars.GAME_HOST_CNGOKZ }}:${{ vars.GAME_PATH_CNGOKZ }}/
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugins/cngokz-core.smx plugins/cngokz-server.smx plugins/cngokz-sync.smx plugins/cngokz-recordguard.smx plugins/cngokz-global.smx ${{ vars.GAME_USER_CNGOKZ }}@${{ vars.GAME_HOST_CNGOKZ }}:${{ vars.GAME_PATH_CNGOKZ }}/
 
       - name: Reload Plugin
         uses: appleboy/ssh-action@v1
@@ -318,12 +336,18 @@ jobs:
           username: ${{ vars.GAME_USER_CNGOKZ }}
           key: ${{ secrets.GAME_SSH_KEY_CNGOKZ }}
           script: |
-            echo "插件已更新，请执行 sm plugins reload manger_online_reporter; sm plugins reload manger_edge_sync"
+            PLUGIN_DIR="${{ vars.GAME_PATH_CNGOKZ }}"
+            mkdir -p "$PLUGIN_DIR/disabled"
+            if [ -f "$PLUGIN_DIR/gokz-global.smx" ]; then
+              mv "$PLUGIN_DIR/gokz-global.smx" "$PLUGIN_DIR/disabled/gokz-global.smx"
+              echo "已将原版 gokz-global.smx 移动到 plugins/disabled/"
+            fi
+            echo "插件已更新，请执行 sm plugins unload gokz-global; sm plugins reload cngokz-core; sm plugins reload cngokz-server; sm plugins reload cngokz-sync; sm plugins reload cngokz-recordguard; sm plugins load cngokz-global"
 
   # ===== 部署插件 → ILIAN =====
   deploy-plugin-ilian:
     needs: [detect-changes, build-plugin]
-    if: needs.detect-changes.outputs.plugin == 'true'
+    if: needs.detect-changes.outputs.plugin == 'true' && github.event_name == 'workflow_dispatch' && (inputs.deploy_target == 'ilian' || inputs.deploy_target == 'all')
     runs-on: ubuntu-latest
 
     steps:
@@ -342,7 +366,7 @@ jobs:
 
       - name: Deploy Plugin
         run: |
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugins/manger_online_reporter.smx plugins/manger_edge_sync.smx ${{ vars.GAME_USER_ILIAN }}@${{ vars.GAME_HOST_ILIAN }}:${{ vars.GAME_PATH_ILIAN }}/
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugins/cngokz-core.smx plugins/cngokz-server.smx plugins/cngokz-sync.smx plugins/cngokz-recordguard.smx plugins/cngokz-global.smx ${{ vars.GAME_USER_ILIAN }}@${{ vars.GAME_HOST_ILIAN }}:${{ vars.GAME_PATH_ILIAN }}/
 
       - name: Reload Plugin
         uses: appleboy/ssh-action@v1
@@ -351,4 +375,10 @@ jobs:
           username: ${{ vars.GAME_USER_ILIAN }}
           key: ${{ secrets.GAME_SSH_KEY_ILIAN }}
           script: |
-            echo "插件已更新，请执行 sm plugins reload manger_online_reporter; sm plugins reload manger_edge_sync"
+            PLUGIN_DIR="${{ vars.GAME_PATH_ILIAN }}"
+            mkdir -p "$PLUGIN_DIR/disabled"
+            if [ -f "$PLUGIN_DIR/gokz-global.smx" ]; then
+              mv "$PLUGIN_DIR/gokz-global.smx" "$PLUGIN_DIR/disabled/gokz-global.smx"
+              echo "已将原版 gokz-global.smx 移动到 plugins/disabled/"
+            fi
+            echo "插件已更新，请执行 sm plugins unload gokz-global; sm plugins reload cngokz-core; sm plugins reload cngokz-server; sm plugins reload cngokz-sync; sm plugins reload cngokz-recordguard; sm plugins load cngokz-global"

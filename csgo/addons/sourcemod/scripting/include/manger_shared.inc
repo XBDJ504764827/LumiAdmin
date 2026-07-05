@@ -130,3 +130,47 @@ stock bool ParseServerMappingLine(const char[] line, int &port, char[] token, in
     TrimString(token);
     return port > 0;
 }
+
+/**
+ * 解析 cngokz_server 配置行，提取端口和 token。
+ * 行格式: cngokz_server "port" "token"
+ */
+stock bool ParseCNGOKZServerMappingLine(const char[] line, int &port, char[] token, int tokenMaxLen)
+{
+    token[0] = '\0';
+    port = 0;
+
+    if (StrContains(line, "cngokz_server", false) != 0)
+    {
+        return false;
+    }
+
+    int firstQuote = FindCharInString(line, '"');
+    if (firstQuote < 0)
+    {
+        return false;
+    }
+
+    char portText[16];
+    int nextOffset = 0;
+    if (!CopyQuotedValue(line, firstQuote, portText, sizeof(portText), nextOffset))
+    {
+        return false;
+    }
+
+    int tokenQuote = FindCharInString(line[nextOffset], '"');
+    if (tokenQuote < 0)
+    {
+        return false;
+    }
+    tokenQuote += nextOffset;
+
+    if (!CopyQuotedValue(line, tokenQuote, token, tokenMaxLen, nextOffset))
+    {
+        return false;
+    }
+
+    port = StringToInt(portText);
+    TrimString(token);
+    return port > 0;
+}

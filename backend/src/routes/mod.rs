@@ -1,3 +1,4 @@
+pub mod abnormal_record;
 pub mod access;
 pub mod auth;
 pub mod ban;
@@ -364,6 +365,60 @@ pub fn router(
         .route(
             "/api/player-reports/:id/files",
             get(player_report::list_report_files).post(player_report::upload_report_files),
+        )
+        // -- abnormal records --
+        .route("/api/abnormal-records", get(abnormal_record::list_records))
+        .route(
+            "/api/abnormal-records/:id",
+            get(abnormal_record::get_record),
+        )
+        .route(
+            "/api/abnormal-records/:id/replay-url",
+            get(abnormal_record::get_replay_url),
+        )
+        .route(
+            "/api/abnormal-records/:id/approve",
+            post(abnormal_record::approve_record),
+        )
+        .route(
+            "/api/abnormal-records/:id/reject",
+            post(abnormal_record::reject_record),
+        )
+        .route(
+            "/api/abnormal-records/:id/reject-and-ban",
+            post(abnormal_record::reject_and_ban),
+        )
+        .route(
+            "/api/abnormal-records/:id/retry-submit",
+            post(abnormal_record::retry_submit),
+        )
+        .route(
+            "/api/abnormal-record-rules",
+            get(abnormal_record::list_rules).post(abnormal_record::create_rule),
+        )
+        .route(
+            "/api/abnormal-record-rules/:id",
+            put(abnormal_record::update_rule).delete(abnormal_record::delete_rule),
+        )
+        .route(
+            "/api/plugin/abnormal-record-rules",
+            get(abnormal_record::plugin_rules),
+        )
+        .route(
+            "/api/plugin/abnormal-records",
+            post(abnormal_record::plugin_create_record),
+        )
+        .route(
+            "/api/plugin/abnormal-records/:id/replay",
+            post(abnormal_record::plugin_upload_replay).put(abnormal_record::plugin_upload_replay),
+        )
+        .route(
+            "/api/plugin/abnormal-records/poll-approved",
+            post(abnormal_record::plugin_poll_approved),
+        )
+        .route(
+            "/api/plugin/abnormal-records/:id/submit-result",
+            post(abnormal_record::plugin_submit_result),
         )
         // -- audit --
         .route("/api/audit/logs", get(misc::list_audit_logs))

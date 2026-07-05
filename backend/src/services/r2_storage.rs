@@ -320,8 +320,6 @@ pub fn guess_content_type(filename: &str) -> &'static str {
         "audio/flac"
     } else if lower.ends_with(".replay") {
         "application/vnd.gokz.replay"
-    } else if lower.ends_with(".dem") {
-        "application/octet-stream"
     } else {
         "application/octet-stream"
     }

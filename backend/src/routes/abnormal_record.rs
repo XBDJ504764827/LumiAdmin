@@ -376,12 +376,14 @@ pub(crate) async fn plugin_upload_replay(
     let item = abnormal_record_service::upload_replay(
         &ctx.db,
         r2,
-        id,
-        report_token,
-        port,
-        file_name,
-        content_type,
-        body.to_vec(),
+        abnormal_record_service::ReplayUploadInput {
+            record_id: id,
+            report_token,
+            port,
+            file_name,
+            content_type,
+            data: body.to_vec(),
+        },
     )
     .await
     .map_err(invalid_request)?;

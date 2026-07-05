@@ -175,7 +175,7 @@ jobs:
         run: GOKZ_INCLUDE_DIR="$PWD/csgo/.build/gokz/addons/sourcemod/scripting/include" bash csgo/build_plugins.sh
 
       - name: Test Plugin Sources
-        run: node --test csgo/*.test.js
+        run: CNGOKZ_EXPECT_COMPILED_PLUGINS=1 node --test csgo/*.test.js
 
       - name: Upload Plugin Artifact
         uses: actions/upload-artifact@v4

@@ -13,6 +13,7 @@ const configPath = resolve(root, 'csgo/cfg/sourcemod/cngokz-lumiadmin/cngokz-ser
 const coreConfigPath = resolve(root, 'csgo/cfg/sourcemod/cngokz-lumiadmin/cngokz-core.cfg');
 const buildScriptPath = resolve(root, 'csgo/build_plugins.sh');
 const deployWorkflowPath = resolve(root, '.github/workflows/deploy.yml');
+const expectCompiledPlugins = process.env.CNGOKZ_EXPECT_COMPILED_PLUGINS === '1';
 
 function read(path) {
   return readFileSync(path, 'utf8');
@@ -416,7 +417,7 @@ test('ban poll sends and stores server etag to skip unchanged payloads', () => {
   assert.match(source, /if \(!data\.IsNull\("etag"\)\)[\s\S]*?data\.GetString\("etag", g_BanPollEtag, sizeof\(g_BanPollEtag\)\);/);
 });
 
-test('compiled SourceMod plugins are present', () => {
+test('compiled SourceMod plugins are present', { skip: !expectCompiledPlugins }, () => {
   assert.ok(existsSync(onlinePluginPath), 'online reporter smx should exist');
   assert.ok(statSync(onlinePluginPath).size > 0, 'online reporter smx should not be empty');
   assert.ok(existsSync(edgePluginPath), 'edge sync smx should exist');

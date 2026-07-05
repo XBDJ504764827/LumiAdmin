@@ -489,33 +489,44 @@ pub async fn create_plugin_record(
     .map_err(Into::into)
 }
 
+pub struct ReplayUploadInput<'a> {
+    pub record_id: Uuid,
+    pub report_token: &'a str,
+    pub port: i32,
+    pub file_name: &'a str,
+    pub content_type: Option<&'a str>,
+    pub data: Vec<u8>,
+}
+
 pub async fn upload_replay(
     db: &Database,
     storage: &R2Storage,
-    record_id: Uuid,
-    report_token: &str,
-    port: i32,
-    file_name: &str,
-    content_type: Option<&str>,
-    data: Vec<u8>,
+    input: ReplayUploadInput<'_>,
 ) -> anyhow::Result<AbnormalRecordItem> {
-    let server = ServerAuth::authenticate(db, port, report_token).await?;
-    let mut item = get_record(db, record_id).await?;
+    let server = ServerAuth::authenticate(db, input.port, input.report_token).await?;
+    let mut item = get_record(db, input.record_id).await?;
     anyhow::ensure!(item.server_id == Some(server.id), "记录不属于当前服务器");
     anyhow::ensure!(item.status == "pending", "该记录已被处理，无法上传录像");
-    anyhow::ensure!(!data.is_empty(), "录像文件为空");
+    anyhow::ensure!(!input.data.is_empty(), "录像文件为空");
     anyhow::ensure!(
-        r2_storage::is_allowed_file_type(file_name),
+        r2_storage::is_allowed_file_type(input.file_name),
         "不支持的录像文件类型"
     );
-    let file_size = data.len() as i64;
+    let file_size = input.data.len() as i64;
 
-    let content_type = content_type
+    let content_type = input
+        .content_type
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| r2_storage::guess_content_type(file_name));
+        .unwrap_or_else(|| r2_storage::guess_content_type(input.file_name));
     let key = storage
-        .upload_with_prefix("abnormal-records", record_id, file_name, content_type, data)
+        .upload_with_prefix(
+            "abnormal-records",
+            input.record_id,
+            input.file_name,
+            content_type,
+            input.data,
+        )
         .await?;
 
     item = sqlx::query_as::<_, AbnormalRecordItem>(&format!(
@@ -525,12 +536,12 @@ pub async fn upload_replay(
            WHERE id = $1
            RETURNING {RECORD_FIELDS}"#
     ))
-    .bind(record_id)
+    .bind(input.record_id)
     .bind(key)
-    .bind(file_name)
+    .bind(input.file_name)
     .bind(file_size)
     .bind(content_type)
-    .bind(r2_storage::file_category(file_name))
+    .bind(r2_storage::file_category(input.file_name))
     .fetch_one(&db.pool)
     .await?;
 

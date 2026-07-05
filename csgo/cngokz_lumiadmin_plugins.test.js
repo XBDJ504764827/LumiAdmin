@@ -7,6 +7,7 @@ const root = resolve(import.meta.dirname, '../');
 const scripting = resolve(root, 'csgo/addons/sourcemod/scripting');
 const plugins = resolve(root, 'csgo/addons/sourcemod/plugins');
 const cfg = resolve(root, 'csgo/cfg/sourcemod/cngokz-lumiadmin');
+const expectCompiledPlugins = process.env.CNGOKZ_EXPECT_COMPILED_PLUGINS === '1';
 
 function read(path) {
   return readFileSync(path, 'utf8');
@@ -99,7 +100,7 @@ test('project include directory keeps only cngokz and local plugin headers', () 
   assert.equal(existsSync(resolve(scripting, 'include/GlobalAPI.inc')), false);
 });
 
-test('compiled cngokz plugin artifacts exist', () => {
+test('compiled cngokz plugin artifacts exist', { skip: !expectCompiledPlugins }, () => {
   const core = statSync(resolve(plugins, 'cngokz-core.smx'));
   const recordguard = statSync(resolve(plugins, 'cngokz-recordguard.smx'));
   const global = statSync(resolve(plugins, 'cngokz-global.smx'));

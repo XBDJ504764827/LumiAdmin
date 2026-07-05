@@ -34,7 +34,7 @@ public int BanPlayerCallback(JSON_Object response, GlobalAPIRequestData request,
 	dp.ReadString(steamid, sizeof(steamid));
 	delete dp;
 	
-	if (request.Failure)
+	if (GlobalAPIRequestFailed(request, "BanPlayerCallback"))
 	{
 		LogError("Failed to globally ban %s (%s).", playerName, steamid);
 	}

@@ -97,6 +97,23 @@ test('cngokz-global replaces gokz-global and intercepts abnormal records directl
   assert.match(legacyDisable, /RenameFile\(LEGACY_GLOBAL_DISABLED_PLUGIN, LEGACY_GLOBAL_PLUGIN\)/);
 });
 
+test('cngokz-global guards invalid GlobalAPI request handles in callbacks', () => {
+  const sources = [
+    read(resolve(scripting, 'cngokz-global.sp')),
+    read(resolve(scripting, 'cngokz-global/send_run.sp')),
+    read(resolve(scripting, 'cngokz-global/maptop_menu.sp')),
+    read(resolve(scripting, 'cngokz-global/print_records.sp')),
+    read(resolve(scripting, 'cngokz-global/ban_player.sp')),
+    read(resolve(scripting, 'cngokz-global/points.sp')),
+  ].join('\n');
+
+  assert.match(sources, /bool GlobalAPIRequestFailed\(GlobalAPIRequestData request, const char\[] context\)/);
+  assert.match(sources, /IsValidHandle\(view_as<Handle>\(request\)\)/);
+  assert.doesNotMatch(sources.replace(/return request\.Failure;/, ''), /request\.Failure/);
+  assert.match(sources, /GlobalAPIRequestFailed\(request, "GetAuthStatusCallback"\)/);
+  assert.match(sources, /GlobalAPIRequestFailed\(request, "UpdatePointsCallback"\)/);
+});
+
 test('recordguard talks to abnormal record plugin APIs', () => {
   const recordguard = [
     read(resolve(scripting, 'cngokz-recordguard/rules.sp')),

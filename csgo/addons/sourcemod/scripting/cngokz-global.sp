@@ -621,9 +621,20 @@ static void SetupAPI()
 	}
 }
 
+bool GlobalAPIRequestFailed(GlobalAPIRequestData request, const char[] context)
+{
+	if (!IsValidHandle(view_as<Handle>(request)))
+	{
+		LogError("%s returned invalid GlobalAPI request data handle.", context);
+		return true;
+	}
+
+	return request.Failure;
+}
+
 public int GetAuthStatusCallback(JSON_Object auth_json, GlobalAPIRequestData request)
 {
-	if (request.Failure)
+	if (GlobalAPIRequestFailed(request, "GetAuthStatusCallback"))
 	{
 		LogError("Failed to check API key with Global API.");
 		return 0;
@@ -640,7 +651,7 @@ public int GetAuthStatusCallback(JSON_Object auth_json, GlobalAPIRequestData req
 
 public int GetModeInfoCallback(JSON_Object modes, GlobalAPIRequestData request)
 {
-	if (request.Failure)
+	if (GlobalAPIRequestFailed(request, "GetModeInfoCallback"))
 	{
 		LogError("Failed to check mode versions with Global API.");
 		return 0;
@@ -679,7 +690,7 @@ public int GetModeInfoCallback(JSON_Object modes, GlobalAPIRequestData request)
 
 public int GetMapCallback(JSON_Object map_json, GlobalAPIRequestData request)
 {
-	if (request.Failure || map_json == INVALID_HANDLE)
+	if (GlobalAPIRequestFailed(request, "GetMapCallback") || map_json == INVALID_HANDLE)
 	{
 		LogError("Failed to get map info.");
 		return 0;
@@ -717,7 +728,7 @@ public void CheckClientGlobalBan_Callback(JSON_Object player_json, GlobalAPIRequ
 		return;
 	}
 	
-	if (request.Failure)
+	if (GlobalAPIRequestFailed(request, "CheckClientGlobalBan_Callback"))
 	{
 		LogError("Failed to get ban info.");
 		return;

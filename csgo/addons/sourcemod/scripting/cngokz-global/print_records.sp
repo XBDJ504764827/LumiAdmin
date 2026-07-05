@@ -54,7 +54,7 @@ public int PrintRecordsCallback(JSON_Object records, GlobalAPIRequestData reques
 	int timeType = dp.ReadCell();
 	delete dp;
 	
-	if (request.Failure)
+	if (GlobalAPIRequestFailed(request, "PrintRecordsCallback"))
 	{
 		LogError("Failed to retrieve record from the Global API for printing.");
 		return 0;

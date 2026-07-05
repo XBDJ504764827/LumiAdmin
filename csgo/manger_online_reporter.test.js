@@ -9,8 +9,6 @@ const edgeSourcePath = resolve(root, 'csgo/addons/sourcemod/scripting/cngokz-syn
 const sharedIncludePath = resolve(root, 'csgo/addons/sourcemod/scripting/include/manger_shared.inc');
 const onlinePluginPath = resolve(root, 'csgo/addons/sourcemod/plugins/cngokz-server.smx');
 const edgePluginPath = resolve(root, 'csgo/addons/sourcemod/plugins/cngokz-sync.smx');
-const configPath = resolve(root, 'csgo/cfg/sourcemod/cngokz-lumiadmin/cngokz-server.cfg');
-const coreConfigPath = resolve(root, 'csgo/cfg/sourcemod/cngokz-lumiadmin/cngokz-core.cfg');
 const buildScriptPath = resolve(root, 'csgo/build_plugins.sh');
 const deployWorkflowPath = resolve(root, '.github/workflows/deploy.yml');
 const expectCompiledPlugins = process.env.CNGOKZ_EXPECT_COMPILED_PLUGINS === '1';
@@ -31,19 +29,16 @@ test('online reporter uses row-based port token mappings from cfg', () => {
 
 test('online reporter parses all cfg-backed intervals and debug flag', () => {
   const source = read(onlineSourcePath);
-  const config = read(configPath);
-  const coreConfig = read(coreConfigPath);
 
   assert.match(source, /CreateConVar\("cngokz_status_report_interval"/);
   assert.match(source, /CreateConVar\("cngokz_server_debug"/);
   assert.match(source, /CreateConVar\("cngokz_access_fail_open"/);
   // ParseConfigValueLine is now in shared include
   assert.match(source, /#include <manger_shared>/);
-  assert.match(config, /cngokz_status_report_interval\s+"30\.0"/);
-  assert.match(config, /cngokz_server_debug\s+"0"/);
-  assert.match(config, /cngokz_access_fail_open\s+"1"/);
-  assert.match(coreConfig, /\/\/\s*cngokz_server\s+"10001"\s+"replace-with-report-token"/);
-  assert.doesNotMatch(coreConfig, /^\s*cngokz_server\s+"[^"]+"\s+""/m);
+  assert.match(source, /#define DEFAULT_STATUS_REPORT_INTERVAL "30\.0"/);
+  assert.match(source, /#define DEFAULT_DEBUG_LOG "0"/);
+  assert.match(source, /#define DEFAULT_ACCESS_FAIL_OPEN "1"/);
+  assert.match(source, /AutoExecConfig\(true, "cngokz-server", "sourcemod\/cngokz-lumiadmin"\)/);
 });
 
 test('online reporter keeps repeat timer handles killable', () => {
@@ -320,13 +315,11 @@ test('deploy workflow rebuilds and tests SourceMod plugins', () => {
   assert.match(workflow, /GOKZ_INCLUDE_DIR="\$PWD\/csgo\/\.build\/gokz\/addons\/sourcemod\/scripting\/include"/);
   assert.match(workflow, /name: Test Plugin Sources[\s\S]*?node --test csgo\/\*\.test\.js/);
   assert.match(workflow, /name: Stage Plugin Output[\s\S]*?mkdir -p csgo\/plugin-output\/plugins/);
-  assert.match(workflow, /mkdir -p csgo\/plugin-output\/cfg\/sourcemod\/cngokz-lumiadmin/);
-  assert.match(workflow, /cp csgo\/cfg\/sourcemod\/cngokz-lumiadmin\/\*\.cfg csgo\/plugin-output\/cfg\/sourcemod\/cngokz-lumiadmin\//);
   assert.match(workflow, /name: plugin-output[\s\S]*?path: csgo\/plugin-output/);
-  assert.match(workflow, /mkdir -p \$\{\{ vars\.GAME_PATH_CNGOKZ \}\}\/\.\.\/\.\.\/\.\.\/cfg\/sourcemod\/cngokz-lumiadmin/);
-  assert.match(workflow, /mkdir -p \$\{\{ vars\.GAME_PATH_ILIAN \}\}\/\.\.\/\.\.\/\.\.\/cfg\/sourcemod\/cngokz-lumiadmin/);
-  assert.match(workflow, /plugin-output\/cfg\/sourcemod\/cngokz-lumiadmin\/ [\s\S]*?\$\{\{ vars\.GAME_PATH_CNGOKZ \}\}\/\.\.\/\.\.\/\.\.\/cfg\/sourcemod\/cngokz-lumiadmin\//);
-  assert.match(workflow, /plugin-output\/cfg\/sourcemod\/cngokz-lumiadmin\/ [\s\S]*?\$\{\{ vars\.GAME_PATH_ILIAN \}\}\/\.\.\/\.\.\/\.\.\/cfg\/sourcemod\/cngokz-lumiadmin\//);
+  assert.doesNotMatch(workflow, /plugin-output\/cfg/);
+  assert.doesNotMatch(workflow, /cp csgo\/cfg\/sourcemod\/cngokz-lumiadmin/);
+  assert.doesNotMatch(workflow, /rsync[\s\S]*plugin-output\/cfg/);
+  assert.doesNotMatch(workflow, /mkdir -p [^\n]*cfg\/sourcemod\/cngokz-lumiadmin/);
   assert.match(workflow, /mkdir -p "\$PLUGIN_DIR\/disabled"/);
   assert.match(workflow, /mv "\$PLUGIN_DIR\/gokz-global\.smx" "\$PLUGIN_DIR\/disabled\/gokz-global\.smx"/);
   assert.match(workflow, /mv "\$PLUGIN_DIR\/manger_online_reporter\.smx" "\$PLUGIN_DIR\/disabled\/manger_online_reporter\.smx"/);

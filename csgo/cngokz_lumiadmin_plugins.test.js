@@ -31,19 +31,27 @@ test('cngokz lumiadmin plugins use block-style SourcePawn structure', () => {
   assert.ok(existsSync(resolve(scripting, 'cngokz-global/api.sp')));
 });
 
-test('cngokz lumiadmin config files are under cngokz-lumiadmin', () => {
+test('cngokz lumiadmin config files are generated on servers only', () => {
   const core = read(resolve(scripting, 'cngokz-core.sp'));
   const coreConfig = read(resolve(scripting, 'cngokz-core/config.sp'));
   const server = read(resolve(scripting, 'cngokz-server.sp'));
+  const sync = read(resolve(scripting, 'cngokz-sync.sp'));
   const recordguard = read(resolve(scripting, 'cngokz-recordguard/config.sp'));
+  const gitignore = read(resolve(root, '.gitignore'));
 
   assert.match(core, /#define CNGOKZ_CFG_FOLDER "sourcemod\/cngokz-lumiadmin"/);
   assert.match(coreConfig, /CNGOKZCore_EnsureConfigDirectory\(\)/);
   assert.match(server, /EnsureCNGOKZConfigDirectory\(\)/);
+  assert.match(sync, /EnsureCNGOKZSyncConfigDirectory\(\)/);
   assert.match(recordguard, /RecordGuard_EnsureConfigDirectory\(\)/);
+  assert.match(coreConfig, /AutoExecConfig\(true, "cngokz-core", CNGOKZ_CFG_FOLDER\)/);
+  assert.match(server, /AutoExecConfig\(true, "cngokz-server", "sourcemod\/cngokz-lumiadmin"\)/);
+  assert.match(sync, /AutoExecConfig\(true, "cngokz-sync", "sourcemod\/cngokz-lumiadmin"\)/);
   assert.match(recordguard, /AutoExecConfig\(true, "cngokz-recordguard", "sourcemod\/cngokz-lumiadmin"\)/);
-  assert.ok(existsSync(resolve(cfg, 'cngokz-core.cfg')));
-  assert.ok(existsSync(resolve(cfg, 'cngokz-recordguard.cfg')));
+  assert.match(gitignore, /csgo\/cfg\/sourcemod\/cngokz-lumiadmin\/\*\.cfg/);
+  for (const cfgFile of ['cngokz-core.cfg', 'cngokz-server.cfg', 'cngokz-sync.cfg', 'cngokz-recordguard.cfg']) {
+    assert.equal(existsSync(resolve(cfg, cfgFile)), false);
+  }
 });
 
 test('cngokz server and sync disable legacy manger plugins before registering compatibility natives', () => {
@@ -108,10 +116,15 @@ test('cngokz-global guards invalid GlobalAPI request handles in callbacks', () =
   ].join('\n');
 
   assert.match(sources, /bool GlobalAPIRequestFailed\(GlobalAPIRequestData request, const char\[] context\)/);
+  assert.match(sources, /bool GlobalAPIResponseInvalid\(JSON_Object response, const char\[] context\)/);
   assert.match(sources, /IsValidHandle\(view_as<Handle>\(request\)\)/);
-  assert.doesNotMatch(sources.replace(/return request\.Failure;/, ''), /request\.Failure/);
+  assert.match(sources, /IsValidHandle\(view_as<Handle>\(response\)\)/);
+  assert.doesNotMatch(sources, /request\.Failure/);
+  assert.match(sources, /return false;/);
   assert.match(sources, /GlobalAPIRequestFailed\(request, "GetAuthStatusCallback"\)/);
+  assert.match(sources, /GlobalAPIResponseInvalid\(auth_json, "GetAuthStatusCallback"\)/);
   assert.match(sources, /GlobalAPIRequestFailed\(request, "UpdatePointsCallback"\)/);
+  assert.match(sources, /GlobalAPIResponseInvalid\(ranks, "UpdatePointsCallback"\)/);
 });
 
 test('recordguard talks to abnormal record plugin APIs', () => {

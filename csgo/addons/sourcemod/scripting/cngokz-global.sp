@@ -629,12 +629,23 @@ bool GlobalAPIRequestFailed(GlobalAPIRequestData request, const char[] context)
 		return true;
 	}
 
-	return request.Failure;
+	return false;
+}
+
+bool GlobalAPIResponseInvalid(JSON_Object response, const char[] context)
+{
+	if (!IsValidHandle(view_as<Handle>(response)))
+	{
+		LogError("%s returned invalid GlobalAPI response handle.", context);
+		return true;
+	}
+
+	return false;
 }
 
 public int GetAuthStatusCallback(JSON_Object auth_json, GlobalAPIRequestData request)
 {
-	if (GlobalAPIRequestFailed(request, "GetAuthStatusCallback"))
+	if (GlobalAPIRequestFailed(request, "GetAuthStatusCallback") || GlobalAPIResponseInvalid(auth_json, "GetAuthStatusCallback"))
 	{
 		LogError("Failed to check API key with Global API.");
 		return 0;
@@ -651,7 +662,7 @@ public int GetAuthStatusCallback(JSON_Object auth_json, GlobalAPIRequestData req
 
 public int GetModeInfoCallback(JSON_Object modes, GlobalAPIRequestData request)
 {
-	if (GlobalAPIRequestFailed(request, "GetModeInfoCallback"))
+	if (GlobalAPIRequestFailed(request, "GetModeInfoCallback") || GlobalAPIResponseInvalid(modes, "GetModeInfoCallback"))
 	{
 		LogError("Failed to check mode versions with Global API.");
 		return 0;
@@ -690,7 +701,7 @@ public int GetModeInfoCallback(JSON_Object modes, GlobalAPIRequestData request)
 
 public int GetMapCallback(JSON_Object map_json, GlobalAPIRequestData request)
 {
-	if (GlobalAPIRequestFailed(request, "GetMapCallback") || map_json == INVALID_HANDLE)
+	if (GlobalAPIRequestFailed(request, "GetMapCallback") || GlobalAPIResponseInvalid(map_json, "GetMapCallback"))
 	{
 		LogError("Failed to get map info.");
 		return 0;
@@ -728,7 +739,7 @@ public void CheckClientGlobalBan_Callback(JSON_Object player_json, GlobalAPIRequ
 		return;
 	}
 	
-	if (GlobalAPIRequestFailed(request, "CheckClientGlobalBan_Callback"))
+	if (GlobalAPIRequestFailed(request, "CheckClientGlobalBan_Callback") || GlobalAPIResponseInvalid(player_json, "CheckClientGlobalBan_Callback"))
 	{
 		LogError("Failed to get ban info.");
 		return;

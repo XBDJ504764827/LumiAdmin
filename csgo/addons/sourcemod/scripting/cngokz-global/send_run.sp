@@ -55,7 +55,7 @@ public int SendTimeCallback(JSON_Object response, GlobalAPIRequestData request, 
 		return 0;
 	}
 	
-	if (GlobalAPIRequestFailed(request, "SendTimeCallback"))
+	if (GlobalAPIRequestFailed(request, "SendTimeCallback") || GlobalAPIResponseInvalid(response, "SendTimeCallback"))
 	{
 		LogError("Failed to send a time to the global API.");
 		return 0;

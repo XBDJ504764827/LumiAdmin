@@ -181,13 +181,11 @@ jobs:
         run: |
           rm -rf csgo/plugin-output
           mkdir -p csgo/plugin-output/plugins
-          mkdir -p csgo/plugin-output/cfg/sourcemod/cngokz-lumiadmin
           cp csgo/addons/sourcemod/plugins/cngokz-core.smx csgo/plugin-output/plugins/
           cp csgo/addons/sourcemod/plugins/cngokz-server.smx csgo/plugin-output/plugins/
           cp csgo/addons/sourcemod/plugins/cngokz-sync.smx csgo/plugin-output/plugins/
           cp csgo/addons/sourcemod/plugins/cngokz-recordguard.smx csgo/plugin-output/plugins/
           cp csgo/addons/sourcemod/plugins/cngokz-global.smx csgo/plugin-output/plugins/
-          cp csgo/cfg/sourcemod/cngokz-lumiadmin/*.cfg csgo/plugin-output/cfg/sourcemod/cngokz-lumiadmin/
 
       - name: Upload Plugin Artifact
         uses: actions/upload-artifact@v4
@@ -334,9 +332,7 @@ jobs:
 
       - name: Deploy Plugin
         run: |
-          ssh -i ~/.ssh/deploy_key ${{ vars.GAME_USER_CNGOKZ }}@${{ vars.GAME_HOST_CNGOKZ }} "mkdir -p ${{ vars.GAME_PATH_CNGOKZ }}/../../../cfg/sourcemod/cngokz-lumiadmin"
           rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugin-output/plugins/cngokz-core.smx plugin-output/plugins/cngokz-server.smx plugin-output/plugins/cngokz-sync.smx plugin-output/plugins/cngokz-recordguard.smx plugin-output/plugins/cngokz-global.smx ${{ vars.GAME_USER_CNGOKZ }}@${{ vars.GAME_HOST_CNGOKZ }}:${{ vars.GAME_PATH_CNGOKZ }}/
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugin-output/cfg/sourcemod/cngokz-lumiadmin/ ${{ vars.GAME_USER_CNGOKZ }}@${{ vars.GAME_HOST_CNGOKZ }}:${{ vars.GAME_PATH_CNGOKZ }}/../../../cfg/sourcemod/cngokz-lumiadmin/
 
       - name: Reload Plugin
         uses: appleboy/ssh-action@v1
@@ -383,9 +379,7 @@ jobs:
 
       - name: Deploy Plugin
         run: |
-          ssh -i ~/.ssh/deploy_key ${{ vars.GAME_USER_ILIAN }}@${{ vars.GAME_HOST_ILIAN }} "mkdir -p ${{ vars.GAME_PATH_ILIAN }}/../../../cfg/sourcemod/cngokz-lumiadmin"
           rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugin-output/plugins/cngokz-core.smx plugin-output/plugins/cngokz-server.smx plugin-output/plugins/cngokz-sync.smx plugin-output/plugins/cngokz-recordguard.smx plugin-output/plugins/cngokz-global.smx ${{ vars.GAME_USER_ILIAN }}@${{ vars.GAME_HOST_ILIAN }}:${{ vars.GAME_PATH_ILIAN }}/
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugin-output/cfg/sourcemod/cngokz-lumiadmin/ ${{ vars.GAME_USER_ILIAN }}@${{ vars.GAME_HOST_ILIAN }}:${{ vars.GAME_PATH_ILIAN }}/../../../cfg/sourcemod/cngokz-lumiadmin/
 
       - name: Reload Plugin
         uses: appleboy/ssh-action@v1

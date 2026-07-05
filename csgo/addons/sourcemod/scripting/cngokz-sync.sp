@@ -81,6 +81,9 @@ public void OnPluginStart()
     g_HostPortCvar = FindConVar("hostport");
     HookConVarChange(g_SyncInterval, OnSyncIntervalChanged);
 
+    EnsureCNGOKZSyncConfigDirectory();
+    AutoExecConfig(true, "cngokz-sync", "sourcemod/cngokz-lumiadmin");
+
     RegServerCmd("cngokz_sync_set_token", CommandSetToken, "Set server report token for CNGOKZ Sync fallback mode.");
     RegAdminCmd("sm_sync_status", CommandSyncStatus, ADMFLAG_RCON, "Show offline sync status");
     RegAdminCmd("sm_force_sync", CommandForceSync, ADMFLAG_RCON, "Force sync offline queue");
@@ -88,6 +91,16 @@ public void OnPluginStart()
     ResolveEdgeSyncConfig();
     InitEdgeSyncDb();
     StartSyncTimer();
+}
+
+void EnsureCNGOKZSyncConfigDirectory()
+{
+    char dir[PLATFORM_MAX_PATH];
+    BuildPath(Path_SM, dir, sizeof(dir), "../../cfg/sourcemod/cngokz-lumiadmin");
+    if (!DirExists(dir))
+    {
+        CreateDirectory(dir, 511);
+    }
 }
 
 public void OnMapStart()

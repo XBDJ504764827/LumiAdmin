@@ -159,7 +159,7 @@ public int DisplayMapTopSubmenuCallback(JSON_Object top, GlobalAPIRequestData re
 	int timeType = dp.ReadCell();
 	delete dp;
 	
-	if (GlobalAPIRequestFailed(request, "DisplayMapTopSubmenuCallback"))
+	if (GlobalAPIRequestFailed(request, "DisplayMapTopSubmenuCallback") || GlobalAPIResponseInvalid(top, "DisplayMapTopSubmenuCallback"))
 	{
 		LogError("Failed to get top records with Global API.");
 		return 0;

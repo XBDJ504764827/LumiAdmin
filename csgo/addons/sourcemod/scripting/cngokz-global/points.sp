@@ -116,7 +116,10 @@ static void UpdatePointsCallback(JSON_Object ranks, GlobalAPIRequestData request
 	}
 	
 	int points, totalFinishes;
-	if (GlobalAPIRequestFailed(request, "UpdatePointsCallback") || !ranks.IsArray || ranks.Length == 0)
+	if (GlobalAPIRequestFailed(request, "UpdatePointsCallback")
+		|| GlobalAPIResponseInvalid(ranks, "UpdatePointsCallback")
+		|| !ranks.IsArray
+		|| ranks.Length == 0)
 	{
 		points = 0;
 		totalFinishes = 0;

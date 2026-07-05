@@ -23,6 +23,7 @@ csgo/.build/
 csgo/addons/sourcemod/plugins/*.smx
 csgo/addons/sourcemod/scripting/*.smx
 csgo/plugin-output/
+csgo/cfg/sourcemod/cngokz-lumiadmin/*.cfg
 
 # ----- 前端原型模板 -----
 frontend/index-*.html

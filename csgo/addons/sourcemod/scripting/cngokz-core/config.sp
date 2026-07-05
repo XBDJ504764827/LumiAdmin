@@ -18,7 +18,18 @@ void CNGOKZCore_OnPluginStart()
     }
 
     CNGOKZCore_ResetServerTokenMappings();
+    CNGOKZCore_EnsureConfigDirectory();
     AutoExecConfig(true, "cngokz-core", CNGOKZ_CFG_FOLDER);
+}
+
+void CNGOKZCore_EnsureConfigDirectory()
+{
+    char dir[PLATFORM_MAX_PATH];
+    BuildPath(Path_SM, dir, sizeof(dir), "../../cfg/sourcemod/cngokz-lumiadmin");
+    if (!DirExists(dir))
+    {
+        CreateDirectory(dir, 511);
+    }
 }
 
 Action CNGOKZCore_CommandServerMapping(int args)

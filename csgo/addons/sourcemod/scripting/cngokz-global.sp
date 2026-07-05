@@ -103,7 +103,11 @@ public void OnPluginStart()
 	LoadTranslations("gokz-common.phrases");
 	LoadTranslations("gokz-global.phrases");
 	
-	DisableLegacyGlobalBinary();
+	if (!DisableLegacyGlobalBinary())
+	{
+		SetFailState("Failed to disable legacy gokz-global.smx. Move it to plugins/disabled and reload cngokz-global.");
+	}
+
 	if (gB_LegacyGlobalSurfaceDeferred)
 	{
 		ServerCommand("sm plugins reload cngokz-global");

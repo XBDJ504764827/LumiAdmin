@@ -177,16 +177,23 @@ jobs:
       - name: Test Plugin Sources
         run: CNGOKZ_EXPECT_COMPILED_PLUGINS=1 node --test csgo/*.test.js
 
+      - name: Stage Plugin Output
+        run: |
+          rm -rf csgo/plugin-output
+          mkdir -p csgo/plugin-output/plugins
+          mkdir -p csgo/plugin-output/cfg/sourcemod/cngokz-lumiadmin
+          cp csgo/addons/sourcemod/plugins/cngokz-core.smx csgo/plugin-output/plugins/
+          cp csgo/addons/sourcemod/plugins/cngokz-server.smx csgo/plugin-output/plugins/
+          cp csgo/addons/sourcemod/plugins/cngokz-sync.smx csgo/plugin-output/plugins/
+          cp csgo/addons/sourcemod/plugins/cngokz-recordguard.smx csgo/plugin-output/plugins/
+          cp csgo/addons/sourcemod/plugins/cngokz-global.smx csgo/plugin-output/plugins/
+          cp csgo/cfg/sourcemod/cngokz-lumiadmin/*.cfg csgo/plugin-output/cfg/sourcemod/cngokz-lumiadmin/
+
       - name: Upload Plugin Artifact
         uses: actions/upload-artifact@v4
         with:
           name: plugin-output
-          path: |
-            csgo/addons/sourcemod/plugins/cngokz-core.smx
-            csgo/addons/sourcemod/plugins/cngokz-server.smx
-            csgo/addons/sourcemod/plugins/cngokz-sync.smx
-            csgo/addons/sourcemod/plugins/cngokz-recordguard.smx
-            csgo/addons/sourcemod/plugins/cngokz-global.smx
+          path: csgo/plugin-output
           retention-days: 1
 
   # ===== 部署前端 → CNGOKZ =====
@@ -316,7 +323,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: plugin-output
-          path: plugins
+          path: plugin-output
 
       - name: Setup SSH Key
         run: |
@@ -327,7 +334,9 @@ jobs:
 
       - name: Deploy Plugin
         run: |
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugins/cngokz-core.smx plugins/cngokz-server.smx plugins/cngokz-sync.smx plugins/cngokz-recordguard.smx plugins/cngokz-global.smx ${{ vars.GAME_USER_CNGOKZ }}@${{ vars.GAME_HOST_CNGOKZ }}:${{ vars.GAME_PATH_CNGOKZ }}/
+          ssh -i ~/.ssh/deploy_key ${{ vars.GAME_USER_CNGOKZ }}@${{ vars.GAME_HOST_CNGOKZ }} "mkdir -p ${{ vars.GAME_PATH_CNGOKZ }}/../../../cfg/sourcemod/cngokz-lumiadmin"
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugin-output/plugins/cngokz-core.smx plugin-output/plugins/cngokz-server.smx plugin-output/plugins/cngokz-sync.smx plugin-output/plugins/cngokz-recordguard.smx plugin-output/plugins/cngokz-global.smx ${{ vars.GAME_USER_CNGOKZ }}@${{ vars.GAME_HOST_CNGOKZ }}:${{ vars.GAME_PATH_CNGOKZ }}/
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugin-output/cfg/sourcemod/cngokz-lumiadmin/ ${{ vars.GAME_USER_CNGOKZ }}@${{ vars.GAME_HOST_CNGOKZ }}:${{ vars.GAME_PATH_CNGOKZ }}/../../../cfg/sourcemod/cngokz-lumiadmin/
 
       - name: Reload Plugin
         uses: appleboy/ssh-action@v1
@@ -342,6 +351,14 @@ jobs:
               mv "$PLUGIN_DIR/gokz-global.smx" "$PLUGIN_DIR/disabled/gokz-global.smx"
               echo "已将原版 gokz-global.smx 移动到 plugins/disabled/"
             fi
+            if [ -f "$PLUGIN_DIR/manger_online_reporter.smx" ]; then
+              mv "$PLUGIN_DIR/manger_online_reporter.smx" "$PLUGIN_DIR/disabled/manger_online_reporter.smx"
+              echo "已将旧版 manger_online_reporter.smx 移动到 plugins/disabled/"
+            fi
+            if [ -f "$PLUGIN_DIR/manger_edge_sync.smx" ]; then
+              mv "$PLUGIN_DIR/manger_edge_sync.smx" "$PLUGIN_DIR/disabled/manger_edge_sync.smx"
+              echo "已将旧版 manger_edge_sync.smx 移动到 plugins/disabled/"
+            fi
             echo "插件已更新，请执行 sm plugins unload gokz-global; sm plugins reload cngokz-core; sm plugins reload cngokz-server; sm plugins reload cngokz-sync; sm plugins reload cngokz-recordguard; sm plugins load cngokz-global"
 
   # ===== 部署插件 → ILIAN =====
@@ -355,7 +372,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: plugin-output
-          path: plugins
+          path: plugin-output
 
       - name: Setup SSH Key
         run: |
@@ -366,7 +383,9 @@ jobs:
 
       - name: Deploy Plugin
         run: |
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugins/cngokz-core.smx plugins/cngokz-server.smx plugins/cngokz-sync.smx plugins/cngokz-recordguard.smx plugins/cngokz-global.smx ${{ vars.GAME_USER_ILIAN }}@${{ vars.GAME_HOST_ILIAN }}:${{ vars.GAME_PATH_ILIAN }}/
+          ssh -i ~/.ssh/deploy_key ${{ vars.GAME_USER_ILIAN }}@${{ vars.GAME_HOST_ILIAN }} "mkdir -p ${{ vars.GAME_PATH_ILIAN }}/../../../cfg/sourcemod/cngokz-lumiadmin"
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugin-output/plugins/cngokz-core.smx plugin-output/plugins/cngokz-server.smx plugin-output/plugins/cngokz-sync.smx plugin-output/plugins/cngokz-recordguard.smx plugin-output/plugins/cngokz-global.smx ${{ vars.GAME_USER_ILIAN }}@${{ vars.GAME_HOST_ILIAN }}:${{ vars.GAME_PATH_ILIAN }}/
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugin-output/cfg/sourcemod/cngokz-lumiadmin/ ${{ vars.GAME_USER_ILIAN }}@${{ vars.GAME_HOST_ILIAN }}:${{ vars.GAME_PATH_ILIAN }}/../../../cfg/sourcemod/cngokz-lumiadmin/
 
       - name: Reload Plugin
         uses: appleboy/ssh-action@v1
@@ -380,5 +399,13 @@ jobs:
             if [ -f "$PLUGIN_DIR/gokz-global.smx" ]; then
               mv "$PLUGIN_DIR/gokz-global.smx" "$PLUGIN_DIR/disabled/gokz-global.smx"
               echo "已将原版 gokz-global.smx 移动到 plugins/disabled/"
+            fi
+            if [ -f "$PLUGIN_DIR/manger_online_reporter.smx" ]; then
+              mv "$PLUGIN_DIR/manger_online_reporter.smx" "$PLUGIN_DIR/disabled/manger_online_reporter.smx"
+              echo "已将旧版 manger_online_reporter.smx 移动到 plugins/disabled/"
+            fi
+            if [ -f "$PLUGIN_DIR/manger_edge_sync.smx" ]; then
+              mv "$PLUGIN_DIR/manger_edge_sync.smx" "$PLUGIN_DIR/disabled/manger_edge_sync.smx"
+              echo "已将旧版 manger_edge_sync.smx 移动到 plugins/disabled/"
             fi
             echo "插件已更新，请执行 sm plugins unload gokz-global; sm plugins reload cngokz-core; sm plugins reload cngokz-server; sm plugins reload cngokz-sync; sm plugins reload cngokz-recordguard; sm plugins load cngokz-global"

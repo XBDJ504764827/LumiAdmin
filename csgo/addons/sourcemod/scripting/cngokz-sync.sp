@@ -36,6 +36,7 @@ bool g_SyncInFlight = false;
 int g_PendingCount = 0;
 int g_LastSyncTime = 0;
 int g_OperationSeq = 0;
+bool g_LegacyEdgeSyncSurfaceDeferred = false;
 
 /**
  * 安全格式化整数到 SQL 字符串，负数输出 "0"。
@@ -56,8 +57,21 @@ public Plugin myinfo =
     url = ""
 };
 
+#include "cngokz-sync/legacy_disable.sp"
+
 public void OnPluginStart()
 {
+    if (!DisableLegacyEdgeSyncBinary())
+    {
+        SetFailState("Failed to disable legacy manger_edge_sync.smx. Move it to plugins/disabled and reload cngokz-sync.");
+    }
+
+    if (g_LegacyEdgeSyncSurfaceDeferred)
+    {
+        ServerCommand("sm plugins reload cngokz-sync");
+        return;
+    }
+
     g_ApiBaseUrl = FindConVar("cngokz_api_base_url");
     if (g_ApiBaseUrl == null)
     {
@@ -720,9 +734,16 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
     MarkNativeAsOptional("CNGOKZCore_GetApiBaseUrl");
     MarkNativeAsOptional("CNGOKZCore_GetReportToken");
     MarkNativeAsOptional("CNGOKZCore_GetServerPort");
-    CreateNative("EdgeSync_EnqueueOperation", Native_EnqueueOperation);
-    CreateNative("EdgeSync_IsOnline", Native_IsOnline);
-    CreateNative("EdgeSync_GetPendingCount", Native_GetPendingCount);
-    RegPluginLibrary("cngokz-sync");
+    if (IsLegacyEdgeSyncSurfaceOccupied())
+    {
+        g_LegacyEdgeSyncSurfaceDeferred = true;
+    }
+    else
+    {
+        CreateNative("EdgeSync_EnqueueOperation", Native_EnqueueOperation);
+        CreateNative("EdgeSync_IsOnline", Native_IsOnline);
+        CreateNative("EdgeSync_GetPendingCount", Native_GetPendingCount);
+        RegPluginLibrary("cngokz-sync");
+    }
     return APLRes_Success;
 }

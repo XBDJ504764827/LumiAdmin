@@ -17,6 +17,8 @@ test('cngokz lumiadmin plugins use block-style SourcePawn structure', () => {
   assert.ok(existsSync(resolve(scripting, 'cngokz-core.sp')));
   assert.ok(existsSync(resolve(scripting, 'cngokz-core/config.sp')));
   assert.ok(existsSync(resolve(scripting, 'cngokz-core/natives.sp')));
+  assert.ok(existsSync(resolve(scripting, 'cngokz-server/legacy_disable.sp')));
+  assert.ok(existsSync(resolve(scripting, 'cngokz-sync/legacy_disable.sp')));
   assert.ok(existsSync(resolve(scripting, 'cngokz-recordguard.sp')));
   assert.ok(existsSync(resolve(scripting, 'cngokz-recordguard/rules.sp')));
   assert.ok(existsSync(resolve(scripting, 'cngokz-recordguard/detection.sp')));
@@ -31,12 +33,42 @@ test('cngokz lumiadmin plugins use block-style SourcePawn structure', () => {
 
 test('cngokz lumiadmin config files are under cngokz-lumiadmin', () => {
   const core = read(resolve(scripting, 'cngokz-core.sp'));
+  const coreConfig = read(resolve(scripting, 'cngokz-core/config.sp'));
+  const server = read(resolve(scripting, 'cngokz-server.sp'));
   const recordguard = read(resolve(scripting, 'cngokz-recordguard/config.sp'));
 
   assert.match(core, /#define CNGOKZ_CFG_FOLDER "sourcemod\/cngokz-lumiadmin"/);
+  assert.match(coreConfig, /CNGOKZCore_EnsureConfigDirectory\(\)/);
+  assert.match(server, /EnsureCNGOKZConfigDirectory\(\)/);
+  assert.match(recordguard, /RecordGuard_EnsureConfigDirectory\(\)/);
   assert.match(recordguard, /AutoExecConfig\(true, "cngokz-recordguard", "sourcemod\/cngokz-lumiadmin"\)/);
   assert.ok(existsSync(resolve(cfg, 'cngokz-core.cfg')));
   assert.ok(existsSync(resolve(cfg, 'cngokz-recordguard.cfg')));
+});
+
+test('cngokz server and sync disable legacy manger plugins before registering compatibility natives', () => {
+  const server = read(resolve(scripting, 'cngokz-server.sp'));
+  const serverLegacy = read(resolve(scripting, 'cngokz-server/legacy_disable.sp'));
+  const sync = read(resolve(scripting, 'cngokz-sync.sp'));
+  const syncLegacy = read(resolve(scripting, 'cngokz-sync/legacy_disable.sp'));
+
+  assert.match(server, /IsLegacyServerSurfaceOccupied\(\)/);
+  assert.match(server, /g_LegacyServerSurfaceDeferred = true/);
+  assert.match(server, /DisableLegacyServerBinary\(\)/);
+  assert.match(server, /ServerCommand\("sm plugins reload cngokz-server"\)/);
+  assert.match(server, /MarkNativeAsOptional\("EdgeSync_EnqueueOperation"\)/);
+  assert.match(server, /bool QueueEdgeSyncOperation\(/);
+  assert.match(serverLegacy, /manger_online_reporter\.smx/);
+  assert.match(serverLegacy, /MangerReporter_GetApiBaseUrl/);
+  assert.match(serverLegacy, /RenameFile\(LEGACY_SERVER_DISABLED_PLUGIN, LEGACY_SERVER_PLUGIN\)/);
+
+  assert.match(sync, /IsLegacyEdgeSyncSurfaceOccupied\(\)/);
+  assert.match(sync, /g_LegacyEdgeSyncSurfaceDeferred = true/);
+  assert.match(sync, /DisableLegacyEdgeSyncBinary\(\)/);
+  assert.match(sync, /ServerCommand\("sm plugins reload cngokz-sync"\)/);
+  assert.match(syncLegacy, /manger_edge_sync\.smx/);
+  assert.match(syncLegacy, /EdgeSync_EnqueueOperation/);
+  assert.match(syncLegacy, /RenameFile\(LEGACY_EDGE_SYNC_DISABLED_PLUGIN, LEGACY_EDGE_SYNC_PLUGIN\)/);
 });
 
 test('cngokz-global replaces gokz-global and intercepts abnormal records directly', () => {

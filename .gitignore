@@ -22,6 +22,7 @@ csgo/.build/
 # ----- SourceMod 编译产物 -----
 csgo/addons/sourcemod/plugins/*.smx
 csgo/addons/sourcemod/scripting/*.smx
+csgo/plugin-output/
 
 # ----- 前端原型模板 -----
 frontend/index-*.html

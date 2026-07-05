@@ -9,6 +9,7 @@ void RecordGuard_OnPluginStart()
     g_RGDebugLog = CreateConVar("cngokz_recordguard_debug", "0", "Enable verbose recordguard debug logs.", _, true, 0.0, true, 1.0);
     g_RGTickrate = FindConVar("sv_maxupdaterate");
 
+    RecordGuard_EnsureConfigDirectory();
     AutoExecConfig(true, "cngokz-recordguard", "sourcemod/cngokz-lumiadmin");
     GetCurrentMapDisplayName(g_CurrentMapName, sizeof(g_CurrentMapName));
     InitRecordGuardDb();
@@ -16,6 +17,16 @@ void RecordGuard_OnPluginStart()
     SyncRules();
     StartRuleSyncTimer();
     StartApprovedPollTimer();
+}
+
+void RecordGuard_EnsureConfigDirectory()
+{
+    char dir[PLATFORM_MAX_PATH];
+    BuildPath(Path_SM, dir, sizeof(dir), "../../cfg/sourcemod/cngokz-lumiadmin");
+    if (!DirExists(dir))
+    {
+        CreateDirectory(dir, 511);
+    }
 }
 
 void StartRuleSyncTimer()

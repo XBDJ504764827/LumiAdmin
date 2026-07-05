@@ -45,6 +45,7 @@ bool g_WaitingOwnReason[MAXPLAYERS + 1];
 int g_LastTickrate = 64;
 int g_ServerStartTime = 0;
 int g_UnbanAdminUserId = 0;
+bool g_LegacyServerSurfaceDeferred = false;
 
 // 服务端返回的封禁列表版本签名 etag。每次轮询时回传，命中后端版本检测时
 // items 为空，避免后端每次全量序列化最多 10000 条记录。
@@ -60,8 +61,21 @@ public Plugin myinfo =
     url = ""
 };
 
+#include "cngokz-server/legacy_disable.sp"
+
 public void OnPluginStart()
 {
+    if (!DisableLegacyServerBinary())
+    {
+        SetFailState("Failed to disable legacy manger_online_reporter.smx. Move it to plugins/disabled and reload cngokz-server.");
+    }
+
+    if (g_LegacyServerSurfaceDeferred)
+    {
+        ServerCommand("sm plugins reload cngokz-server");
+        return;
+    }
+
     PrintToServer("[Manger] Plugin v20260525 loaded - SteamID2 matching with universe-agnostic comparison");
     g_ApiBaseUrl = FindConVar("cngokz_api_base_url");
     if (g_ApiBaseUrl == null)
@@ -100,6 +114,7 @@ public void OnPluginStart()
 
     g_ServerStartTime = GetTime();
     ResetServerTokenMappings();
+    EnsureCNGOKZConfigDirectory();
     AutoExecConfig(true, "cngokz-server", "sourcemod/cngokz-lumiadmin");
     InitAccessSnapshotDb();
     StartReportTimer();
@@ -108,16 +123,37 @@ public void OnPluginStart()
     StartStatusReportTimer();
 }
 
+void EnsureCNGOKZConfigDirectory()
+{
+    char dir[PLATFORM_MAX_PATH];
+    BuildPath(Path_SM, dir, sizeof(dir), "../../cfg/sourcemod/cngokz-lumiadmin");
+    if (!DirExists(dir))
+    {
+        CreateDirectory(dir, 511);
+    }
+}
+
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int errMax)
 {
-    CreateNative("MangerReporter_GetApiBaseUrl", Native_GetApiBaseUrl);
-    CreateNative("MangerReporter_GetReportToken", Native_GetReportToken);
-    CreateNative("MangerReporter_GetServerPort", Native_GetServerPort);
-    CreateNative("CNGOKZServer_GetApiBaseUrl", Native_GetApiBaseUrl);
-    CreateNative("CNGOKZServer_GetReportToken", Native_GetReportToken);
-    CreateNative("CNGOKZServer_GetServerPort", Native_GetServerPort);
-    RegPluginLibrary("cngokz-server");
-    RegPluginLibrary("manger_online_reporter");
+    MarkNativeAsOptional("EdgeSync_EnqueueOperation");
+    MarkNativeAsOptional("EdgeSync_IsOnline");
+    MarkNativeAsOptional("EdgeSync_GetPendingCount");
+
+    if (IsLegacyServerSurfaceOccupied())
+    {
+        g_LegacyServerSurfaceDeferred = true;
+    }
+    else
+    {
+        CreateNative("MangerReporter_GetApiBaseUrl", Native_GetApiBaseUrl);
+        CreateNative("MangerReporter_GetReportToken", Native_GetReportToken);
+        CreateNative("MangerReporter_GetServerPort", Native_GetServerPort);
+        CreateNative("CNGOKZServer_GetApiBaseUrl", Native_GetApiBaseUrl);
+        CreateNative("CNGOKZServer_GetReportToken", Native_GetReportToken);
+        CreateNative("CNGOKZServer_GetServerPort", Native_GetServerPort);
+        RegPluginLibrary("cngokz-server");
+        RegPluginLibrary("manger_online_reporter");
+    }
     return APLRes_Success;
 }
 
@@ -263,6 +299,18 @@ bool GetCurrentServerPort(int &port)
     }
     port = g_HostPortCvar.IntValue;
     return port > 0;
+}
+
+bool QueueEdgeSyncOperation(const char[] operation, const char[] target, const char[] targetType, const char[] playerName, const char[] reason, const char[] operatorName, const char[] operatorSteamid, int durationMinutes)
+{
+    if (GetFeatureStatus(FeatureType_Native, "EdgeSync_EnqueueOperation") != FeatureStatus_Available)
+    {
+        LogError("[cngokz-server] EdgeSync_EnqueueOperation is unavailable. Load cngokz-sync before relying on offline queue operations.");
+        return false;
+    }
+
+    EdgeSync_EnqueueOperation(operation, target, targetType, playerName, reason, operatorName, operatorSteamid, durationMinutes);
+    return true;
 }
 
 Action CommandServerMapping(int args)
@@ -1445,7 +1493,10 @@ bool SubmitPluginBan(int client, int target, const char[] banType, const char[] 
         strcopy(targetId, sizeof(targetId), ipAddress);
     }
 
-    EdgeSync_EnqueueOperation("ban", targetId, banType, player, reason, adminName, adminSteamid, duration);
+    if (!QueueEdgeSyncOperation("ban", targetId, banType, player, reason, adminName, adminSteamid, duration))
+    {
+        ReplyToCommand(client, "[Manger] 离线队列不可用，请确认 cngokz-sync 已加载。");
+    }
 
     if (target > 0 && IsClientInGame(target))
     {
@@ -1777,7 +1828,10 @@ public Action CommandUnban(int client, int args)
         strcopy(targetType, sizeof(targetType), "ip");
     }
 
-    EdgeSync_EnqueueOperation("unban", target, targetType, "", reason, adminName, adminSteamid, 0);
+    if (!QueueEdgeSyncOperation("unban", target, targetType, "", reason, adminName, adminSteamid, 0))
+    {
+        ReplyToCommand(client, "[Manger] 离线队列不可用，请确认 cngokz-sync 已加载。");
+    }
 
     return Plugin_Handled;
 }

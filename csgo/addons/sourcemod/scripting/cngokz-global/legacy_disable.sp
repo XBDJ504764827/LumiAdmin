@@ -16,32 +16,33 @@ bool IsLegacyGlobalSurfaceOccupied()
 		|| FileExists(LEGACY_GLOBAL_PLUGIN);
 }
 
-void DisableLegacyGlobalBinary()
+bool DisableLegacyGlobalBinary()
 {
 	UnloadLegacyGlobalPlugin();
 	
 	if (!FileExists(LEGACY_GLOBAL_PLUGIN))
 	{
-		return;
+		return true;
 	}
 	
 	if (!DirExists(LEGACY_GLOBAL_DISABLED_DIR) && !CreateDirectory(LEGACY_GLOBAL_DISABLED_DIR, 511))
 	{
 		LogError("[cngokz-global] Failed to create %s", LEGACY_GLOBAL_DISABLED_DIR);
-		return;
+		return false;
 	}
 	
 	if (FileExists(LEGACY_GLOBAL_DISABLED_PLUGIN) && !DeleteFile(LEGACY_GLOBAL_DISABLED_PLUGIN))
 	{
 		LogError("[cngokz-global] Failed to replace existing disabled gokz-global.smx");
-		return;
+		return false;
 	}
 	
 	if (RenameFile(LEGACY_GLOBAL_DISABLED_PLUGIN, LEGACY_GLOBAL_PLUGIN))
 	{
 		LogMessage("[cngokz-global] Moved legacy gokz-global.smx to plugins/disabled");
-		return;
+		return true;
 	}
 	
 	LogError("[cngokz-global] Failed to move legacy gokz-global.smx to plugins/disabled");
+	return false;
 }

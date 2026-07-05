@@ -319,8 +319,18 @@ test('deploy workflow rebuilds and tests SourceMod plugins', () => {
   assert.match(workflow, /name: Build SourceMod Plugins[\s\S]*?bash csgo\/build_plugins\.sh/);
   assert.match(workflow, /GOKZ_INCLUDE_DIR="\$PWD\/csgo\/\.build\/gokz\/addons\/sourcemod\/scripting\/include"/);
   assert.match(workflow, /name: Test Plugin Sources[\s\S]*?node --test csgo\/\*\.test\.js/);
+  assert.match(workflow, /name: Stage Plugin Output[\s\S]*?mkdir -p csgo\/plugin-output\/plugins/);
+  assert.match(workflow, /mkdir -p csgo\/plugin-output\/cfg\/sourcemod\/cngokz-lumiadmin/);
+  assert.match(workflow, /cp csgo\/cfg\/sourcemod\/cngokz-lumiadmin\/\*\.cfg csgo\/plugin-output\/cfg\/sourcemod\/cngokz-lumiadmin\//);
+  assert.match(workflow, /name: plugin-output[\s\S]*?path: csgo\/plugin-output/);
+  assert.match(workflow, /mkdir -p \$\{\{ vars\.GAME_PATH_CNGOKZ \}\}\/\.\.\/\.\.\/\.\.\/cfg\/sourcemod\/cngokz-lumiadmin/);
+  assert.match(workflow, /mkdir -p \$\{\{ vars\.GAME_PATH_ILIAN \}\}\/\.\.\/\.\.\/\.\.\/cfg\/sourcemod\/cngokz-lumiadmin/);
+  assert.match(workflow, /plugin-output\/cfg\/sourcemod\/cngokz-lumiadmin\/ [\s\S]*?\$\{\{ vars\.GAME_PATH_CNGOKZ \}\}\/\.\.\/\.\.\/\.\.\/cfg\/sourcemod\/cngokz-lumiadmin\//);
+  assert.match(workflow, /plugin-output\/cfg\/sourcemod\/cngokz-lumiadmin\/ [\s\S]*?\$\{\{ vars\.GAME_PATH_ILIAN \}\}\/\.\.\/\.\.\/\.\.\/cfg\/sourcemod\/cngokz-lumiadmin\//);
   assert.match(workflow, /mkdir -p "\$PLUGIN_DIR\/disabled"/);
   assert.match(workflow, /mv "\$PLUGIN_DIR\/gokz-global\.smx" "\$PLUGIN_DIR\/disabled\/gokz-global\.smx"/);
+  assert.match(workflow, /mv "\$PLUGIN_DIR\/manger_online_reporter\.smx" "\$PLUGIN_DIR\/disabled\/manger_online_reporter\.smx"/);
+  assert.match(workflow, /mv "\$PLUGIN_DIR\/manger_edge_sync\.smx" "\$PLUGIN_DIR\/disabled\/manger_edge_sync\.smx"/);
   assert.match(workflow, /sm plugins unload gokz-global/);
   for (const plugin of [
     'cngokz-core.smx',
@@ -331,7 +341,7 @@ test('deploy workflow rebuilds and tests SourceMod plugins', () => {
   ]) {
     const escapedPlugin = plugin.replace('.', '\\.');
     assert.match(workflow, new RegExp(`csgo/addons/sourcemod/plugins/${escapedPlugin}`));
-    assert.match(workflow, new RegExp(`plugins/${escapedPlugin}`));
+    assert.match(workflow, new RegExp(`plugin-output/plugins/${escapedPlugin}`));
     assert.match(workflow, new RegExp(`sm plugins (reload|load) ${plugin.replace('.smx', '')}`));
   }
   assert.doesNotMatch(workflow, /plugins\/manger_/);

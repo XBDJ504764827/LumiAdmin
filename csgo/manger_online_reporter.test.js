@@ -312,8 +312,12 @@ test('deploy workflow rebuilds and tests SourceMod plugins', () => {
   const workflow = read(deployWorkflowPath);
 
   assert.match(workflow, /workflow_dispatch:[\s\S]*?deploy_target:/);
+  assert.match(workflow, /workflow_dispatch:[\s\S]*?publish_plugin_release:/);
+  assert.match(workflow, /publish_plugin_release:[\s\S]*?type: boolean/);
+  assert.match(workflow, /publish_plugin_release:[\s\S]*?default: false/);
   assert.match(workflow, /default: 'ilian'/);
   assert.match(workflow, /options:[\s\S]*?- ilian[\s\S]*?- cngokz[\s\S]*?- all/);
+  assert.match(workflow, /plugin:[\s\S]*?'csgo\/\*\*'[\s\S]*?'\.github\/workflows\/deploy\.yml'/);
   assert.match(workflow, /deploy-frontend-cngokz:[\s\S]*?inputs\.deploy_target == 'cngokz'[\s\S]*?inputs\.deploy_target == 'all'/);
   assert.match(workflow, /deploy-backend-cngokz:[\s\S]*?inputs\.deploy_target == 'cngokz'[\s\S]*?inputs\.deploy_target == 'all'/);
   assert.match(workflow, /deploy-plugin-cngokz:[\s\S]*?inputs\.deploy_target == 'cngokz'[\s\S]*?inputs\.deploy_target == 'all'/);
@@ -333,10 +337,20 @@ test('deploy workflow rebuilds and tests SourceMod plugins', () => {
   assert.match(workflow, /name: Test Plugin Sources[\s\S]*?node --test csgo\/\*\.test\.js/);
   assert.match(workflow, /name: Stage Plugin Output[\s\S]*?mkdir -p csgo\/plugin-output\/plugins/);
   assert.match(workflow, /name: plugin-output[\s\S]*?path: csgo\/plugin-output/);
+  assert.match(workflow, /name: Stage Game Server Release Package[\s\S]*?mkdir -p csgo\/plugin-release\/csgo\/addons\/sourcemod\/plugins/);
+  assert.match(workflow, /name: Stage Game Server Release Package[\s\S]*?inputs\.publish_plugin_release/);
+  assert.match(workflow, /mkdir -p csgo\/plugin-release\/csgo\/cfg\/sourcemod\/cngokz-lumiadmin/);
+  assert.match(workflow, /tar -czf "csgo\/plugin-release-assets\/\$package_name" -C csgo\/plugin-release \./);
+  assert.match(workflow, /name: plugin-release-package[\s\S]*?path: csgo\/plugin-release-assets/);
+  assert.match(workflow, /name: Upload Game Server Package Artifact[\s\S]*?inputs\.publish_plugin_release/);
+  assert.match(workflow, /release-plugin:[\s\S]*?softprops\/action-gh-release@v2/);
+  assert.match(workflow, /release-plugin:[\s\S]*?inputs\.publish_plugin_release/);
+  assert.match(workflow, /tag_name: cngokz-plugins-\$\{\{ github\.run_number \}\}/);
+  assert.match(workflow, /plugin-release-package\/\*\.tar\.gz/);
+  assert.match(workflow, /plugin-release-package\/SHA256SUMS/);
   assert.doesNotMatch(workflow, /plugin-output\/cfg/);
   assert.doesNotMatch(workflow, /cp csgo\/cfg\/sourcemod\/cngokz-lumiadmin/);
   assert.doesNotMatch(workflow, /rsync[\s\S]*plugin-output\/cfg/);
-  assert.doesNotMatch(workflow, /mkdir -p [^\n]*cfg\/sourcemod\/cngokz-lumiadmin/);
   assert.match(workflow, /mkdir -p "\$PLUGIN_DIR\/disabled"/);
   assert.match(workflow, /mv "\$PLUGIN_DIR\/gokz-global\.smx" "\$PLUGIN_DIR\/disabled\/gokz-global\.smx"/);
   assert.match(workflow, /mv "\$PLUGIN_DIR\/gokz-r2upload\.smx" "\$PLUGIN_DIR\/disabled\/gokz-r2upload\.smx"/);
@@ -353,6 +367,7 @@ test('deploy workflow rebuilds and tests SourceMod plugins', () => {
     const escapedPlugin = plugin.replace('.', '\\.');
     assert.match(workflow, new RegExp(`csgo/addons/sourcemod/plugins/${escapedPlugin}`));
     assert.match(workflow, new RegExp(`plugin-output/plugins/${escapedPlugin}`));
+    assert.match(workflow, new RegExp(`plugin-release/csgo/addons/sourcemod/plugins/${escapedPlugin}`));
     assert.match(workflow, new RegExp(`sm plugins (reload|load) ${plugin.replace('.smx', '')}`));
   }
   assert.doesNotMatch(workflow, /plugins\/manger_/);

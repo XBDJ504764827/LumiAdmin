@@ -14,6 +14,11 @@ on:
           - ilian
           - cngokz
           - all
+      publish_plugin_release:
+        description: '是否将游戏服务器插件包发布到 GitHub Releases'
+        required: true
+        default: false
+        type: boolean
 
 jobs:
   # ===== 检测变更模块 =====
@@ -39,6 +44,7 @@ jobs:
               - '.github/workflows/**'
             plugin:
               - 'csgo/**'
+              - '.github/workflows/deploy.yml'
 
       - name: Print Detection Result
         run: |
@@ -193,6 +199,67 @@ jobs:
           name: plugin-output
           path: csgo/plugin-output
           retention-days: 1
+
+      - name: Stage Game Server Release Package
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_plugin_release
+        run: |
+          rm -rf csgo/plugin-release csgo/plugin-release-assets
+          mkdir -p csgo/plugin-release/csgo/addons/sourcemod/plugins
+          mkdir -p csgo/plugin-release/csgo/cfg/sourcemod/cngokz-lumiadmin
+          cp csgo/addons/sourcemod/plugins/cngokz-core.smx csgo/plugin-release/csgo/addons/sourcemod/plugins/cngokz-core.smx
+          cp csgo/addons/sourcemod/plugins/cngokz-server.smx csgo/plugin-release/csgo/addons/sourcemod/plugins/cngokz-server.smx
+          cp csgo/addons/sourcemod/plugins/cngokz-sync.smx csgo/plugin-release/csgo/addons/sourcemod/plugins/cngokz-sync.smx
+          cp csgo/addons/sourcemod/plugins/cngokz-recordguard.smx csgo/plugin-release/csgo/addons/sourcemod/plugins/cngokz-recordguard.smx
+          cp csgo/addons/sourcemod/plugins/cngokz-global.smx csgo/plugin-release/csgo/addons/sourcemod/plugins/cngokz-global.smx
+          mkdir -p csgo/plugin-release-assets
+          package_name="cngokz-lumiadmin-csgo-plugins-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}.tar.gz"
+          tar -czf "csgo/plugin-release-assets/$package_name" -C csgo/plugin-release .
+          (cd csgo/plugin-release-assets && sha256sum "$package_name" > SHA256SUMS)
+
+      - name: Upload Game Server Package Artifact
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_plugin_release
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-release-package
+          path: csgo/plugin-release-assets
+          retention-days: 7
+
+  # ===== 发布游戏服务器插件包到 GitHub Releases =====
+  release-plugin:
+    needs: [detect-changes, build-plugin]
+    if: needs.detect-changes.outputs.plugin == 'true' && github.event_name == 'workflow_dispatch' && inputs.publish_plugin_release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Game Server Package Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: plugin-release-package
+          path: plugin-release-package
+
+      - name: Publish Plugin Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: cngokz-plugins-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: CNGOKZ Game Server Plugins ${{ github.run_number }}
+          body: |
+            CNGOKZ game server plugin package built from `${{ github.sha }}`.
+
+            Extract this archive at the game server root so files land under:
+
+            - `csgo/addons/sourcemod/plugins/`
+            - `csgo/cfg/sourcemod/cngokz-lumiadmin/`
+
+            The package intentionally does not include generated config files. Existing server configs should remain managed on the server.
+          files: |
+            plugin-release-package/*.tar.gz
+            plugin-release-package/SHA256SUMS
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          make_latest: true
 
   # ===== 部署前端 → CNGOKZ =====
   deploy-frontend-cngokz:

@@ -50,6 +50,7 @@ void ClearHeldRecord(int client)
     g_HeldRecordCreated[client] = false;
     g_HeldReplayCopied[client] = false;
     g_HeldReplayUploaded[client] = false;
+    g_HeldReplayUploadInFlight[client] = false;
     g_HeldRecordId[client][0] = '\0';
     g_HeldIdempotencyKey[client][0] = '\0';
     g_HeldReplayPath[client][0] = '\0';
@@ -141,7 +142,7 @@ int FindHeldClientByUserId(int userId)
 
 void TryUploadHeldReplay(int client)
 {
-    if (!g_HeldActive[client] || !g_HeldRecordCreated[client] || !g_HeldReplayCopied[client] || g_HeldReplayUploaded[client])
+    if (!g_HeldActive[client] || !g_HeldRecordCreated[client] || !g_HeldReplayCopied[client] || g_HeldReplayUploaded[client] || g_HeldReplayUploadInFlight[client])
     {
         return;
     }
@@ -152,42 +153,10 @@ void TryUploadHeldReplay(int client)
         return;
     }
 
-    char suffix[128];
-    Format(suffix, sizeof(suffix), "/abnormal-records/%s/replay", g_HeldRecordId[client]);
-    HTTPRequest request = CreateJsonRequest(suffix);
-    if (request == null)
+    if (UploadHeldReplayToR2(client))
     {
-        return;
+        g_HeldReplayUploadInFlight[client] = true;
     }
-
-    ApplyServerHeaders(request);
-    request.SetHeader("Content-Type", "application/vnd.gokz.replay");
-    request.SetHeader("x-cngokz-file-name", "%s.replay", g_HeldIdempotencyKey[client]);
-    request.UploadFile(g_HeldReplayPath[client], OnReplayUploaded, g_HeldUserId[client]);
-}
-
-public void OnReplayUploaded(HTTPStatus status, any value, const char[] error)
-{
-    int client = FindHeldClientByUserId(value);
-    if (client <= 0)
-    {
-        return;
-    }
-
-    if (error[0] != '\0')
-    {
-        LogError("[cngokz-recordguard] Replay upload failed: %s", error);
-        return;
-    }
-
-    if (status < HTTPStatus_OK || status >= HTTPStatus_MultipleChoices)
-    {
-        LogError("[cngokz-recordguard] Replay upload returned HTTP status %d.", status);
-        return;
-    }
-
-    g_HeldReplayUploaded[client] = true;
-    SaveReplayCacheForClient(client);
 }
 
 void SaveReplayCacheForClient(int client)

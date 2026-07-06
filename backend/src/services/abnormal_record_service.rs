@@ -498,6 +498,16 @@ pub struct ReplayUploadInput<'a> {
     pub data: Vec<u8>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ReplayMetadataInput {
+    pub report_token: String,
+    pub port: i32,
+    pub storage_key: String,
+    pub file_name: Option<String>,
+    pub file_size: Option<i64>,
+    pub content_type: Option<String>,
+}
+
 pub async fn upload_replay(
     db: &Database,
     storage: &R2Storage,
@@ -546,6 +556,67 @@ pub async fn upload_replay(
     .await?;
 
     Ok(item)
+}
+
+pub async fn attach_replay_metadata(
+    db: &Database,
+    record_id: Uuid,
+    input: ReplayMetadataInput,
+) -> anyhow::Result<AbnormalRecordItem> {
+    let server = ServerAuth::authenticate(db, input.port, &input.report_token).await?;
+    let item = get_record(db, record_id).await?;
+    anyhow::ensure!(item.server_id == Some(server.id), "记录不属于当前服务器");
+    anyhow::ensure!(item.status == "pending", "该记录已被处理，无法更新录像信息");
+
+    let storage_key = normalize_required(&input.storage_key, "R2 存储 key 不能为空")?;
+    anyhow::ensure!(
+        !storage_key.starts_with('/') && !storage_key.contains("..") && !storage_key.contains('\\'),
+        "R2 存储 key 无效"
+    );
+
+    let file_name = input
+        .file_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            storage_key
+                .rsplit('/')
+                .next()
+                .filter(|value| !value.is_empty())
+                .unwrap_or("run.replay")
+                .to_string()
+        });
+    anyhow::ensure!(
+        r2_storage::is_allowed_file_type(&file_name),
+        "不支持的录像文件类型"
+    );
+
+    let content_type = input
+        .content_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| r2_storage::guess_content_type(&file_name));
+    let file_size = input.file_size.unwrap_or(0).max(0);
+
+    sqlx::query_as::<_, AbnormalRecordItem>(&format!(
+        r#"UPDATE abnormal_records
+           SET replay_storage_key = $2, replay_file_name = $3, replay_file_size = $4,
+               replay_content_type = $5, replay_category = $6, updated_at = now()
+           WHERE id = $1
+           RETURNING {RECORD_FIELDS}"#
+    ))
+    .bind(record_id)
+    .bind(storage_key)
+    .bind(file_name.clone())
+    .bind(file_size)
+    .bind(content_type)
+    .bind(r2_storage::file_category(&file_name))
+    .fetch_one(&db.pool)
+    .await
+    .map_err(Into::into)
 }
 
 pub async fn update_replay_metadata_size(

@@ -1,4 +1,5 @@
 #include <sourcemod>
+#include <SteamWorks>
 #include <ripext>
 #include <GlobalAPI>
 #include <gokz>
@@ -18,6 +19,7 @@
 #define CNGOKZ_MAX_RECORD_ID 64
 #define CNGOKZ_MAX_RULES 512
 #define CNGOKZ_MAX_IDEMPOTENCY_KEY 96
+#define CNGOKZ_MAX_R2_KEY_LENGTH 256
 #define CNGOKZ_RECORDGUARD_DB "cngokz_recordguard"
 #define CNGOKZ_REPLAY_CACHE_DIR "data/cngokz-recordguard/abnormal"
 
@@ -31,10 +33,19 @@ ConVar g_RGPollInterval = null;
 ConVar g_RGRequestTimeout = null;
 ConVar g_RGDebugLog = null;
 ConVar g_RGTickrate = null;
+ConVar g_RGR2UploadEnabled = null;
+ConVar g_RGR2UploadUrl = null;
+ConVar g_RGR2UploadKey = null;
+ConVar g_RGR2UploadVerifyCert = null;
+ConVar g_RGLegacyR2UploadEnabled = null;
+ConVar g_RGLegacyR2UploadUrl = null;
+ConVar g_RGLegacyR2UploadKey = null;
+ConVar g_RGLegacyR2UploadVerifyCert = null;
 
 Handle g_RGRuleTimer = null;
 Handle g_RGPollTimer = null;
 Database g_RGDb = null;
+bool g_RGR2SteamWorksOK = false;
 
 int g_RuleCount = 0;
 char g_RuleMap[CNGOKZ_MAX_RULES][128];
@@ -55,6 +66,7 @@ float g_HeldThreshold[MAXPLAYERS + 1];
 bool g_HeldRecordCreated[MAXPLAYERS + 1];
 bool g_HeldReplayCopied[MAXPLAYERS + 1];
 bool g_HeldReplayUploaded[MAXPLAYERS + 1];
+bool g_HeldReplayUploadInFlight[MAXPLAYERS + 1];
 char g_HeldRecordId[MAXPLAYERS + 1][CNGOKZ_MAX_RECORD_ID];
 char g_HeldIdempotencyKey[MAXPLAYERS + 1][CNGOKZ_MAX_IDEMPOTENCY_KEY];
 char g_HeldReplayPath[MAXPLAYERS + 1][PLATFORM_MAX_PATH];
@@ -66,6 +78,7 @@ char g_HeldPlayerName[MAXPLAYERS + 1][MAX_NAME_LENGTH];
 #include "cngokz-recordguard/config.sp"
 #include "cngokz-recordguard/rules.sp"
 #include "cngokz-recordguard/detection.sp"
+#include "cngokz-recordguard/r2_upload.sp"
 #include "cngokz-recordguard/replay_capture.sp"
 #include "cngokz-recordguard/pending_records.sp"
 #include "cngokz-recordguard/global_submit.sp"
@@ -92,6 +105,11 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int errMax)
 public void OnPluginStart()
 {
     RecordGuard_OnPluginStart();
+}
+
+public void OnAllPluginsLoaded()
+{
+    RecordGuard_OnAllPluginsLoaded();
 }
 
 public void OnMapStart()

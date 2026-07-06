@@ -61,15 +61,17 @@ impl Database {
           created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )"#,
             r#"CREATE TABLE IF NOT EXISTS player_access_cache (
-          steamid64 TEXT PRIMARY KEY,
+          steamid64 TEXT NOT NULL,
           rating INTEGER NOT NULL DEFAULT 0,
           steam_level INTEGER NOT NULL DEFAULT 0,
+          rating_source TEXT NOT NULL DEFAULT 'legacy',
           kzt_data JSONB,
           skz_data JSONB,
           vnl_data JSONB,
           ovr_data JSONB,
           expires_at TIMESTAMPTZ NOT NULL,
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY (steamid64, rating_source)
         )"#,
             r#"CREATE TABLE IF NOT EXISTS whitelist_requests (
           id UUID PRIMARY KEY,

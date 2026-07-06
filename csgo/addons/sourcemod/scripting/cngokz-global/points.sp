@@ -126,10 +126,19 @@ static void UpdatePointsCallback(JSON_Object ranks, GlobalAPIRequestData request
 	}
 	else
 	{
-		APIPlayerRank rank = view_as<APIPlayerRank>(view_as<JSON_Array>(ranks).GetObject(0));
-		// points = timeType == TimeType_Nub ? rank.PointsOverall : rank.Points;
-		points = points == -1 ? 0 : rank.Points;
-		totalFinishes = rank.Finishes == -1 ? 0 : rank.Finishes;
+		JSON_Object rank_object = GlobalAPIArrayGetObject(ranks, 0);
+		if (GlobalAPIResponseInvalid(rank_object, "UpdatePointsCallback rank"))
+		{
+			points = 0;
+			totalFinishes = 0;
+		}
+		else
+		{
+			APIPlayerRank rank = view_as<APIPlayerRank>(rank_object);
+			// points = timeType == TimeType_Nub ? rank.PointsOverall : rank.Points;
+			points = points == -1 ? 0 : rank.Points;
+			totalFinishes = rank.Finishes == -1 ? 0 : rank.Finishes;
+		}
 	}
 	
 	if (isTotal)

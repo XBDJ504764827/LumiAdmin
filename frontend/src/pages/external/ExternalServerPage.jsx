@@ -6,6 +6,12 @@ import { useToast } from '../../shared/Toast.jsx';
 import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { formatChinaMonthDayTime } from '../../shared/time.js';
+import {
+  EXTERNAL_SERVER_DEFAULT_POLL_INTERVAL,
+  EXTERNAL_SERVER_MAX_POLL_INTERVAL,
+  EXTERNAL_SERVER_MIN_POLL_INTERVAL,
+  clampExternalServerPollInterval,
+} from './externalServerConfig.js';
 
 function normalizeServer(item) {
   return {
@@ -15,7 +21,7 @@ function normalizeServer(item) {
     port: item.port,
     rconPassword: item.rcon_password,
     enabled: item.enabled,
-    pollInterval: item.poll_interval ?? 30,
+    pollInterval: item.poll_interval ?? EXTERNAL_SERVER_DEFAULT_POLL_INTERVAL,
     lastQueriedAt: item.last_queried_at,
     createdAt: item.created_at,
     serverName: item.server_name ?? '',
@@ -27,7 +33,14 @@ function normalizeServer(item) {
   };
 }
 
-const defaultForm = { name: '', ip: '', port: 27015, rconPassword: '', enabled: true, pollInterval: 30 };
+const defaultForm = {
+  name: '',
+  ip: '',
+  port: 27015,
+  rconPassword: '',
+  enabled: true,
+  pollInterval: EXTERNAL_SERVER_DEFAULT_POLL_INTERVAL,
+};
 
 export function ExternalServerPage() {
   const { session } = useAuth();
@@ -76,7 +89,7 @@ export function ExternalServerPage() {
       toast({ title: '保存失败', message: '请填写必填字段', tone: 'danger' });
       return;
     }
-    const poll = Math.max(5, Math.min(3600, Number(form.pollInterval) || 30));
+    const poll = clampExternalServerPollInterval(form.pollInterval);
     try {
       setSaving(true);
       const body = {
@@ -273,12 +286,14 @@ export function ExternalServerPage() {
                     type="number"
                     className="form-control"
                     style={{ width: 100 }}
-                    min={5}
-                    max={3600}
+                    min={EXTERNAL_SERVER_MIN_POLL_INTERVAL}
+                    max={EXTERNAL_SERVER_MAX_POLL_INTERVAL}
                     value={form.pollInterval}
                     onChange={(e) => setForm((p) => ({ ...p, pollInterval: e.target.value }))}
                   />
-                  <span style={{ fontSize: 13, color: 'var(--text3)' }}>范围 5 - 3600 秒,默认 30 秒</span>
+                  <span style={{ fontSize: 13, color: 'var(--text3)' }}>
+                    范围 {EXTERNAL_SERVER_MIN_POLL_INTERVAL} - {EXTERNAL_SERVER_MAX_POLL_INTERVAL} 秒，默认 {EXTERNAL_SERVER_DEFAULT_POLL_INTERVAL} 秒
+                  </span>
                 </div>
               </div>
 

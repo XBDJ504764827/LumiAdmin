@@ -1,0 +1,10 @@
+export const EXTERNAL_SERVER_DEFAULT_POLL_INTERVAL = 120;
+export const EXTERNAL_SERVER_MIN_POLL_INTERVAL = 30;
+export const EXTERNAL_SERVER_MAX_POLL_INTERVAL = 3600;
+
+export function clampExternalServerPollInterval(value) {
+  return Math.max(
+    EXTERNAL_SERVER_MIN_POLL_INTERVAL,
+    Math.min(EXTERNAL_SERVER_MAX_POLL_INTERVAL, Number(value) || EXTERNAL_SERVER_DEFAULT_POLL_INTERVAL),
+  );
+}

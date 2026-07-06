@@ -108,6 +108,7 @@ test('online reporter uses unified plugin API endpoints', () => {
   assert.match(source, /ResolvePluginApiConfig\(url, sizeof\(url\), "\/bans\/poll", token, sizeof\(token\)\)/);
   assert.match(source, /ResolvePluginApiConfig\(banUrl, sizeof\(banUrl\), "\/bans", token, sizeof\(token\)\)/);
   assert.match(source, /ResolvePluginApiConfig\(url, sizeof\(url\), "\/access\/check", token, sizeof\(token\)\)/);
+  assert.match(source, /ResolvePluginApiConfig\(url, sizeof\(url\), "\/online-players\/disconnect", token, sizeof\(token\)\)/);
   assert.doesNotMatch(source, /manger_report_url/);
   assert.doesNotMatch(source, /manger_ban_api_url/);
 });
@@ -160,9 +161,24 @@ test('online reporter cleans up on client disconnect', () => {
   const source = read(onlineSourcePath);
 
   assert.match(source, /public void OnClientDisconnect\(int client\)/);
+  assert.match(source, /ReportClientDisconnect\(client\)/);
+  assert.match(source, /ClearClientDisconnectReason\(client\)/);
   assert.match(source, /g_WaitingOwnReason\[client\] = false/);
   assert.match(source, /g_BanTarget\[client\] = 0/);
   assert.match(source, /g_BanTime\[client\] = 0/);
+});
+
+test('online reporter records detailed disconnect reasons', () => {
+  const source = read(onlineSourcePath);
+
+  assert.match(source, /char g_DisconnectReason\[MAXPLAYERS \+ 1\]\[32\]/);
+  assert.match(source, /#include <cngokz\/session_reasons>/);
+  assert.match(source, /AddCommandListener\(CommandKickListener, "sm_kick"\)/);
+  assert.match(source, /MarkClientDisconnect\(target, CNGOKZ_SESSION_REASON_ADMIN_KICKED, detail\)/);
+  assert.match(source, /MarkClientDisconnect\(matchedClient, CNGOKZ_SESSION_REASON_BANNED_KICKED, reason\)/);
+  assert.match(source, /MarkClientDisconnect\(client, CNGOKZ_SESSION_REASON_ACCESS_REJECTED, message\)/);
+  assert.match(source, /payload\.SetString\("reason", reason\)/);
+  assert.match(source, /payload\.SetString\("detail", detail\)/);
 });
 
 test('online reporter resets ban poll etag on config change', () => {
@@ -283,6 +299,7 @@ test('plugin build script compiles both SourceMod plugins', () => {
   assert.match(script, /curl -fsSL "\$SOURCEMOD_DOWNLOAD_URL" -o "\$archive_path"/);
   assert.match(script, /spcomp64/);
   assert.match(script, /addons\/sourcemod\/plugins/);
+  assert.match(script, /GOKZ_TOP_SOURCE_DIR/);
   assert.match(script, /GOKZ_INCLUDE_DIR/);
   assert.match(script, /cngokz-core\.sp/);
   assert.match(script, /cngokz-server\.sp/);
@@ -310,9 +327,9 @@ test('deploy workflow rebuilds and tests SourceMod plugins', () => {
   assert.match(workflow, /deploy-backend-ilian:[\s\S]*?github\.event_name == 'workflow_dispatch'/);
   assert.match(workflow, /deploy-plugin-ilian:[\s\S]*?github\.event_name == 'workflow_dispatch'/);
   assert.match(workflow, /name: Cache SourceMod Compiler[\s\S]*?path: csgo\/\.build/);
-  assert.match(workflow, /name: Checkout GOKZ Includes[\s\S]*?XBDJ504764827\/gokz\.git/);
+  assert.match(workflow, /name: Checkout GOKZ Includes[\s\S]*?kzcharm\/gokz-top-plugins\.git/);
   assert.match(workflow, /name: Build SourceMod Plugins[\s\S]*?bash csgo\/build_plugins\.sh/);
-  assert.match(workflow, /GOKZ_INCLUDE_DIR="\$PWD\/csgo\/\.build\/gokz\/addons\/sourcemod\/scripting\/include"/);
+  assert.match(workflow, /GOKZ_INCLUDE_DIR="\$PWD\/csgo\/\.build\/gokz-top-plugins\/addons\/sourcemod\/scripting\/include"/);
   assert.match(workflow, /name: Test Plugin Sources[\s\S]*?node --test csgo\/\*\.test\.js/);
   assert.match(workflow, /name: Stage Plugin Output[\s\S]*?mkdir -p csgo\/plugin-output\/plugins/);
   assert.match(workflow, /name: plugin-output[\s\S]*?path: csgo\/plugin-output/);
@@ -322,6 +339,7 @@ test('deploy workflow rebuilds and tests SourceMod plugins', () => {
   assert.doesNotMatch(workflow, /mkdir -p [^\n]*cfg\/sourcemod\/cngokz-lumiadmin/);
   assert.match(workflow, /mkdir -p "\$PLUGIN_DIR\/disabled"/);
   assert.match(workflow, /mv "\$PLUGIN_DIR\/gokz-global\.smx" "\$PLUGIN_DIR\/disabled\/gokz-global\.smx"/);
+  assert.match(workflow, /mv "\$PLUGIN_DIR\/gokz-r2upload\.smx" "\$PLUGIN_DIR\/disabled\/gokz-r2upload\.smx"/);
   assert.match(workflow, /mv "\$PLUGIN_DIR\/manger_online_reporter\.smx" "\$PLUGIN_DIR\/disabled\/manger_online_reporter\.smx"/);
   assert.match(workflow, /mv "\$PLUGIN_DIR\/manger_edge_sync\.smx" "\$PLUGIN_DIR\/disabled\/manger_edge_sync\.smx"/);
   assert.match(workflow, /sm plugins unload gokz-global/);

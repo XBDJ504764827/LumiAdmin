@@ -126,6 +126,7 @@ public void OnPluginStart()
 	}
 	
 	CreateConVars();
+	ApplySettingsEnforcerForLateLoad();
 	CreateGlobalForwards();
 	RegisterCommands();
 }
@@ -567,6 +568,34 @@ static void CreateConVars()
 	}
 }
 
+static void ApplySettingsEnforcerForLateLoad()
+{
+	if (!gB_JustLateLoaded || !gCV_gokz_settings_enforcer.BoolValue)
+	{
+		return;
+	}
+
+	for (int i = 0; i < ENFORCEDCVAR_COUNT; i++)
+	{
+		if (gCV_EnforcedCVar[i] != null)
+		{
+			gCV_EnforcedCVar[i].FloatValue = gF_EnforcedCVarValues[i];
+		}
+	}
+
+	for (int client = 1; client <= MaxClients; client++)
+	{
+		gB_InValidRun[client] = false;
+		if (IsValidClient(client) && GOKZ_GetTimerRunning(client) && GOKZ_GetValidTimer(client))
+		{
+			LogMessage("Invalidated %N's active run because cngokz-global was loaded after map start.", client);
+			GOKZ_InvalidateRun(client);
+		}
+	}
+
+	gB_EnforcerOnFreshMap = true;
+}
+
 public void OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue)
 {
 	if (convar == gCV_gokz_settings_enforcer)
@@ -640,7 +669,25 @@ bool GlobalAPIResponseInvalid(JSON_Object response, const char[] context)
 		return true;
 	}
 
+#if defined _metastringmap_included
+	Handle data = response.Meta.GetHandle("data");
+	if (!IsValidHandle(data))
+	{
+		LogError("%s returned GlobalAPI response without readable JSON data.", context);
+		return true;
+	}
+#endif
+
 	return false;
+}
+
+JSON_Object GlobalAPIArrayGetObject(JSON_Object array, int index)
+{
+#if defined _json_array_included
+	return view_as<JSON_Array>(array).GetObject(index);
+#else
+	return array.GetObjectIndexed(index);
+#endif
 }
 
 public int GetAuthStatusCallback(JSON_Object auth_json, GlobalAPIRequestData request)
@@ -676,7 +723,14 @@ public int GetModeInfoCallback(JSON_Object modes, GlobalAPIRequestData request)
 	
 	for (int i = 0; i < modes.Length; i++)
 	{
-		APIMode mode = view_as<APIMode>(view_as<JSON_Array>(modes).GetObject(i));
+		JSON_Object mode_json = GlobalAPIArrayGetObject(modes, i);
+		if (GlobalAPIResponseInvalid(mode_json, "GetModeInfoCallback mode"))
+		{
+			LogError("GlobalAPI returned a malformed mode.");
+			continue;
+		}
+
+		APIMode mode = view_as<APIMode>(mode_json);
 		int mode_id = GOKZ_GL_FromGlobalMode(view_as<GlobalMode>(mode.Id));
 		if (mode_id == -1)
 		{
@@ -707,6 +761,12 @@ public int GetMapCallback(JSON_Object map_json, GlobalAPIRequestData request)
 		return 0;
 	}
 	
+	if (!map_json.HasKey("id") || !map_json.HasKey("filesize") || !map_json.HasKey("validated") || !map_json.HasKey("difficulty"))
+	{
+		LogError("GlobalAPI returned a malformed response while looking up the map.");
+		return 0;
+	}
+
 	APIMap map = view_as<APIMap>(map_json);
 	
 	gB_MapValidated = map.IsValidated;
@@ -754,7 +814,14 @@ public void CheckClientGlobalBan_Callback(JSON_Object player_json, GlobalAPIRequ
 		return;
 	}
 	
-	APIPlayer player = view_as<APIPlayer>(view_as<JSON_Array>(player_json).GetObject(0));
+	JSON_Object player_object = GlobalAPIArrayGetObject(player_json, 0);
+	if (GlobalAPIResponseInvalid(player_object, "CheckClientGlobalBan_Callback player"))
+	{
+		LogError("Got malformed reply when querying steamid %s", client_steamid);
+		return;
+	}
+
+	APIPlayer player = view_as<APIPlayer>(player_object);
 	player.GetSteamId(response_steamid, sizeof(response_steamid));
 	if (!StrEqual(client_steamid, response_steamid))
 	{

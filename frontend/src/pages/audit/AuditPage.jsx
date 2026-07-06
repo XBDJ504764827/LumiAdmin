@@ -4,6 +4,7 @@ import { useApiQuery } from '../../shared/useApiQuery.js';
 import { FilterToolbar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
+import { Modal } from '../../shared/Modal.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 
 const OPERATION_LABELS = {
@@ -50,13 +51,34 @@ const SUCCESS_OPTIONS = [
   { value: 'false', label: '失败' },
 ];
 
-function detailsPreview(details) {
-  if (!details || typeof details !== 'object') return null;
-  const entries = Object.entries(details)
-    .filter(([, value]) => value !== null && value !== undefined && value !== '')
-    .slice(0, 3);
-  if (entries.length === 0) return null;
-  return entries.map(([key, value]) => `${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`).join(' · ');
+function textPreview(value, maxLength = 48) {
+  if (!value) return null;
+  const text = String(value).replace(/\s+/g, ' ').trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength)}...`;
+}
+
+function AuditDetailModal({ item, onClose }) {
+  if (!item) return null;
+  return (
+    <Modal open title="审计详情" onClose={onClose} wide footer={<button className="btn btn-outline" onClick={onClose}>关闭</button>}>
+      <div className="detail-grid">
+        <span className="detail-label">时间</span><span className="detail-value">{formatChinaDateTime(item.created_at)}</span>
+        <span className="detail-label">操作</span><span className="detail-value">{OPERATION_LABELS[item.operation] || item.operation}</span>
+        <span className="detail-label">状态</span><span className="detail-value">{item.success ? '成功' : '失败'}</span>
+        <span className="detail-label">目标</span><span className="detail-value pre">{item.target || '-'}</span>
+        <span className="detail-label">玩家</span><span className="detail-value">{item.player_name || '-'}</span>
+        <span className="detail-label">操作人</span><span className="detail-value">{item.operator_name || '-'}</span>
+        <span className="detail-label">来源</span><span className="detail-value">{SOURCE_LABELS[item.source] || item.source}</span>
+        <span className="detail-label">IP</span><span className="detail-value mono">{item.client_ip || '-'}</span>
+        <span className="detail-label">服务器</span><span className="detail-value">{item.server_name ? `${item.server_name}${item.server_port ? `:${item.server_port}` : ''}` : '-'}</span>
+        <span className="detail-label">原因</span><span className="detail-value pre">{item.reason || '-'}</span>
+        <span className="detail-label">时长</span><span className="detail-value">{item.duration_minutes === 0 ? '永久' : item.duration_minutes ? `${item.duration_minutes} 分钟` : '-'}</span>
+        <span className="detail-label">消息</span><span className="detail-value pre">{item.message || '-'}</span>
+        <span className="detail-label">详情</span><span className="detail-value pre">{item.details ? JSON.stringify(item.details, null, 2) : '-'}</span>
+      </div>
+    </Modal>
+  );
 }
 
 export function AuditPage() {
@@ -65,6 +87,7 @@ export function AuditPage() {
   const [sourceFilter, setSourceFilter] = useState('');
   const [successFilter, setSuccessFilter] = useState('');
   const [page, setPage] = useState(1);
+  const [detailItem, setDetailItem] = useState(null);
 
   const buildParams = () => {
     const params = { page, page_size: 20 };
@@ -204,23 +227,10 @@ export function AuditPage() {
                         </span>
                       </td>
                       <td style={{ fontSize: 12, color: 'var(--text3)', maxWidth: 200 }} data-label="备注">
-                        {item.reason ? (
-                          <div><strong>原因:</strong> {item.reason}</div>
-                        ) : null}
-                        {item.duration_minutes ? (
-                          <div><strong>时长:</strong> {item.duration_minutes === 0 ? '永久' : `${item.duration_minutes}分钟`}</div>
-                        ) : null}
-                        {item.message ? (
-                          <div className="mt-4">{item.message}</div>
-                        ) : null}
+                        {textPreview(item.reason || item.message) || '-'}
                       </td>
                       <td style={{ fontSize: 12, color: 'var(--text3)', maxWidth: 260 }} data-label="详情">
-                        {item.details ? (
-                          <details>
-                            <summary style={{ cursor: 'pointer', color: 'var(--accent)' }}>{detailsPreview(item.details) || '查看详情'}</summary>
-                            <pre className="text-pre-wrap" style={{ margin: '8px 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{JSON.stringify(item.details, null, 2)}</pre>
-                          </details>
-                        ) : '-'}
+                        <button className="action-btn action-btn-accent" onClick={() => setDetailItem(item)}>查看详情</button>
                       </td>
                     </tr>
                 )) : null}
@@ -231,6 +241,7 @@ export function AuditPage() {
       </div>
 
       <Pagination page={page} pageSize={20} total={total} onChange={setPage} />
+      <AuditDetailModal item={detailItem} onClose={() => setDetailItem(null)} />
     </div>
   );
 }

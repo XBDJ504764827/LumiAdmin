@@ -221,10 +221,17 @@ static int MapTopSubmenuAddItems(Menu menu, JSON_Object records, int timeType)
 {
 	char playerName[MAX_NAME_LENGTH];
 	char display[128];
+	int added = 0;
 	
 	for (int i = 0; i < records.Length; i++)
 	{
-		APIRecord record = view_as<APIRecord>(view_as<JSON_Array>(records).GetObject(i));
+		JSON_Object record_object = GlobalAPIArrayGetObject(records, i);
+		if (GlobalAPIResponseInvalid(record_object, "MapTopSubmenuAddItems record"))
+		{
+			continue;
+		}
+
+		APIRecord record = view_as<APIRecord>(record_object);
 		
 		record.GetPlayerName(playerName, sizeof(playerName));
 		
@@ -243,7 +250,8 @@ static int MapTopSubmenuAddItems(Menu menu, JSON_Object records, int timeType)
 		}
 		
 		menu.AddItem("", display, ITEMDRAW_DISABLED);
+		added++;
 	}
 	
-	return records.Length;
+	return added;
 }

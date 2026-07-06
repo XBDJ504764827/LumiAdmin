@@ -7,30 +7,32 @@ import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { StatusPill } from '../../shared/StatusPill.jsx';
 import { Modal } from '../../shared/Modal.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
+import {
+  candidateMeta,
+  categoryKind,
+  categoryLabel,
+  count,
+  countActiveGlobalBans,
+  durLabel,
+  eventSourceLabel,
+  failureLabel,
+  feedbackTypeLabel,
+  latestItems,
+  latestWhitelistContact,
+  methodLabel,
+  riskLabel,
+  riskTone,
+  sessionDurationLabel,
+  sessionEndLabel,
+  sessionReasonKind,
+  sessionReasonLabel,
+  stKind,
+  stLabel,
+  tagsToText,
+  textToTags,
+} from './playerDetailFormat.js';
 
-const STATUS_LABELS = { active:'生效中', inactive:'已失效', pending:'待审核', approved:'已通过', rejected:'已驳回', revoked:'已撤销', resolved:'已解决', online:'在线', success:'成功', failed:'失败' };
-const ACCESS_METHOD_LABELS = { unrestricted:'无限制放行', whitelist:'白名单放行', restriction:'Rating 限制通过', custom_rule:'自定义规则放行', banned:'封禁拒绝', whitelist_rejected:'白名单拒绝', restriction_rejected:'Rating/等级拒绝', custom_rule_rejected:'自定义规则拒绝', snapshot_fallback:'快照回退' };
-const FAILURE_CODE_LABELS = { banned:'存在有效封禁', not_whitelisted:'未通过白名单', low_rating:'Rating 不足', low_steam_level:'Steam 等级不足', custom_rule_rejected:'自定义规则拒绝', profile_fetch_failed:'无法获取玩家资料', snapshot_unavailable:'访问控制服务不可用' };
-const CATEGORY_LABELS = { whitelist:'白名单', ban:'封禁', appeal:'申诉', report:'举报', online:'在线', session:'会话', access:'进服', admin:'后台操作', audit:'审计', evidence:'证据', map_feedback:'地图反馈' };
-function stKind(s,c){if(s==='active'||c==='ban')return s==='inactive'?'offline':'danger';if(s==='online'||s==='approved'||s==='success'||s==='resolved')return'success';if(s==='pending')return'warning';if(s==='failed'||s==='rejected')return'danger';if(s==='revoked'||s==='inactive')return'offline';return'default'}
-function stLabel(s){return STATUS_LABELS[s]||s||'-'}
-function durLabel(m){const v=Number(m);if(!Number.isFinite(v))return'-';if(v===0)return'永久';if(v<60)return`${v} 分钟`;if(v%1440===0)return`${v/1440} 天`;if(v%60===0)return`${v/60} 小时`;return`${v} 分钟`}
-function sessionDurationLabel(seconds){const v=Number(seconds);if(!Number.isFinite(v)||v<0)return'-';if(v<60)return`${Math.round(v)} 秒`;const minutes=Math.floor(v/60);if(minutes<60)return`${minutes} 分钟`;const hours=Math.floor(minutes/60);const restMinutes=minutes%60;if(hours<24)return restMinutes?`${hours} 小时 ${restMinutes} 分钟`:`${hours} 小时`;const days=Math.floor(hours/24);const restHours=hours%24;return restHours?`${days} 天 ${restHours} 小时`:`${days} 天`}
-function sessionEndLabel(item){return item?.left_at?formatChinaDateTime(item.left_at,{seconds:false}):'仍在线'}
-function tagsToText(t=[]){return t.join(', ')}
-function textToTags(v){return v.split(/[,，\n]/).map(t=>t.trim().replace(/^#/,'')).filter(Boolean).filter((t,i,a)=>a.findIndex(n=>n.toLowerCase()===t.toLowerCase())===i)}
 function Empty({children}){return<div className="player-detail-empty">{children}</div>}
-function feedbackTypeLabel(t){const m={missing:'地图缺失',broken:'地图损坏',request:'地图请求'};return m[t]||t||'-'}
-function methodLabel(method){return ACCESS_METHOD_LABELS[method]||method||'-'}
-function failureLabel(item){return FAILURE_CODE_LABELS[item?.failure_code]||item?.reject_reason||item?.failure_code||'-'}
-function categoryLabel(category){return CATEGORY_LABELS[category]||category||'事件'}
-function categoryKind(category,status){if(status==='failed'||category==='ban')return'danger';if(status==='pending')return'warning';if(status==='success'||status==='approved'||status==='online')return'success';if(category==='session')return status==='online'?'success':'offline';if(category==='access')return status==='success'?'success':'danger';return'default'}
-function count(v){return Number(v||0)}
-function countActiveGlobalBans(items=[]){return items.filter(item=>{const e=item.ban?.expires_on;if(!e||e.startsWith('9999'))return true;const d=new Date(e);return !Number.isNaN(d.getTime())&&d>new Date();}).length}
-function riskTone(action){if(action==='deny'||action==='require_force')return'danger';if(action==='warn')return'warning';return'success'}
-function riskLabel(action){if(action==='deny')return'建议拒绝';if(action==='require_force')return'强制复核';if(action==='warn')return'需要复核';return'正常处理'}
-function latestItems(items=[],limit=8){return [...items].sort((a,b)=>new Date(b.occurred_at)-new Date(a.occurred_at)).slice(0,limit)}
-function candidateMeta(candidate){const parts=[];if(candidate.active_ban_count>0)parts.push(`${candidate.active_ban_count} 条活跃封禁`);if(candidate.whitelist_status)parts.push(`白名单 ${stLabel(candidate.whitelist_status)}`);if(candidate.last_seen_at)parts.push(`最近 ${formatChinaDateTime(candidate.last_seen_at,{seconds:false})}`);return parts}
 
 // ── Ban Detail Popup ──
 function BanDetailPopup({item, onClose, onAction, token}) {
@@ -97,6 +99,7 @@ function WhitelistDetailPopup({item, onClose, onAction, token}) {
     <div className="detail-grid">
       <span className="detail-label">状态</span><span className="detail-value"><StatusPill kind={stKind(item.status,'whitelist')}>{stLabel(item.status)}</StatusPill></span>
       <span className="detail-label">昵称</span><span className="detail-value fw-600">{item.nickname}</span>
+      {item.contact&&<><span className="detail-label">联系方式</span><span className="detail-value pre">{item.contact}</span></>}
       <span className="detail-label">SteamID64</span><span className="detail-value mono">{item.steamid64}</span>
       {item.steam_persona_name&&<><span className="detail-label">Steam 名称</span><span className="detail-value">{item.steam_persona_name}</span></>}
       <span className="detail-label">申请时间</span><span className="detail-value">{formatChinaDateTime(item.applied_at)}</span>
@@ -300,7 +303,7 @@ function TimelineTab({detail}) {
             {event.description&&<div className="player-event-desc">{event.description}</div>}
             <div className="player-event-meta">
               <span>操作人: {event.actor||'-'}</span>
-              <span>来源: {event.source||'-'}</span>
+              <span>来源: {eventSourceLabel(event.source)}</span>
               {event.related_id&&<span className="mono">ID: {event.related_id}</span>}
             </div>
           </div>
@@ -311,11 +314,12 @@ function TimelineTab({detail}) {
 }
 
 function SessionTable({sessions=[], emptyText='暂无服务器会话记录。'}) {
-  return sessions.length===0?<Empty>{emptyText}</Empty>:<div className="table-responsive"><table className="data-table player-record-table"><thead><tr><th>服务器</th><th>进入时间</th><th>退出时间</th><th>时长</th><th>IP</th><th>Ping</th><th>地图</th><th>玩家名</th></tr></thead><tbody>
+  return sessions.length===0?<Empty>{emptyText}</Empty>:<div className="table-responsive"><table className="data-table player-record-table"><thead><tr><th>服务器</th><th>进入时间</th><th>退出时间</th><th>退出原因</th><th>时长</th><th>IP</th><th>Ping</th><th>地图</th><th>玩家名</th></tr></thead><tbody>
     {sessions.map(item=><tr key={item.id}>
       <td className="fw-600">{item.server_name}:{item.server_port}<br/><span style={{color:'var(--text3)',fontSize:'11.5px'}}>{item.community_name||'-'}</span></td>
       <td style={{fontFamily:'var(--mono)',fontSize:'12px',whiteSpace:'nowrap'}}>{formatChinaDateTime(item.first_seen_at,{seconds:false})}</td>
       <td style={{fontFamily:'var(--mono)',fontSize:'12px',whiteSpace:'nowrap'}}><StatusPill kind={item.left_at?'offline':'success'}>{item.left_at?'已退出':'在线'}</StatusPill><div className="player-table-sub">{sessionEndLabel(item)}</div></td>
+      <td><StatusPill kind={sessionReasonKind(item.end_reason)}>{item.left_at?sessionReasonLabel(item.end_reason):'仍在线'}</StatusPill>{item.end_detail?<div className="player-table-sub text-break">{item.end_detail}</div>:null}</td>
       <td>{sessionDurationLabel(item.duration_seconds)}</td>
       <td className="steam-id">{item.ip||'-'}</td>
       <td>{item.last_ping??'-'}</td>
@@ -427,6 +431,7 @@ function PlayerSummaryRail({detail, globalBans, canEdit, onSaveInternal, interna
   const tags = detail.internal_profile?.tags || [];
   const note = detail.internal_profile?.note || '';
   const onlineText = currentOnline.length > 0 ? currentOnline.map(item=>item.server_name).filter(Boolean).join(' / ') : '未在线';
+  const contact = latestWhitelistContact(detail);
 
   return <aside className="player-summary-card">
     <div className="player-summary-head">
@@ -461,6 +466,7 @@ function PlayerSummaryRail({detail, globalBans, canEdit, onSaveInternal, interna
       <div className="player-summary-id-row"><span>SteamID64</span><code>{profile.steamid64}</code></div>
       {profile.steamid&&<div className="player-summary-id-row"><span>SteamID2</span><code>{profile.steamid}</code></div>}
       {profile.steamid3&&<div className="player-summary-id-row"><span>SteamID3</span><code>{profile.steamid3}</code></div>}
+      <div className="player-summary-id-row"><span>联系方式</span><code>{contact || ''}</code></div>
     </div>
 
     <div className="player-summary-section">
@@ -741,7 +747,6 @@ export function PlayerDetailPage() {
             </div>
           )}
         </div>
-        <button className="btn btn-primary" type="submit" disabled={loading}>{loading?'检索中...':'检索档案'}</button>
         {lastQuery&&<button className="btn btn-outline" type="button" disabled={loading} onClick={refreshDetail}>刷新</button>}
       </form>
       {error&&<div className="player-detail-error">{error}</div>}

@@ -264,6 +264,20 @@ pub(crate) async fn report_plugin_online_players(
     }
 }
 
+pub(crate) async fn report_plugin_player_disconnect(
+    State(ctx): State<AppCtx>,
+    Json(body): Json<community_service::PlayerDisconnectReportInput>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    match community_service::report_player_disconnect(&ctx.db, body).await {
+        Ok(result) => Ok(Json(serde_json::json!({ "result": result }))),
+        Err(error) if error.to_string().contains("不匹配") => Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )),
+        Err(error) => Err(invalid_request(error)),
+    }
+}
+
 pub(crate) async fn get_online_players(
     State(ctx): State<AppCtx>,
     headers: HeaderMap,

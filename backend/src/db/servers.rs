@@ -36,20 +36,24 @@ impl Database {
         // player_access_cache 表 + 索引（扩展为通用 GOKZ 缓存）
         sqlx::query(
             r#"CREATE TABLE IF NOT EXISTS player_access_cache (
-          steamid64 TEXT PRIMARY KEY,
+          steamid64 TEXT NOT NULL,
           rating INTEGER NOT NULL DEFAULT 0,
           steam_level INTEGER NOT NULL DEFAULT 0,
+          rating_source TEXT NOT NULL DEFAULT 'legacy',
           kzt_data JSONB,
           skz_data JSONB,
           vnl_data JSONB,
           ovr_data JSONB,
           expires_at TIMESTAMPTZ NOT NULL,
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY (steamid64, rating_source)
         )"#,
         )
         .execute(&self.pool)
         .await?;
         sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_player_access_cache_expires_at ON player_access_cache (expires_at)"#)
+        .execute(&self.pool).await?;
+        sqlx::query(r#"ALTER TABLE player_access_cache ADD COLUMN IF NOT EXISTS rating_source TEXT NOT NULL DEFAULT 'legacy'"#)
         .execute(&self.pool).await?;
 
         // server_online_players 表 + 索引
@@ -88,6 +92,7 @@ impl Database {
           last_seen_at TIMESTAMPTZ NOT NULL,
           left_at TIMESTAMPTZ,
           end_reason TEXT,
+          end_detail TEXT,
           last_ping INTEGER,
           last_map TEXT NOT NULL DEFAULT '',
           created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -98,6 +103,11 @@ impl Database {
         .await?;
         sqlx::query(
             r#"ALTER TABLE player_server_sessions ADD COLUMN IF NOT EXISTS end_reason TEXT"#,
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            r#"ALTER TABLE player_server_sessions ADD COLUMN IF NOT EXISTS end_detail TEXT"#,
         )
         .execute(&self.pool)
         .await?;
@@ -210,6 +220,44 @@ impl Database {
         sqlx::query(r#"ALTER TABLE player_access_cache ALTER COLUMN steam_level SET DEFAULT 0"#)
             .execute(&self.pool)
             .await?;
+        sqlx::query(
+            r#"ALTER TABLE player_access_cache ALTER COLUMN rating_source SET DEFAULT 'legacy'"#,
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(r#"ALTER TABLE player_access_cache ALTER COLUMN steamid64 SET NOT NULL"#)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(r#"ALTER TABLE player_access_cache ALTER COLUMN rating_source SET NOT NULL"#)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(
+            r#"DO $$
+DECLARE
+  pk_name TEXT;
+  pk_columns TEXT;
+BEGIN
+  SELECT c.conname, string_agg(a.attname, ',' ORDER BY cols.ordinality)
+    INTO pk_name, pk_columns
+  FROM pg_constraint c
+  JOIN unnest(c.conkey) WITH ORDINALITY AS cols(attnum, ordinality) ON true
+  JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = cols.attnum
+  WHERE c.conrelid = 'player_access_cache'::regclass
+    AND c.contype = 'p'
+  GROUP BY c.conname;
+
+  IF pk_columns IS DISTINCT FROM 'steamid64,rating_source' THEN
+    IF pk_name IS NOT NULL THEN
+      EXECUTE format('ALTER TABLE player_access_cache DROP CONSTRAINT %I', pk_name);
+    END IF;
+
+    ALTER TABLE player_access_cache
+      ADD PRIMARY KEY (steamid64, rating_source);
+  END IF;
+END $$;"#,
+        )
+        .execute(&self.pool)
+        .await?;
 
         // player_access_logs 进服记录表
         sqlx::query(

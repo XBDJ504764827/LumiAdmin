@@ -27,6 +27,7 @@ pub struct GokzModeStats {
 /// 缓存配置
 const CACHE_TTL_HOURS: i64 = 24;
 const CACHE_MAX_ENTRIES: usize = 10000;
+const GOKZ_STATS_RATING_SOURCE: &str = "gokz_stats";
 
 /// GOKZ 内存缓存条目类型
 type GokzMemoryCache = HashMap<String, (GokzStats, DateTime<Utc>)>;
@@ -91,9 +92,10 @@ impl GokzCacheManager {
         let row: Option<GokzDbRow> = sqlx::query_as(
             r#"SELECT kzt_data, skz_data, vnl_data, ovr_data, expires_at
                FROM player_access_cache
-               WHERE steamid64 = $1 AND expires_at > now()"#,
+               WHERE steamid64 = $1 AND rating_source = $2 AND expires_at > now()"#,
         )
         .bind(steamid64)
+        .bind(GOKZ_STATS_RATING_SOURCE)
         .fetch_optional(&self.db.pool)
         .await
         .ok()?;
@@ -144,9 +146,9 @@ impl GokzCacheManager {
 
         // 写入 PG
         let result = sqlx::query(
-            r#"INSERT INTO player_access_cache (steamid64, rating, steam_level, kzt_data, skz_data, vnl_data, ovr_data, expires_at, updated_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
-               ON CONFLICT (steamid64) DO UPDATE
+            r#"INSERT INTO player_access_cache (steamid64, rating, steam_level, rating_source, kzt_data, skz_data, vnl_data, ovr_data, expires_at, updated_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+               ON CONFLICT (steamid64, rating_source) DO UPDATE
                SET rating = EXCLUDED.rating,
                    steam_level = EXCLUDED.steam_level,
                    kzt_data = EXCLUDED.kzt_data,
@@ -159,6 +161,7 @@ impl GokzCacheManager {
         .bind(steamid64)
         .bind(rating)
         .bind(steam_level)
+        .bind(GOKZ_STATS_RATING_SOURCE)
         .bind(kzt_json)
         .bind(skz_json)
         .bind(vnl_json)

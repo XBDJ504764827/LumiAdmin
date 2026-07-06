@@ -1,4 +1,4 @@
-use crate::{auth::session::role_label, db::Database};
+use crate::{auth::session::role_label, db::Database, services::community_service};
 use serde::Serialize;
 #[cfg(not(test))]
 use std::sync::{OnceLock, RwLock};
@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 #[cfg(not(test))]
 const DASHBOARD_CACHE_TTL: Duration = Duration::from_secs(10);
+const SERVER_PERFORMANCE_WINDOW_SECONDS: i64 = 300;
 /// 仪表盘缓存使用 RwLock：读多写少（所有管理员共享、每 30s 轮询一次），
 /// 读不阻塞读，避免 Mutex 在并发读时造成不必要的串行化。
 #[cfg(not(test))]
@@ -131,13 +132,15 @@ fn cached_metrics() -> Option<DashboardMetrics> {
 
 async fn get_metrics_uncached(db: &Database) -> anyhow::Result<DashboardMetrics> {
     // 查询1: 服务器 + 社区组 + 在线玩家统计（合并为 1 个查询）
+    let stale_after = community_service::stale_report_interval_sql();
     let stats: (i64, i64, i64, i64) = sqlx::query_as(
         r#"SELECT
             (SELECT COUNT(*) FROM servers) AS total_servers,
-            (SELECT COUNT(*) FROM servers WHERE status = 'online') AS online_servers,
+            (SELECT COUNT(*) FROM servers WHERE status = 'online' AND (last_reported_at IS NULL OR last_reported_at > now() - $1::INTERVAL)) AS online_servers,
             (SELECT COUNT(*) FROM communities) AS communities,
-            (SELECT COALESCE(SUM(cardinality(players)), 0)::BIGINT FROM servers WHERE status = 'online') AS online_players"#,
+            (SELECT COALESCE(SUM(cardinality(players)), 0)::BIGINT FROM servers WHERE status = 'online' AND (last_reported_at IS NULL OR last_reported_at > now() - $1::INTERVAL)) AS online_players"#,
     )
+    .bind(&stale_after)
     .fetch_one(&db.pool)
     .await?;
     let (total_servers, online_servers, communities, online_players) = stats;
@@ -197,6 +200,7 @@ async fn get_metrics_uncached(db: &Database) -> anyhow::Result<DashboardMetrics>
 }
 
 async fn get_server_performance_stats(db: &Database) -> anyhow::Result<ServerPerformanceStats> {
+    let performance_window = format!("{SERVER_PERFORMANCE_WINDOW_SECONDS} seconds");
     let result: Option<(f32, f32, f32, i64, i64)> = sqlx::query_as(
         r#"
         SELECT
@@ -216,11 +220,12 @@ async fn get_server_performance_stats(db: &Database) -> anyhow::Result<ServerPer
             FROM server_status_history ssh
             JOIN servers s ON s.id = ssh.server_id
             WHERE s.status = 'online'
-              AND ssh.reported_at > now() - interval '5 minutes'
+              AND ssh.reported_at > now() - $1::INTERVAL
             ORDER BY ssh.server_id, ssh.reported_at DESC
         ) ssh
         "#,
     )
+    .bind(&performance_window)
     .fetch_optional(&db.pool)
     .await?;
 

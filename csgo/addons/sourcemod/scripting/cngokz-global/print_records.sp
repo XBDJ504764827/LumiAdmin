@@ -71,10 +71,18 @@ public int PrintRecordsCallback(JSON_Object records, GlobalAPIRequestData reques
 	}
 	else
 	{
-		APIRecord record = view_as<APIRecord>(view_as<JSON_Array>(records).GetObject(0));
-		printRecordsTimeExists[client][timeType] = true;
-		printRecordsTimes[client][timeType] = record.Time;
-		record.GetPlayerName(printRecordsPlayerNames[client][timeType], sizeof(printRecordsPlayerNames[][]));
+		JSON_Object record_object = GlobalAPIArrayGetObject(records, 0);
+		if (GlobalAPIResponseInvalid(record_object, "PrintRecordsCallback record"))
+		{
+			printRecordsTimeExists[client][timeType] = false;
+		}
+		else
+		{
+			APIRecord record = view_as<APIRecord>(record_object);
+			printRecordsTimeExists[client][timeType] = true;
+			printRecordsTimes[client][timeType] = record.Time;
+			record.GetPlayerName(printRecordsPlayerNames[client][timeType], sizeof(printRecordsPlayerNames[][]));
+		}
 	}
 	
 	if (!waitingForOtherCallback[client])

@@ -392,6 +392,17 @@ pub(crate) async fn plugin_upload_replay(
     Ok(Json(serde_json::json!({ "item": item })))
 }
 
+pub(crate) async fn plugin_attach_replay_metadata(
+    State(ctx): State<AppCtx>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<abnormal_record_service::ReplayMetadataInput>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let item = abnormal_record_service::attach_replay_metadata(&ctx.db, id, body)
+        .await
+        .map_err(invalid_request)?;
+    Ok(Json(serde_json::json!({ "item": item })))
+}
+
 pub(crate) async fn plugin_poll_approved(
     State(ctx): State<AppCtx>,
     Json(body): Json<PollApprovedBody>,

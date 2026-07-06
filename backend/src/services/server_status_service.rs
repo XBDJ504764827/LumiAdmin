@@ -2,6 +2,8 @@ use crate::{db::Database, services::observability_service};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+const LATEST_STATUS_WINDOW_SECONDS: i64 = 300;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerStatusInput {
     pub report_token: String,
@@ -170,6 +172,7 @@ pub fn start_status_history_cleanup_loop(db: Database, interval_secs: u64, reten
 
 #[allow(dead_code)]
 pub async fn get_latest_status(db: &Database) -> anyhow::Result<Vec<ServerStatusItem>> {
+    let latest_window = format!("{LATEST_STATUS_WINDOW_SECONDS} seconds");
     let rows = sqlx::query_as::<_, ServerStatusRow>(
         r#"
         SELECT DISTINCT ON (ssh.server_id)
@@ -188,10 +191,11 @@ pub async fn get_latest_status(db: &Database) -> anyhow::Result<Vec<ServerStatus
         FROM server_status_history ssh
         JOIN servers s ON s.id = ssh.server_id
         WHERE s.status = 'online'
-          AND ssh.reported_at > now() - interval '5 minutes'
+          AND ssh.reported_at > now() - $1::INTERVAL
         ORDER BY ssh.server_id, ssh.reported_at DESC
         "#,
     )
+    .bind(&latest_window)
     .fetch_all(&db.pool)
     .await?;
 

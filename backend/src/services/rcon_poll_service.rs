@@ -10,7 +10,7 @@ use std::time::Duration;
 
 const CACHE_TTL_SECS: u64 = 60;
 
-/// 启动轮询循环。base_interval_secs 为基础扫描间隔（建议 5 秒），
+/// 启动轮询循环。base_interval_secs 为基础扫描间隔（建议 30 秒），
 /// 每个服务器的实际查询频率由其自身的 poll_interval 决定。
 /// 服务器列表缓存 60 秒，避免高频查库。
 pub fn start_rcon_poll_loop(db: Database, base_interval_secs: u64) {

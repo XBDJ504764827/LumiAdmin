@@ -3,6 +3,7 @@
 #include <ripext>
 #include <manger_shared>
 #include <cngokz/core>
+#include <cngokz/session_reasons>
 
 // Edge Sync Agent Native函数声明
 native int EdgeSync_EnqueueOperation(const char[] operation, const char[] target, const char[] targetType, const char[] playerName, const char[] reason, const char[] operatorName, const char[] operatorSteamid, int durationMinutes);
@@ -46,6 +47,8 @@ int g_LastTickrate = 64;
 int g_ServerStartTime = 0;
 int g_UnbanAdminUserId = 0;
 bool g_LegacyServerSurfaceDeferred = false;
+char g_DisconnectReason[MAXPLAYERS + 1][32];
+char g_DisconnectDetail[MAXPLAYERS + 1][256];
 
 // 服务端返回的封禁列表版本签名 etag。每次轮询时回传，命中后端版本检测时
 // items 为空，避免后端每次全量序列化最多 10000 条记录。
@@ -106,6 +109,7 @@ public void OnPluginStart()
     RegServerCmd("cngokz_server_local", CommandServerMapping, "Register one CNGOKZ server mapping when cngokz-core is not loaded.");
     AddCommandListener(ChatHook, "say");
     AddCommandListener(ChatHook, "say_team");
+    AddCommandListener(CommandKickListener, "sm_kick");
 
     if (g_ServerTokenMap == null)
     {
@@ -218,9 +222,70 @@ public void OnMapEnd()
 
 public void OnClientDisconnect(int client)
 {
+    ReportClientDisconnect(client);
+    ClearClientDisconnectReason(client);
     g_WaitingOwnReason[client] = false;
     g_BanTarget[client] = 0;
     g_BanTime[client] = 0;
+}
+
+public void OnClientPutInServer(int client)
+{
+    ClearClientDisconnectReason(client);
+}
+
+void ClearClientDisconnectReason(int client)
+{
+    if (client <= 0 || client > MaxClients)
+    {
+        return;
+    }
+    g_DisconnectReason[client][0] = '\0';
+    g_DisconnectDetail[client][0] = '\0';
+}
+
+void MarkClientDisconnect(int client, const char[] reason, const char[] detail)
+{
+    if (client <= 0 || client > MaxClients)
+    {
+        return;
+    }
+    strcopy(g_DisconnectReason[client], sizeof(g_DisconnectReason[]), reason);
+    strcopy(g_DisconnectDetail[client], sizeof(g_DisconnectDetail[]), detail);
+}
+
+public Action CommandKickListener(int client, const char[] command, int args)
+{
+    if (args < 1)
+    {
+        return Plugin_Continue;
+    }
+
+    char targetArg[128];
+    GetCmdArg(1, targetArg, sizeof(targetArg));
+    int target = FindTarget(client, targetArg, true, false);
+    if (target <= 0)
+    {
+        return Plugin_Continue;
+    }
+
+    char reason[256];
+    AppendCommandReason(2, args, reason, sizeof(reason));
+
+    char adminName[128];
+    if (client == 0)
+    {
+        strcopy(adminName, sizeof(adminName), "CONSOLE");
+    }
+    else
+    {
+        GetClientName(client, adminName, sizeof(adminName));
+    }
+
+    char detail[256];
+    Format(detail, sizeof(detail), "管理员 %s 执行 sm_kick：%s", adminName, reason);
+    MarkClientDisconnect(target, CNGOKZ_SESSION_REASON_ADMIN_KICKED, detail);
+    return Plugin_Continue;
 }
 
 public void OnPluginConfigChanged(ConVar convar, const char[] oldValue, const char[] newValue)
@@ -947,6 +1012,7 @@ void KickMatchingBan(JSONObject item, StringMap steamMap, StringMap ipMap)
     if (matchedClient > 0 && IsClientInGame(matchedClient))
     {
         CompletePolledBanDetails(matchedClient);
+        MarkClientDisconnect(matchedClient, CNGOKZ_SESSION_REASON_BANNED_KICKED, reason);
         KickClient(matchedClient, "你已被封禁：%s", reason);
     }
 }
@@ -1074,6 +1140,78 @@ public void OnReportResponse(HTTPResponse response, any value, const char[] erro
     {
         LogError("Manger online reporter returned HTTP status %d.", response.Status);
     }
+}
+
+void ReportClientDisconnect(int client)
+{
+    if (client <= 0 || client > MaxClients || IsFakeClient(client))
+    {
+        return;
+    }
+
+    char token[256];
+    char url[512];
+    if (!ResolvePluginApiConfig(url, sizeof(url), "/online-players/disconnect", token, sizeof(token)))
+    {
+        return;
+    }
+
+    int currentPort = 0;
+    if (!GetCurrentServerPort(currentPort))
+    {
+        return;
+    }
+
+    char steamId64[64] = "";
+    char steamId2[64] = "";
+    GetClientAuthId(client, AuthId_SteamID64, steamId64, sizeof(steamId64), true);
+    GetClientAuthId(client, AuthId_Steam2, steamId2, sizeof(steamId2), true);
+    if (steamId64[0] == '\0' && steamId2[0] == '\0')
+    {
+        return;
+    }
+
+    char reason[32];
+    if (g_DisconnectReason[client][0] == '\0')
+    {
+        strcopy(reason, sizeof(reason), CNGOKZ_SESSION_REASON_PLAYER_QUIT);
+    }
+    else
+    {
+        strcopy(reason, sizeof(reason), g_DisconnectReason[client]);
+    }
+
+    char detail[256];
+    if (g_DisconnectDetail[client][0] == '\0')
+    {
+        strcopy(detail, sizeof(detail), "玩家断开连接。");
+    }
+    else
+    {
+        strcopy(detail, sizeof(detail), g_DisconnectDetail[client]);
+    }
+
+    char playerName[128] = "";
+    char playerIp[64] = "";
+    GetClientName(client, playerName, sizeof(playerName));
+    GetClientIP(client, playerIp, sizeof(playerIp), true);
+
+    JSONObject payload = new JSONObject();
+    payload.SetString("report_token", token);
+    payload.SetInt("port", currentPort);
+    payload.SetString("steam_id64", steamId64);
+    payload.SetString("steam_id", steamId2);
+    payload.SetString("player_name", playerName);
+    payload.SetString("ip", playerIp);
+    payload.SetString("reason", reason);
+    payload.SetString("detail", detail);
+    PostJsonObject(url, payload, OnDisconnectReportResponse);
+    delete payload;
+}
+
+public void OnDisconnectReportResponse(HTTPResponse response, any value, const char[] error)
+{
+    LogHttpPostFailure("disconnect report", response, error);
 }
 
 void AppendCommandReason(int startArg, int args, char[] reason, int maxLen)
@@ -1500,6 +1638,7 @@ bool SubmitPluginBan(int client, int target, const char[] banType, const char[] 
 
     if (target > 0 && IsClientInGame(target))
     {
+        MarkClientDisconnect(target, CNGOKZ_SESSION_REASON_BANNED_KICKED, reason);
         KickClient(target, "你已被封禁：%s", reason);
     }
     return true;
@@ -2182,7 +2321,19 @@ public void OnAccessCheckResponse(HTTPResponse response, any value, const char[]
     if (!allowed)
     {
         char message[256];
+        char failureCode[64];
+        char accessMethod[64];
         result.GetString("message", message, sizeof(message));
+        result.GetString("failure_code", failureCode, sizeof(failureCode));
+        result.GetString("access_method", accessMethod, sizeof(accessMethod));
+        if (StrEqual(failureCode, "banned") || StrEqual(failureCode, "linked_ip_banned") || StrEqual(accessMethod, "banned"))
+        {
+            MarkClientDisconnect(client, CNGOKZ_SESSION_REASON_BANNED_KICKED, message);
+        }
+        else
+        {
+            MarkClientDisconnect(client, CNGOKZ_SESSION_REASON_ACCESS_REJECTED, message);
+        }
         KickClient(client, "%s", message);
     }
 
@@ -2205,6 +2356,7 @@ void OfflineAccessCheck(any userId)
             DebugLog("Access check fallback allowed userId %d because local snapshot is unavailable.", userId);
             return;
         }
+        MarkClientDisconnect(client, CNGOKZ_SESSION_REASON_ACCESS_REJECTED, "访问控制服务暂时不可用。");
         KickClient(client, "访问控制服务暂时不可用，请稍后再试。");
         return;
     }
@@ -2217,6 +2369,7 @@ void OfflineAccessCheck(any userId)
     char reason[256];
     if (FindOfflineBan(steamId, ipAddress, reason, sizeof(reason)))
     {
+        MarkClientDisconnect(client, CNGOKZ_SESSION_REASON_BANNED_KICKED, reason);
         KickClient(client, "你已被封禁：%s", reason);
         return;
     }
@@ -2228,6 +2381,7 @@ void OfflineAccessCheck(any userId)
             DebugLog("Access check fallback allowed userId %d because offline whitelist/access rules could not confirm eligibility.", userId);
             return;
         }
+        MarkClientDisconnect(client, CNGOKZ_SESSION_REASON_ACCESS_REJECTED, "本地访问快照未确认玩家满足进入条件。");
         KickClient(client, "你的白名单状态无法确认，请稍后再试。");
         return;
     }

@@ -8,9 +8,13 @@ use crate::{
     },
 };
 use chrono::{DateTime, Duration, Utc};
+use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::warn;
+
+const GOKZ_RATING_SCOPES: [&str; 4] = ["KZT", "SKZ", "VNL", "OVR"];
+pub(crate) const ACCESS_RATING_SOURCE: &str = "scoped_max";
 
 #[derive(Debug, Clone)]
 pub struct AccessCheckInput {
@@ -336,9 +340,10 @@ async fn read_cache(
     Ok(sqlx::query_as::<_, PlayerAccessCacheRow>(
         r#"SELECT rating, steam_level, expires_at
            FROM player_access_cache
-           WHERE steamid64 = $1"#,
+           WHERE steamid64 = $1 AND rating_source = $2"#,
     )
     .bind(steam_id64)
+    .bind(ACCESS_RATING_SOURCE)
     .fetch_optional(&db.pool)
     .await?)
 }
@@ -349,9 +354,9 @@ async fn write_cache(
     profile: &PlayerAccessProfile,
 ) -> anyhow::Result<()> {
     sqlx::query(
-        r#"INSERT INTO player_access_cache (steamid64, rating, steam_level, expires_at, updated_at)
-           VALUES ($1, $2, $3, $4, now())
-           ON CONFLICT (steamid64) DO UPDATE
+        r#"INSERT INTO player_access_cache (steamid64, rating, steam_level, rating_source, expires_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, now())
+           ON CONFLICT (steamid64, rating_source) DO UPDATE
            SET rating = EXCLUDED.rating,
                steam_level = EXCLUDED.steam_level,
                expires_at = EXCLUDED.expires_at,
@@ -360,6 +365,7 @@ async fn write_cache(
     .bind(steam_id64)
     .bind(profile.rating)
     .bind(profile.steam_level)
+    .bind(ACCESS_RATING_SOURCE)
     .bind(Utc::now() + Duration::hours(24))
     .execute(&db.pool)
     .await?;
@@ -376,29 +382,8 @@ async fn fetch_player_profile(
         return Ok(None);
     }
 
-    let gokz_url = format!("https://api.gokz.top/v1/leaderboards/players/{steam_id64}");
-
     let steam_level = fetch_steam_level(config, steam_id64).await;
-
-    let rating = match http_client::http_client().get(&gokz_url).send().await {
-        Ok(response) if response.status().is_success() => {
-            match response.json::<GokzPlayerResponse>().await {
-                Ok(body) => body.rating.map(|rating| rating.trunc() as i32),
-                Err(error) => {
-                    warn!(steam_id64, error = %error, "GOKZ 玩家资料解析失败，进入限制将放行");
-                    None
-                }
-            }
-        }
-        Ok(response) => {
-            warn!(steam_id64, status = %response.status(), "GOKZ 玩家资料请求失败，进入限制将放行");
-            None
-        }
-        Err(error) => {
-            warn!(steam_id64, error = %error, "GOKZ 玩家资料请求异常，进入限制将放行");
-            None
-        }
-    };
+    let rating = fetch_best_gokz_rating(steam_id64).await;
     let steam_level = match steam_level {
         Some(level) => Some(level),
         None => {
@@ -422,6 +407,56 @@ async fn fetch_player_profile(
             Ok(None)
         }
     }
+}
+
+async fn fetch_best_gokz_rating(steam_id64: &str) -> Option<i32> {
+    let ratings = join_all(
+        GOKZ_RATING_SCOPES
+            .iter()
+            .map(|scope| fetch_gokz_scope_rating(steam_id64, scope)),
+    )
+    .await;
+
+    let best_rating = best_gokz_rating(ratings);
+    if best_rating.is_none() {
+        warn!(
+            steam_id64,
+            "GOKZ 四个模式 rating 查询全部失败，进入限制将放行"
+        );
+    }
+    best_rating
+}
+
+async fn fetch_gokz_scope_rating(steam_id64: &str, scope: &str) -> Option<i32> {
+    let url = format!("https://api.gokz.top/v1/leaderboards/players/{steam_id64}");
+    match http_client::http_client()
+        .get(&url)
+        .query(&[("scope", scope)])
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => {
+            match response.json::<GokzPlayerResponse>().await {
+                Ok(body) => body.rating.map(|rating| rating.trunc() as i32),
+                Err(error) => {
+                    warn!(steam_id64, scope, error = %error, "GOKZ scoped 玩家资料解析失败");
+                    None
+                }
+            }
+        }
+        Ok(response) => {
+            warn!(steam_id64, scope, status = %response.status(), "GOKZ scoped 玩家资料请求失败");
+            None
+        }
+        Err(error) => {
+            warn!(steam_id64, scope, error = %error, "GOKZ scoped 玩家资料请求异常");
+            None
+        }
+    }
+}
+
+fn best_gokz_rating(ratings: impl IntoIterator<Item = Option<i32>>) -> Option<i32> {
+    ratings.into_iter().flatten().max()
 }
 
 fn normalize_steamid64(value: &str) -> anyhow::Result<String> {
@@ -610,6 +645,15 @@ mod tests {
             serde_json::from_str(r#"{"steam_name":"PlayerOne","rating":8.352655}"#).unwrap();
         assert_eq!(response.steam_name.as_deref(), Some("PlayerOne"));
         assert_eq!(response.rating.map(|rating| rating.trunc() as i32), Some(8));
+    }
+
+    #[test]
+    fn best_gokz_rating_uses_highest_available_scope() {
+        assert_eq!(
+            best_gokz_rating([Some(900), None, Some(1500), Some(1499)]),
+            Some(1500)
+        );
+        assert_eq!(best_gokz_rating([None, None, None]), None);
     }
 
     #[test]

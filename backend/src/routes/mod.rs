@@ -185,6 +185,10 @@ pub fn router(
             "/api/plugin/online-players/report",
             post(community::report_plugin_online_players),
         )
+        .route(
+            "/api/plugin/online-players/disconnect",
+            post(community::report_plugin_player_disconnect),
+        )
         .route("/api/plugin/bans", post(ban::create_plugin_ban))
         .route("/api/plugin/bans/poll", post(ban::poll_plugin_bans))
         .route(
@@ -411,6 +415,11 @@ pub fn router(
         .route(
             "/api/plugin/abnormal-records/:id/replay",
             post(abnormal_record::plugin_upload_replay).put(abnormal_record::plugin_upload_replay),
+        )
+        .route(
+            "/api/plugin/abnormal-records/:id/replay-metadata",
+            post(abnormal_record::plugin_attach_replay_metadata)
+                .put(abnormal_record::plugin_attach_replay_metadata),
         )
         .route(
             "/api/plugin/abnormal-records/poll-approved",

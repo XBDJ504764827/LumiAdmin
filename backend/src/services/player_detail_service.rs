@@ -93,6 +93,7 @@ pub struct WhitelistRecord {
     pub steamid: Option<String>,
     pub steamid3: Option<String>,
     pub profile_url: Option<String>,
+    pub contact: Option<String>,
     pub nickname: String,
     pub steam_persona_name: Option<String>,
     pub status: String,
@@ -192,6 +193,7 @@ pub struct PlayerServerSession {
     pub last_seen_at: DateTime<Utc>,
     pub left_at: Option<DateTime<Utc>>,
     pub end_reason: Option<String>,
+    pub end_detail: Option<String>,
     pub last_ping: Option<i32>,
     pub last_map: String,
     pub duration_seconds: i64,
@@ -1062,7 +1064,7 @@ async fn fetch_whitelist_records(
     steamid64: &str,
 ) -> anyhow::Result<Vec<WhitelistRecord>> {
     let rows = sqlx::query_as::<_, WhitelistRecord>(
-        r#"SELECT wr.id, wr.steamid64, wr.steamid, wr.steamid3, wr.profile_url,
+        r#"SELECT wr.id, wr.steamid64, wr.steamid, wr.steamid3, wr.profile_url, wr.contact,
                   wr.nickname, wr.steam_persona_name, wr.status, wr.source,
                   wr.applied_at,
                   wr.approved_at, COALESCE(approved_user.display_name, wr.approved_by) AS approved_by, wr.approval_reason,
@@ -1237,7 +1239,7 @@ async fn fetch_player_sessions(
     let rows = sqlx::query_as::<_, PlayerServerSession>(
         r#"SELECT id, server_id, server_name, community_id, community_name,
                   player_name, steam_id64, ip, server_port, first_seen_at,
-                  last_seen_at, left_at, end_reason, last_ping, last_map,
+                  last_seen_at, left_at, end_reason, end_detail, last_ping, last_map,
                   GREATEST(
                     0,
                     EXTRACT(EPOCH FROM (COALESCE(left_at, last_seen_at) - first_seen_at))::BIGINT

@@ -4,6 +4,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub const DEFAULT_POLL_INTERVAL_SECONDS: i32 = 120;
+pub const MIN_POLL_INTERVAL_SECONDS: i32 = 30;
+pub const MAX_POLL_INTERVAL_SECONDS: i32 = 3600;
+
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct ExternalServer {
     pub id: Uuid,
@@ -66,8 +70,12 @@ pub struct UpdateExternalServerInput {
 fn default_true() -> bool {
     true
 }
-fn default_poll_interval() -> i32 {
-    30
+pub fn default_poll_interval() -> i32 {
+    DEFAULT_POLL_INTERVAL_SECONDS
+}
+
+fn normalize_poll_interval(value: i32) -> i32 {
+    value.clamp(MIN_POLL_INTERVAL_SECONDS, MAX_POLL_INTERVAL_SECONDS)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -101,7 +109,7 @@ pub async fn create_server(
     anyhow::ensure!(!name.is_empty(), "名称不能为空");
     anyhow::ensure!(!ip.is_empty(), "IP 不能为空");
 
-    let poll_interval = input.poll_interval.clamp(5, 3600);
+    let poll_interval = normalize_poll_interval(input.poll_interval);
 
     sqlx::query_as::<_, ExternalServer>(
         r#"INSERT INTO external_servers (id, name, ip, port, rcon_password, enabled, poll_interval)
@@ -134,7 +142,7 @@ pub async fn update_server(
         .as_deref()
         .map(|p| p.trim())
         .filter(|p| !p.is_empty());
-    let poll_interval = input.poll_interval.clamp(5, 3600);
+    let poll_interval = normalize_poll_interval(input.poll_interval);
     sqlx::query_as::<_, ExternalServer>(
         r#"UPDATE external_servers SET name = $2, ip = $3, port = $4, rcon_password = $5, enabled = $6, poll_interval = $7
            WHERE id = $1

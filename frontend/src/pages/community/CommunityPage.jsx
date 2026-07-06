@@ -35,10 +35,10 @@ import {
   emptyCommunityAccessConfig,
   fillAccessConfigFromServer,
   fillCommunityAccessConfig,
-  buildAccessSummary,
 } from './communityAccess.js';
 import { onlinePlayerKey, buildKickCommand } from './onlinePlayers.js';
 import { OnlinePlayerCard, ToggleSwitch, FormSectionCard, ServerRconFeedback } from './CommunityComponents.jsx';
+import { CommunityServerTable } from './CommunityServerTable.jsx';
 import { COMMAND_CATEGORIES } from '../rcon/RconPage.jsx';
 import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
@@ -940,15 +940,14 @@ export function CommunityPage() {
 
   // ── 渲染：服务器行操作 ──
   function renderServerActions(server) {
-    const isOnline = server.status === 'online';
     return (
       <div className="action-btn-group">
-        <button className="action-btn" onClick={() => handleViewPlayers(server)} disabled={!isOnline} title={!isOnline ? '服务器离线，无法查看' : ''}>
+        <button className="action-btn" onClick={() => handleViewPlayers(server)}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
           玩家
         </button>
         {canMutate ? (
-          <button className="action-btn" onClick={() => openRconModal(server)} disabled={!isOnline} title={!isOnline ? '服务器离线，无法执行' : ''}>
+          <button className="action-btn" onClick={() => openRconModal(server)}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></svg>
             RCON
           </button>
@@ -1006,53 +1005,16 @@ export function CommunityPage() {
                 <button className="action-btn" onClick={() => openReloadPluginsModal(group)}>重启插件</button>
                 <button className="action-btn" onClick={() => openCommunityAccessModal(group)}>访问限制</button>
                 <button className="action-btn" onClick={() => openCreateServerModal(group.id)}>+ 添加服务器</button>
+                <button className="action-btn action-btn-danger" onClick={() => _handleDeleteGroup(group)}>删除社区组</button>
               </div>
             ) : null}
           </div>
           <div className="card-body p-0">
-            <div className="table-responsive">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>服务器名称</th>
-                    <th>地址 / 端口</th>
-                    <th>Token 令牌</th>
-                    <th>状态</th>
-                    <th>访问限制</th>
-                    <th>当前人数</th>
-                    <th className="text-right">操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {group.servers.length === 0 ? (
-                    <tr><td colSpan={7} style={{ padding: 20, color: 'var(--text3)' }}>暂无服务器。</td></tr>
-                  ) : (
-                    group.servers.map((server) => {
-                      const isOnline = server.status === 'online';
-                      const playerCount = server.online_player_count ?? server.players?.length ?? 0;
-                      const maxPlayers = server.max_players ?? 0;
-                      return (
-                        <tr key={server.id}>
-                          <td className="fw-600">{server.name}</td>
-                          <td className="steam-id">{server.ip}:{server.port}</td>
-                          <td>{renderTokenCell(server)}</td>
-                          <td>
-                            <span className={`status-pill ${isOnline ? 'pill-online' : 'pill-offline'}`}>
-                              {isOnline ? '在线' : '离线'}
-                            </span>
-                          </td>
-                          <td style={{ fontSize: 12, color: 'var(--text3)' }}>{buildAccessSummary(server, group)}</td>
-                          <td>
-                            {isOnline ? `${playerCount} / ${maxPlayers}` : <span className="text-muted-light">0 / 0</span>}
-                          </td>
-                          <td className="text-right">{renderServerActions(server)}</td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
+            <CommunityServerTable
+              group={group}
+              renderTokenCell={renderTokenCell}
+              renderServerActions={renderServerActions}
+            />
           </div>
         </div>
       ))}

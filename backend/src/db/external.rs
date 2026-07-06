@@ -1,4 +1,5 @@
 use super::Database;
+use crate::services::external_server_service::DEFAULT_POLL_INTERVAL_SECONDS;
 
 impl Database {
     pub(super) async fn migrate_external_servers_schema(&self) -> anyhow::Result<()> {
@@ -36,7 +37,13 @@ impl Database {
         sqlx::query(r#"ALTER TABLE external_servers ALTER COLUMN rcon_password DROP NOT NULL"#)
             .execute(&self.pool)
             .await?;
-        sqlx::query(r#"ALTER TABLE external_servers ADD COLUMN IF NOT EXISTS poll_interval INTEGER NOT NULL DEFAULT 30"#)
+        sqlx::query(&format!(
+            r#"ALTER TABLE external_servers ADD COLUMN IF NOT EXISTS poll_interval INTEGER NOT NULL DEFAULT {DEFAULT_POLL_INTERVAL_SECONDS}"#
+        ))
+        .execute(&self.pool).await?;
+        sqlx::query(&format!(
+            r#"ALTER TABLE external_servers ALTER COLUMN poll_interval SET DEFAULT {DEFAULT_POLL_INTERVAL_SECONDS}"#
+        ))
         .execute(&self.pool).await?;
         // player_api_webhooks 关联外部服务器
         let webhook_alters = [

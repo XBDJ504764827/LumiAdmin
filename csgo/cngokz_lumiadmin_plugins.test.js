@@ -24,6 +24,7 @@ test('cngokz lumiadmin plugins use block-style SourcePawn structure', () => {
   assert.ok(existsSync(resolve(scripting, 'cngokz-recordguard/detection.sp')));
   assert.ok(existsSync(resolve(scripting, 'cngokz-recordguard/pending_records.sp')));
   assert.ok(existsSync(resolve(scripting, 'cngokz-recordguard/replay_capture.sp')));
+  assert.ok(existsSync(resolve(scripting, 'cngokz-recordguard/r2_upload.sp')));
   assert.ok(existsSync(resolve(scripting, 'cngokz-recordguard/global_submit.sp')));
   assert.ok(existsSync(resolve(scripting, 'cngokz-global.sp')));
   assert.ok(existsSync(resolve(scripting, 'cngokz-global/send_run.sp')));
@@ -96,6 +97,9 @@ test('cngokz-global replaces gokz-global and intercepts abnormal records directl
   assert.match(global, /ServerCommand\("sm plugins reload cngokz-global"\)/);
   assert.match(global, /RegPluginLibrary\("cngokz-global"\)/);
   assert.match(global, /RegPluginLibrary\("gokz-global"\)/);
+  assert.match(global, /ApplySettingsEnforcerForLateLoad\(\)/);
+  assert.match(global, /gB_EnforcerOnFreshMap = true/);
+  assert.match(global, /GOKZ_InvalidateRun\(client\)/);
   assert.match(sendRun, /CNGOKZ_RecordGuard_ShouldHoldRecord/);
   assert.match(sendRun, /GlobalAPI_CreateRecord/);
   assert.match(legacyDisable, /LEGACY_GLOBAL_PLUGIN "addons\/sourcemod\/plugins\/gokz-global\.smx"/);
@@ -119,32 +123,45 @@ test('cngokz-global guards invalid GlobalAPI request handles in callbacks', () =
   assert.match(sources, /bool GlobalAPIResponseInvalid\(JSON_Object response, const char\[] context\)/);
   assert.match(sources, /IsValidHandle\(view_as<Handle>\(request\)\)/);
   assert.match(sources, /IsValidHandle\(view_as<Handle>\(response\)\)/);
+  assert.match(sources, /response\.Meta\.GetHandle\("data"\)/);
+  assert.match(sources, /GlobalAPI response without readable JSON data/);
   assert.doesNotMatch(sources, /request\.Failure/);
   assert.match(sources, /return false;/);
   assert.match(sources, /GlobalAPIRequestFailed\(request, "GetAuthStatusCallback"\)/);
   assert.match(sources, /GlobalAPIResponseInvalid\(auth_json, "GetAuthStatusCallback"\)/);
   assert.match(sources, /GlobalAPIRequestFailed\(request, "UpdatePointsCallback"\)/);
   assert.match(sources, /GlobalAPIResponseInvalid\(ranks, "UpdatePointsCallback"\)/);
+  assert.match(sources, /GlobalAPIResponseInvalid\(mode_json, "GetModeInfoCallback mode"\)/);
+  assert.match(sources, /GlobalAPIResponseInvalid\(record_object, "MapTopSubmenuAddItems record"\)/);
 });
 
 test('recordguard talks to abnormal record plugin APIs', () => {
   const recordguard = [
     read(resolve(scripting, 'cngokz-recordguard/rules.sp')),
     read(resolve(scripting, 'cngokz-recordguard/pending_records.sp')),
+    read(resolve(scripting, 'cngokz-recordguard/r2_upload.sp')),
     read(resolve(scripting, 'cngokz-recordguard/global_submit.sp')),
   ].join('\n');
 
   assert.match(recordguard, /\/abnormal-record-rules/);
   assert.match(recordguard, /\/abnormal-records/);
-  assert.match(recordguard, /\/replay/);
+  assert.match(recordguard, /\/replay-metadata/);
   assert.match(recordguard, /\/poll-approved/);
   assert.match(recordguard, /\/submit-result/);
+  assert.match(recordguard, /SteamWorks_SetHTTPRequestRawPostBodyFromFile/);
+  assert.match(recordguard, /X-GOKZ-Mode/);
+  assert.match(recordguard, /X-Map/);
+  assert.match(recordguard, /X-Route/);
+  assert.match(recordguard, /X-CNGOKZ-Object-Key/);
+  assert.match(recordguard, /gokz_r2upload_url/);
+  assert.doesNotMatch(recordguard, /UploadFile\(/);
 });
 
 test('build script compiles cngokz plugins with host sourcemod compiler first', () => {
   const build = read(resolve(root, 'csgo/build_plugins.sh'));
 
   assert.match(build, /HOST_SOURCEMOD_ROOT/);
+  assert.match(build, /GOKZ_TOP_SOURCE_DIR/);
   assert.match(build, /GOKZ_INCLUDE_DIR/);
   assert.match(build, /compile_plugin "cngokz-core\.sp" "cngokz-core\.smx"/);
   assert.match(build, /compile_plugin "cngokz-recordguard\.sp" "cngokz-recordguard\.smx"/);
@@ -154,6 +171,7 @@ test('build script compiles cngokz plugins with host sourcemod compiler first', 
 test('project include directory keeps only cngokz and local plugin headers', () => {
   assert.ok(existsSync(resolve(scripting, 'include/cngokz/recordguard.inc')));
   assert.ok(existsSync(resolve(scripting, 'include/cngokz/core.inc')));
+  assert.ok(existsSync(resolve(scripting, 'include/cngokz/session_reasons.inc')));
   assert.ok(existsSync(resolve(scripting, 'include/manger_shared.inc')));
   assert.ok(existsSync(resolve(scripting, 'include/ripext.inc')));
   assert.equal(existsSync(resolve(scripting, 'include/gokz')), false);

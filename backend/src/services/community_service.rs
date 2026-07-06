@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 use crate::{db::Database, services::observability_service};
 use chrono::{DateTime, TimeDelta, Utc};
@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
-const OFFLINE_AFTER_SECONDS: i64 = 60;
+pub(crate) const STALE_REPORT_AFTER_SECONDS: i64 = 300;
+const STALE_CLEANUP_INTERVAL_SECONDS: u64 = 300;
 
 #[derive(Serialize)]
 pub struct ServerItem {
@@ -88,6 +89,18 @@ pub struct OnlinePlayersReportInput {
     pub players: Vec<OnlinePlayerInput>,
 }
 
+#[derive(Deserialize)]
+pub struct PlayerDisconnectReportInput {
+    pub report_token: String,
+    pub port: u16,
+    pub steam_id64: Option<String>,
+    pub steam_id: Option<String>,
+    pub player_name: Option<String>,
+    pub ip: Option<String>,
+    pub reason: String,
+    pub detail: Option<String>,
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 pub struct OnlinePlayerInput {
     pub name: String,
@@ -111,6 +124,12 @@ struct NormalizedOnlinePlayer {
 #[derive(Serialize)]
 pub struct OnlinePlayersReportResult {
     pub server_id: Uuid,
+}
+
+#[derive(Serialize)]
+pub struct PlayerDisconnectReportResult {
+    pub server_id: Uuid,
+    pub updated: bool,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -182,6 +201,41 @@ struct OnlineReportServer {
     community_name: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SessionEndReason {
+    AdminKicked,
+    PlayerQuit,
+    AccessRejected,
+    BannedKicked,
+    SnapshotMissing,
+    ServerStale,
+}
+
+impl SessionEndReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::AdminKicked => "admin_kicked",
+            Self::PlayerQuit => "player_quit",
+            Self::AccessRejected => "access_rejected",
+            Self::BannedKicked => "banned_kicked",
+            Self::SnapshotMissing => "snapshot_missing",
+            Self::ServerStale => "server_stale",
+        }
+    }
+
+    fn parse(value: &str) -> anyhow::Result<Self> {
+        match value.trim() {
+            "admin_kicked" => Ok(Self::AdminKicked),
+            "player_quit" => Ok(Self::PlayerQuit),
+            "access_rejected" => Ok(Self::AccessRejected),
+            "banned_kicked" => Ok(Self::BannedKicked),
+            "snapshot_missing" => Ok(Self::SnapshotMissing),
+            "server_stale" => Ok(Self::ServerStale),
+            _ => anyhow::bail!("未知退出原因"),
+        }
+    }
+}
+
 pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
     let rows = sqlx::query_as::<_, CommunityRow>(
         r#"
@@ -220,24 +274,33 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
     .fetch_all(&db.pool)
     .await?;
 
-    let mut groups: BTreeMap<Uuid, CommunityGroup> = BTreeMap::new();
+    let mut groups: Vec<CommunityGroup> = Vec::new();
+    let mut group_indexes: HashMap<Uuid, usize> = HashMap::new();
+    let now = Utc::now();
 
     for row in rows {
-        let group = groups
-            .entry(row.community_id)
-            .or_insert_with(|| CommunityGroup {
-                id: row.community_id,
-                name: row.community_name,
-                whitelist_mode_enabled: row.community_whitelist_mode_enabled.unwrap_or(false),
-                min_rating: row.community_min_rating.unwrap_or(0),
-                min_steam_level: row.community_min_steam_level.unwrap_or(0),
-                servers: Vec::new(),
-            });
+        let group_index = match group_indexes.get(&row.community_id).copied() {
+            Some(index) => index,
+            None => {
+                let index = groups.len();
+                group_indexes.insert(row.community_id, index);
+                groups.push(CommunityGroup {
+                    id: row.community_id,
+                    name: row.community_name.clone(),
+                    whitelist_mode_enabled: row.community_whitelist_mode_enabled.unwrap_or(false),
+                    min_rating: row.community_min_rating.unwrap_or(0),
+                    min_steam_level: row.community_min_steam_level.unwrap_or(0),
+                    servers: Vec::new(),
+                });
+                index
+            }
+        };
+        let group = &mut groups[group_index];
 
         if let (Some(id), Some(name), Some(ip), Some(port), Some(status)) =
             (row.server_id, row.server_name, row.ip, row.port, row.status)
         {
-            let stale = is_report_stale(row.last_reported_at);
+            let stale = is_report_stale_at(row.last_reported_at, now);
             let players = if stale {
                 Vec::new()
             } else {
@@ -251,7 +314,7 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
                 port,
                 report_token: row.report_token,
                 note: row.note,
-                status: if stale { "offline".to_string() } else { status },
+                status: server_display_status(&status, row.last_reported_at, now),
                 players,
                 online_player_count,
                 max_players: row.max_players.unwrap_or(0),
@@ -266,7 +329,7 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
         }
     }
 
-    Ok(groups.into_values().collect())
+    Ok(groups)
 }
 
 pub async fn create_group(
@@ -655,6 +718,93 @@ pub async fn report_online_players(
     })
 }
 
+pub async fn report_player_disconnect(
+    db: &Database,
+    input: PlayerDisconnectReportInput,
+) -> anyhow::Result<PlayerDisconnectReportResult> {
+    let report_token = input.report_token.trim();
+    anyhow::ensure!(!report_token.is_empty(), "report_token 不能为空");
+
+    let server: OnlineReportServer = sqlx::query_as(
+        r#"
+        SELECT s.id, s.name, s.port, s.community_id, c.name AS community_name
+        FROM servers s
+        LEFT JOIN communities c ON c.id = s.community_id
+        WHERE s.report_token = $1 AND s.port = $2
+        "#,
+    )
+    .bind(report_token)
+    .bind(i32::from(input.port))
+    .fetch_optional(&db.pool)
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("服务器 token 或端口不匹配"))?;
+
+    let steam_id64 = normalize_disconnect_steam_id(&input)?;
+    let end_reason = SessionEndReason::parse(&input.reason)?;
+    let player_name = super::normalize_optional_text(input.player_name.as_deref());
+    let ip = super::normalize_optional_text(input.ip.as_deref())
+        .unwrap_or_else(|| "unknown".to_string());
+    let end_detail = super::normalize_optional_text(input.detail.as_deref())
+        .map(|value| value.chars().take(1000).collect::<String>());
+    let report_time = Utc::now();
+
+    let result = sqlx::query(
+        r#"
+        UPDATE player_server_sessions
+        SET left_at = $3,
+            last_seen_at = GREATEST(last_seen_at, $3),
+            end_reason = $4,
+            end_detail = $5,
+            player_name = COALESCE($6, player_name),
+            ip = COALESCE(NULLIF($7, ''), ip),
+            updated_at = $3
+        WHERE server_id = $1
+          AND steam_id64 = $2
+          AND left_at IS NULL
+        "#,
+    )
+    .bind(server.id)
+    .bind(&steam_id64)
+    .bind(report_time)
+    .bind(end_reason.as_str())
+    .bind(&end_detail)
+    .bind(&player_name)
+    .bind(&ip)
+    .execute(&db.pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        sqlx::query(
+            r#"
+            INSERT INTO player_server_sessions (
+                server_id, server_name, server_port, community_id, community_name,
+                steam_id64, player_name, ip, first_seen_at, last_seen_at, left_at,
+                end_reason, end_detail, last_map, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $9, $10, $11, '', $9, $9)
+            "#,
+        )
+        .bind(server.id)
+        .bind(&server.name)
+        .bind(server.port)
+        .bind(server.community_id)
+        .bind(&server.community_name)
+        .bind(&steam_id64)
+        .bind(&player_name)
+        .bind(&ip)
+        .bind(report_time)
+        .bind(end_reason.as_str())
+        .bind(&end_detail)
+        .execute(&db.pool)
+        .await?;
+    }
+
+    Ok(PlayerDisconnectReportResult {
+        server_id: server.id,
+        updated: true,
+    })
+}
+
 async fn sync_player_sessions(
     tx: &mut Transaction<'_, Postgres>,
     server: &OnlineReportServer,
@@ -670,7 +820,7 @@ async fn sync_player_sessions(
     sqlx::query(
         r#"UPDATE player_server_sessions
            SET left_at = $2,
-               end_reason = 'snapshot_missing',
+               end_reason = $4,
                updated_at = $2
            WHERE server_id = $1
              AND left_at IS NULL
@@ -679,6 +829,7 @@ async fn sync_player_sessions(
     .bind(server.id)
     .bind(report_time)
     .bind(&active_steamids)
+    .bind(SessionEndReason::SnapshotMissing.as_str())
     .execute(&mut **tx)
     .await?;
 
@@ -801,44 +952,72 @@ fn generate_report_token() -> String {
     Uuid::new_v4().simple().to_string()
 }
 
-fn is_report_stale(last_reported_at: Option<chrono::DateTime<chrono::Utc>>) -> bool {
+fn is_report_stale_at(
+    last_reported_at: Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
     match last_reported_at {
-        Some(value) => {
-            chrono::Utc::now()
-                .signed_duration_since(value)
-                .num_seconds()
-                > OFFLINE_AFTER_SECONDS
-        }
+        Some(value) => now.signed_duration_since(value).num_seconds() > STALE_REPORT_AFTER_SECONDS,
         None => true,
     }
 }
 
+fn server_display_status(
+    status: &str,
+    last_reported_at: Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> String {
+    if last_reported_at.is_some() && is_report_stale_at(last_reported_at, now) {
+        "hibernating".to_string()
+    } else {
+        status.to_string()
+    }
+}
+
+pub(crate) fn stale_report_interval_sql() -> String {
+    format!("{} seconds", STALE_REPORT_AFTER_SECONDS)
+}
+
+fn normalize_disconnect_steam_id(input: &PlayerDisconnectReportInput) -> anyhow::Result<String> {
+    if let Some(value) = super::normalize_optional_text(input.steam_id64.as_deref()) {
+        return Ok(value);
+    }
+    if let Some(value) = super::normalize_optional_text(input.steam_id.as_deref()) {
+        return super::steam_service::steam2_to_steamid64(&value);
+    }
+    anyhow::bail!("玩家 SteamID64 不能为空")
+}
+
 async fn mark_stale_servers_offline(db: &Database) -> anyhow::Result<()> {
+    let stale_after = stale_report_interval_sql();
     sqlx::query(
         r#"
         UPDATE player_server_sessions
         SET left_at = now(),
-            end_reason = 'server_stale',
+            end_reason = $2,
             updated_at = now()
         WHERE left_at IS NULL
           AND server_id IN (
               SELECT id FROM servers
               WHERE last_reported_at IS NOT NULL
-                AND last_reported_at < now() - interval '60 seconds'
+                AND last_reported_at < now() - $1::INTERVAL
           )
         "#,
     )
+    .bind(&stale_after)
+    .bind(SessionEndReason::ServerStale.as_str())
     .execute(&db.pool)
     .await?;
 
     sqlx::query(
         r#"
         UPDATE servers
-        SET status = 'offline', players = ARRAY[]::TEXT[]
+        SET players = ARRAY[]::TEXT[]
         WHERE last_reported_at IS NOT NULL
-          AND last_reported_at < now() - interval '60 seconds'
+          AND last_reported_at < now() - $1::INTERVAL
         "#,
     )
+    .bind(&stale_after)
     .execute(&db.pool)
     .await?;
 
@@ -848,27 +1027,30 @@ async fn mark_stale_servers_offline(db: &Database) -> anyhow::Result<()> {
         WHERE server_id IN (
             SELECT id FROM servers
             WHERE last_reported_at IS NOT NULL
-              AND last_reported_at < now() - interval '60 seconds'
+              AND last_reported_at < now() - $1::INTERVAL
         )
         "#,
     )
+    .bind(&stale_after)
     .execute(&db.pool)
     .await?;
 
     Ok(())
 }
 
-/// 启动定时清理过期服务器的后台任务（每 30 秒执行一次）
+/// 启动定时清理过期服务器的后台任务。
 pub fn start_stale_cleanup_loop(db: Database) {
     observability_service::register_task(
         "stale_server_cleanup",
         "过期服务器状态清理",
         "清理",
-        Some(30),
+        Some(STALE_CLEANUP_INTERVAL_SECONDS),
         true,
     );
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(
+            STALE_CLEANUP_INTERVAL_SECONDS,
+        ));
         loop {
             interval.tick().await;
             if let Err(error) = observability_service::observe_task(

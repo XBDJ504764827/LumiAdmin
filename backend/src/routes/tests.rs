@@ -326,6 +326,40 @@ async fn community_server_stores_report_token() {
 }
 
 #[tokio::test]
+async fn community_groups_keep_created_at_order() {
+    with_test_app(async |db, _config| {
+        let older_id = Uuid::new_v4();
+        let newer_id = Uuid::new_v4();
+
+        sqlx::query(
+            r#"
+            INSERT INTO communities (id, name, created_at)
+            VALUES
+              ($1, '旧社区', now() - interval '1 day'),
+              ($2, '新社区', now())
+            "#,
+        )
+        .bind(older_id)
+        .bind(newer_id)
+        .execute(&db.pool)
+        .await?;
+
+        let groups = crate::services::community_service::list_groups(&db).await?;
+        let new_index = groups
+            .iter()
+            .position(|group| group.id == newer_id)
+            .unwrap();
+        let old_index = groups
+            .iter()
+            .position(|group| group.id == older_id)
+            .unwrap();
+        assert!(new_index < old_index);
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn community_servers_include_access_control_fields() {
     with_test_app(async |db, config| {
             let community_id = Uuid::new_v4();
@@ -800,10 +834,11 @@ async fn access_check_restriction_uses_success_cache_and_rejects_low_values() {
             .execute(&db.pool)
             .await?;
             sqlx::query(
-                r#"INSERT INTO player_access_cache (steamid64, rating, steam_level, expires_at)
-                   VALUES ($1, 1999, 30, now() + interval '24 hours')"#,
+                r#"INSERT INTO player_access_cache (steamid64, rating, steam_level, rating_source, expires_at)
+                   VALUES ($1, 1999, 30, $2, now() + interval '24 hours')"#,
             )
             .bind("76561198000000004")
+            .bind(crate::services::access_service::ACCESS_RATING_SOURCE)
             .execute(&db.pool)
             .await?;
 
@@ -1192,6 +1227,81 @@ async fn plugin_report_updates_online_players_when_token_and_port_match() {
             assert_eq!(closed_session.1.as_deref(), Some("snapshot_missing"));
             Ok(())
         }).await;
+}
+
+#[tokio::test]
+async fn plugin_disconnect_report_closes_player_session_with_reason() {
+    with_test_app(async |db, config| {
+        let (_, server_id) = insert_community_with_server(&db, "断开上报服").await;
+        let app = test_app(config.clone(), db.clone());
+
+        let online_report = Request::builder()
+            .method("POST")
+            .uri("/api/plugin/online-players/report")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "report_token": "plugin-token",
+                    "port": 25575,
+                    "current_map": "kz_begin",
+                    "players": [{
+                        "name": "Alice",
+                        "steam_id64": "76561198000000001",
+                        "ip": "203.0.113.10",
+                        "ping": 28,
+                        "server_port": 25575,
+                        "connected_seconds": 60
+                    }]
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let online_response = app.oneshot(online_report).await.unwrap();
+        assert_eq!(online_response.status(), StatusCode::OK);
+
+        let app = test_app(config, db.clone());
+        let disconnect_report = Request::builder()
+            .method("POST")
+            .uri("/api/plugin/online-players/disconnect")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "report_token": "plugin-token",
+                    "port": 25575,
+                    "steam_id64": "76561198000000001",
+                    "player_name": "Alice",
+                    "ip": "203.0.113.10",
+                    "reason": "admin_kicked",
+                    "detail": "管理员 CONSOLE 执行 sm_kick"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let disconnect_response = app.oneshot(disconnect_report).await.unwrap();
+        assert_eq!(disconnect_response.status(), StatusCode::OK);
+
+        let closed_session: (
+            Option<chrono::DateTime<chrono::Utc>>,
+            Option<String>,
+            Option<String>,
+        ) = sqlx::query_as(
+            r#"SELECT left_at, end_reason, end_detail
+                   FROM player_server_sessions
+                   WHERE server_id = $1 AND steam_id64 = $2"#,
+        )
+        .bind(server_id)
+        .bind("76561198000000001")
+        .fetch_one(&db.pool)
+        .await?;
+        assert!(closed_session.0.is_some());
+        assert_eq!(closed_session.1.as_deref(), Some("admin_kicked"));
+        assert_eq!(
+            closed_session.2.as_deref(),
+            Some("管理员 CONSOLE 执行 sm_kick")
+        );
+        Ok(())
+    })
+    .await;
 }
 
 #[tokio::test]

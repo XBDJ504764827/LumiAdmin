@@ -1,4 +1,7 @@
-use crate::{db::Database, services::observability_service};
+use crate::{
+    db::Database,
+    services::{access_service::ACCESS_RATING_SOURCE, observability_service},
+};
 use anyhow::Context;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -155,8 +158,9 @@ async fn load_snapshot_access_profiles(
     sqlx::query_as::<_, SnapshotAccessProfileRow>(
         r#"SELECT steamid64, rating, steam_level, expires_at
            FROM player_access_cache
-           WHERE expires_at > now()"#,
+           WHERE rating_source = $1 AND expires_at > now()"#,
     )
+    .bind(ACCESS_RATING_SOURCE)
     .fetch_all(&db.pool)
     .await
     .map(|rows| rows.into_iter().map(Into::into).collect())

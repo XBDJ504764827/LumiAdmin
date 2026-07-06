@@ -4,6 +4,7 @@ import { useAuth } from '../../state/store.js';
 import { useApiQuery } from '../../shared/useApiQuery.js';
 import { useToast } from '../../shared/Toast.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
+import { rconServerStatusText } from '../../shared/serverStatus.js';
 
 export const COMMAND_CATEGORIES = [
   {
@@ -129,14 +130,14 @@ export function RconPage() {
               <option value="">-- 请选择服务器 --</option>
               {allServers.map((s) => (
                 <option key={s.id} value={s.id}>
-                  [{s.groupName}] {s.name} ({s.ip}:{s.port}) {s.status === 'online' ? '● 在线' : '○ 离线'}
+                  [{s.groupName}] {s.name} ({s.ip}:{s.port}) {rconServerStatusText(s.status).option}
                 </option>
               ))}
             </select>
           )}
           {selectedServer && (
-            <div style={{ marginTop: 8, fontSize: 12, color: selectedServer.status === 'online' ? 'var(--success-text)' : 'var(--danger-text)' }}>
-              {selectedServer.status === 'online' ? `● ${selectedServer.name} 在线` : `○ ${selectedServer.name} 离线 — 命令可能无法执行`}
+            <div style={{ marginTop: 8, fontSize: 12, color: rconServerStatusText(selectedServer.status).color }}>
+              {rconServerStatusText(selectedServer.status).option} {selectedServer.name} {rconServerStatusText(selectedServer.status).detail}
             </div>
           )}
         </div>

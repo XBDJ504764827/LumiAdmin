@@ -530,7 +530,10 @@ export function WhitelistPage() {
                       <td data-label="审核管理员">{item.approved_by ?? '-'}</td>
                       <td className={`text-break ${item.approval_reason ? 'text-accent2' : 'text-muted-light'}`} style={{ maxWidth: 200 }} data-label="通过理由">{item.approval_reason ?? '-'}</td>
                       <td className="text-right mobile-card-actions" data-label="操作">
-                        {canRevoke ? <button className="action-btn action-btn-danger" onClick={() => handleRevoke(item)} disabled={submitting}>删除审核</button> : null}
+                        <div className="action-btn-group">
+                          <button className="action-btn action-btn-accent" onClick={() => setDetailModal({ open: true, item })}>详细</button>
+                          {canRevoke ? <button className="action-btn action-btn-danger" onClick={() => handleRevoke(item)} disabled={submitting}>删除审核</button> : null}
+                        </div>
                       </td>
                     </tr>
                   )) : null}
@@ -546,7 +549,10 @@ export function WhitelistPage() {
                       <td className="text-muted-light" data-label="拒绝时间">{formatChinaDateTime(item.rejected_at)}</td>
                       <td data-label="审核管理员">{item.rejected_by ?? '-'}</td>
                       <td className="text-right mobile-card-actions" data-label="操作">
-                        {canReview ? <button className="action-btn action-btn-success" onClick={() => handleRestore(item)} disabled={submitting}>恢复通过</button> : null}
+                        <div className="action-btn-group">
+                          <button className="action-btn action-btn-accent" onClick={() => setDetailModal({ open: true, item })}>详细</button>
+                          {canReview ? <button className="action-btn action-btn-success" onClick={() => handleRestore(item)} disabled={submitting}>恢复通过</button> : null}
+                        </div>
                       </td>
                     </tr>
                   )) : null}

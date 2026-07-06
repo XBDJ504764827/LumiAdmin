@@ -44,7 +44,7 @@ fn default_true() -> bool {
     true
 }
 fn default_poll_interval() -> i32 {
-    30
+    external_server_service::default_poll_interval()
 }
 
 pub(crate) async fn create_external_server(

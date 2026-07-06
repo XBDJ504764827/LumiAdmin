@@ -866,7 +866,7 @@ async fn migrate_adds_server_access_control_fields_and_cache_table() {
                    FROM information_schema.columns
                    WHERE table_schema = current_schema()
                      AND table_name = 'player_access_cache'
-                     AND column_name IN ('steamid64', 'rating', 'steam_level', 'expires_at', 'updated_at')
+                     AND column_name IN ('steamid64', 'rating', 'steam_level', 'rating_source', 'expires_at', 'updated_at')
                    ORDER BY column_name"#,
             )
             .fetch_all(&db.pool)
@@ -877,10 +877,28 @@ async fn migrate_adds_server_access_control_fields_and_cache_table() {
                 vec![
                     "expires_at".to_string(),
                     "rating".to_string(),
+                    "rating_source".to_string(),
                     "steam_level".to_string(),
                     "steamid64".to_string(),
                     "updated_at".to_string(),
                 ]
+            );
+
+            let cache_primary_key_columns = sqlx::query_scalar::<_, String>(
+                r#"SELECT a.attname::TEXT
+                   FROM pg_constraint c
+                   JOIN unnest(c.conkey) WITH ORDINALITY AS cols(attnum, ordinality) ON true
+                   JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = cols.attnum
+                   WHERE c.conrelid = 'player_access_cache'::regclass
+                     AND c.contype = 'p'
+                   ORDER BY cols.ordinality"#,
+            )
+            .fetch_all(&db.pool)
+            .await?;
+
+            assert_eq!(
+                cache_primary_key_columns,
+                vec!["steamid64".to_string(), "rating_source".to_string()]
             );
 
             Ok::<(), anyhow::Error>(())

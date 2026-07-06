@@ -420,6 +420,7 @@ export function PlayerDetailModal({ open, onClose, item, canReview, submitting, 
     if (!open) React.startTransition(() => { setError(''); });
   }, [open, item?.steamid64, loadStats]);
   const forceApprove = item?.risk_profile?.action === 'deny';
+  const canReviewPending = canReview && item?.status === 'pending';
 
   return (
     <Modal
@@ -427,7 +428,7 @@ export function PlayerDetailModal({ open, onClose, item, canReview, submitting, 
       title="玩家详细信息"
       onClose={onClose}
       footer={
-        canReview && item ? (
+        canReviewPending ? (
           <>
             <button className="btn btn-outline" onClick={onClose}>关闭</button>
             <button className="action-btn action-btn-danger" onClick={() => { onClose(); onReject(item); }} disabled={submitting}>拒绝</button>

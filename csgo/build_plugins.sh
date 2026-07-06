@@ -6,8 +6,15 @@ CSGO_DIR="$ROOT_DIR/csgo"
 SOURCE_DIR="$CSGO_DIR/addons/sourcemod/scripting"
 PLUGIN_DIR="$CSGO_DIR/addons/sourcemod/plugins"
 PROJECT_INCLUDE_DIR="$SOURCE_DIR/include"
+GOKZ_TOP_SOURCE_DIR="${GOKZ_TOP_SOURCE_DIR:-$HOME/gokz-top-plugins/addons/sourcemod/scripting}"
 GOKZ_SOURCE_DIR="${GOKZ_SOURCE_DIR:-$HOME/gokz/addons/sourcemod/scripting}"
-GOKZ_INCLUDE_DIR="${GOKZ_INCLUDE_DIR:-$GOKZ_SOURCE_DIR/include}"
+if [[ -z "${GOKZ_INCLUDE_DIR:-}" ]]; then
+  if [[ -d "$GOKZ_TOP_SOURCE_DIR/include" ]]; then
+    GOKZ_INCLUDE_DIR="$GOKZ_TOP_SOURCE_DIR/include"
+  else
+    GOKZ_INCLUDE_DIR="$GOKZ_SOURCE_DIR/include"
+  fi
+fi
 SOURCEMOD_VERSION="${SOURCEMOD_VERSION:-1.11.0-git6970}"
 SOURCEMOD_SERIES="${SOURCEMOD_SERIES:-1.11}"
 SOURCEMOD_ARCHIVE="sourcemod-${SOURCEMOD_VERSION}-linux.tar.gz"

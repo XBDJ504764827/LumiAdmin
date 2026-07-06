@@ -7,10 +7,17 @@ void RecordGuard_OnPluginStart()
     g_RGPollInterval = CreateConVar("cngokz_recordguard_poll_interval", "10.0", "Approved abnormal record poll interval in seconds.", _, true, 5.0);
     g_RGRequestTimeout = CreateConVar("cngokz_recordguard_request_timeout", "15", "HTTP request timeout in seconds.", _, true, 3.0, true, 60.0);
     g_RGDebugLog = CreateConVar("cngokz_recordguard_debug", "0", "Enable verbose recordguard debug logs.", _, true, 0.0, true, 1.0);
+    g_RGR2UploadEnabled = CreateConVar("cngokz_recordguard_r2upload_enabled", "1", "Upload abnormal replays directly to R2 from the game server.", _, true, 0.0, true, 1.0);
+    g_RGR2UploadUrl = CreateConVar("cngokz_recordguard_r2upload_url", "", "Cloudflare Worker URL used for abnormal replay uploads. Empty uses gokz_r2upload_url if present.");
+    g_RGR2UploadKey = CreateConVar("cngokz_recordguard_r2upload_key", "", "Cloudflare Worker API key used for abnormal replay uploads. Empty uses gokz_r2upload_key if present.");
+    g_RGR2UploadVerifyCert = CreateConVar("cngokz_recordguard_r2upload_verify_cert", "0", "Verify HTTPS certificate for game-server R2 uploads.", _, true, 0.0, true, 1.0);
     g_RGTickrate = FindConVar("sv_maxupdaterate");
 
+    RecordGuard_CreateLegacyR2UploadConVars();
     RecordGuard_EnsureConfigDirectory();
+    AutoExecConfig(false, "gokz-r2upload", "sourcemod/gokz");
     AutoExecConfig(true, "cngokz-recordguard", "sourcemod/cngokz-lumiadmin");
+    RecordGuard_InitR2Upload();
     GetCurrentMapDisplayName(g_CurrentMapName, sizeof(g_CurrentMapName));
     InitRecordGuardDb();
     EnsureReplayCacheDir();

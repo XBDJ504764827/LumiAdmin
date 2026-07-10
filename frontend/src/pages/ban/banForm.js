@@ -27,12 +27,12 @@ export const emptyBanForm = {
 };
 
 function optionalText(value) {
-  const trimmed = value.trim();
+  const trimmed = typeof value === 'string' ? value.trim() : '';
   return trimmed ? trimmed : null;
 }
 
 export function validateBanForm(form) {
-  if (!form.steam_id.trim()) {
+  if (!optionalText(form?.steam_id)) {
     return '请输入 SteamID64。';
   }
 
@@ -52,7 +52,7 @@ export function validateBanForm(form) {
     return '封禁到期时间必须晚于当前时间。';
   }
 
-  if (!form.reason.trim()) {
+  if (!optionalText(form?.reason)) {
     return '请输入封禁理由。';
   }
 
@@ -68,10 +68,10 @@ export function validateBanForm(form) {
 export function buildCreateBanPayload(form) {
   const payload = {
     player: optionalText(form.player),
-    steam_id: form.steam_id.trim(),
+    steam_id: optionalText(form.steam_id) ?? '',
     ban_type: form.ban_type,
     ip_address: optionalText(form.ip_address),
-    reason: form.reason.trim(),
+    reason: optionalText(form.reason) ?? '',
   };
 
   if (form.duration_minutes === -1) {

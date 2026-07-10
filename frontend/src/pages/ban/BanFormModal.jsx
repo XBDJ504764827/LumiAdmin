@@ -68,7 +68,7 @@ function uploadBanFilesWithProgress(banId, formData, token, onProgress) {
  * @param {string} props.token - API token
  */
 export function BanFormModal({ open, mode, editingBanId, reportReview, prefillForm, onClose, onSuccess, token }) {
-  const { toast: _toast } = useToast();
+  const { toast } = useToast();
   const [form, setForm] = useState(emptyBanForm);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -85,7 +85,10 @@ export function BanFormModal({ open, mode, editingBanId, reportReview, prefillFo
     if (open) {
       React.startTransition(() => {
         if (prefillForm) {
-          setForm(prefillForm);
+          // Callers such as the player report page only provide fields that can
+          // be prefilled. Keep the rest of the form shape intact so validation
+          // and payload building never receive undefined text fields.
+          setForm({ ...emptyBanForm, ...prefillForm });
         } else {
           setForm(emptyBanForm);
         }
@@ -108,8 +111,10 @@ export function BanFormModal({ open, mode, editingBanId, reportReview, prefillFo
       if (category === 'other') { firstError = firstError || `不支持的文件类型: ${file.name}`; continue; }
       newFiles.push({ id: ++fileIdCounter.current, file, category });
     }
-    if (firstError) setError(firstError);
-    else setError('');
+    if (firstError) {
+      setError(firstError);
+      toast({ title: '文件选择失败', message: firstError, tone: 'danger', duration: 5000 });
+    } else setError('');
     setSelectedFiles((prev) => [...prev, ...newFiles]);
     if (inputRef.current) inputRef.current.value = '';
   }
@@ -127,7 +132,11 @@ export function BanFormModal({ open, mode, editingBanId, reportReview, prefillFo
 
   async function handleSave() {
     const validationError = validateBanForm(form);
-    if (validationError) { setError(validationError); return; }
+    if (validationError) {
+      setError(validationError);
+      toast({ title: '无法提交封禁', message: validationError, tone: 'danger', duration: 5000 });
+      return;
+    }
 
     try {
       setSubmitting(true);
@@ -163,7 +172,9 @@ export function BanFormModal({ open, mode, editingBanId, reportReview, prefillFo
       onClose();
       onSuccess({ mode, savedItem, uploadedFiles, uploadWarning, reportReview });
     } catch (requestError) {
-      setError(requestError.message);
+      const message = requestError?.message || '封禁提交失败，请稍后重试。';
+      setError(message);
+      toast({ title: '封禁失败', message, tone: 'danger', duration: 6000 });
     } finally {
       setSubmitting(false);
       setSavePhase('idle');

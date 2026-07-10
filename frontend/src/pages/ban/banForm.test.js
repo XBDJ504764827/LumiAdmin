@@ -50,6 +50,26 @@ test('buildCreateBanPayload keeps optional player and ip when provided', () => {
   assert.equal(payload.ip_address, '192.168.1.5');
 });
 
+test('partial report prefill does not throw when optional fields are absent', () => {
+  const partialForm = {
+    player: 'Alex',
+    steam_id: '76561198000000001',
+    ban_type: 'steam',
+    reason: '举报作弊',
+    duration_minutes: 0,
+  };
+
+  assert.equal(validateBanForm(partialForm), '');
+  assert.deepEqual(buildCreateBanPayload(partialForm), {
+    player: 'Alex',
+    steam_id: '76561198000000001',
+    ban_type: 'steam',
+    ip_address: null,
+    reason: '举报作弊',
+    duration_minutes: 0,
+  });
+});
+
 
 test('inactive ban records expose reban action and reuse record fields', () => {
   const record = {

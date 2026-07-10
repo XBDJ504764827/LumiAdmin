@@ -77,7 +77,7 @@ pub(crate) async fn submit_feedback(
         &format!(
             "{:?}: {}",
             item.feedback_type,
-            &item.detail.chars().take(80).collect::<String>()
+            item.detail.chars().take(80).collect::<String>()
         ),
         &extract_client_ip(&headers),
     )

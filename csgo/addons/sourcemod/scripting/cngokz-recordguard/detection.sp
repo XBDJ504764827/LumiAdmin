@@ -55,12 +55,15 @@ bool FindMatchingThreshold(const char[] mapName, int course, const char[] mode, 
 
     for (int i = 0; i < g_RuleCount; i++)
     {
-        if (!StrEqual(g_RuleMap[i], normalizedMap, false))
+        bool exactMap = StrEqual(g_RuleMap[i], normalizedMap, false);
+        bool allMaps = StrEqual(g_RuleMap[i], "*", false);
+        if (!exactMap && !allMaps)
         {
             continue;
         }
 
-        int score = 0;
+        // An exact map rule always wins over the all-maps default.
+        int score = exactMap ? 8 : 0;
         if (g_RuleCourse[i] == course)
         {
             score += 4;

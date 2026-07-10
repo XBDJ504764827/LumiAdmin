@@ -12,6 +12,7 @@ import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.js
 import { FileItem, fileActionLabel } from '../../shared/FilePreview.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { notifyPendingReviewsUpdated, usePendingReviewIndicators } from '../../hooks/usePendingReviewIndicators.js';
+import { buildRulePayload, createEmptyRuleForm, ruleMapLabel, ruleToForm } from './abnormalRuleForm.js';
 
 const RECORD_STATUS = {
   pending: { label: '待审核', pill: 'warning' },
@@ -83,16 +84,6 @@ function replayFileFromRecord(item, replayUrl) {
   };
 }
 
-const initialRuleForm = {
-  map_name: '',
-  course: 0,
-  mode: '',
-  time_type: '',
-  threshold_seconds: 5,
-  enabled: true,
-  note: '',
-};
-
 export function AbnormalRecordPage() {
   const { session } = useAuth();
   const token = session?.token ?? null;
@@ -143,7 +134,7 @@ export function AbnormalRecordPage() {
 
   const [ruleOpen, setRuleOpen] = useState(false);
   const [ruleEditing, setRuleEditing] = useState(null);
-  const [ruleForm, setRuleForm] = useState(initialRuleForm);
+  const [ruleForm, setRuleForm] = useState(createEmptyRuleForm);
 
   const records = recordsQuery.data?.items ?? [];
   const recordTotal = recordsQuery.data?.total ?? 0;
@@ -232,30 +223,18 @@ export function AbnormalRecordPage() {
     }
   }
 
-  function openRuleForm(rule = null) {
+  function openRuleForm(rule = null, scope = 'single_map') {
     setRuleEditing(rule);
-    setRuleForm(rule ? {
-      map_name: rule.map_name || '',
-      course: rule.course ?? 0,
-      mode: rule.mode || '',
-      time_type: rule.time_type || '',
-      threshold_seconds: rule.threshold_seconds ?? 5,
-      enabled: Boolean(rule.enabled),
-      note: rule.note || '',
-    } : initialRuleForm);
+    setRuleForm(rule ? ruleToForm(rule) : createEmptyRuleForm(scope));
     setRuleOpen(true);
   }
 
   async function handleRuleSubmit() {
-    const body = {
-      map_name: ruleForm.map_name.trim(),
-      course: Number(ruleForm.course) || 0,
-      mode: ruleForm.mode || null,
-      time_type: ruleForm.time_type || null,
-      threshold_seconds: Number(ruleForm.threshold_seconds),
-      enabled: Boolean(ruleForm.enabled),
-      note: ruleForm.note.trim() || null,
-    };
+    const { error, payload: body } = buildRulePayload(ruleForm);
+    if (error) {
+      toast({ title: '无法保存规则', message: error, tone: 'danger' });
+      return;
+    }
     try {
       setSubmitting(true);
       if (ruleEditing) {
@@ -266,7 +245,7 @@ export function AbnormalRecordPage() {
       setRuleOpen(false);
       setRuleEditing(null);
       await rulesQuery.refetch();
-      toast({ title: '规则已保存', message: body.map_name });
+      toast({ title: '规则已保存', message: ruleMapLabel(body.map_name) });
     } catch (e) {
       toast({ title: '保存失败', message: e.message, tone: 'danger' });
     } finally {
@@ -277,13 +256,13 @@ export function AbnormalRecordPage() {
   async function handleDeleteRule(rule) {
     const confirmed = await confirm({
       title: '删除规则',
-      message: `确定删除 ${rule.map_name} 的异常时间规则吗？`,
+      message: `确定删除 ${ruleMapLabel(rule.map_name)} 的异常时间规则吗？`,
     });
     if (!confirmed) return;
     try {
       await api.deleteAbnormalRecordRule(token, rule.id);
       await rulesQuery.refetch();
-      toast({ title: '规则已删除', message: rule.map_name });
+      toast({ title: '规则已删除', message: ruleMapLabel(rule.map_name) });
     } catch (e) {
       toast({ title: '删除失败', message: e.message, tone: 'danger' });
     }
@@ -402,7 +381,12 @@ export function AbnormalRecordPage() {
             onChange={(value) => { setRuleSearch(value); setRulePage(1); }}
             placeholder="搜索地图名称..."
             aria-label="搜索异常时间规则"
-            actions={<button type="button" className="btn btn-primary btn-sm" onClick={() => openRuleForm()}>新增规则</button>}
+            actions={(
+              <>
+                <button type="button" className="btn btn-outline btn-sm" onClick={() => openRuleForm(null, 'all_maps')}>设置全部地图默认阈值</button>
+                <button type="button" className="btn btn-primary btn-sm" onClick={() => openRuleForm()}>新增单地图规则</button>
+              </>
+            )}
           />
 
           <div className="card">
@@ -427,7 +411,7 @@ export function AbnormalRecordPage() {
                     {!rulesQuery.isLoading && rulesQuery.error ? <TableError colSpan={9} message={rulesQuery.error.message} /> : null}
                     {!rulesQuery.isLoading && rules.map((rule) => (
                       <tr key={rule.id}>
-                        <td className="steam-id mobile-card-primary" data-label="地图">{rule.map_name}</td>
+                        <td className="steam-id mobile-card-primary" data-label="地图">{ruleMapLabel(rule.map_name)}</td>
                         <td data-label="Course">C{rule.course}</td>
                         <td data-label="模式">{rule.mode ? formatMode(rule.mode) : '全部'}</td>
                         <td data-label="类型">{rule.time_type ? formatTimeType(rule.time_type) : '全部'}</td>
@@ -592,9 +576,21 @@ export function AbnormalRecordPage() {
       >
         <div className="flex-col gap-12">
           <div className="form-group">
-            <label>地图名称</label>
-            <input className="form-control" value={ruleForm.map_name} onChange={(event) => setRuleForm((prev) => ({ ...prev, map_name: event.target.value }))} placeholder="kz_cargo" />
+            <label>适用范围</label>
+            <select className="form-control" value={ruleForm.scope} onChange={(event) => setRuleForm((prev) => ({ ...prev, scope: event.target.value }))}>
+              <option value="all_maps">全部地图默认阈值</option>
+              <option value="single_map">单独指定地图</option>
+            </select>
+            <div className="form-hint mt-4">单地图规则的优先级高于全部地图默认规则。</div>
           </div>
+          {ruleForm.scope === 'single_map' ? (
+            <div className="form-group">
+              <label>地图名称</label>
+              <input className="form-control" value={ruleForm.map_name} onChange={(event) => setRuleForm((prev) => ({ ...prev, map_name: event.target.value }))} placeholder="kz_cargo" />
+            </div>
+          ) : (
+            <div className="alert alert-info" style={{ marginBottom: 0 }}>保存后，没有单独规则的地图都会使用此阈值。</div>
+          )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
             <div className="form-group">
               <label>Course</label>
@@ -614,8 +610,17 @@ export function AbnormalRecordPage() {
             </div>
           </div>
           <div className="form-group">
-            <label>异常阈值（秒）</label>
-            <input className="form-control" type="number" min="0.01" step="0.01" value={ruleForm.threshold_seconds} onChange={(event) => setRuleForm((prev) => ({ ...prev, threshold_seconds: event.target.value }))} />
+            <label>异常阈值时间</label>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 12 }}>
+              <div>
+                <input className="form-control" type="number" min="0" max="1440" step="1" value={ruleForm.threshold_minutes} onChange={(event) => setRuleForm((prev) => ({ ...prev, threshold_minutes: event.target.value }))} />
+                <div className="form-hint mt-4">分钟</div>
+              </div>
+              <div>
+                <input className="form-control" type="number" min="0" max="59.99" step="0.01" value={ruleForm.threshold_seconds} onChange={(event) => setRuleForm((prev) => ({ ...prev, threshold_seconds: event.target.value }))} />
+                <div className="form-hint mt-4">秒（可填写小数）</div>
+              </div>
+            </div>
           </div>
           <div className="form-group">
             <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

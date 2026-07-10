@@ -16,6 +16,7 @@ const RECORD_FIELDS: &str = r#"id, idempotency_key, server_id, server_name, serv
 
 const RULE_FIELDS: &str = r#"id, map_name, course, mode, time_type, threshold_seconds,
     enabled, note, created_by, updated_by, created_at, updated_at"#;
+const ALL_MAPS_RULE: &str = "*";
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct AbnormalRecordItem {
@@ -870,11 +871,12 @@ async fn find_matching_rule(
         r#"SELECT {RULE_FIELDS}
            FROM abnormal_record_rules
            WHERE enabled = true
-             AND lower(map_name) = lower($1)
+             AND (lower(map_name) = lower($1) OR map_name = $5)
              AND (course = $2 OR course = 0)
              AND (mode IS NULL OR lower(mode) = lower($3))
              AND (time_type IS NULL OR lower(time_type) = lower($4))
            ORDER BY
+             CASE WHEN lower(map_name) = lower($1) THEN 0 ELSE 1 END,
              CASE WHEN course = $2 THEN 0 ELSE 1 END,
              CASE WHEN mode IS NOT NULL THEN 0 ELSE 1 END,
              CASE WHEN time_type IS NOT NULL THEN 0 ELSE 1 END
@@ -884,6 +886,7 @@ async fn find_matching_rule(
     .bind(course)
     .bind(mode)
     .bind(time_type)
+    .bind(ALL_MAPS_RULE)
     .fetch_optional(&db.pool)
     .await
     .map_err(Into::into)

@@ -747,6 +747,7 @@ pub async fn report_player_disconnect(
     let end_detail = super::normalize_optional_text(input.detail.as_deref())
         .map(|value| value.chars().take(1000).collect::<String>());
     let report_time = Utc::now();
+    let mut tx = db.pool.begin().await?;
 
     let result = sqlx::query(
         r#"
@@ -770,7 +771,7 @@ pub async fn report_player_disconnect(
     .bind(&end_detail)
     .bind(&player_name)
     .bind(&ip)
-    .execute(&db.pool)
+    .execute(&mut *tx)
     .await?;
 
     if result.rows_affected() == 0 {
@@ -795,9 +796,45 @@ pub async fn report_player_disconnect(
         .bind(report_time)
         .bind(end_reason.as_str())
         .bind(&end_detail)
-        .execute(&db.pool)
+        .execute(&mut *tx)
         .await?;
     }
+
+    sqlx::query(
+        r#"DELETE FROM server_online_players
+           WHERE server_id = $1 AND steam_id64 = $2"#,
+    )
+    .bind(server.id)
+    .bind(&steam_id64)
+    .execute(&mut *tx)
+    .await?;
+
+    // A sleeping empty server may never send the next periodic snapshot. Keep
+    // the server summary in sync with the disconnect event itself so the last
+    // player is removed immediately instead of remaining visible until stale
+    // cleanup runs.
+    sqlx::query(
+        r#"UPDATE servers
+           SET players = COALESCE((
+                 SELECT ARRAY_AGG(name ORDER BY name)
+                 FROM server_online_players
+                 WHERE server_id = $1
+               ), ARRAY[]::TEXT[]),
+               status = CASE
+                 WHEN EXISTS (
+                   SELECT 1 FROM server_online_players WHERE server_id = $1
+                 ) THEN 'online'
+                 ELSE 'hibernating'
+               END,
+               last_reported_at = $2
+           WHERE id = $1"#,
+    )
+    .bind(server.id)
+    .bind(report_time)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
 
     Ok(PlayerDisconnectReportResult {
         server_id: server.id,

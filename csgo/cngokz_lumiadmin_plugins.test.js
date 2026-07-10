@@ -109,6 +109,13 @@ test('cngokz-global replaces gokz-global and intercepts abnormal records directl
   assert.match(legacyDisable, /RenameFile\(LEGACY_GLOBAL_DISABLED_PLUGIN, LEGACY_GLOBAL_PLUGIN\)/);
 });
 
+test('recordguard supports an all-maps default threshold with map overrides', () => {
+  const detection = read(resolve(scripting, 'cngokz-recordguard/detection.sp'));
+
+  assert.match(detection, /StrEqual\(g_RuleMap\[i\], "\*", false\)/);
+  assert.match(detection, /int score = exactMap \? 8 : 0/);
+});
+
 test('cngokz-global guards invalid GlobalAPI request handles in callbacks', () => {
   const sources = [
     read(resolve(scripting, 'cngokz-global.sp')),

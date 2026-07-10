@@ -1299,6 +1299,22 @@ async fn plugin_disconnect_report_closes_player_session_with_reason() {
             closed_session.2.as_deref(),
             Some("管理员 CONSOLE 执行 sm_kick")
         );
+
+        let server: (String, Vec<String>) =
+            sqlx::query_as(r#"SELECT status, players FROM servers WHERE id = $1"#)
+                .bind(server_id)
+                .fetch_one(&db.pool)
+                .await?;
+        assert_eq!(server.0, "hibernating");
+        assert!(server.1.is_empty());
+
+        let online_count: i64 = sqlx::query_scalar(
+            r#"SELECT COUNT(*) FROM server_online_players WHERE server_id = $1"#,
+        )
+        .bind(server_id)
+        .fetch_one(&db.pool)
+        .await?;
+        assert_eq!(online_count, 0);
         Ok(())
     })
     .await;

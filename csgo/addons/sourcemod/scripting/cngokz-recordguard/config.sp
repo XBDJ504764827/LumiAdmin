@@ -86,6 +86,15 @@ void DebugLog(const char[] format, any ...)
     LogMessage("[cngokz-recordguard] %s", message);
 }
 
+void RecordGuardConsole(const char[] format, any ...)
+{
+    // Routine success diagnostics are intentionally silent. Failures still use LogError.
+    if (format[0] == '\0')
+    {
+        return;
+    }
+}
+
 bool GetApiConfig(char[] apiBaseUrl, int apiMaxLen, char[] token, int tokenMaxLen, int &port)
 {
     apiBaseUrl[0] = '\0';

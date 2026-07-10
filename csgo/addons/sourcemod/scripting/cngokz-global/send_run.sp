@@ -23,6 +23,7 @@ void SendTime(int client, int course, float time, int teleportsUsed)
 		if (LibraryExists("cngokz-recordguard")
 			&& CNGOKZ_RecordGuard_ShouldHoldRecord(client, course, mode, timeType, time, teleportsUsed, gI_MapID))
 		{
+			gB_InValidRun[client] = false;
 			return;
 		}
 		

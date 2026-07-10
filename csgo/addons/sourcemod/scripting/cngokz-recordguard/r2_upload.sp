@@ -23,6 +23,7 @@ bool UploadHeldReplayToR2(int client)
     if (!g_RGR2SteamWorksOK)
     {
         LogError("[cngokz-recordguard] SteamWorks extension is unavailable; cannot upload abnormal replay.");
+        RecordGuardConsole("upload blocked: SteamWorks extension is unavailable");
         return false;
     }
 
@@ -62,10 +63,12 @@ bool UploadAbnormalReplayFileToR2(
     bool verifyCert = false;
     if (!GetR2UploadConfig(url, sizeof(url), apiKey, sizeof(apiKey), verifyCert))
     {
+        RecordGuardConsole("upload blocked: shared R2 URL/key config is incomplete or disabled");
         return false;
     }
     if (!FileExists(replayPath))
     {
+        RecordGuardConsole("upload blocked: replay cache file does not exist: %s", replayPath);
         return false;
     }
 
@@ -90,6 +93,7 @@ bool UploadAbnormalReplayFileToR2(
     if (request == null)
     {
         LogError("[cngokz-recordguard] Failed to create SteamWorks R2 upload request.");
+        RecordGuardConsole("failed to create SteamWorks upload request: record_id=%s", recordId);
         return false;
     }
 
@@ -117,6 +121,7 @@ bool UploadAbnormalReplayFileToR2(
     if (!SteamWorks_SetHTTPRequestRawPostBodyFromFile(request, "application/octet-stream", replayPath))
     {
         LogError("[cngokz-recordguard] Failed to attach replay body for R2 upload: %s", replayPath);
+        RecordGuardConsole("failed to attach replay body: record_id=%s file=%s", recordId, replayPath);
         delete request;
         return false;
     }
@@ -134,12 +139,14 @@ bool UploadAbnormalReplayFileToR2(
     if (!SteamWorks_SendHTTPRequest(request))
     {
         LogError("[cngokz-recordguard] Failed to send abnormal replay R2 upload request for %s.", storageKey);
+        RecordGuardConsole("failed to dispatch Worker request: record_id=%s key=%s", recordId, storageKey);
         delete pack;
         delete request;
         return false;
     }
 
     MarkR2UploadAttempt(recordId);
+    RecordGuardConsole("Worker upload request sent: record_id=%s key=%s size=%d", recordId, storageKey, fileSize);
     DebugLog("uploading abnormal replay to R2 key=%s file=%s", storageKey, replayPath);
     return true;
 }
@@ -174,11 +181,13 @@ public void OnAbnormalReplayR2Uploaded(Handle request, bool failure, bool reques
             requestSuccessful ? 1 : 0,
             status,
             timedOut ? 1 : 0);
+        RecordGuardConsole("Worker upload failed: record_id=%s status=%d failure=%d successful=%d timeout=%d", recordId, status, failure ? 1 : 0, requestSuccessful ? 1 : 0, timedOut ? 1 : 0);
         delete request;
         return;
     }
 
     delete request;
+    RecordGuardConsole("Worker upload succeeded: record_id=%s key=%s status=%d; notifying website", recordId, storageKey, status);
     NotifyReplayMetadataUploaded(userId, recordId, storageKey, fileName, fileSize);
 }
 
@@ -190,6 +199,7 @@ void NotifyReplayMetadataUploaded(int userId, const char[] recordId, const char[
     HTTPRequest request = CreateJsonRequest(suffix);
     if (request == null)
     {
+        RecordGuardConsole("metadata notification blocked: cannot create website request for record_id=%s", recordId);
         return;
     }
 
@@ -198,6 +208,7 @@ void NotifyReplayMetadataUploaded(int userId, const char[] recordId, const char[
     int port = 0;
     if (!GetApiConfig(apiBaseUrl, sizeof(apiBaseUrl), token, sizeof(token), port))
     {
+        RecordGuardConsole("metadata notification blocked: plugin API config is incomplete for record_id=%s", recordId);
         return;
     }
 
@@ -213,6 +224,7 @@ void NotifyReplayMetadataUploaded(int userId, const char[] recordId, const char[
     context.WriteCell(userId);
     context.WriteString(recordId);
     request.Post(payload, OnReplayMetadataUploaded, context);
+    RecordGuardConsole("website metadata request sent: record_id=%s key=%s", recordId, storageKey);
 }
 
 public void OnReplayMetadataUploaded(HTTPResponse response, any value, const char[] error)
@@ -228,20 +240,29 @@ public void OnReplayMetadataUploaded(HTTPResponse response, any value, const cha
     if (error[0] != '\0')
     {
         LogError("[cngokz-recordguard] Replay metadata update failed: %s", error);
+        RecordGuardConsole("website metadata update failed: record_id=%s error=%s", recordId, error);
         return;
     }
 
     if (response.Status < HTTPStatus_OK || response.Status >= HTTPStatus_MultipleChoices)
     {
         LogError("[cngokz-recordguard] Replay metadata update returned HTTP status %d.", response.Status);
+        RecordGuardConsole("website metadata update failed: record_id=%s HTTP=%d", recordId, response.Status);
         return;
     }
 
     if (client > 0)
     {
         g_HeldReplayUploaded[client] = true;
+        g_HeldReplayPath[client][0] = '\0';
     }
     MarkR2UploadComplete(recordId);
+    char replayPath[PLATFORM_MAX_PATH];
+    if (LoadReplayPath(recordId, replayPath, sizeof(replayPath)))
+    {
+        DeleteCachedReplay(recordId, replayPath);
+    }
+    RecordGuardConsole("abnormal replay fully attached to website record: record_id=%s", recordId);
 }
 
 void StartR2RetryTimer()
@@ -249,6 +270,7 @@ void StartR2RetryTimer()
     if (g_RGR2RetryTimer == null)
     {
         g_RGR2RetryTimer = CreateTimer(30.0, Timer_RetryPendingR2Uploads, _, TIMER_REPEAT);
+        RecordGuardConsole("persistent replay retry timer started (interval=30s)");
     }
 }
 
@@ -282,8 +304,10 @@ void RetryPendingR2Uploads()
         return;
     }
 
+    int pendingCount = 0;
     while (SQL_FetchRow(results))
     {
+        pendingCount++;
         char recordId[CNGOKZ_MAX_RECORD_ID];
         char idempotencyKey[CNGOKZ_MAX_IDEMPOTENCY_KEY];
         char replayPath[PLATFORM_MAX_PATH];
@@ -294,11 +318,42 @@ void RetryPendingR2Uploads()
         if (!FileExists(replayPath))
         {
             LogError("[cngokz-recordguard] Pending abnormal replay cache file is missing: %s", replayPath);
+            RecordGuardConsole("retry skipped: cached replay is missing record_id=%s file=%s", recordId, replayPath);
             MarkR2UploadAttempt(recordId);
             continue;
         }
 
+        RecordGuardConsole("retrying pending replay: record_id=%s file=%s", recordId, replayPath);
         UploadAbnormalReplayFileToR2(0, recordId, idempotencyKey, replayPath, "", "", "");
+    }
+    delete results;
+    if (pendingCount > 0)
+    {
+        RecordGuardConsole("persistent retry scan processed %d pending replay(s)", pendingCount);
+    }
+    CleanupUploadedReplayCache();
+}
+
+void CleanupUploadedReplayCache()
+{
+    if (g_RGDb == null)
+    {
+        return;
+    }
+
+    DBResultSet results = SQL_Query(g_RGDb, "SELECT record_id, replay_path FROM abnormal_replay_cache WHERE r2_uploaded = 1 ORDER BY created_at ASC LIMIT 20");
+    if (results == null)
+    {
+        return;
+    }
+
+    while (SQL_FetchRow(results))
+    {
+        char recordId[CNGOKZ_MAX_RECORD_ID];
+        char replayPath[PLATFORM_MAX_PATH];
+        SQL_FetchString(results, 0, recordId, sizeof(recordId));
+        SQL_FetchString(results, 1, replayPath, sizeof(replayPath));
+        DeleteCachedReplay(recordId, replayPath);
     }
     delete results;
 }

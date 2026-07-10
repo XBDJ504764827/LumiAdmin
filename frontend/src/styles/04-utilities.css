@@ -191,6 +191,51 @@
   margin-top: 2px;
   word-break: break-all;
 }
+.gokz-replay-player {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.gokz-replay-heading,
+.gokz-replay-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text3);
+}
+.gokz-replay-heading strong { color: var(--text); font-size: 14px; margin-right: 8px; }
+.gokz-replay-heading span { color: var(--text2); }
+.gokz-replay-canvas {
+  display: block;
+  width: 100%;
+  height: 320px;
+  margin-top: 10px;
+  border-radius: 8px;
+  background: #08101d;
+}
+.gokz-replay-range { width: 100%; margin: 10px 0 8px; accent-color: #38bdf8; }
+.gokz-replay-controls { justify-content: flex-start; }
+.gokz-replay-controls select {
+  margin-left: auto;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface2);
+  color: var(--text);
+}
+.gokz-replay-note,
+.replay-player-state { margin-top: 9px; font-size: 12px; color: var(--text3); }
+.replay-player-state { padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.replay-player-error { color: var(--danger); }
+@media (max-width: 640px) {
+  .gokz-replay-canvas { height: 260px; }
+  .gokz-replay-controls select { margin-left: 0; }
+}
 
 /* ── FileItem 样式 ── */
 .file-item {

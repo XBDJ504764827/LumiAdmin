@@ -96,6 +96,7 @@ compile_plugin() {
 }
 
 compile_plugin "cngokz-core.sp" "cngokz-core.smx"
+compile_plugin "gokz-replays.sp" "gokz-replays.smx"
 compile_plugin "cngokz-server.sp" "cngokz-server.smx"
 compile_plugin "cngokz-sync.sp" "cngokz-sync.smx"
 compile_plugin "cngokz-recordguard.sp" "cngokz-recordguard.smx"

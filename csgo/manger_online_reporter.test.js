@@ -356,8 +356,11 @@ test('deploy workflow rebuilds and tests SourceMod plugins', () => {
   assert.match(workflow, /mv "\$PLUGIN_DIR\/gokz-r2upload\.smx" "\$PLUGIN_DIR\/disabled\/gokz-r2upload\.smx"/);
   assert.match(workflow, /mv "\$PLUGIN_DIR\/manger_online_reporter\.smx" "\$PLUGIN_DIR\/disabled\/manger_online_reporter\.smx"/);
   assert.match(workflow, /mv "\$PLUGIN_DIR\/manger_edge_sync\.smx" "\$PLUGIN_DIR\/disabled\/manger_edge_sync\.smx"/);
-  assert.match(workflow, /sm plugins unload gokz-global/);
+  assert.match(workflow, /包含自定义 gokz-replays\.smx/);
+  assert.match(workflow, /请完整重启游戏服务器/);
+  assert.doesNotMatch(workflow, /sm plugins (?:unload|reload|load) /);
   for (const plugin of [
+    'gokz-replays.smx',
     'cngokz-core.smx',
     'cngokz-server.smx',
     'cngokz-sync.smx',
@@ -368,7 +371,6 @@ test('deploy workflow rebuilds and tests SourceMod plugins', () => {
     assert.match(workflow, new RegExp(`csgo/addons/sourcemod/plugins/${escapedPlugin}`));
     assert.match(workflow, new RegExp(`plugin-output/plugins/${escapedPlugin}`));
     assert.match(workflow, new RegExp(`plugin-release/csgo/addons/sourcemod/plugins/${escapedPlugin}`));
-    assert.match(workflow, new RegExp(`sm plugins (reload|load) ${plugin.replace('.smx', '')}`));
   }
   assert.doesNotMatch(workflow, /plugins\/manger_/);
   assert.doesNotMatch(workflow, /sm plugins reload manger_/);

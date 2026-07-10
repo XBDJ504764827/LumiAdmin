@@ -294,6 +294,7 @@ function replayHeaders(object, key, metadata) {
   headers.set("Content-Length", String(object.size));
   headers.set("Cache-Control", key.startsWith("wr/") ? "public, max-age=3600" : "private, no-store");
   headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("Access-Control-Allow-Origin", "*");
   headers.set("x-size", String(object.size));
   if (object.httpEtag) headers.set("ETag", object.httpEtag);
   if (metadata.record_id) headers.set("x-record-id", metadata.record_id);

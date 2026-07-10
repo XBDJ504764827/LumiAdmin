@@ -9,6 +9,7 @@
 #include <gokz/kzplayer>
 #include <cngokz/core>
 #include <cngokz/recordguard>
+#include <cngokz/replay_force>
 
 #pragma newdecls required
 #pragma semicolon 1
@@ -68,6 +69,12 @@ char g_HeldMapName[MAXPLAYERS + 1][128];
 char g_HeldSteamId64[MAXPLAYERS + 1][32];
 char g_HeldSteamId2[MAXPLAYERS + 1][32];
 char g_HeldPlayerName[MAXPLAYERS + 1][MAX_NAME_LENGTH];
+bool g_RecentReplayValid[MAXPLAYERS + 1];
+int g_RecentReplayUserId[MAXPLAYERS + 1];
+int g_RecentReplayCourse[MAXPLAYERS + 1];
+int g_RecentReplayTimeType[MAXPLAYERS + 1];
+float g_RecentReplayTime[MAXPLAYERS + 1];
+char g_RecentReplayPath[MAXPLAYERS + 1][PLATFORM_MAX_PATH];
 
 #include "cngokz-recordguard/config.sp"
 #include "cngokz-recordguard/rules.sp"
@@ -135,4 +142,5 @@ public void OnPluginEnd()
 public void OnClientDisconnect(int client)
 {
     ClearHeldRecord(client);
+    ClearRecentReplay(client);
 }

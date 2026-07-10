@@ -15,6 +15,8 @@ function read(path) {
 
 test('cngokz lumiadmin plugins use block-style SourcePawn structure', () => {
   assert.ok(existsSync(resolve(scripting, 'cngokz-core.sp')));
+  assert.ok(existsSync(resolve(scripting, 'gokz-replays.sp')));
+  assert.ok(existsSync(resolve(scripting, 'gokz-replays/recording.sp')));
   assert.ok(existsSync(resolve(scripting, 'cngokz-core/config.sp')));
   assert.ok(existsSync(resolve(scripting, 'cngokz-core/natives.sp')));
   assert.ok(existsSync(resolve(scripting, 'cngokz-server/legacy_disable.sp')));
@@ -149,6 +151,7 @@ test('recordguard talks to abnormal record plugin APIs', () => {
   const recordguard = [
     read(resolve(scripting, 'cngokz-recordguard/rules.sp')),
     read(resolve(scripting, 'cngokz-recordguard/pending_records.sp')),
+    read(resolve(scripting, 'cngokz-recordguard/replay_capture.sp')),
     read(resolve(scripting, 'cngokz-recordguard/r2_upload.sp')),
     read(resolve(scripting, 'cngokz-recordguard/global_submit.sp')),
   ].join('\n');
@@ -170,6 +173,13 @@ test('recordguard talks to abnormal record plugin APIs', () => {
   assert.match(recordguard, /Timer_RetryPendingR2Uploads/);
   assert.match(recordguard, /r2_uploaded = 0/);
   assert.match(recordguard, /MarkR2UploadComplete/);
+  assert.match(recordguard, /CleanupUploadedReplayCache/);
+  assert.match(recordguard, /SteamWorks_WriteHTTPResponseBodyToFile/);
+  assert.match(recordguard, /replay_storage_key/);
+  assert.match(recordguard, /DownloadApprovedReplay/);
+  assert.match(recordguard, /CacheRecentReplay/);
+  assert.match(recordguard, /TryCaptureRecentReplay/);
+  assert.match(recordguard, /CNGOKZ_RP_ForceSaveRun/);
   assert.doesNotMatch(recordguard, /gokz_r2upload_url/);
   assert.doesNotMatch(recordguard, /UploadFile\(/);
 });
@@ -198,6 +208,7 @@ test('build script compiles cngokz plugins with host sourcemod compiler first', 
   assert.match(build, /GOKZ_TOP_SOURCE_DIR/);
   assert.match(build, /GOKZ_INCLUDE_DIR/);
   assert.match(build, /compile_plugin "cngokz-core\.sp" "cngokz-core\.smx"/);
+  assert.match(build, /compile_plugin "gokz-replays\.sp" "gokz-replays\.smx"/);
   assert.match(build, /compile_plugin "cngokz-recordguard\.sp" "cngokz-recordguard\.smx"/);
   assert.match(build, /compile_plugin "cngokz-global\.sp" "cngokz-global\.smx"/);
 });
@@ -216,10 +227,12 @@ test('project include directory keeps only cngokz and local plugin headers', () 
 
 test('compiled cngokz plugin artifacts exist', { skip: !expectCompiledPlugins }, () => {
   const core = statSync(resolve(plugins, 'cngokz-core.smx'));
+  const replays = statSync(resolve(plugins, 'gokz-replays.smx'));
   const recordguard = statSync(resolve(plugins, 'cngokz-recordguard.smx'));
   const global = statSync(resolve(plugins, 'cngokz-global.smx'));
 
   assert.ok(core.size > 0);
+  assert.ok(replays.size > 0);
   assert.ok(recordguard.size > 0);
   assert.ok(global.size > 0);
 });

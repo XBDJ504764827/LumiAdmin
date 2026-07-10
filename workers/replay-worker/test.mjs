@@ -101,6 +101,7 @@ const auditDownload = await call(`/${auditKey}`, {
   headers: { "x-api-key": env.API_KEY }
 });
 assert.equal(auditDownload.status, 200);
+assert.equal(auditDownload.headers.get("access-control-allow-origin"), "*");
 assert.equal(await auditDownload.text(), "AUDIT_REPLAY");
 
 const auditDelete = await call(`/${auditKey}`, {

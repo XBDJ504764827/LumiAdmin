@@ -1,4 +1,6 @@
 
+import { GokzReplayPlayer } from './GokzReplayPlayer.jsx';
+
 /**
  * 文件预览组件
  * 根据文件类型（video/image/audio）渲染对应的预览元素。
@@ -83,6 +85,9 @@ export function FilePreview({ file }) {
   }
 
   if (file.category === 'replay' || file.category === 'demo') {
+    if (file.category === 'replay') {
+      return <GokzReplayPlayer key={file.url} file={file} />;
+    }
     return (
       <div className="file-preview-replay">
         <div>

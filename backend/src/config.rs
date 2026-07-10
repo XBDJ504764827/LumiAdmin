@@ -50,7 +50,10 @@ pub struct Config {
     pub r2_bucket: Option<String>,
     pub r2_access_key_id: Option<String>,
     pub r2_secret_access_key: Option<String>,
-    pub r2_custom_domain: Option<String>,
+    // 生产环境可通过自定义域名 Worker 网关访问 R2，避免在应用中保存 S3 凭据
+    pub r2_worker_url: Option<String>,
+    pub r2_worker_api_key: Option<String>,
+    pub r2_worker_signing_key: Option<String>,
     pub appeal_file_max_size_bytes: usize,
     // QQ 机器人集成令牌（用于插件查询待审核数量等只读统计接口）
     pub qq_integration_token: Option<String>,
@@ -185,7 +188,13 @@ impl Config {
             r2_secret_access_key: std::env::var("R2_SECRET_ACCESS_KEY")
                 .ok()
                 .filter(|v| !v.is_empty()),
-            r2_custom_domain: std::env::var("R2_CUSTOM_DOMAIN")
+            r2_worker_url: std::env::var("R2_WORKER_URL")
+                .ok()
+                .filter(|v| !v.is_empty()),
+            r2_worker_api_key: std::env::var("R2_WORKER_API_KEY")
+                .ok()
+                .filter(|v| !v.is_empty()),
+            r2_worker_signing_key: std::env::var("R2_WORKER_SIGNING_KEY")
                 .ok()
                 .filter(|v| !v.is_empty()),
             appeal_file_max_size_bytes,
@@ -280,6 +289,30 @@ impl Config {
             );
         }
 
+        let r2_worker_count = [
+            config.r2_worker_url.is_some(),
+            config.r2_worker_api_key.is_some(),
+            config.r2_worker_signing_key.is_some(),
+        ]
+        .iter()
+        .filter(|&&v| v)
+        .count();
+        if r2_worker_count > 0 && r2_worker_count < 3 {
+            if config.is_production {
+                tracing::error!(
+                    filled = r2_worker_count,
+                    total = 3,
+                    "生产环境 R2 Worker 配置不完整，请补齐或清空 R2_WORKER_* 配置"
+                );
+                std::process::exit(1);
+            }
+            tracing::warn!(
+                filled = r2_worker_count,
+                total = 3,
+                "R2 Worker 配置不完整，Worker 文件网关将不可用"
+            );
+        }
+
         // 启动配置日志（隐藏敏感字段）
         tracing::info!(
             bind_addr = %config.bind_addr,
@@ -299,10 +332,14 @@ impl Config {
     }
 
     pub fn r2_storage_enabled(&self) -> bool {
-        self.r2_endpoint.is_some()
+        let worker_enabled = self.r2_worker_url.is_some()
+            && self.r2_worker_api_key.is_some()
+            && self.r2_worker_signing_key.is_some();
+        let s3_enabled = self.r2_endpoint.is_some()
             && self.r2_bucket.is_some()
             && self.r2_access_key_id.is_some()
-            && self.r2_secret_access_key.is_some()
+            && self.r2_secret_access_key.is_some();
+        worker_enabled || s3_enabled
     }
 }
 

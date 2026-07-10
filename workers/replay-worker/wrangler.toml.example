@@ -1,0 +1,11 @@
+name = "cngokz-replay-worker"
+main = "src/index.js"
+compatibility_date = "2026-07-10"
+
+[[r2_buckets]]
+binding = "REPLAY_BUCKET"
+bucket_name = "errorplayer"
+
+# 使用以下命令设置两个不同的强密钥，不要把真实密钥写进此文件：
+# npx wrangler secret put API_KEY
+# npx wrangler secret put DOWNLOAD_SIGNING_KEY

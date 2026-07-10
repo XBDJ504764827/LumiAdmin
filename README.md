@@ -217,7 +217,8 @@ cargo build --release   # 生产构建 → target/release/manger-backend
 
 - `APP_ENV=production` 时必须设置 `CORS_ORIGIN`。
 - `DEV_PASSWORD` 不能使用 `change-me` 或 `dev123`。
-- 如果配置任意 `R2_*` 字段，则 `R2_ENDPOINT`、`R2_BUCKET`、`R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY` 必须全部配置。
+- Worker 网关模式必须同时配置 `R2_WORKER_URL`、`R2_WORKER_API_KEY`、`R2_WORKER_SIGNING_KEY`。
+- 兼容 S3 模式如果填写任意 S3 字段，则 `R2_ENDPOINT`、`R2_BUCKET`、`R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY` 必须全部配置。
 - `MAX_REQUEST_BODY_BYTES` 如果小于或等于 `APPEAL_FILE_MAX_SIZE_MB` 对应字节数，会自动修正为文件上限加 10MB。
 
 ### Steam API
@@ -247,19 +248,22 @@ cargo build --release   # 生产构建 → target/release/manger-backend
 | `REQUEST_TIMEOUT_SECS` | `300` | 全局请求超时 |
 | `MAX_REQUEST_BODY_BYTES` | `APPEAL_FILE_MAX_SIZE_MB + 10MB` | 请求体大小限制，需高于申诉文件大小上限 |
 
-### 封禁申诉文件上传
+### R2 文件存储
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `APPEAL_FILE_MAX_SIZE_MB` | `100` | 单个申诉辅助文件大小上限 |
+| `R2_WORKER_URL` | 空 | 生产环境文件网关，例如 `https://cngokz.iquankz.cn` |
+| `R2_WORKER_API_KEY` | 空 | Worker 内部上传密钥，必须与 Worker `API_KEY` 一致 |
+| `R2_WORKER_SIGNING_KEY` | 空 | 短时下载地址签名密钥，必须与 Worker `DOWNLOAD_SIGNING_KEY` 一致 |
 | `R2_ENDPOINT` | 空 | Cloudflare R2 S3 API endpoint，例如 `https://<account>.r2.cloudflarestorage.com` |
 | `R2_BUCKET` | 空 | R2 存储桶名称 |
 | `R2_ACCESS_KEY_ID` | 空 | R2 S3 访问密钥 ID |
 | `R2_SECRET_ACCESS_KEY` | 空 | R2 S3 机密访问密钥 |
-| `R2_CUSTOM_DOMAIN` | 空 | 文件公开访问域名，可省略 `https://` |
 | `R2_TOKEN_VALUE` | 空 | 可选，保留给后续 R2 管理 API 使用 |
 
-未配置完整 R2 信息时，封禁申诉本身仍可提交，只有辅助文件上传不可用。
+生产环境推荐仅配置 `R2_WORKER_*`，S3 配置用于兼容旧部署或开发环境。未配置完整
+R2 信息时，业务记录本身仍可提交，只有证据文件上传不可用。
 
 ### 其他
 
@@ -482,26 +486,17 @@ cngokz_server "27016" "token_for_27016"
 cngokz_server "27017" "token_for_27017"
 ```
 
-### 异常录像 R2 上传配置
+### WR 与异常录像 R2 上传配置
 
-`cngokz-recordguard` 会优先读取旧 `gokz-r2upload` 配置，方便从旧插件迁移；也可以使用新的 CNGOKZ 配置项。
-
-新配置文件：
-
-```text
-csgo/cfg/sourcemod/cngokz-lumiadmin/cngokz-recordguard.cfg
-```
-
-关键配置：
+普通 WR 录像和异常审核录像默认共用同一个 Cloudflare Worker、R2 Bucket 和上传密钥，
+由插件使用不同对象前缀隔离：
 
 ```text
-cngokz_recordguard_r2upload_enabled "1"
-cngokz_recordguard_r2upload_url "https://你的 Cloudflare Worker 上传地址"
-cngokz_recordguard_r2upload_key "你的上传 API Key"
-cngokz_recordguard_r2upload_verify_cert "0"
+wr/{mode}/{map}/{route}.replay
+audit/{recordId}/{idempotencyKey}.replay
 ```
 
-兼容旧配置：
+统一配置文件：
 
 ```text
 csgo/cfg/sourcemod/gokz/gokz-r2upload.cfg
@@ -509,10 +504,28 @@ csgo/cfg/sourcemod/gokz/gokz-r2upload.cfg
 
 ```text
 gokz_r2upload_enabled "1"
-gokz_r2upload_url "https://你的 Cloudflare Worker 上传地址"
+gokz_r2upload_url "https://你的 Cloudflare Worker 域名/upload"
 gokz_r2upload_key "你的上传 API Key"
-gokz_r2upload_verify_cert "0"
+gokz_r2upload_verify_cert "1"
 ```
+
+`cngokz-recordguard` 默认复用以上 URL、Key 和证书校验配置，因此服务器只需要维护一套
+R2 上传凭据。它仍提供以下可选覆盖项；保持 URL 和 Key 为空即可继续使用统一配置：
+
+```text
+csgo/cfg/sourcemod/cngokz-lumiadmin/cngokz-recordguard.cfg
+```
+
+```text
+cngokz_recordguard_r2upload_enabled "1"
+cngokz_recordguard_r2upload_url ""
+cngokz_recordguard_r2upload_key ""
+cngokz_recordguard_r2upload_verify_cert "1"
+```
+
+统一 Worker 源码和部署示例位于 `workers/replay-worker/`。Worker 允许公开下载 `wr/`
+对象，但访问 `audit/` 对象时必须提供 API Key；网站后端则使用同一 Bucket 的 S3 凭据
+生成短时预签名审核下载地址。
 
 ### GOKZ Global 配置
 

@@ -71,14 +71,13 @@ bool UploadHeldReplayToR2(int client)
     char modeShort[8];
     GetRecordGuardR2Mode(modeShort, sizeof(modeShort), g_HeldMode[client]);
 
-    char typeShort[8];
-    GetRecordGuardR2TimeType(typeShort, sizeof(typeShort), g_HeldTimeType[client]);
-
-    char route[128];
-    Format(route, sizeof(route), "abnormal_%s", g_HeldRecordId[client]);
-
     char storageKey[CNGOKZ_MAX_R2_KEY_LENGTH];
-    Format(storageKey, sizeof(storageKey), "wr/%s/%s/%s.replay", modeShort, g_HeldMapName[client], route);
+    Format(
+        storageKey,
+        sizeof(storageKey),
+        "audit/%s/%s.replay",
+        g_HeldRecordId[client],
+        g_HeldIdempotencyKey[client]);
 
     char fileName[128];
     Format(fileName, sizeof(fileName), "%s.replay", g_HeldIdempotencyKey[client]);
@@ -103,7 +102,6 @@ bool UploadHeldReplayToR2(int client)
     SteamWorks_SetHTTPRequestHeaderValue(request, "X-API-Key", apiKey);
     SteamWorks_SetHTTPRequestHeaderValue(request, "X-GOKZ-Mode", modeShort);
     SteamWorks_SetHTTPRequestHeaderValue(request, "X-Map", g_HeldMapName[client]);
-    SteamWorks_SetHTTPRequestHeaderValue(request, "X-Route", route);
     SteamWorks_SetHTTPRequestHeaderValue(request, "X-CNGOKZ-Object-Key", storageKey);
     SteamWorks_SetHTTPRequestHeaderValue(request, "X-CNGOKZ-Abnormal-Record-Id", g_HeldRecordId[client]);
     SteamWorks_SetHTTPRequestHeaderValue(request, "X-CNGOKZ-Replay-Category", "abnormal");
@@ -302,17 +300,6 @@ void GetRecordGuardR2Mode(char[] buffer, int maxLen, int mode)
     }
 
     strcopy(buffer, maxLen, "unk");
-}
-
-void GetRecordGuardR2TimeType(char[] buffer, int maxLen, int timeType)
-{
-    if (timeType == TimeType_Pro)
-    {
-        strcopy(buffer, maxLen, "pro");
-        return;
-    }
-
-    strcopy(buffer, maxLen, "tp");
 }
 
 void StringToLower(char[] value)

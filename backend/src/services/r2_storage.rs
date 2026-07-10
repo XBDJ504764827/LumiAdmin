@@ -11,32 +11,56 @@ type HmacSha256 = Hmac<Sha256>;
 /// R2 存储客户端，提供文件上传和签名 URL 生成功能。
 #[derive(Clone)]
 pub struct R2Storage {
-    endpoint: String,
-    bucket: String,
-    access_key: String,
-    secret_key: String,
+    backend: R2Backend,
     client: reqwest::Client,
+}
+
+#[derive(Clone)]
+enum R2Backend {
+    Worker {
+        base_url: String,
+        api_key: String,
+        signing_key: String,
+    },
+    S3 {
+        endpoint: String,
+        bucket: String,
+        access_key: String,
+        secret_key: String,
+    },
 }
 
 impl R2Storage {
     pub fn new(config: &Config) -> Option<Self> {
+        if let (Some(base_url), Some(api_key), Some(signing_key)) = (
+            config.r2_worker_url.as_ref(),
+            config.r2_worker_api_key.as_ref(),
+            config.r2_worker_signing_key.as_ref(),
+        ) {
+            return Some(Self {
+                backend: R2Backend::Worker {
+                    base_url: normalize_base_url(base_url),
+                    api_key: api_key.trim().to_string(),
+                    signing_key: signing_key.trim().to_string(),
+                },
+                client: reqwest::Client::new(),
+            });
+        }
+
         let endpoint = config.r2_endpoint.as_ref()?;
         let bucket = config.r2_bucket.as_ref()?;
         let access_key = config.r2_access_key_id.as_ref()?;
         let secret_key = config.r2_secret_access_key.as_ref()?;
         let endpoint = normalize_base_url(endpoint);
         let bucket = bucket.trim().to_string();
-        let _custom_domain = config
-            .r2_custom_domain
-            .as_deref()
-            .map(normalize_base_url)
-            .unwrap_or_else(|| format!("{endpoint}/{bucket}"));
 
         Some(Self {
-            endpoint,
-            bucket,
-            access_key: access_key.trim().to_string(),
-            secret_key: secret_key.trim().to_string(),
+            backend: R2Backend::S3 {
+                endpoint,
+                bucket,
+                access_key: access_key.trim().to_string(),
+                secret_key: secret_key.trim().to_string(),
+            },
             client: reqwest::Client::new(),
         })
     }
@@ -69,20 +93,36 @@ impl R2Storage {
             Uuid::new_v4(),
             sanitize_filename(file_name)
         );
-        let url = format!("{}/{}/{}", self.endpoint, self.bucket, key);
-        let now = Utc::now();
-
-        let payload_hash = hex::encode(sha256_hash(&data));
-        let headers = self.build_signed_headers("PUT", &url, content_type, &payload_hash, &now)?;
-
-        let response = self
-            .client
-            .put(&url)
-            .headers(headers)
-            .body(data)
-            .send()
-            .await
-            .context("R2 upload request failed")?;
+        let response = match &self.backend {
+            R2Backend::Worker {
+                base_url, api_key, ..
+            } => self
+                .client
+                .post(format!("{base_url}/internal/upload"))
+                .header("x-api-key", api_key)
+                .header("x-object-key", &key)
+                .header(reqwest::header::CONTENT_TYPE, content_type)
+                .body(data)
+                .send()
+                .await
+                .context("R2 Worker upload request failed")?,
+            R2Backend::S3 {
+                endpoint, bucket, ..
+            } => {
+                let url = format!("{endpoint}/{bucket}/{key}");
+                let now = Utc::now();
+                let payload_hash = hex::encode(sha256_hash(&data));
+                let headers =
+                    self.build_signed_headers("PUT", &url, content_type, &payload_hash, &now)?;
+                self.client
+                    .put(&url)
+                    .headers(headers)
+                    .body(data)
+                    .send()
+                    .await
+                    .context("R2 upload request failed")?
+            }
+        };
 
         if !response.status().is_success() {
             let status = response.status();
@@ -95,19 +135,40 @@ impl R2Storage {
 
     /// 生成预签名下载 URL（有效期 1 小时）
     pub fn presigned_url(&self, key: &str, expiry_secs: u32) -> String {
+        if let R2Backend::Worker {
+            base_url,
+            signing_key,
+            ..
+        } = &self.backend
+        {
+            let expires = Utc::now().timestamp() + i64::from(expiry_secs.min(604_800));
+            let message = format!("{key}\n{expires}");
+            let signature = hex::encode(hmac_sha256(signing_key.as_bytes(), message.as_bytes()));
+            return format!(
+                "{base_url}/files/{}?expires={expires}&signature={signature}",
+                uri_encode_path(key)
+            );
+        }
+
+        let R2Backend::S3 {
+            endpoint,
+            bucket,
+            access_key,
+            ..
+        } = &self.backend
+        else {
+            unreachable!();
+        };
         let now = Utc::now();
         let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
         let date_stamp = now.format("%Y%m%d").to_string();
         let region = "auto";
         let service = "s3";
         let credential_scope = format!("{date_stamp}/{region}/{service}/aws4_request");
-        let resource = format!("/{}/{}", self.bucket, key);
+        let resource = format!("/{bucket}/{key}");
         let canonical_uri = uri_encode_path(&resource);
-        let host = self
-            .endpoint
-            .strip_prefix("https://")
-            .unwrap_or(&self.endpoint);
-        let credential = format!("{}/{}", self.access_key, credential_scope);
+        let host = endpoint.strip_prefix("https://").unwrap_or(endpoint);
+        let credential = format!("{access_key}/{credential_scope}");
         let expires = expiry_secs.min(604_800);
         let canonical_query = format!(
             "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential={}&X-Amz-Date={}&X-Amz-Expires={}&X-Amz-SignedHeaders=host",
@@ -136,6 +197,9 @@ impl R2Storage {
         payload_hash: &str,
         now: &chrono::DateTime<Utc>,
     ) -> anyhow::Result<reqwest::header::HeaderMap> {
+        let R2Backend::S3 { access_key, .. } = &self.backend else {
+            anyhow::bail!("S3 signing is unavailable in R2 Worker mode");
+        };
         let url_parts = url
             .strip_prefix("https://")
             .context("invalid R2 endpoint URL")?;
@@ -173,7 +237,7 @@ impl R2Storage {
 
         let auth_header = format!(
             "AWS4-HMAC-SHA256 Credential={}/{}, SignedHeaders={}, Signature={}",
-            self.access_key, credential_scope, signed_headers, signature
+            access_key, credential_scope, signed_headers, signature
         );
 
         let mut headers = reqwest::header::HeaderMap::new();
@@ -211,8 +275,11 @@ impl R2Storage {
     }
 
     fn derive_signing_key(&self, date_stamp: &str, region: &str, service: &str) -> Vec<u8> {
+        let R2Backend::S3 { secret_key, .. } = &self.backend else {
+            unreachable!();
+        };
         let k_date = hmac_sha256(
-            format!("AWS4{}", self.secret_key).as_bytes(),
+            format!("AWS4{secret_key}").as_bytes(),
             date_stamp.as_bytes(),
         );
         let k_region = hmac_sha256(&k_date, region.as_bytes());
@@ -413,8 +480,15 @@ mod tests {
         let content_type = "text/plain";
 
         println!("正在上传测试文件到 R2...");
-        println!("  Endpoint: {}", r2.endpoint);
-        println!("  Bucket: {}", r2.bucket);
+        match &r2.backend {
+            R2Backend::Worker { base_url, .. } => println!("  Worker: {base_url}"),
+            R2Backend::S3 {
+                endpoint, bucket, ..
+            } => {
+                println!("  Endpoint: {endpoint}");
+                println!("  Bucket: {bucket}");
+            }
+        }
         println!("  Key: appeals/{}/{}", appeal_id, file_name);
 
         match r2

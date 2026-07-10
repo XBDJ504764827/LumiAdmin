@@ -13,6 +13,11 @@
 ConVar g_CNGOKZApiBaseUrl = null;
 ConVar g_CNGOKZDebugLog = null;
 ConVar g_CNGOKZHostPort = null;
+ConVar g_CNGOKZReplayR2Enabled = null;
+ConVar g_CNGOKZReplayR2WREnabled = null;
+ConVar g_CNGOKZReplayR2Url = null;
+ConVar g_CNGOKZReplayR2Key = null;
+ConVar g_CNGOKZReplayR2VerifyCert = null;
 StringMap g_CNGOKZServerTokenMap = null;
 char g_CNGOKZCachedReportToken[CNGOKZ_MAX_SERVER_TOKEN];
 int g_CNGOKZCachedReportPort = -1;
@@ -36,6 +41,9 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int errMax)
     CreateNative("CNGOKZCore_GetReportToken", Native_GetReportToken);
     CreateNative("CNGOKZCore_GetServerPort", Native_GetServerPort);
     CreateNative("CNGOKZCore_IsDebugEnabled", Native_IsDebugEnabled);
+    CreateNative("CNGOKZCore_IsReplayR2Enabled", Native_IsReplayR2Enabled);
+    CreateNative("CNGOKZCore_IsWRReplayR2Enabled", Native_IsWRReplayR2Enabled);
+    CreateNative("CNGOKZCore_GetReplayR2Config", Native_GetReplayR2Config);
     RegPluginLibrary("cngokz-core");
     return APLRes_Success;
 }

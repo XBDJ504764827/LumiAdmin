@@ -1,4 +1,5 @@
 #include <sourcemod>
+#include <SteamWorks>
 
 #include <sdktools>
 
@@ -14,6 +15,7 @@
 #include <gokz/momsurffix>
 
 #include <autoexecconfig>
+#include <cngokz/core>
 
 #undef REQUIRE_EXTENSIONS
 #undef REQUIRE_PLUGIN
@@ -67,6 +69,7 @@ ConVar gCV_EnforcedCVar[ENFORCEDCVAR_COUNT];
 #include "cngokz-global/maptop_menu.sp"
 #include "cngokz-global/print_records.sp"
 #include "cngokz-global/send_run.sp"
+#include "cngokz-global/r2_upload.sp"
 #include "cngokz-global/points.sp"
 
 
@@ -134,6 +137,7 @@ public void OnPluginStart()
 public void OnAllPluginsLoaded()
 {
 	gB_GOKZLocalDB = LibraryExists("gokz-localdb");
+	CNGOKZReplayR2_Init();
 	
 	for (int client = 1; client <= MaxClients; client++)
 	{
@@ -316,6 +320,7 @@ public void GOKZ_OnTimerEnd_Post(int client, int course, float time, int telepor
 
 public Action GOKZ_RP_OnReplaySaved(int client, int replayType, const char[] map, int course, int timeType, float time, const char[] filePath, bool tempReplay)
 {
+	CNGOKZReplayR2_OnReplaySaved(client, replayType, map, course, timeType, filePath, tempReplay);
 	if (gB_GloballyVerified[client] && gB_InValidRun[client])
 	{
 		OnReplaySaved_SendReplay(client, replayType, map, course, timeType, time, filePath, tempReplay);
@@ -354,6 +359,7 @@ public void OnMapStart()
 	LoadSounds();
 
 	GetCurrentMapDisplayName(gC_CurrentMap, sizeof(gC_CurrentMap));
+	CNGOKZReplayR2_OnMapStart(gC_CurrentMap);
 	gI_CurrentMapFileSize = GetCurrentMapFileSize();
 	
 	gB_BannedCommandsCheck = true;

@@ -7,6 +7,9 @@ native int CNGOKZCore_GetApiBaseUrl(char[] apiBaseUrl, int maxLen);
 native int CNGOKZCore_GetReportToken(char[] token, int maxLen);
 native int CNGOKZCore_GetServerPort();
 native bool CNGOKZCore_IsDebugEnabled();
+native bool CNGOKZCore_IsReplayR2Enabled();
+native bool CNGOKZCore_IsWRReplayR2Enabled();
+native bool CNGOKZCore_GetReplayR2Config(char[] url, int urlMaxLen, char[] apiKey, int keyMaxLen, bool &verifyCert);
 
 public SharedPlugin __pl_cngokz_core =
 {
@@ -26,5 +29,8 @@ public void __pl_cngokz_core_SetNTVOptional()
     MarkNativeAsOptional("CNGOKZCore_GetReportToken");
     MarkNativeAsOptional("CNGOKZCore_GetServerPort");
     MarkNativeAsOptional("CNGOKZCore_IsDebugEnabled");
+    MarkNativeAsOptional("CNGOKZCore_IsReplayR2Enabled");
+    MarkNativeAsOptional("CNGOKZCore_IsWRReplayR2Enabled");
+    MarkNativeAsOptional("CNGOKZCore_GetReplayR2Config");
 }
 #endif

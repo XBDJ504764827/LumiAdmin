@@ -499,18 +499,21 @@ audit/{recordId}/{idempotencyKey}.replay
 统一配置文件：
 
 ```text
-csgo/cfg/sourcemod/gokz/gokz-r2upload.cfg
+csgo/cfg/sourcemod/cngokz-lumiadmin/cngokz-core.cfg
 ```
 
 ```text
-gokz_r2upload_enabled "1"
-gokz_r2upload_url "https://你的 Cloudflare Worker 域名/upload"
-gokz_r2upload_key "你的上传 API Key"
-gokz_r2upload_verify_cert "1"
+cngokz_replay_r2_enabled "1"
+cngokz_replay_r2_wr_enabled "1"
+cngokz_replay_r2_url "https://你的 Cloudflare Worker 域名/upload"
+cngokz_replay_r2_key "你的上传 API Key"
+cngokz_replay_r2_verify_cert "1"
 ```
 
-`cngokz-recordguard` 默认复用以上 URL、Key 和证书校验配置，因此服务器只需要维护一套
-R2 上传凭据。它仍提供以下可选覆盖项；保持 URL 和 Key 为空即可继续使用统一配置：
+`cngokz-global` 已整合原 `gokz-r2upload` 的永久服务器纪录回填、WR 上传和上一任纪录
+位移逻辑；`cngokz-recordguard` 使用同一套 URL、Key 和证书校验配置上传异常录像。
+服务器只需要维护这一套 R2 上传凭据，旧 `gokz-r2upload.smx` 和
+`cfg/sourcemod/gokz/gokz-r2upload.cfg` 不再使用。
 
 ```text
 csgo/cfg/sourcemod/cngokz-lumiadmin/cngokz-recordguard.cfg
@@ -518,14 +521,10 @@ csgo/cfg/sourcemod/cngokz-lumiadmin/cngokz-recordguard.cfg
 
 ```text
 cngokz_recordguard_r2upload_enabled "1"
-cngokz_recordguard_r2upload_url ""
-cngokz_recordguard_r2upload_key ""
-cngokz_recordguard_r2upload_verify_cert "1"
 ```
 
 统一 Worker 源码和部署示例位于 `workers/replay-worker/`。Worker 允许公开下载 `wr/`
-对象，但访问 `audit/` 对象时必须提供 API Key；网站后端则使用同一 Bucket 的 S3 凭据
-生成短时预签名审核下载地址。
+对象；`audit/` 和网站证据对象使用鉴权或短时 HMAC 签名地址访问。
 
 ### GOKZ Global 配置
 

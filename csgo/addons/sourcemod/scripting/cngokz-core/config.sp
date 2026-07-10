@@ -7,6 +7,11 @@ void CNGOKZCore_OnPluginStart()
     }
 
     g_CNGOKZDebugLog = CreateConVar("cngokz_debug_log", "0", "Enable verbose CNGOKZ plugin debug logs.", _, true, 0.0, true, 1.0);
+    g_CNGOKZReplayR2Enabled = CreateConVar("cngokz_replay_r2_enabled", "1", "Upload CNGOKZ replay files to R2.", _, true, 0.0, true, 1.0);
+    g_CNGOKZReplayR2WREnabled = CreateConVar("cngokz_replay_r2_wr_enabled", "1", "Upload permanent server-record replays to the WR R2 prefix.", _, true, 0.0, true, 1.0);
+    g_CNGOKZReplayR2Url = CreateConVar("cngokz_replay_r2_url", "", "Shared Cloudflare Worker upload URL for WR and abnormal replays.");
+    g_CNGOKZReplayR2Key = CreateConVar("cngokz_replay_r2_key", "", "Shared Cloudflare Worker API key for replay uploads.");
+    g_CNGOKZReplayR2VerifyCert = CreateConVar("cngokz_replay_r2_verify_cert", "1", "Verify the Cloudflare Worker HTTPS certificate.", _, true, 0.0, true, 1.0);
     g_CNGOKZHostPort = FindConVar("hostport");
 
     RegServerCmd("cngokz_server", CNGOKZCore_CommandServerMapping, "Register one CNGOKZ server mapping.");

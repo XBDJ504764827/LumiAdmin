@@ -19,9 +19,10 @@ npx wrangler secret put DOWNLOAD_SIGNING_KEY
 npx wrangler deploy
 ```
 
-游戏服务器的 `gokz-r2upload.cfg` 只需要配置一次 Worker `/upload` URL 和 API Key。
-`cngokz-recordguard` 默认复用这套配置，并通过 `X-CNGOKZ-Replay-Category: abnormal`
-和 `X-CNGOKZ-Object-Key` 将异常录像写入 `audit/` 前缀。
+游戏服务器在 `cngokz-core.cfg` 中配置一次 Worker `/upload` URL 和 API Key。
+`cngokz-global` 将 WR 录像写入 `wr/`，`cngokz-recordguard` 通过
+`X-CNGOKZ-Replay-Category: abnormal` 和 `X-CNGOKZ-Object-Key` 将异常录像写入
+`audit/` 前缀。
 
 生产环境网站后端配置 `R2_WORKER_URL`、`R2_WORKER_API_KEY` 和
 `R2_WORKER_SIGNING_KEY`。后端通过 `/internal/upload` 上传文件，并生成 `/files/`

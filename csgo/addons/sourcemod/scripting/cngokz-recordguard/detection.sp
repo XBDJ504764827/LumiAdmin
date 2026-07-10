@@ -11,6 +11,12 @@ public int Native_ShouldHoldRecord(Handle plugin, int numParams)
     return ShouldHoldRecord(client, course, mode, timeType, runTime, teleportsUsed, mapId);
 }
 
+public int Native_IsHoldingClient(Handle plugin, int numParams)
+{
+    int client = GetNativeCell(1);
+    return client >= 1 && client <= MaxClients && g_HeldActive[client];
+}
+
 bool ShouldHoldRecord(int client, int course, int mode, int timeType, float runTime, int teleportsUsed, int mapId)
 {
     if (g_RGEnabled == null || !g_RGEnabled.BoolValue)

@@ -4,6 +4,7 @@
 #define _cngokz_recordguard_included
 
 native bool CNGOKZ_RecordGuard_ShouldHoldRecord(int client, int course, int mode, int timeType, float runTime, int teleportsUsed, int mapId);
+native bool CNGOKZ_RecordGuard_IsHoldingClient(int client);
 
 public SharedPlugin __pl_cngokz_recordguard =
 {
@@ -20,5 +21,6 @@ public SharedPlugin __pl_cngokz_recordguard =
 public void __pl_cngokz_recordguard_SetNTVOptional()
 {
     MarkNativeAsOptional("CNGOKZ_RecordGuard_ShouldHoldRecord");
+    MarkNativeAsOptional("CNGOKZ_RecordGuard_IsHoldingClient");
 }
 #endif

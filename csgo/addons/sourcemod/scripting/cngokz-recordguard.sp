@@ -34,13 +34,6 @@ ConVar g_RGRequestTimeout = null;
 ConVar g_RGDebugLog = null;
 ConVar g_RGTickrate = null;
 ConVar g_RGR2UploadEnabled = null;
-ConVar g_RGR2UploadUrl = null;
-ConVar g_RGR2UploadKey = null;
-ConVar g_RGR2UploadVerifyCert = null;
-ConVar g_RGLegacyR2UploadEnabled = null;
-ConVar g_RGLegacyR2UploadUrl = null;
-ConVar g_RGLegacyR2UploadKey = null;
-ConVar g_RGLegacyR2UploadVerifyCert = null;
 
 Handle g_RGRuleTimer = null;
 Handle g_RGPollTimer = null;
@@ -95,6 +88,7 @@ public Plugin myinfo =
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int errMax)
 {
     CreateNative("CNGOKZ_RecordGuard_ShouldHoldRecord", Native_ShouldHoldRecord);
+    CreateNative("CNGOKZ_RecordGuard_IsHoldingClient", Native_IsHoldingClient);
     RegPluginLibrary("cngokz-recordguard");
     MarkNativeAsOptional("MangerReporter_GetApiBaseUrl");
     MarkNativeAsOptional("MangerReporter_GetReportToken");

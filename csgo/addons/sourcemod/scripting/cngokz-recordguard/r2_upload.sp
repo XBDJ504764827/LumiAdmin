@@ -1,30 +1,3 @@
-void RecordGuard_CreateLegacyR2UploadConVars()
-{
-    g_RGLegacyR2UploadEnabled = FindConVar("gokz_r2upload_enabled");
-    if (g_RGLegacyR2UploadEnabled == null)
-    {
-        g_RGLegacyR2UploadEnabled = CreateConVar("gokz_r2upload_enabled", "1", "Compatibility switch for legacy gokz-r2upload R2 replay uploads.", _, true, 0.0, true, 1.0);
-    }
-
-    g_RGLegacyR2UploadUrl = FindConVar("gokz_r2upload_url");
-    if (g_RGLegacyR2UploadUrl == null)
-    {
-        g_RGLegacyR2UploadUrl = CreateConVar("gokz_r2upload_url", "", "Compatibility Cloudflare Worker URL for legacy gokz-r2upload.");
-    }
-
-    g_RGLegacyR2UploadKey = FindConVar("gokz_r2upload_key");
-    if (g_RGLegacyR2UploadKey == null)
-    {
-        g_RGLegacyR2UploadKey = CreateConVar("gokz_r2upload_key", "", "Compatibility Cloudflare Worker API key for legacy gokz-r2upload.");
-    }
-
-    g_RGLegacyR2UploadVerifyCert = FindConVar("gokz_r2upload_verify_cert");
-    if (g_RGLegacyR2UploadVerifyCert == null)
-    {
-        g_RGLegacyR2UploadVerifyCert = CreateConVar("gokz_r2upload_verify_cert", "0", "Compatibility HTTPS certificate verification switch for legacy gokz-r2upload.", _, true, 0.0, true, 1.0);
-    }
-}
-
 void RecordGuard_InitR2Upload()
 {
     g_RGR2SteamWorksOK = (GetExtensionFileStatus("SteamWorks.ext") > 0);
@@ -58,7 +31,7 @@ bool UploadHeldReplayToR2(int client)
     bool verifyCert = false;
     if (!GetR2UploadConfig(url, sizeof(url), apiKey, sizeof(apiKey), verifyCert))
     {
-        LogError("[cngokz-recordguard] Missing R2 upload URL or key; set cngokz_recordguard_r2upload_* or legacy gokz_r2upload_*.");
+        LogError("[cngokz-recordguard] Missing shared replay R2 config; set cngokz_replay_r2_url and cngokz_replay_r2_key in cngokz-core.cfg.");
         return false;
     }
 
@@ -235,59 +208,15 @@ bool GetR2UploadConfig(char[] url, int urlMaxLen, char[] apiKey, int keyMaxLen, 
     url[0] = '\0';
     apiKey[0] = '\0';
     verifyCert = false;
-    bool usingLegacyConfig = false;
-
     if (g_RGR2UploadEnabled != null && !g_RGR2UploadEnabled.BoolValue)
     {
         return false;
     }
-
-    if (g_RGLegacyR2UploadEnabled != null && !g_RGLegacyR2UploadEnabled.BoolValue)
+    if (!CNGOKZCore_IsReplayR2Enabled())
     {
         return false;
     }
-
-    if (g_RGLegacyR2UploadUrl != null)
-    {
-        g_RGLegacyR2UploadUrl.GetString(url, urlMaxLen);
-        TrimString(url);
-    }
-    if (url[0] != '\0')
-    {
-        usingLegacyConfig = true;
-    }
-    else if (g_RGR2UploadUrl != null)
-    {
-        g_RGR2UploadUrl.GetString(url, urlMaxLen);
-        TrimString(url);
-    }
-
-    if (g_RGLegacyR2UploadKey != null)
-    {
-        g_RGLegacyR2UploadKey.GetString(apiKey, keyMaxLen);
-        TrimString(apiKey);
-    }
-    if (apiKey[0] == '\0')
-    {
-        usingLegacyConfig = false;
-    }
-
-    if (apiKey[0] == '\0' && g_RGR2UploadKey != null)
-    {
-        g_RGR2UploadKey.GetString(apiKey, keyMaxLen);
-        TrimString(apiKey);
-    }
-
-    if (usingLegacyConfig && g_RGLegacyR2UploadVerifyCert != null)
-    {
-        verifyCert = g_RGLegacyR2UploadVerifyCert.BoolValue;
-    }
-    else if (g_RGR2UploadVerifyCert != null)
-    {
-        verifyCert = g_RGR2UploadVerifyCert.BoolValue;
-    }
-
-    return url[0] != '\0' && apiKey[0] != '\0';
+    return CNGOKZCore_GetReplayR2Config(url, urlMaxLen, apiKey, keyMaxLen, verifyCert);
 }
 
 void GetRecordGuardR2Mode(char[] buffer, int maxLen, int mode)

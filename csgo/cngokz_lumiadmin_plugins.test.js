@@ -28,6 +28,7 @@ test('cngokz lumiadmin plugins use block-style SourcePawn structure', () => {
   assert.ok(existsSync(resolve(scripting, 'cngokz-recordguard/global_submit.sp')));
   assert.ok(existsSync(resolve(scripting, 'cngokz-global.sp')));
   assert.ok(existsSync(resolve(scripting, 'cngokz-global/send_run.sp')));
+  assert.ok(existsSync(resolve(scripting, 'cngokz-global/r2_upload.sp')));
   assert.ok(existsSync(resolve(scripting, 'cngokz-global/legacy_disable.sp')));
   assert.ok(existsSync(resolve(scripting, 'cngokz-global/api.sp')));
 });
@@ -46,6 +47,8 @@ test('cngokz lumiadmin config files are generated on servers only', () => {
   assert.match(sync, /EnsureCNGOKZSyncConfigDirectory\(\)/);
   assert.match(recordguard, /RecordGuard_EnsureConfigDirectory\(\)/);
   assert.match(coreConfig, /AutoExecConfig\(true, "cngokz-core", CNGOKZ_CFG_FOLDER\)/);
+  assert.match(coreConfig, /cngokz_replay_r2_url/);
+  assert.match(coreConfig, /cngokz_replay_r2_key/);
   assert.match(server, /AutoExecConfig\(true, "cngokz-server", "sourcemod\/cngokz-lumiadmin"\)/);
   assert.match(sync, /AutoExecConfig\(true, "cngokz-sync", "sourcemod\/cngokz-lumiadmin"\)/);
   assert.match(recordguard, /AutoExecConfig\(true, "cngokz-recordguard", "sourcemod\/cngokz-lumiadmin"\)/);
@@ -158,10 +161,31 @@ test('recordguard talks to abnormal record plugin APIs', () => {
   assert.match(recordguard, /SteamWorks_SetHTTPRequestRawPostBodyFromFile/);
   assert.match(recordguard, /X-GOKZ-Mode/);
   assert.match(recordguard, /X-Map/);
-  assert.match(recordguard, /X-Route/);
   assert.match(recordguard, /X-CNGOKZ-Object-Key/);
-  assert.match(recordguard, /gokz_r2upload_url/);
+  assert.match(recordguard, /X-CNGOKZ-Abnormal-Record-Id/);
+  assert.match(recordguard, /X-CNGOKZ-Replay-Category/);
+  assert.match(recordguard, /"audit\/%s\/%s\.replay"/);
+  assert.doesNotMatch(recordguard, /X-Route/);
+  assert.match(recordguard, /CNGOKZCore_GetReplayR2Config/);
+  assert.doesNotMatch(recordguard, /gokz_r2upload_url/);
   assert.doesNotMatch(recordguard, /UploadFile\(/);
+});
+
+test('cngokz-global integrates legacy WR replay R2 behavior with shared config', () => {
+  const global = read(resolve(scripting, 'cngokz-global.sp'));
+  const uploader = read(resolve(scripting, 'cngokz-global/r2_upload.sp'));
+
+  assert.match(global, /CNGOKZReplayR2_OnReplaySaved/);
+  assert.match(global, /CNGOKZReplayR2_OnMapStart/);
+  assert.match(uploader, /tempReplay/);
+  assert.match(uploader, /CNGOKZ_RecordGuard_IsHoldingClient/);
+  assert.match(uploader, /CNGOKZCore_GetReplayR2Config/);
+  assert.match(uploader, /X-GOKZ-Mode/);
+  assert.match(uploader, /X-Map/);
+  assert.match(uploader, /X-Route/);
+  assert.match(uploader, /CNGOKZReplayR2_BackfillExistingRecords/);
+  assert.match(uploader, /CNGOKZReplayR2_UploadWRWithShuffle/);
+  assert.doesNotMatch(uploader, /gokz_r2upload_/);
 });
 
 test('build script compiles cngokz plugins with host sourcemod compiler first', () => {

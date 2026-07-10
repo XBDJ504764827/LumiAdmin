@@ -37,6 +37,7 @@ ConVar g_RGR2UploadEnabled = null;
 
 Handle g_RGRuleTimer = null;
 Handle g_RGPollTimer = null;
+Handle g_RGR2RetryTimer = null;
 Database g_RGDb = null;
 bool g_RGR2SteamWorksOK = false;
 
@@ -114,18 +115,21 @@ public void OnMapStart()
     SyncRules();
     StartRuleSyncTimer();
     StartApprovedPollTimer();
+    StartR2RetryTimer();
 }
 
 public void OnMapEnd()
 {
     StopRuleSyncTimer();
     StopApprovedPollTimer();
+    StopR2RetryTimer();
 }
 
 public void OnPluginEnd()
 {
     StopRuleSyncTimer();
     StopApprovedPollTimer();
+    StopR2RetryTimer();
 }
 
 public void OnClientDisconnect(int client)

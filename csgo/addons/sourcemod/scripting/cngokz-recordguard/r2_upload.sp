@@ -26,15 +26,6 @@ bool UploadHeldReplayToR2(int client)
         return false;
     }
 
-    char url[CNGOKZ_MAX_URL_LENGTH];
-    char apiKey[CNGOKZ_MAX_TOKEN_LENGTH];
-    bool verifyCert = false;
-    if (!GetR2UploadConfig(url, sizeof(url), apiKey, sizeof(apiKey), verifyCert))
-    {
-        LogError("[cngokz-recordguard] Missing shared replay R2 config; set cngokz_replay_r2_url and cngokz_replay_r2_key in cngokz-core.cfg.");
-        return false;
-    }
-
     if (!FileExists(g_HeldReplayPath[client]))
     {
         LogError("[cngokz-recordguard] Abnormal replay cache missing: %s", g_HeldReplayPath[client]);
@@ -44,18 +35,52 @@ bool UploadHeldReplayToR2(int client)
     char modeShort[8];
     GetRecordGuardR2Mode(modeShort, sizeof(modeShort), g_HeldMode[client]);
 
+    char timeMs[16];
+    IntToString(RoundToNearest(g_HeldRunTime[client] * 1000.0), timeMs, sizeof(timeMs));
+
+    return UploadAbnormalReplayFileToR2(
+        g_HeldUserId[client],
+        g_HeldRecordId[client],
+        g_HeldIdempotencyKey[client],
+        g_HeldReplayPath[client],
+        modeShort,
+        g_HeldMapName[client],
+        timeMs);
+}
+
+bool UploadAbnormalReplayFileToR2(
+    int userId,
+    const char[] recordId,
+    const char[] idempotencyKey,
+    const char[] replayPath,
+    const char[] modeShort,
+    const char[] mapName,
+    const char[] timeMs)
+{
+    char url[CNGOKZ_MAX_URL_LENGTH];
+    char apiKey[CNGOKZ_MAX_TOKEN_LENGTH];
+    bool verifyCert = false;
+    if (!GetR2UploadConfig(url, sizeof(url), apiKey, sizeof(apiKey), verifyCert))
+    {
+        return false;
+    }
+    if (!FileExists(replayPath))
+    {
+        return false;
+    }
+
     char storageKey[CNGOKZ_MAX_R2_KEY_LENGTH];
     Format(
         storageKey,
         sizeof(storageKey),
         "audit/%s/%s.replay",
-        g_HeldRecordId[client],
-        g_HeldIdempotencyKey[client]);
+        recordId,
+        idempotencyKey);
 
     char fileName[128];
-    Format(fileName, sizeof(fileName), "%s.replay", g_HeldIdempotencyKey[client]);
+    Format(fileName, sizeof(fileName), "%s.replay", idempotencyKey);
 
-    int fileSize = FileSize(g_HeldReplayPath[client]);
+    int fileSize = FileSize(replayPath);
     if (fileSize < 0)
     {
         fileSize = 0;
@@ -73,26 +98,32 @@ bool UploadHeldReplayToR2(int client)
     SteamWorks_SetHTTPRequestAbsoluteTimeoutMS(request, timeout * 1000);
     SteamWorks_SetHTTPRequestRequiresVerifiedCertificate(request, verifyCert);
     SteamWorks_SetHTTPRequestHeaderValue(request, "X-API-Key", apiKey);
-    SteamWorks_SetHTTPRequestHeaderValue(request, "X-GOKZ-Mode", modeShort);
-    SteamWorks_SetHTTPRequestHeaderValue(request, "X-Map", g_HeldMapName[client]);
-    SteamWorks_SetHTTPRequestHeaderValue(request, "X-CNGOKZ-Object-Key", storageKey);
-    SteamWorks_SetHTTPRequestHeaderValue(request, "X-CNGOKZ-Abnormal-Record-Id", g_HeldRecordId[client]);
-    SteamWorks_SetHTTPRequestHeaderValue(request, "X-CNGOKZ-Replay-Category", "abnormal");
-
-    char timeMs[16];
-    IntToString(RoundToNearest(g_HeldRunTime[client] * 1000.0), timeMs, sizeof(timeMs));
-    SteamWorks_SetHTTPRequestHeaderValue(request, "X-Time-Ms", timeMs);
-
-    if (!SteamWorks_SetHTTPRequestRawPostBodyFromFile(request, "application/octet-stream", g_HeldReplayPath[client]))
+    if (modeShort[0] != '\0')
     {
-        LogError("[cngokz-recordguard] Failed to attach replay body for R2 upload: %s", g_HeldReplayPath[client]);
+        SteamWorks_SetHTTPRequestHeaderValue(request, "X-GOKZ-Mode", modeShort);
+    }
+    if (mapName[0] != '\0')
+    {
+        SteamWorks_SetHTTPRequestHeaderValue(request, "X-Map", mapName);
+    }
+    SteamWorks_SetHTTPRequestHeaderValue(request, "X-CNGOKZ-Object-Key", storageKey);
+    SteamWorks_SetHTTPRequestHeaderValue(request, "X-CNGOKZ-Abnormal-Record-Id", recordId);
+    SteamWorks_SetHTTPRequestHeaderValue(request, "X-CNGOKZ-Replay-Category", "abnormal");
+    if (timeMs[0] != '\0')
+    {
+        SteamWorks_SetHTTPRequestHeaderValue(request, "X-Time-Ms", timeMs);
+    }
+
+    if (!SteamWorks_SetHTTPRequestRawPostBodyFromFile(request, "application/octet-stream", replayPath))
+    {
+        LogError("[cngokz-recordguard] Failed to attach replay body for R2 upload: %s", replayPath);
         delete request;
         return false;
     }
 
     DataPack pack = new DataPack();
-    pack.WriteCell(g_HeldUserId[client]);
-    pack.WriteString(g_HeldRecordId[client]);
+    pack.WriteCell(userId);
+    pack.WriteString(recordId);
     pack.WriteString(storageKey);
     pack.WriteString(fileName);
     pack.WriteCell(fileSize);
@@ -108,7 +139,8 @@ bool UploadHeldReplayToR2(int client)
         return false;
     }
 
-    DebugLog("uploading abnormal replay to R2 key=%s file=%s", storageKey, g_HeldReplayPath[client]);
+    MarkR2UploadAttempt(recordId);
+    DebugLog("uploading abnormal replay to R2 key=%s file=%s", storageKey, replayPath);
     return true;
 }
 
@@ -177,12 +209,21 @@ void NotifyReplayMetadataUploaded(int userId, const char[] recordId, const char[
     payload.SetInt("file_size", fileSize);
     payload.SetString("content_type", "application/vnd.gokz.replay");
 
-    request.Post(payload, OnReplayMetadataUploaded, userId);
+    DataPack context = new DataPack();
+    context.WriteCell(userId);
+    context.WriteString(recordId);
+    request.Post(payload, OnReplayMetadataUploaded, context);
 }
 
 public void OnReplayMetadataUploaded(HTTPResponse response, any value, const char[] error)
 {
-    int client = FindHeldClientByUserId(value);
+    DataPack context = view_as<DataPack>(value);
+    context.Reset();
+    int userId = context.ReadCell();
+    char recordId[CNGOKZ_MAX_RECORD_ID];
+    context.ReadString(recordId, sizeof(recordId));
+    delete context;
+    int client = FindHeldClientByUserId(userId);
 
     if (error[0] != '\0')
     {
@@ -199,8 +240,93 @@ public void OnReplayMetadataUploaded(HTTPResponse response, any value, const cha
     if (client > 0)
     {
         g_HeldReplayUploaded[client] = true;
-        SaveReplayCacheForClient(client);
     }
+    MarkR2UploadComplete(recordId);
+}
+
+void StartR2RetryTimer()
+{
+    if (g_RGR2RetryTimer == null)
+    {
+        g_RGR2RetryTimer = CreateTimer(30.0, Timer_RetryPendingR2Uploads, _, TIMER_REPEAT);
+    }
+}
+
+void StopR2RetryTimer()
+{
+    if (g_RGR2RetryTimer != null)
+    {
+        delete g_RGR2RetryTimer;
+        g_RGR2RetryTimer = null;
+    }
+}
+
+public Action Timer_RetryPendingR2Uploads(Handle timer)
+{
+    RetryPendingR2Uploads();
+    return Plugin_Continue;
+}
+
+void RetryPendingR2Uploads()
+{
+    if (g_RGDb == null || !g_RGR2SteamWorksOK)
+    {
+        return;
+    }
+
+    char query[512];
+    Format(query, sizeof(query), "SELECT record_id, idempotency_key, replay_path FROM abnormal_replay_cache WHERE r2_uploaded = 0 AND last_attempt <= %d ORDER BY created_at ASC LIMIT 5", GetTime() - 60);
+    DBResultSet results = SQL_Query(g_RGDb, query);
+    if (results == null)
+    {
+        return;
+    }
+
+    while (SQL_FetchRow(results))
+    {
+        char recordId[CNGOKZ_MAX_RECORD_ID];
+        char idempotencyKey[CNGOKZ_MAX_IDEMPOTENCY_KEY];
+        char replayPath[PLATFORM_MAX_PATH];
+        SQL_FetchString(results, 0, recordId, sizeof(recordId));
+        SQL_FetchString(results, 1, idempotencyKey, sizeof(idempotencyKey));
+        SQL_FetchString(results, 2, replayPath, sizeof(replayPath));
+
+        if (!FileExists(replayPath))
+        {
+            LogError("[cngokz-recordguard] Pending abnormal replay cache file is missing: %s", replayPath);
+            MarkR2UploadAttempt(recordId);
+            continue;
+        }
+
+        UploadAbnormalReplayFileToR2(0, recordId, idempotencyKey, replayPath, "", "", "");
+    }
+    delete results;
+}
+
+void MarkR2UploadAttempt(const char[] recordId)
+{
+    if (g_RGDb == null)
+    {
+        return;
+    }
+    char escaped[128];
+    SQL_EscapeString(g_RGDb, recordId, escaped, sizeof(escaped));
+    char query[256];
+    Format(query, sizeof(query), "UPDATE abnormal_replay_cache SET last_attempt = %d WHERE record_id = '%s'", GetTime(), escaped);
+    SQL_FastQuery(g_RGDb, query);
+}
+
+void MarkR2UploadComplete(const char[] recordId)
+{
+    if (g_RGDb == null)
+    {
+        return;
+    }
+    char escaped[128];
+    SQL_EscapeString(g_RGDb, recordId, escaped, sizeof(escaped));
+    char query[256];
+    Format(query, sizeof(query), "UPDATE abnormal_replay_cache SET r2_uploaded = 1 WHERE record_id = '%s'", escaped);
+    SQL_FastQuery(g_RGDb, query);
 }
 
 bool GetR2UploadConfig(char[] url, int urlMaxLen, char[] apiKey, int keyMaxLen, bool &verifyCert)

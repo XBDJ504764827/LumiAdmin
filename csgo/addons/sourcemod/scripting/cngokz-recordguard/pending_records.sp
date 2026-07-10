@@ -174,6 +174,6 @@ void SaveReplayCacheForClient(int client)
     SQL_EscapeString(g_RGDb, g_HeldReplayPath[client], replayPath, sizeof(replayPath));
 
     char query[1024];
-    Format(query, sizeof(query), "INSERT OR REPLACE INTO abnormal_replay_cache (record_id, idempotency_key, replay_path, created_at) VALUES ('%s', '%s', '%s', %d)", recordId, idem, replayPath, GetTime());
+    Format(query, sizeof(query), "INSERT OR REPLACE INTO abnormal_replay_cache (record_id, idempotency_key, replay_path, created_at, r2_uploaded, last_attempt) VALUES ('%s', '%s', '%s', %d, 0, 0)", recordId, idem, replayPath, GetTime());
     SQL_FastQuery(g_RGDb, query);
 }

@@ -544,7 +544,7 @@ csgo/cfg/sourcemod/gokz/gokz-global.cfg
 | `Library not found: SteamWorks` | SteamWorks extension 是否安装并加载 |
 | `Library not found: GlobalAPI` | GlobalAPI 插件是否安装并加载 |
 | `Library not found: gokz-global` | `cngokz-global.smx` 是否加载；它会提供兼容的 `gokz-global` library |
-| 异常记录有数据但没有录像 | 检查 GOKZ Replays、SteamWorks、R2 上传 URL/Key、`cngokz_recordguard_r2upload_enabled` |
+| 异常记录有数据但录像显示待上传 | 检查 GOKZ Replays、SteamWorks、共享 R2 URL/Key 和 `cngokz_recordguard_r2upload_enabled`；新版插件会每 30 秒重试本地缓存录像 |
 | 后端收不到在线玩家/封禁数据 | 检查 `cngokz_api_base_url`、`cngokz_server "<port>" "<token>"`、服务器端口是否与后台配置一致 |
 | 配置文件没有生成 | 检查 `csgo/cfg/sourcemod/cngokz-lumiadmin/` 是否可写 |
 

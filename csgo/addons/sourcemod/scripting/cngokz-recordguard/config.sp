@@ -19,6 +19,7 @@ void RecordGuard_OnPluginStart()
     SyncRules();
     StartRuleSyncTimer();
     StartApprovedPollTimer();
+    StartR2RetryTimer();
 }
 
 void RecordGuard_EnsureConfigDirectory()
@@ -182,7 +183,10 @@ void InitRecordGuardDb()
         return;
     }
 
-    SQL_FastQuery(g_RGDb, "CREATE TABLE IF NOT EXISTS abnormal_replay_cache (record_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL, replay_path TEXT NOT NULL, created_at INTEGER NOT NULL)");
+    SQL_FastQuery(g_RGDb, "CREATE TABLE IF NOT EXISTS abnormal_replay_cache (record_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL, replay_path TEXT NOT NULL, created_at INTEGER NOT NULL, r2_uploaded INTEGER NOT NULL DEFAULT 0, last_attempt INTEGER NOT NULL DEFAULT 0)");
+    // Harmless on upgraded databases where the columns already exist.
+    SQL_FastQuery(g_RGDb, "ALTER TABLE abnormal_replay_cache ADD COLUMN r2_uploaded INTEGER NOT NULL DEFAULT 0");
+    SQL_FastQuery(g_RGDb, "ALTER TABLE abnormal_replay_cache ADD COLUMN last_attempt INTEGER NOT NULL DEFAULT 0");
 }
 
 void EnsureReplayCacheDir()

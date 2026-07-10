@@ -167,6 +167,9 @@ test('recordguard talks to abnormal record plugin APIs', () => {
   assert.match(recordguard, /"audit\/%s\/%s\.replay"/);
   assert.doesNotMatch(recordguard, /X-Route/);
   assert.match(recordguard, /CNGOKZCore_GetReplayR2Config/);
+  assert.match(recordguard, /Timer_RetryPendingR2Uploads/);
+  assert.match(recordguard, /r2_uploaded = 0/);
+  assert.match(recordguard, /MarkR2UploadComplete/);
   assert.doesNotMatch(recordguard, /gokz_r2upload_url/);
   assert.doesNotMatch(recordguard, /UploadFile\(/);
 });

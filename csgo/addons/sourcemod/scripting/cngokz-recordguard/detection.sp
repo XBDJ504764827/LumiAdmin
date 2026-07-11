@@ -23,6 +23,12 @@ bool ShouldHoldRecord(int client, int course, int mode, int timeType, float runT
     {
         return false;
     }
+    // Only main-course records are subject to abnormal-time review. Bonus
+    // courses (b1, b2, ...) must continue through the normal global submit flow.
+    if (course != 0)
+    {
+        return false;
+    }
     if (!IsValidClient(client) || IsFakeClient(client))
     {
         return false;

@@ -121,6 +121,12 @@ test('recordguard supports an all-maps default threshold with map overrides', ()
   assert.match(detection, /int score = exactMap \? 8 : 0/);
 });
 
+test('recordguard only holds main-course records for abnormal review', () => {
+  const detection = read(resolve(scripting, 'cngokz-recordguard/detection.sp'));
+
+  assert.match(detection, /if \(course != 0\)\s*\{\s*return false;\s*\}/);
+});
+
 test('cngokz-global guards invalid GlobalAPI request handles in callbacks', () => {
   const sources = [
     read(resolve(scripting, 'cngokz-global.sp')),

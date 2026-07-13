@@ -121,10 +121,14 @@ test('recordguard supports an all-maps default threshold with map overrides', ()
   assert.match(detection, /int score = exactMap \? 8 : 0/);
 });
 
-test('recordguard only holds main-course records for abnormal review', () => {
+test('recordguard matches course exactly so website rules control main/bonus intercept', () => {
   const detection = read(resolve(scripting, 'cngokz-recordguard/detection.sp'));
 
-  assert.match(detection, /if \(course != 0\)\s*\{\s*return false;\s*\}/);
+  // course 0 is main only, not a wildcard for bonus courses
+  assert.match(detection, /if \(g_RuleCourse\[i\] != course\)\s*\{\s*continue;\s*\}/);
+  assert.doesNotMatch(detection, /else if \(g_RuleCourse\[i\] != 0\)/);
+  // no hardcoded main-only skip; bonus intercept is controlled by website rules
+  assert.doesNotMatch(detection, /if \(course != 0\)\s*\{\s*return false;\s*\}/);
 });
 
 test('cngokz-global guards invalid GlobalAPI request handles in callbacks', () => {

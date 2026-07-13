@@ -23,12 +23,6 @@ bool ShouldHoldRecord(int client, int course, int mode, int timeType, float runT
     {
         return false;
     }
-    // Only main-course records are subject to abnormal-time review. Bonus
-    // courses (b1, b2, ...) must continue through the normal global submit flow.
-    if (course != 0)
-    {
-        return false;
-    }
     if (!IsValidClient(client) || IsFakeClient(client))
     {
         return false;
@@ -75,15 +69,14 @@ bool FindMatchingThreshold(const char[] mapName, int course, const char[] mode, 
         }
 
         // An exact map rule always wins over the all-maps default.
+        // Course is always exact: 0 = main (C0), 1-99 = bonus (C1-C99).
+        // Course 0 is NOT a wildcard for all courses.
         int score = exactMap ? 8 : 0;
-        if (g_RuleCourse[i] == course)
-        {
-            score += 4;
-        }
-        else if (g_RuleCourse[i] != 0)
+        if (g_RuleCourse[i] != course)
         {
             continue;
         }
+        score += 4;
 
         if (g_RuleMode[i][0] != '\0')
         {

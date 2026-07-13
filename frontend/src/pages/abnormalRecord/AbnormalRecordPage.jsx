@@ -12,7 +12,7 @@ import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.js
 import { FileItem, fileActionLabel } from '../../shared/FilePreview.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { notifyPendingReviewsUpdated, usePendingReviewIndicators } from '../../hooks/usePendingReviewIndicators.js';
-import { buildRulePayload, createEmptyRuleForm, ruleMapLabel, ruleToForm } from './abnormalRuleForm.js';
+import { buildRulePayload, courseLabel, createEmptyRuleForm, ruleMapLabel, ruleToForm } from './abnormalRuleForm.js';
 
 const RECORD_STATUS = {
   pending: { label: '待审核', pill: 'warning' },
@@ -343,7 +343,7 @@ export function AbnormalRecordPage() {
                             <div className="steam-id">{item.steam_id64}</div>
                           </td>
                           <td className="steam-id" data-label="地图">{item.map_name}</td>
-                          <td data-label="模式">{formatMode(item.mode)} · {formatTimeType(item.time_type)} · C{item.course}</td>
+                          <td data-label="模式">{formatMode(item.mode)} · {formatTimeType(item.time_type)} · {courseLabel(item.course)}</td>
                           <td style={{ color: 'var(--danger-text)', fontWeight: 700 }} data-label="异常时间">{formatRunTime(item.run_time_seconds)}</td>
                           <td className="text-muted-light" data-label="阈值">{formatRunTime(item.threshold_seconds)}</td>
                           <td data-label="录像">
@@ -396,7 +396,7 @@ export function AbnormalRecordPage() {
                   <thead>
                     <tr>
                       <th scope="col">地图</th>
-                      <th scope="col">Course</th>
+                      <th scope="col">关卡</th>
                       <th scope="col">模式</th>
                       <th scope="col">类型</th>
                       <th scope="col">异常阈值</th>
@@ -412,7 +412,7 @@ export function AbnormalRecordPage() {
                     {!rulesQuery.isLoading && rules.map((rule) => (
                       <tr key={rule.id}>
                         <td className="steam-id mobile-card-primary" data-label="地图">{ruleMapLabel(rule.map_name)}</td>
-                        <td data-label="Course">C{rule.course}</td>
+                        <td data-label="关卡">{courseLabel(rule.course)}</td>
                         <td data-label="模式">{rule.mode ? formatMode(rule.mode) : '全部'}</td>
                         <td data-label="类型">{rule.time_type ? formatTimeType(rule.time_type) : '全部'}</td>
                         <td style={{ color: 'var(--danger-text)', fontWeight: 700 }} data-label="异常阈值">{formatRunTime(rule.threshold_seconds)}</td>
@@ -470,7 +470,7 @@ export function AbnormalRecordPage() {
               <div className="detail-field-label">成绩数据</div>
               <div className="detail-field-value">
                 <div>地图：{detailItem.map_name}</div>
-                <div>模式：{formatMode(detailItem.mode)} · {formatTimeType(detailItem.time_type)} · Course {detailItem.course}</div>
+                <div>模式：{formatMode(detailItem.mode)} · {formatTimeType(detailItem.time_type)} · {courseLabel(detailItem.course)}</div>
                 <div>完赛时间：{formatRunTime(detailItem.run_time_seconds)} / 阈值：{formatRunTime(detailItem.threshold_seconds)}</div>
                 <div>TP 次数：{detailItem.teleports}</div>
               </div>
@@ -593,8 +593,9 @@ export function AbnormalRecordPage() {
           )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
             <div className="form-group">
-              <label>Course</label>
-              <input className="form-control" type="number" min="0" value={ruleForm.course} onChange={(event) => setRuleForm((prev) => ({ ...prev, course: event.target.value }))} />
+              <label>关卡 (Course)</label>
+              <input className="form-control" type="number" min="0" max="99" value={ruleForm.course} onChange={(event) => setRuleForm((prev) => ({ ...prev, course: event.target.value }))} />
+              <div className="form-hint mt-4">C0=主关，C1-99=指定奖励关。只匹配该关卡，不互相影响；要拦多个奖励关请分别建规则。</div>
             </div>
             <div className="form-group">
               <label>模式</label>

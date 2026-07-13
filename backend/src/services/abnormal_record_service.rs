@@ -870,17 +870,16 @@ async fn find_matching_rule(
     sqlx::query_as::<_, AbnormalRecordRuleItem>(&format!(
         r#"SELECT {RULE_FIELDS}
            FROM abnormal_record_rules
-           WHERE enabled = true
-             AND (lower(map_name) = lower($1) OR map_name = $5)
-             AND (course = $2 OR course = 0)
-             AND (mode IS NULL OR lower(mode) = lower($3))
-             AND (time_type IS NULL OR lower(time_type) = lower($4))
-           ORDER BY
-             CASE WHEN lower(map_name) = lower($1) THEN 0 ELSE 1 END,
-             CASE WHEN course = $2 THEN 0 ELSE 1 END,
-             CASE WHEN mode IS NOT NULL THEN 0 ELSE 1 END,
-             CASE WHEN time_type IS NOT NULL THEN 0 ELSE 1 END
-           LIMIT 1"#
+            WHERE enabled = true
+              AND (lower(map_name) = lower($1) OR map_name = $5)
+              AND course = $2
+              AND (mode IS NULL OR lower(mode) = lower($3))
+              AND (time_type IS NULL OR lower(time_type) = lower($4))
+            ORDER BY
+              CASE WHEN lower(map_name) = lower($1) THEN 0 ELSE 1 END,
+              CASE WHEN mode IS NOT NULL THEN 0 ELSE 1 END,
+              CASE WHEN time_type IS NOT NULL THEN 0 ELSE 1 END
+            LIMIT 1"#
     ))
     .bind(map_name)
     .bind(course)

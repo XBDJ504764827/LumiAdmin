@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ALL_MAPS_RULE, buildRulePayload, ruleToForm, splitThreshold } from './abnormalRuleForm.js';
+import { ALL_MAPS_RULE, buildRulePayload, courseLabel, ruleToForm, splitThreshold } from './abnormalRuleForm.js';
 
 test('splitThreshold converts seconds to minutes and seconds', () => {
   assert.deepEqual(splitThreshold(125.5), { minutes: 2, seconds: 5.5 });
@@ -48,4 +48,10 @@ test('seconds part must be lower than 60', () => {
     enabled: true,
   });
   assert.match(result.error, /60/);
+});
+
+test('courseLabel distinguishes main and bonus courses', () => {
+  assert.equal(courseLabel(0), 'C0 主关');
+  assert.equal(courseLabel(1), 'C1 奖励关');
+  assert.equal(courseLabel(12), 'C12 奖励关');
 });

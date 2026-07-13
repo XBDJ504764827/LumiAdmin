@@ -73,3 +73,10 @@ export function buildRulePayload(form) {
 export function ruleMapLabel(mapName) {
   return mapName === ALL_MAPS_RULE ? '全部地图（默认）' : mapName;
 }
+
+export function courseLabel(course) {
+  const value = Number(course);
+  if (!Number.isFinite(value) || value < 0) return 'C0 主关';
+  if (value === 0) return 'C0 主关';
+  return `C${value} 奖励关`;
+}

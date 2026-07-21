@@ -19,10 +19,12 @@ pub struct CachedServerConfig {
     pub min_rating: i32,
     pub min_steam_level: i32,
     pub whitelist_mode_enabled: bool,
+    pub cs_prime_enabled: bool,
     pub use_custom_access: bool,
     pub community_whitelist_mode_enabled: bool,
     pub community_min_rating: i32,
     pub community_min_steam_level: i32,
+    pub community_cs_prime_enabled: bool,
 }
 
 impl CachedServerConfig {
@@ -57,6 +59,14 @@ impl CachedServerConfig {
             self.community_whitelist_mode_enabled
         }
     }
+
+    pub fn effective_cs_prime_enabled(&self) -> bool {
+        if self.use_custom_access {
+            self.cs_prime_enabled
+        } else {
+            self.community_cs_prime_enabled
+        }
+    }
 }
 
 type ServerConfigRow = (
@@ -71,9 +81,56 @@ type ServerConfigRow = (
     bool,
     bool,
     bool,
+    bool,
     i32,
     i32,
+    bool,
 );
+
+fn map_server_config_row(
+    (
+        id,
+        community_id,
+        name,
+        port,
+        report_token,
+        access_restriction_enabled,
+        min_rating,
+        min_steam_level,
+        whitelist_mode_enabled,
+        cs_prime_enabled,
+        use_custom_access,
+        community_whitelist_mode_enabled,
+        community_min_rating,
+        community_min_level,
+        community_cs_prime_enabled,
+    ): ServerConfigRow,
+) -> CachedServerConfig {
+    CachedServerConfig {
+        id,
+        community_id,
+        name,
+        port,
+        report_token,
+        access_restriction_enabled,
+        min_rating,
+        min_steam_level,
+        whitelist_mode_enabled,
+        cs_prime_enabled,
+        use_custom_access,
+        community_whitelist_mode_enabled,
+        community_min_rating,
+        community_min_steam_level: community_min_level,
+        community_cs_prime_enabled,
+    }
+}
+
+const SERVER_CONFIG_SELECT: &str = r#"SELECT s.id, s.community_id, s.name, s.port, s.report_token,
+              s.access_restriction_enabled, s.min_rating, s.min_steam_level, s.whitelist_mode_enabled,
+              s.cs_prime_enabled, s.use_custom_access, c.whitelist_mode_enabled, c.min_rating, c.min_steam_level,
+              c.cs_prime_enabled
+       FROM servers s
+       JOIN communities c ON c.id = s.community_id"#;
 
 /// 服务器配置缓存
 ///
@@ -216,52 +273,15 @@ impl ServerConfigCache {
         report_token: &str,
         port: i32,
     ) -> anyhow::Result<Option<CachedServerConfig>> {
-        let row: Option<ServerConfigRow> = sqlx::query_as(
-            r#"SELECT s.id, s.community_id, s.name, s.port, s.report_token,
-                      s.access_restriction_enabled, s.min_rating, s.min_steam_level, s.whitelist_mode_enabled,
-                      s.use_custom_access, c.whitelist_mode_enabled, c.min_rating, c.min_steam_level
-               FROM servers s
-               JOIN communities c ON c.id = s.community_id
-               WHERE s.report_token = $1 AND s.port = $2"#,
-        )
+        let row: Option<ServerConfigRow> = sqlx::query_as(&format!(
+            "{SERVER_CONFIG_SELECT} WHERE s.report_token = $1 AND s.port = $2"
+        ))
         .bind(report_token)
         .bind(port)
         .fetch_optional(&db.pool)
         .await?;
 
-        Ok(row.map(
-            |(
-                id,
-                community_id,
-                name,
-                port,
-                report_token,
-                access_restriction_enabled,
-                min_rating,
-                min_steam_level,
-                whitelist_mode_enabled,
-                use_custom_access,
-                community_whitelist_mode_enabled,
-                community_min_rating,
-                community_min_level,
-            )| {
-                CachedServerConfig {
-                    id,
-                    community_id,
-                    name,
-                    port,
-                    report_token,
-                    access_restriction_enabled,
-                    min_rating,
-                    min_steam_level,
-                    whitelist_mode_enabled,
-                    use_custom_access,
-                    community_whitelist_mode_enabled,
-                    community_min_rating,
-                    community_min_steam_level: community_min_level,
-                }
-            },
-        ))
+        Ok(row.map(map_server_config_row))
     }
 
     /// 根据 ID 加载服务器配置
@@ -271,51 +291,13 @@ impl ServerConfigCache {
         db: &Database,
         server_id: Uuid,
     ) -> anyhow::Result<Option<CachedServerConfig>> {
-        let row: Option<ServerConfigRow> = sqlx::query_as(
-            r#"SELECT s.id, s.community_id, s.name, s.port, s.report_token,
-                      s.access_restriction_enabled, s.min_rating, s.min_steam_level, s.whitelist_mode_enabled,
-                      s.use_custom_access, c.whitelist_mode_enabled, c.min_rating, c.min_steam_level
-               FROM servers s
-               JOIN communities c ON c.id = s.community_id
-               WHERE s.id = $1"#,
-        )
-        .bind(server_id)
-        .fetch_optional(&db.pool)
-        .await?;
+        let row: Option<ServerConfigRow> =
+            sqlx::query_as(&format!("{SERVER_CONFIG_SELECT} WHERE s.id = $1"))
+                .bind(server_id)
+                .fetch_optional(&db.pool)
+                .await?;
 
-        Ok(row.map(
-            |(
-                id,
-                community_id,
-                name,
-                port,
-                report_token,
-                access_restriction_enabled,
-                min_rating,
-                min_steam_level,
-                whitelist_mode_enabled,
-                use_custom_access,
-                community_whitelist_mode_enabled,
-                community_min_rating,
-                community_min_level,
-            )| {
-                CachedServerConfig {
-                    id,
-                    community_id,
-                    name,
-                    port,
-                    report_token,
-                    access_restriction_enabled,
-                    min_rating,
-                    min_steam_level,
-                    whitelist_mode_enabled,
-                    use_custom_access,
-                    community_whitelist_mode_enabled,
-                    community_min_rating,
-                    community_min_steam_level: community_min_level,
-                }
-            },
-        ))
+        Ok(row.map(map_server_config_row))
     }
 
     /// 从数据库加载所有服务器配置
@@ -323,53 +305,13 @@ impl ServerConfigCache {
         &self,
         db: &Database,
     ) -> anyhow::Result<Vec<CachedServerConfig>> {
-        let rows: Vec<ServerConfigRow> = sqlx::query_as(
-            r#"SELECT s.id, s.community_id, s.name, s.port, s.report_token,
-                      s.access_restriction_enabled, s.min_rating, s.min_steam_level, s.whitelist_mode_enabled,
-                      s.use_custom_access, c.whitelist_mode_enabled, c.min_rating, c.min_steam_level
-               FROM servers s
-               JOIN communities c ON c.id = s.community_id
-               WHERE s.report_token IS NOT NULL AND s.report_token != ''"#,
-        )
+        let rows: Vec<ServerConfigRow> = sqlx::query_as(&format!(
+            "{SERVER_CONFIG_SELECT} WHERE s.report_token IS NOT NULL AND s.report_token != ''"
+        ))
         .fetch_all(&db.pool)
         .await?;
 
-        Ok(rows
-            .into_iter()
-            .map(
-                |(
-                    id,
-                    community_id,
-                    name,
-                    port,
-                    report_token,
-                    access_restriction_enabled,
-                    min_rating,
-                    min_steam_level,
-                    whitelist_mode_enabled,
-                    use_custom_access,
-                    community_whitelist_mode_enabled,
-                    community_min_rating,
-                    community_min_level,
-                )| {
-                    CachedServerConfig {
-                        id,
-                        community_id,
-                        name,
-                        port,
-                        report_token,
-                        access_restriction_enabled,
-                        min_rating,
-                        min_steam_level,
-                        whitelist_mode_enabled,
-                        use_custom_access,
-                        community_whitelist_mode_enabled,
-                        community_min_rating,
-                        community_min_steam_level: community_min_level,
-                    }
-                },
-            )
-            .collect())
+        Ok(rows.into_iter().map(map_server_config_row).collect())
     }
 }
 

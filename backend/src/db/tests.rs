@@ -840,13 +840,14 @@ async fn migrate_adds_server_access_control_fields_and_cache_table() {
                    FROM information_schema.columns
                    WHERE table_schema = current_schema()
                      AND table_name = 'servers'
-                     AND column_name IN (
-                        'access_restriction_enabled',
-                        'min_rating',
-                        'min_steam_level',
-                        'whitelist_mode_enabled'
-                     )
-                   ORDER BY column_name"#,
+                      AND column_name IN (
+                         'access_restriction_enabled',
+                         'cs_prime_enabled',
+                         'min_rating',
+                         'min_steam_level',
+                         'whitelist_mode_enabled'
+                      )
+                    ORDER BY column_name"#,
             )
             .fetch_all(&db.pool)
             .await?;
@@ -855,6 +856,7 @@ async fn migrate_adds_server_access_control_fields_and_cache_table() {
                 server_columns,
                 vec![
                     "access_restriction_enabled".to_string(),
+                    "cs_prime_enabled".to_string(),
                     "min_rating".to_string(),
                     "min_steam_level".to_string(),
                     "whitelist_mode_enabled".to_string(),

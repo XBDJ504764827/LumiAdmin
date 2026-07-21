@@ -136,7 +136,9 @@ impl Database {
             r#"ALTER TABLE communities ADD COLUMN IF NOT EXISTS min_rating INTEGER NOT NULL DEFAULT 0"#,
             r#"ALTER TABLE communities ADD COLUMN IF NOT EXISTS min_steam_level INTEGER NOT NULL DEFAULT 0"#,
             r#"ALTER TABLE communities ADD COLUMN IF NOT EXISTS whitelist_mode_enabled BOOLEAN NOT NULL DEFAULT false"#,
+            r#"ALTER TABLE communities ADD COLUMN IF NOT EXISTS cs_prime_enabled BOOLEAN NOT NULL DEFAULT false"#,
             r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS use_custom_access BOOLEAN NOT NULL DEFAULT false"#,
+            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS cs_prime_enabled BOOLEAN NOT NULL DEFAULT false"#,
         ];
         for sql in community_alters {
             sqlx::query(sql).execute(&self.pool).await?;

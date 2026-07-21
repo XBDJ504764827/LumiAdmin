@@ -5,6 +5,10 @@
 #include <cngokz/core>
 #include <cngokz/session_reasons>
 
+#undef REQUIRE_PLUGIN
+#include <cngokz/prime>
+#define REQUIRE_PLUGIN
+
 // Edge Sync Agent Native函数声明
 native int EdgeSync_EnqueueOperation(const char[] operation, const char[] target, const char[] targetType, const char[] playerName, const char[] reason, const char[] operatorName, const char[] operatorSteamid, int durationMinutes);
 native bool EdgeSync_IsOnline();
@@ -455,10 +459,13 @@ void InitAccessSnapshotDb()
     }
 
     SQL_FastQuery(g_AccessSnapshotDb, "CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
-    SQL_FastQuery(g_AccessSnapshotDb, "CREATE TABLE IF NOT EXISTS server_rules (id INTEGER PRIMARY KEY CHECK (id = 1), whitelist_mode_enabled INTEGER NOT NULL, access_restriction_enabled INTEGER NOT NULL, min_rating INTEGER NOT NULL, min_steam_level INTEGER NOT NULL)");
+    SQL_FastQuery(g_AccessSnapshotDb, "CREATE TABLE IF NOT EXISTS server_rules (id INTEGER PRIMARY KEY CHECK (id = 1), whitelist_mode_enabled INTEGER NOT NULL, access_restriction_enabled INTEGER NOT NULL, min_rating INTEGER NOT NULL, min_steam_level INTEGER NOT NULL, cs_prime_enabled INTEGER NOT NULL DEFAULT 0)");
     SQL_FastQuery(g_AccessSnapshotDb, "CREATE TABLE IF NOT EXISTS bans (steam_id TEXT, ip_address TEXT, reason TEXT NOT NULL, expires_at INTEGER)");
     SQL_FastQuery(g_AccessSnapshotDb, "CREATE TABLE IF NOT EXISTS whitelist (steam_id TEXT PRIMARY KEY)");
     SQL_FastQuery(g_AccessSnapshotDb, "CREATE TABLE IF NOT EXISTS access_profiles (steam_id TEXT PRIMARY KEY, rating INTEGER NOT NULL, steam_level INTEGER NOT NULL, expires_at INTEGER NOT NULL)");
+
+    // 兼容旧库：补齐 CS 优先账户字段（已存在则忽略错误）
+    SQL_FastQuery(g_AccessSnapshotDb, "ALTER TABLE server_rules ADD COLUMN cs_prime_enabled INTEGER NOT NULL DEFAULT 0");
 
     SQL_FastQuery(g_AccessSnapshotDb, "CREATE INDEX IF NOT EXISTS idx_bans_steam_id ON bans(steam_id)");
     SQL_FastQuery(g_AccessSnapshotDb, "CREATE INDEX IF NOT EXISTS idx_bans_ip_address ON bans(ip_address)");
@@ -650,11 +657,12 @@ void SaveAccessSnapshot(JSONObject item)
     {
         char query[512];
         Format(query, sizeof(query),
-            "INSERT INTO server_rules (id, whitelist_mode_enabled, access_restriction_enabled, min_rating, min_steam_level) VALUES (1, %d, %d, %d, %d)",
+            "INSERT INTO server_rules (id, whitelist_mode_enabled, access_restriction_enabled, min_rating, min_steam_level, cs_prime_enabled) VALUES (1, %d, %d, %d, %d, %d)",
             server.GetBool("whitelist_mode_enabled") ? 1 : 0,
             server.GetBool("access_restriction_enabled") ? 1 : 0,
             server.GetInt("min_rating"),
-            server.GetInt("min_steam_level"));
+            server.GetInt("min_steam_level"),
+            server.GetBool("cs_prime_enabled") ? 1 : 0);
         if (!SQL_FastQuery(g_AccessSnapshotDb, query))
         {
             LogError("Manger access snapshot: server_rules insert failed, ROLLBACK.");
@@ -2168,7 +2176,14 @@ void SubmitAccessCheck(int client)
     {
         return;
     }
-    JSONObject payload = BuildPluginAccessCheckPayload(token, currentPort, steamId64, ipAddress, playerName);
+
+    // 尽量先跑一轮 Prime 检测，再随 access check 上报
+    if (GetFeatureStatus(FeatureType_Native, "CNGOKZPrime_Recheck") == FeatureStatus_Available)
+    {
+        CNGOKZPrime_Recheck(client);
+    }
+
+    JSONObject payload = BuildPluginAccessCheckPayload(token, currentPort, steamId64, ipAddress, playerName, client);
     int userId = GetClientUserId(client);
     PostJsonObject(url, payload, OnAccessCheckResponse, userId);
     delete payload;
@@ -2459,7 +2474,7 @@ bool FindOfflineBan(const char[] steamId, const char[] ipAddress, char[] reason,
 
 bool OfflineRulesAllowClient(const char[] steamId)
 {
-    DBResultSet rules = SQL_Query(g_AccessSnapshotDb, "SELECT whitelist_mode_enabled, access_restriction_enabled, min_rating, min_steam_level FROM server_rules WHERE id = 1");
+    DBResultSet rules = SQL_Query(g_AccessSnapshotDb, "SELECT whitelist_mode_enabled, access_restriction_enabled, min_rating, min_steam_level, cs_prime_enabled FROM server_rules WHERE id = 1");
     if (rules == null)
     {
         return false;
@@ -2475,19 +2490,35 @@ bool OfflineRulesAllowClient(const char[] steamId)
     bool accessRestriction = SQL_FetchInt(rules, 1) == 1;
     int minRating = SQL_FetchInt(rules, 2);
     int minSteamLevel = SQL_FetchInt(rules, 3);
+    bool csPrimeMode = SQL_FetchInt(rules, 4) == 1;
     delete rules;
 
-    if (whitelistMode && !OfflineWhitelistContains(steamId))
+    // 都未开启 → 无限制放行
+    if (!whitelistMode && !accessRestriction && !csPrimeMode)
     {
-        return false;
+        return true;
     }
 
-    if (accessRestriction && !OfflineProfileMeetsRequirement(steamId, minRating, minSteamLevel))
+    // 开启的模式之间为 OR：满足任意一种即可进入（白名单 / 进入限制 / CS优先）
+    if (csPrimeMode && GetFeatureStatus(FeatureType_Native, "CNGOKZPrime_IsPrimeSteam64") == FeatureStatus_Available)
     {
-        return false;
+        if (CNGOKZPrime_IsPrimeSteam64(steamId))
+        {
+            return true;
+        }
     }
 
-    return true;
+    if (accessRestriction && OfflineProfileMeetsRequirement(steamId, minRating, minSteamLevel))
+    {
+        return true;
+    }
+
+    if (whitelistMode && OfflineWhitelistContains(steamId))
+    {
+        return true;
+    }
+
+    return false;
 }
 
 bool OfflineWhitelistContains(const char[] steamId)
@@ -2618,7 +2649,7 @@ JSONObject BuildPluginBanCheckPayload(const char[] token, int port, const char[]
     return payload;
 }
 
-JSONObject BuildPluginAccessCheckPayload(const char[] token, int port, const char[] steamId64, const char[] ipAddress, const char[] player)
+JSONObject BuildPluginAccessCheckPayload(const char[] token, int port, const char[] steamId64, const char[] ipAddress, const char[] player, int client = 0)
 {
     JSONObject payload = new JSONObject();
     payload.SetString("report_token", token);
@@ -2627,6 +2658,29 @@ JSONObject BuildPluginAccessCheckPayload(const char[] token, int port, const cha
     payload.SetString("steam_id64", steamId64);
     payload.SetString("ip_address", ipAddress);
     payload.SetString("player", player);
+
+    // is_cs_prime: 仅在插件已确认时上报 true/false；未知则省略字段
+    if (GetFeatureStatus(FeatureType_Native, "CNGOKZPrime_GetStatus") == FeatureStatus_Available)
+    {
+        int status = -1;
+        if (client > 0 && client <= MaxClients)
+        {
+            status = CNGOKZPrime_GetStatus(client);
+        }
+        if (status < 0)
+        {
+            status = CNGOKZPrime_GetStatusSteam64(steamId64);
+        }
+        if (status == 1)
+        {
+            payload.SetBool("is_cs_prime", true);
+        }
+        else if (status == 0)
+        {
+            payload.SetBool("is_cs_prime", false);
+        }
+    }
+
     return payload;
 }
 

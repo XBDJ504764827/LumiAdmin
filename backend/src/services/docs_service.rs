@@ -160,7 +160,7 @@ pub fn list_endpoints() -> Vec<EndpointDoc> {
             name: "插件进服准入校验",
             method: "POST",
             endpoint: "/api/plugin/access/check",
-            description: "游戏服务器插件在玩家进服时校验封禁、白名单和进入限制",
+            description: "游戏服务器插件在玩家进服时校验封禁、白名单、进入限制与 CS 优先账户（插件上报 is_cs_prime）",
             auth_required: false,
             roles: &["game-server"],
         },

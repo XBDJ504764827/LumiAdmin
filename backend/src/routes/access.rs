@@ -22,6 +22,9 @@ pub(crate) struct PluginAccessCheckBody {
     ip_address: Option<String>,
     player: Option<String>,
     server_port: Option<i32>,
+    /// 游戏插件上报：玩家是否为 CS 优先账户（Prime）。缺失表示插件暂未确认。
+    #[serde(default)]
+    is_cs_prime: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,6 +51,7 @@ pub(crate) async fn check_plugin_access(
             ip_address: body.ip_address.clone(),
             player: body.player.clone(),
             server_port: body.server_port,
+            is_cs_prime: body.is_cs_prime,
         },
     )
     .await

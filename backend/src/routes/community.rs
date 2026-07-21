@@ -151,7 +151,7 @@ pub(crate) async fn update_community_access(
         "社区组管理",
         "更新社区访问限制",
         &format!(
-            "{} (白名单模式: {}, Rating≥{}, Steam等级≥{})",
+            "{} (白名单模式: {}, Rating≥{}, Steam等级≥{}, CS优先账户: {})",
             group.name,
             if group.whitelist_mode_enabled {
                 "开"
@@ -159,7 +159,8 @@ pub(crate) async fn update_community_access(
                 "关"
             },
             group.min_rating,
-            group.min_steam_level
+            group.min_steam_level,
+            if group.cs_prime_enabled { "开" } else { "关" }
         ),
         &extract_client_ip(&headers),
     )

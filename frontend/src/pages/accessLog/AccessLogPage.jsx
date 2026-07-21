@@ -13,12 +13,14 @@ const ACCESS_METHOD_MAP = {
   unrestricted: { label: '无限制', kind: 'success' },
   whitelist: { label: '白名单', kind: 'success' },
   restriction: { label: 'Rating 限制', kind: 'success' },
+  cs_prime: { label: 'CS优先账户', kind: 'success' },
   custom_rule: { label: '自定义规则', kind: 'success' },
   snapshot_fallback: { label: '快照回退', kind: 'default' },
   // 进服失败
   banned: { label: '被封禁', kind: 'danger' },
   whitelist_rejected: { label: '白名单未通过', kind: 'danger' },
   restriction_rejected: { label: 'Rating 不足', kind: 'danger' },
+  cs_prime_rejected: { label: '非CS优先账户', kind: 'danger' },
   custom_rule_rejected: { label: '规则拒绝', kind: 'danger' },
 };
 
@@ -29,6 +31,7 @@ const FAILURE_CODE_MAP = {
   not_whitelisted: '白名单未通过',
   low_rating: 'Rating 不足',
   low_steam_level: 'Steam 等级不足',
+  not_cs_prime: '非 CS 优先账户',
   custom_rule_rejected: '自定义规则拒绝',
   profile_fetch_failed: '无法获取玩家资料',
   snapshot_unavailable: '服务降级',
@@ -47,9 +50,11 @@ const ACCESS_METHOD_OPTIONS = [
   { value: 'unrestricted', label: '无限制' },
   { value: 'whitelist', label: '白名单' },
   { value: 'restriction', label: 'Rating 限制' },
+  { value: 'cs_prime', label: 'CS优先账户' },
   { value: 'banned', label: '被封禁' },
   { value: 'whitelist_rejected', label: '白名单未通过' },
   { value: 'restriction_rejected', label: 'Rating 不足' },
+  { value: 'cs_prime_rejected', label: '非CS优先账户' },
 ];
 
 const ALLOWED_OPTIONS = [

@@ -35,10 +35,12 @@ pub struct SnapshotServer {
     pub min_rating: i32,
     pub min_steam_level: i32,
     pub whitelist_mode_enabled: bool,
+    pub cs_prime_enabled: bool,
     pub use_custom_access: bool,
     pub community_whitelist_mode_enabled: bool,
     pub community_min_rating: i32,
     pub community_min_steam_level: i32,
+    pub community_cs_prime_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,9 +116,10 @@ pub async fn refresh_snapshot(
 async fn load_snapshot_servers(db: &Database) -> anyhow::Result<Vec<SnapshotServer>> {
     sqlx::query_as::<_, SnapshotServerRow>(
         r#"SELECT s.id, s.community_id, s.name, s.port, s.report_token, s.access_restriction_enabled,
-                  s.min_rating, s.min_steam_level, s.whitelist_mode_enabled,
+                  s.min_rating, s.min_steam_level, s.whitelist_mode_enabled, s.cs_prime_enabled,
                   s.use_custom_access, c.whitelist_mode_enabled AS community_whitelist_mode_enabled,
-                  c.min_rating AS community_min_rating, c.min_steam_level AS community_min_steam_level
+                  c.min_rating AS community_min_rating, c.min_steam_level AS community_min_steam_level,
+                  c.cs_prime_enabled AS community_cs_prime_enabled
            FROM servers s
            JOIN communities c ON c.id = s.community_id
            WHERE s.report_token IS NOT NULL AND s.report_token <> ''"#,
@@ -178,10 +181,12 @@ struct SnapshotServerRow {
     min_rating: i32,
     min_steam_level: i32,
     whitelist_mode_enabled: bool,
+    cs_prime_enabled: bool,
     use_custom_access: bool,
     community_whitelist_mode_enabled: bool,
     community_min_rating: i32,
     community_min_steam_level: i32,
+    community_cs_prime_enabled: bool,
 }
 
 impl From<SnapshotServerRow> for SnapshotServer {
@@ -196,10 +201,12 @@ impl From<SnapshotServerRow> for SnapshotServer {
             min_rating: row.min_rating,
             min_steam_level: row.min_steam_level,
             whitelist_mode_enabled: row.whitelist_mode_enabled,
+            cs_prime_enabled: row.cs_prime_enabled,
             use_custom_access: row.use_custom_access,
             community_whitelist_mode_enabled: row.community_whitelist_mode_enabled,
             community_min_rating: row.community_min_rating,
             community_min_steam_level: row.community_min_steam_level,
+            community_cs_prime_enabled: row.community_cs_prime_enabled,
         }
     }
 }
@@ -378,6 +385,7 @@ pub struct PluginSnapshotServer {
     pub min_rating: i32,
     pub min_steam_level: i32,
     pub whitelist_mode_enabled: bool,
+    pub cs_prime_enabled: bool,
 }
 
 pub fn snapshot_for_plugin(
@@ -400,6 +408,8 @@ pub fn snapshot_for_plugin(
     let eff_restriction = effective_restriction_enabled(server);
     let eff_rating = effective_min_rating(server);
     let eff_steam_level = effective_min_steam_level(server);
+    let eff_whitelist = effective_whitelist_mode_enabled(server);
+    let eff_cs_prime = effective_cs_prime_enabled(server);
 
     Ok(PluginAccessSnapshot {
         version: snapshot.version.clone(),
@@ -412,7 +422,8 @@ pub fn snapshot_for_plugin(
             access_restriction_enabled: eff_restriction,
             min_rating: eff_rating,
             min_steam_level: eff_steam_level,
-            whitelist_mode_enabled: server.whitelist_mode_enabled,
+            whitelist_mode_enabled: eff_whitelist,
+            cs_prime_enabled: eff_cs_prime,
         },
         bans: snapshot.bans.clone(),
         whitelist: snapshot.whitelist.clone(),
@@ -501,9 +512,10 @@ pub fn evaluate_access_snapshot(
 
     let has_restriction = effective_restriction_enabled(server);
     let has_whitelist = effective_whitelist_mode_enabled(server);
+    let has_cs_prime = effective_cs_prime_enabled(server);
 
     // 都没开 → 无限制放行
-    if !has_whitelist && !has_restriction {
+    if !has_whitelist && !has_restriction && !has_cs_prime {
         return allow("允许进入服务器。");
     }
 
@@ -512,51 +524,35 @@ pub fn evaluate_access_snapshot(
         .iter()
         .any(|entry| entry.steam_id64 == input.steam_id64);
 
-    // 仅白名单模式：必须通过白名单才能进
-    if has_whitelist && !has_restriction {
-        return if whitelist_approved {
-            allow("已通过白名单审核，允许进入服务器。")
-        } else {
-            reject("你的白名单状态无法确认，请稍后再试。")
-        };
-    }
-
-    // 仅进入限制：检查 rating/steam level
-    if !has_whitelist && has_restriction {
-        let Some(profile) = snapshot
+    // 开启的模式之间为 OR：满足任意一种即可进入
+    // 快照侧暂不缓存 Prime 状态，仅靠白名单/进入限制放行
+    if has_restriction {
+        if let Some(profile) = snapshot
             .access_profiles
             .iter()
             .find(|p| p.steam_id64 == input.steam_id64 && p.expires_at > input.now)
-        else {
-            return reject("你的资料未满足服务器进入要求。");
-        };
-        if profile.rating < effective_min_rating(server)
-            || profile.steam_level < effective_min_steam_level(server)
         {
-            return reject("你的资料未满足服务器进入要求。");
-        }
-        return allow("已满足服务器进入限制，允许进入服务器。");
-    }
-
-    // 两者都开：满足限制即可进，不满足则看白名单
-    if let Some(profile) = snapshot
-        .access_profiles
-        .iter()
-        .find(|p| p.steam_id64 == input.steam_id64 && p.expires_at > input.now)
-    {
-        if profile.rating >= effective_min_rating(server)
-            && profile.steam_level >= effective_min_steam_level(server)
-        {
-            return allow("已满足服务器进入限制，允许进入服务器。");
+            if profile.rating >= effective_min_rating(server)
+                && profile.steam_level >= effective_min_steam_level(server)
+            {
+                return allow("已满足服务器进入限制，允许进入服务器。");
+            }
         }
     }
 
-    // 不满足限制，检查白名单
-    if whitelist_approved {
-        allow("已通过白名单审核，允许进入服务器。")
-    } else {
-        reject("你的资料未满足服务器进入要求。")
+    if has_whitelist && whitelist_approved {
+        return allow("已通过白名单审核，允许进入服务器。");
     }
+
+    if has_whitelist && !has_restriction && !has_cs_prime {
+        return reject("你的白名单状态无法确认，请稍后再试。");
+    }
+
+    if has_cs_prime && !has_whitelist && !has_restriction {
+        return reject("当前服务器要求 CS 优先账户才能进入。");
+    }
+
+    reject("你的资料未满足服务器进入要求。")
 }
 
 fn effective_min_rating(server: &SnapshotServer) -> i32 {
@@ -588,6 +584,14 @@ fn effective_whitelist_mode_enabled(server: &SnapshotServer) -> bool {
         server.whitelist_mode_enabled
     } else {
         server.community_whitelist_mode_enabled
+    }
+}
+
+fn effective_cs_prime_enabled(server: &SnapshotServer) -> bool {
+    if server.use_custom_access {
+        server.cs_prime_enabled
+    } else {
+        server.community_cs_prime_enabled
     }
 }
 
@@ -624,10 +628,12 @@ mod tests {
                 min_rating: 0,
                 min_steam_level: 0,
                 whitelist_mode_enabled: true,
+                cs_prime_enabled: false,
                 use_custom_access: true,
                 community_whitelist_mode_enabled: false,
                 community_min_rating: 0,
                 community_min_steam_level: 0,
+                community_cs_prime_enabled: false,
             }],
             bans: Vec::new(),
             whitelist: vec![SnapshotWhitelistEntry {
@@ -800,10 +806,12 @@ mod tests {
             min_rating: 0,
             min_steam_level: 0,
             whitelist_mode_enabled: false,
+            cs_prime_enabled: false,
             use_custom_access: true,
             community_whitelist_mode_enabled: false,
             community_min_rating: 0,
             community_min_steam_level: 0,
+            community_cs_prime_enabled: false,
         });
 
         let plugin_snapshot = snapshot_for_plugin(&snapshot, "token", 27015, now).unwrap();

@@ -455,10 +455,13 @@ void InitAccessSnapshotDb()
     }
 
     SQL_FastQuery(g_AccessSnapshotDb, "CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
-    SQL_FastQuery(g_AccessSnapshotDb, "CREATE TABLE IF NOT EXISTS server_rules (id INTEGER PRIMARY KEY CHECK (id = 1), whitelist_mode_enabled INTEGER NOT NULL, access_restriction_enabled INTEGER NOT NULL, min_rating INTEGER NOT NULL, min_steam_level INTEGER NOT NULL)");
+    SQL_FastQuery(g_AccessSnapshotDb, "CREATE TABLE IF NOT EXISTS server_rules (id INTEGER PRIMARY KEY CHECK (id = 1), whitelist_mode_enabled INTEGER NOT NULL, access_restriction_enabled INTEGER NOT NULL, min_rating INTEGER NOT NULL, min_steam_level INTEGER NOT NULL, cs_prime_enabled INTEGER NOT NULL DEFAULT 0)");
     SQL_FastQuery(g_AccessSnapshotDb, "CREATE TABLE IF NOT EXISTS bans (steam_id TEXT, ip_address TEXT, reason TEXT NOT NULL, expires_at INTEGER)");
     SQL_FastQuery(g_AccessSnapshotDb, "CREATE TABLE IF NOT EXISTS whitelist (steam_id TEXT PRIMARY KEY)");
     SQL_FastQuery(g_AccessSnapshotDb, "CREATE TABLE IF NOT EXISTS access_profiles (steam_id TEXT PRIMARY KEY, rating INTEGER NOT NULL, steam_level INTEGER NOT NULL, expires_at INTEGER NOT NULL)");
+
+    // 兼容旧库：补齐 CS 优先账户字段（已存在则忽略错误）
+    SQL_FastQuery(g_AccessSnapshotDb, "ALTER TABLE server_rules ADD COLUMN cs_prime_enabled INTEGER NOT NULL DEFAULT 0");
 
     SQL_FastQuery(g_AccessSnapshotDb, "CREATE INDEX IF NOT EXISTS idx_bans_steam_id ON bans(steam_id)");
     SQL_FastQuery(g_AccessSnapshotDb, "CREATE INDEX IF NOT EXISTS idx_bans_ip_address ON bans(ip_address)");
@@ -650,11 +653,12 @@ void SaveAccessSnapshot(JSONObject item)
     {
         char query[512];
         Format(query, sizeof(query),
-            "INSERT INTO server_rules (id, whitelist_mode_enabled, access_restriction_enabled, min_rating, min_steam_level) VALUES (1, %d, %d, %d, %d)",
+            "INSERT INTO server_rules (id, whitelist_mode_enabled, access_restriction_enabled, min_rating, min_steam_level, cs_prime_enabled) VALUES (1, %d, %d, %d, %d, %d)",
             server.GetBool("whitelist_mode_enabled") ? 1 : 0,
             server.GetBool("access_restriction_enabled") ? 1 : 0,
             server.GetInt("min_rating"),
-            server.GetInt("min_steam_level"));
+            server.GetInt("min_steam_level"),
+            server.GetBool("cs_prime_enabled") ? 1 : 0);
         if (!SQL_FastQuery(g_AccessSnapshotDb, query))
         {
             LogError("Manger access snapshot: server_rules insert failed, ROLLBACK.");
@@ -2459,7 +2463,7 @@ bool FindOfflineBan(const char[] steamId, const char[] ipAddress, char[] reason,
 
 bool OfflineRulesAllowClient(const char[] steamId)
 {
-    DBResultSet rules = SQL_Query(g_AccessSnapshotDb, "SELECT whitelist_mode_enabled, access_restriction_enabled, min_rating, min_steam_level FROM server_rules WHERE id = 1");
+    DBResultSet rules = SQL_Query(g_AccessSnapshotDb, "SELECT whitelist_mode_enabled, access_restriction_enabled, min_rating, min_steam_level, cs_prime_enabled FROM server_rules WHERE id = 1");
     if (rules == null)
     {
         return false;
@@ -2475,19 +2479,28 @@ bool OfflineRulesAllowClient(const char[] steamId)
     bool accessRestriction = SQL_FetchInt(rules, 1) == 1;
     int minRating = SQL_FetchInt(rules, 2);
     int minSteamLevel = SQL_FetchInt(rules, 3);
+    bool csPrimeMode = SQL_FetchInt(rules, 4) == 1;
     delete rules;
 
-    if (whitelistMode && !OfflineWhitelistContains(steamId))
+    // 都未开启 → 无限制放行
+    if (!whitelistMode && !accessRestriction && !csPrimeMode)
     {
-        return false;
+        return true;
     }
 
-    if (accessRestriction && !OfflineProfileMeetsRequirement(steamId, minRating, minSteamLevel))
+    // 开启的模式之间为 OR：满足任意一种即可进入
+    // 离线快照暂无 Prime 状态缓存，csPrimeMode 单独开启时无法离线放行
+    if (accessRestriction && OfflineProfileMeetsRequirement(steamId, minRating, minSteamLevel))
     {
-        return false;
+        return true;
     }
 
-    return true;
+    if (whitelistMode && OfflineWhitelistContains(steamId))
+    {
+        return true;
+    }
+
+    return false;
 }
 
 bool OfflineWhitelistContains(const char[] steamId)

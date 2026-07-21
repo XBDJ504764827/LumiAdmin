@@ -3,6 +3,7 @@ export const emptyAccessConfig = {
   min_rating: '0',
   min_steam_level: '0',
   whitelist_mode_enabled: false,
+  cs_prime_enabled: false,
   use_custom_access: false,
 };
 
@@ -10,6 +11,7 @@ export const emptyCommunityAccessConfig = {
   whitelist_mode_enabled: false,
   min_rating: '0',
   min_steam_level: '0',
+  cs_prime_enabled: false,
 };
 
 export function validateAccessConfig(form) {
@@ -48,6 +50,7 @@ export function buildServerPayloadWithAccess(form) {
     min_rating: Number(form.min_rating),
     min_steam_level: Number(form.min_steam_level),
     whitelist_mode_enabled: Boolean(form.whitelist_mode_enabled),
+    cs_prime_enabled: Boolean(form.cs_prime_enabled),
     max_players: maxPlayers,
     use_custom_access: Boolean(form.use_custom_access),
   };
@@ -61,6 +64,7 @@ export function buildCommunityAccessPayload(form) {
     whitelist_mode_enabled: Boolean(form.whitelist_mode_enabled),
     min_rating: Number(form.min_rating),
     min_steam_level: Number(form.min_steam_level),
+    cs_prime_enabled: Boolean(form.cs_prime_enabled),
   };
 }
 
@@ -70,6 +74,7 @@ export function fillAccessConfigFromServer(server) {
     min_rating: String(server.min_rating ?? 0),
     min_steam_level: String(server.min_steam_level ?? 0),
     whitelist_mode_enabled: Boolean(server.whitelist_mode_enabled),
+    cs_prime_enabled: Boolean(server.cs_prime_enabled),
     use_custom_access: Boolean(server.use_custom_access),
   };
 }
@@ -79,6 +84,7 @@ export function fillCommunityAccessConfig(group) {
     whitelist_mode_enabled: Boolean(group.whitelist_mode_enabled),
     min_rating: String(group.min_rating ?? 0),
     min_steam_level: String(group.min_steam_level ?? 0),
+    cs_prime_enabled: Boolean(group.cs_prime_enabled),
   };
 }
 
@@ -86,14 +92,25 @@ export function buildAccessSummary(server, group) {
   const custom = Boolean(server.use_custom_access);
   const hasRestriction = custom ? Boolean(server.access_restriction_enabled) : (group?.min_rating > 0 || group?.min_steam_level > 0);
   const hasWhitelist = custom ? Boolean(server.whitelist_mode_enabled) : Boolean(group?.whitelist_mode_enabled);
+  const hasCsPrime = custom ? Boolean(server.cs_prime_enabled) : Boolean(group?.cs_prime_enabled);
   const minRating = custom ? (server.min_rating ?? 0) : (group?.min_rating ?? 0);
   const minSteamLevel = custom ? (server.min_steam_level ?? 0) : (group?.min_steam_level ?? 0);
   const source = custom ? '' : '（社区）';
+  const restrictionText = `rating ≥ ${minRating}，Steam 等级 ≥ ${minSteamLevel}${source}`;
 
-  if (hasWhitelist && hasRestriction) {
-    return `满足限制即可进；不满足需通过白名单（rating ≥ ${minRating}，Steam 等级 ≥ ${minSteamLevel}${source}）`;
+  const modes = [];
+  if (hasCsPrime) modes.push('CS优先账户');
+  if (hasRestriction) modes.push(restrictionText);
+  if (hasWhitelist) modes.push('白名单');
+
+  if (modes.length === 0) return '无限制';
+  if (modes.length === 1) {
+    if (hasWhitelist) return '白名单模式';
+    if (hasCsPrime) return `CS优先账户${source}`;
+    return `限制：${restrictionText}`;
   }
-  if (hasWhitelist) return '白名单模式';
-  if (hasRestriction) return `限制：rating ≥ ${minRating}，Steam 等级 ≥ ${minSteamLevel}${source}`;
-  return '无限制';
+  if (hasWhitelist && hasRestriction && !hasCsPrime) {
+    return `满足限制即可进；不满足需通过白名单（${restrictionText}）`;
+  }
+  return `${modes.join(' 或 ')}`;
 }

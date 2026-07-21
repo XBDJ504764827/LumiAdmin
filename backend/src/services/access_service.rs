@@ -24,6 +24,8 @@ pub struct AccessCheckInput {
     pub ip_address: Option<String>,
     pub player: Option<String>,
     pub server_port: Option<i32>,
+    /// 游戏插件上报的 CS 优先账户状态；`None` 表示插件暂未确认
+    pub is_cs_prime: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -118,6 +120,7 @@ pub async fn check_access(
                     port: input.port,
                     steam_id64,
                     ip_address: input.ip_address,
+                    is_cs_prime: input.is_cs_prime,
                     now: Utc::now(),
                 },
             );
@@ -217,19 +220,14 @@ async fn check_access_live(
         false
     };
 
-    // CS 优先账户
-    if effective_cs_prime {
-        match is_cs_prime(config, steam_id64).await {
-            Some(true) => {
-                return Ok(allow_with_data(
-                    "已确认 CS 优先账户，允许进入服务器。",
-                    "cs_prime",
-                    None,
-                    None,
-                ));
-            }
-            Some(false) | None => {}
-        }
+    // CS 优先账户：由游戏插件通过 Steam GameServer API 查询后上报
+    if effective_cs_prime && input.is_cs_prime == Some(true) {
+        return Ok(allow_with_data(
+            "已确认 CS 优先账户，允许进入服务器。",
+            "cs_prime",
+            None,
+            None,
+        ));
     }
 
     // 进入限制（rating / steam level）
@@ -522,13 +520,6 @@ fn reject_with_method(message: &str, access_method: &str, failure_code: &str) ->
         rating: None,
         steam_level: None,
     }
-}
-
-/// 查询玩家是否为 CS 优先账户（Prime）。
-/// 返回 `None` 表示暂无法确认（查询逻辑待接入）。
-async fn is_cs_prime(_config: &Config, _steam_id64: &str) -> Option<bool> {
-    // TODO: 接入 Prime 状态查询
-    None
 }
 
 /// 查询 Steam 等级：优先 steamchina，失败用 steampowered

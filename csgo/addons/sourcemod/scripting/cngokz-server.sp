@@ -5,6 +5,10 @@
 #include <cngokz/core>
 #include <cngokz/session_reasons>
 
+#undef REQUIRE_PLUGIN
+#include <cngokz/prime>
+#define REQUIRE_PLUGIN
+
 // Edge Sync Agent Native函数声明
 native int EdgeSync_EnqueueOperation(const char[] operation, const char[] target, const char[] targetType, const char[] playerName, const char[] reason, const char[] operatorName, const char[] operatorSteamid, int durationMinutes);
 native bool EdgeSync_IsOnline();
@@ -2172,7 +2176,14 @@ void SubmitAccessCheck(int client)
     {
         return;
     }
-    JSONObject payload = BuildPluginAccessCheckPayload(token, currentPort, steamId64, ipAddress, playerName);
+
+    // 尽量先跑一轮 Prime 检测，再随 access check 上报
+    if (GetFeatureStatus(FeatureType_Native, "CNGOKZPrime_Recheck") == FeatureStatus_Available)
+    {
+        CNGOKZPrime_Recheck(client);
+    }
+
+    JSONObject payload = BuildPluginAccessCheckPayload(token, currentPort, steamId64, ipAddress, playerName, client);
     int userId = GetClientUserId(client);
     PostJsonObject(url, payload, OnAccessCheckResponse, userId);
     delete payload;
@@ -2488,8 +2499,15 @@ bool OfflineRulesAllowClient(const char[] steamId)
         return true;
     }
 
-    // 开启的模式之间为 OR：满足任意一种即可进入
-    // 离线快照暂无 Prime 状态缓存，csPrimeMode 单独开启时无法离线放行
+    // 开启的模式之间为 OR：满足任意一种即可进入（白名单 / 进入限制 / CS优先）
+    if (csPrimeMode && GetFeatureStatus(FeatureType_Native, "CNGOKZPrime_IsPrimeSteam64") == FeatureStatus_Available)
+    {
+        if (CNGOKZPrime_IsPrimeSteam64(steamId))
+        {
+            return true;
+        }
+    }
+
     if (accessRestriction && OfflineProfileMeetsRequirement(steamId, minRating, minSteamLevel))
     {
         return true;
@@ -2631,7 +2649,7 @@ JSONObject BuildPluginBanCheckPayload(const char[] token, int port, const char[]
     return payload;
 }
 
-JSONObject BuildPluginAccessCheckPayload(const char[] token, int port, const char[] steamId64, const char[] ipAddress, const char[] player)
+JSONObject BuildPluginAccessCheckPayload(const char[] token, int port, const char[] steamId64, const char[] ipAddress, const char[] player, int client = 0)
 {
     JSONObject payload = new JSONObject();
     payload.SetString("report_token", token);
@@ -2640,6 +2658,29 @@ JSONObject BuildPluginAccessCheckPayload(const char[] token, int port, const cha
     payload.SetString("steam_id64", steamId64);
     payload.SetString("ip_address", ipAddress);
     payload.SetString("player", player);
+
+    // is_cs_prime: 仅在插件已确认时上报 true/false；未知则省略字段
+    if (GetFeatureStatus(FeatureType_Native, "CNGOKZPrime_GetStatus") == FeatureStatus_Available)
+    {
+        int status = -1;
+        if (client > 0 && client <= MaxClients)
+        {
+            status = CNGOKZPrime_GetStatus(client);
+        }
+        if (status < 0)
+        {
+            status = CNGOKZPrime_GetStatusSteam64(steamId64);
+        }
+        if (status == 1)
+        {
+            payload.SetBool("is_cs_prime", true);
+        }
+        else if (status == 0)
+        {
+            payload.SetBool("is_cs_prime", false);
+        }
+    }
+
     return payload;
 }
 

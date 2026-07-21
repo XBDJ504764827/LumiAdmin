@@ -218,6 +218,7 @@ test('build script compiles cngokz plugins with host sourcemod compiler first', 
   assert.match(build, /GOKZ_TOP_SOURCE_DIR/);
   assert.match(build, /GOKZ_INCLUDE_DIR/);
   assert.match(build, /compile_plugin "cngokz-core\.sp" "cngokz-core\.smx"/);
+  assert.match(build, /compile_plugin "cngokz-prime\.sp" "cngokz-prime\.smx"/);
   assert.match(build, /compile_plugin "gokz-replays\.sp" "gokz-replays\.smx"/);
   assert.match(build, /compile_plugin "cngokz-recordguard\.sp" "cngokz-recordguard\.smx"/);
   assert.match(build, /compile_plugin "cngokz-global\.sp" "cngokz-global\.smx"/);
@@ -226,6 +227,7 @@ test('build script compiles cngokz plugins with host sourcemod compiler first', 
 test('project include directory keeps only cngokz and local plugin headers', () => {
   assert.ok(existsSync(resolve(scripting, 'include/cngokz/recordguard.inc')));
   assert.ok(existsSync(resolve(scripting, 'include/cngokz/core.inc')));
+  assert.ok(existsSync(resolve(scripting, 'include/cngokz/prime.inc')));
   assert.ok(existsSync(resolve(scripting, 'include/cngokz/session_reasons.inc')));
   assert.ok(existsSync(resolve(scripting, 'include/manger_shared.inc')));
   assert.ok(existsSync(resolve(scripting, 'include/ripext.inc')));

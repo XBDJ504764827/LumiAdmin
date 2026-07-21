@@ -72,6 +72,7 @@ pub struct SnapshotAccessInput {
     pub port: i32,
     pub steam_id64: String,
     pub ip_address: Option<String>,
+    pub is_cs_prime: Option<bool>,
     pub now: DateTime<Utc>,
 }
 
@@ -525,7 +526,10 @@ pub fn evaluate_access_snapshot(
         .any(|entry| entry.steam_id64 == input.steam_id64);
 
     // 开启的模式之间为 OR：满足任意一种即可进入
-    // 快照侧暂不缓存 Prime 状态，仅靠白名单/进入限制放行
+    if has_cs_prime && input.is_cs_prime == Some(true) {
+        return allow("已确认 CS 优先账户，允许进入服务器。");
+    }
+
     if has_restriction {
         if let Some(profile) = snapshot
             .access_profiles
@@ -649,6 +653,7 @@ mod tests {
             port: 27015,
             steam_id64: steam_id64.to_string(),
             ip_address: Some("203.0.113.10".to_string()),
+            is_cs_prime: None,
             now,
         }
     }

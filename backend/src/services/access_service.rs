@@ -231,8 +231,10 @@ async fn check_access_live(
     }
 
     // 进入限制（rating / steam level）
+
     let mut restriction_failed = false;
     let mut restriction_failure_code: Option<&'static str> = None;
+
     if effective_restriction {
         match load_player_profile(db, config, steam_id64).await? {
             Some(profile) => {
@@ -240,6 +242,7 @@ async fn check_access_live(
                 if result.allowed {
                     return Ok(result);
                 }
+
                 restriction_failed = true;
                 restriction_failure_code = result.failure_code.as_deref().map(|code| match code {
                     "low_rating" => "low_rating",
@@ -273,6 +276,7 @@ async fn check_access_live(
             None,
         ));
     }
+
 
     // 均未满足：按启用模式组合返回拒绝原因
     let whitelist_failed = effective_whitelist && !whitelist_approved;

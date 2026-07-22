@@ -288,11 +288,16 @@ async fn check_access_live(
     // 均未满足：按启用模式组合返回拒绝原因
     let whitelist_failed = effective_whitelist && !whitelist_approved;
     let cs_prime_failed = effective_cs_prime && input.is_cs_prime != Some(true);
+    let cs_prime_failure_code = cs_prime_failed.then(|| match input.is_cs_prime {
+        Some(false) => "not_cs_prime".to_string(),
+        _ => "prime_verification_failed".to_string(),
+    });
     Ok(reject_access_modes(
         whitelist_failed,
         restriction_failed,
         cs_prime_failed,
         restriction_failure_code,
+        cs_prime_failure_code,
     ))
 }
 
@@ -330,7 +335,22 @@ fn reject_access_modes(
     restriction_failed: bool,
     cs_prime_failed: bool,
     restriction_failure_code: Option<String>,
+    cs_prime_failure_code: Option<String>,
 ) -> AccessCheckResult {
+    if cs_prime_failure_code.as_deref() == Some("prime_verification_failed") {
+        let message = match (whitelist_failed, restriction_failed) {
+            (false, false) => "无法验证您的 CS 优先账户状态，请稍后再试。",
+            (true, false) => "无法验证您的 CS 优先账户状态，并且您尚未取得白名单资格，请稍后再试。",
+            (false, true) => {
+                "无法验证您的 CS 优先账户状态，并且您的账号未达到其他进入要求，请稍后再试。"
+            }
+            (true, true) => {
+                "无法验证您的 CS 优先账户状态，并且您尚未满足服务器其他进入方式，请稍后再试。"
+            }
+        };
+        return reject_with_method(message, "cs_prime_rejected", "prime_verification_failed");
+    }
+
     let message = match (whitelist_failed, restriction_failed, cs_prime_failed) {
         (true, false, false) => {
             "当前服务器开启了白名单验证\n请前往以下地址进行申请\nhttps://zzzxbdjbans.cngokz.com/public/apply\n如有疑问加入Q群275164688寻求帮助"
@@ -741,35 +761,62 @@ mod tests {
 
     #[test]
     fn reject_access_modes_covers_mode_combinations() {
-        assert!(reject_access_modes(true, false, false, None)
+        assert!(reject_access_modes(true, false, false, None, None)
             .message
             .contains("当前服务器开启了白名单验证"));
         assert!(
-            reject_access_modes(false, true, false, Some("low_rating".to_string()))
+            reject_access_modes(false, true, false, Some("low_rating".to_string()), None)
                 .message
                 .contains("当前服务器开启了进入限制")
         );
-        assert!(reject_access_modes(false, false, true, None)
-            .message
-            .contains("非CS优先账户"));
         assert!(
-            reject_access_modes(true, true, false, Some("low_rating".to_string()))
+            reject_access_modes(false, false, true, None, Some("not_cs_prime".to_string()))
+                .message
+                .contains("非CS优先账户")
+        );
+        assert!(
+            reject_access_modes(true, true, false, Some("low_rating".to_string()), None)
                 .message
                 .contains("没有获取白名单资格")
         );
-        assert!(reject_access_modes(true, false, true, None)
+        assert!(
+            reject_access_modes(true, false, true, None, Some("not_cs_prime".to_string()))
+                .message
+                .contains("CS为非优先账号并且没有获取白名单资格")
+        );
+        assert!(reject_access_modes(
+            false,
+            true,
+            true,
+            Some("low_steam_level".to_string()),
+            Some("not_cs_prime".to_string())
+        )
+        .message
+        .contains("未达到最低进入要求被阻止进入服务器"));
+        assert!(reject_access_modes(
+            true,
+            true,
+            true,
+            Some("low_rating".to_string()),
+            Some("not_cs_prime".to_string())
+        )
+        .message
+        .contains("没有获取白名单资格"));
+
+        let unknown_prime = reject_access_modes(
+            false,
+            false,
+            true,
+            None,
+            Some("prime_verification_failed".to_string()),
+        );
+        assert_eq!(
+            unknown_prime.failure_code.as_deref(),
+            Some("prime_verification_failed")
+        );
+        assert!(unknown_prime
             .message
-            .contains("CS为非优先账号并且没有获取白名单资格"));
-        assert!(
-            reject_access_modes(false, true, true, Some("low_steam_level".to_string()))
-                .message
-                .contains("未达到最低进入要求被阻止进入服务器")
-        );
-        assert!(
-            reject_access_modes(true, true, true, Some("low_rating".to_string()))
-                .message
-                .contains("没有获取白名单资格")
-        );
+            .contains("无法验证您的 CS 优先账户状态"));
     }
 
     #[test]

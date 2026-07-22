@@ -1,11 +1,12 @@
 #include <sourcemod>
+#include <sdktools>
 #include <SteamWorks>
 #include <cngokz/prime>
 
 #pragma newdecls required
 #pragma semicolon 1
 
-#define CNGOKZ_PRIME_VERSION "0.1.0"
+#define CNGOKZ_PRIME_VERSION "0.2.0"
 #define CNGOKZ_PRIME_DB_NAME "cngokz_prime_cache"
 #define CNGOKZ_PRIME_FALSE_TTL_SECS 21600  // 非 Prime 缓存 6 小时后重查
 #define CNGOKZ_PRIME_TRUE_TTL_SECS 2592000 // Prime 缓存 30 天
@@ -52,6 +53,8 @@ public void OnPluginStart()
     }
 
     InitPrimeDatabase();
+    RegAdminCmd("sm_cngokz_prime", CommandPrimeStatus, ADMFLAG_GENERIC, "sm_cngokz_prime [target] - recheck CS Prime status");
+    PrintToServer("[cngokz-prime] Loaded with SteamWorks license and CS:GO player-resource checks.");
 }
 
 public void OnClientDisconnect(int client)
@@ -67,6 +70,25 @@ public void OnClientAuthorized(int client, const char[] auth)
     }
 
     CheckClientPrime(client, false);
+}
+
+public int SteamWorks_OnValidateClient(int ownerAuthId, int authId)
+{
+    for (int client = 1; client <= MaxClients; client++)
+    {
+        if (!IsClientConnected(client) || IsFakeClient(client))
+        {
+            continue;
+        }
+
+        if (GetSteamAccountID(client, false) == authId)
+        {
+            CheckClientPrime(client, true);
+            return 0;
+        }
+    }
+
+    return 0;
 }
 
 // ─── Public helpers ───────────────────────────────────────────
@@ -100,6 +122,15 @@ bool CheckClientPrime(int client, bool force)
         return true;
     }
 
+    if (HasGameReportedPrime(client))
+    {
+        SetPrimeCache(steamId64, true);
+        g_ClientPrimeStatus[client] = 1;
+        FirePrimeChecked(client, true, true);
+        LogMessage("[cngokz-prime] Prime confirmed by CS:GO player resource for %s", steamId64);
+        return true;
+    }
+
     if (GetExtensionFileStatus("SteamWorks.ext") <= 0 || !SteamWorks_IsConnected())
     {
         g_ClientPrimeStatus[client] = -1;
@@ -114,6 +145,7 @@ bool CheckClientPrime(int client, bool force)
         SetPrimeCache(steamId64, true);
         g_ClientPrimeStatus[client] = 1;
         FirePrimeChecked(client, true, true);
+        LogMessage("[cngokz-prime] Prime confirmed by SteamWorks for %s", steamId64);
         return true;
     }
 
@@ -122,13 +154,55 @@ bool CheckClientPrime(int client, bool force)
         SetPrimeCache(steamId64, false);
         g_ClientPrimeStatus[client] = 0;
         FirePrimeChecked(client, false, true);
+        LogMessage("[cngokz-prime] SteamWorks confirmed non-Prime for %s", steamId64);
         return true;
     }
 
     // NoAuth 或其它：不写入非 Prime 缓存，保持未知
     g_ClientPrimeStatus[client] = -1;
     FirePrimeChecked(client, false, false);
+    LogMessage("[cngokz-prime] SteamWorks returned NoAuth for %s; status remains unknown", steamId64);
     return false;
+}
+
+bool HasGameReportedPrime(int client)
+{
+    if (!IsClientInGame(client))
+    {
+        return false;
+    }
+
+    int playerResource = GetPlayerResourceEntity();
+    if (playerResource == -1 || !HasEntProp(playerResource, Prop_Send, "m_bHasPrime"))
+    {
+        return false;
+    }
+
+    return GetEntProp(playerResource, Prop_Send, "m_bHasPrime", 1, client) != 0;
+}
+
+public Action CommandPrimeStatus(int client, int args)
+{
+    int target = client;
+    if (args >= 1)
+    {
+        char targetArg[64];
+        GetCmdArg(1, targetArg, sizeof(targetArg));
+        target = FindTarget(client, targetArg, true, false);
+    }
+
+    if (target <= 0 || target > MaxClients || !IsClientConnected(target) || IsFakeClient(target))
+    {
+        ReplyToCommand(client, "[cngokz-prime] A connected human target is required.");
+        return Plugin_Handled;
+    }
+
+    CheckClientPrime(target, true);
+    int status = g_ClientPrimeStatus[target];
+    char steamId64[32];
+    GetClientAuthId(target, AuthId_SteamID64, steamId64, sizeof(steamId64), true);
+    ReplyToCommand(client, "[cngokz-prime] %N (%s): status=%d (1=Prime, 0=non-Prime, -1=unknown)", target, steamId64, status);
+    return Plugin_Handled;
 }
 
 // ─── Cache ────────────────────────────────────────────────────

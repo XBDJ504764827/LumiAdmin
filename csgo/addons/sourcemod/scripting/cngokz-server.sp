@@ -20,6 +20,8 @@ native int EdgeSync_GetPendingCount();
 #define DEFAULT_STATUS_REPORT_INTERVAL "30.0"
 #define DEFAULT_DEBUG_LOG "0"
 #define DEFAULT_ACCESS_FAIL_OPEN "1"
+#define PRIME_CHECK_RETRY_INTERVAL 0.5
+#define PRIME_CHECK_MAX_ATTEMPTS 6
 #define ACCESS_SNAPSHOT_DB "manger_access_snapshot"
 #define MAX_SERVER_TOKEN 256
 
@@ -53,6 +55,7 @@ int g_UnbanAdminUserId = 0;
 bool g_LegacyServerSurfaceDeferred = false;
 char g_DisconnectReason[MAXPLAYERS + 1][32];
 char g_DisconnectDetail[MAXPLAYERS + 1][256];
+int g_PrimeCheckAttempts[MAXPLAYERS + 1];
 
 // 服务端返回的封禁列表版本签名 etag。每次轮询时回传，命中后端版本检测时
 // items 为空，避免后端每次全量序列化最多 10000 条记录。
@@ -129,6 +132,14 @@ public void OnPluginStart()
     StartBanPollTimer();
     StartAccessSnapshotTimer();
     StartStatusReportTimer();
+}
+
+public void OnAllPluginsLoaded()
+{
+    if (GetFeatureStatus(FeatureType_Native, "CNGOKZPrime_Recheck") != FeatureStatus_Available)
+    {
+        LogError("[Manger] cngokz-prime.smx is not loaded; CS Prime access checks will remain unknown.");
+    }
 }
 
 void EnsureCNGOKZConfigDirectory()
@@ -231,6 +242,7 @@ public void OnClientDisconnect(int client)
     g_WaitingOwnReason[client] = false;
     g_BanTarget[client] = 0;
     g_BanTime[client] = 0;
+    g_PrimeCheckAttempts[client] = 0;
 }
 
 public void OnClientPutInServer(int client)
@@ -2144,7 +2156,49 @@ public void OnClientAuthorized(int client, const char[] auth)
     }
 
     // 准入接口已包含封禁检查，无需单独调用封禁校验
+    g_PrimeCheckAttempts[client] = 0;
+    TrySubmitAccessCheck(client);
+}
+
+void TrySubmitAccessCheck(int client)
+{
+    if (client <= 0 || client > MaxClients || !IsClientConnected(client) || IsFakeClient(client))
+    {
+        return;
+    }
+
+    if (GetFeatureStatus(FeatureType_Native, "CNGOKZPrime_Recheck") == FeatureStatus_Available)
+    {
+        CNGOKZPrime_Recheck(client);
+        int status = CNGOKZPrime_GetStatus(client);
+        if (status < 0 && g_PrimeCheckAttempts[client] < PRIME_CHECK_MAX_ATTEMPTS)
+        {
+            g_PrimeCheckAttempts[client]++;
+            CreateTimer(PRIME_CHECK_RETRY_INTERVAL, Timer_RetryAccessCheck, GetClientUserId(client), TIMER_FLAG_NO_MAPCHANGE);
+            return;
+        }
+
+        if (status < 0)
+        {
+            LogError("[Manger] CS Prime status remained unknown for %N after %d attempts.", client, g_PrimeCheckAttempts[client] + 1);
+        }
+        else
+        {
+            DebugLog("CS Prime status for client %d resolved to %d before access check.", client, status);
+        }
+    }
+
     SubmitAccessCheck(client);
+}
+
+public Action Timer_RetryAccessCheck(Handle timer, any userId)
+{
+    int client = GetClientOfUserId(userId);
+    if (client > 0 && IsClientConnected(client))
+    {
+        TrySubmitAccessCheck(client);
+    }
+    return Plugin_Stop;
 }
 
 void SubmitAccessCheck(int client)
@@ -2175,12 +2229,6 @@ void SubmitAccessCheck(int client)
     if (!GetCurrentServerPort(currentPort))
     {
         return;
-    }
-
-    // 尽量先跑一轮 Prime 检测，再随 access check 上报
-    if (GetFeatureStatus(FeatureType_Native, "CNGOKZPrime_Recheck") == FeatureStatus_Available)
-    {
-        CNGOKZPrime_Recheck(client);
     }
 
     JSONObject payload = BuildPluginAccessCheckPayload(token, currentPort, steamId64, ipAddress, playerName, client);

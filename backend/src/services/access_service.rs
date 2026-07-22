@@ -24,6 +24,8 @@ pub struct AccessCheckInput {
     pub ip_address: Option<String>,
     pub player: Option<String>,
     pub server_port: Option<i32>,
+    /// 游戏插件上报的 CS 优先账户状态；`None` 表示插件暂未确认
+    pub is_cs_prime: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -118,6 +120,7 @@ pub async fn check_access(
                     port: input.port,
                     steam_id64,
                     ip_address: input.ip_address,
+                    is_cs_prime: input.is_cs_prime,
                     now: Utc::now(),
                 },
             );
@@ -196,12 +199,13 @@ async fn check_access_live(
         ));
     }
 
-    // 2. 检查服务器访问模式
+    // 2. 检查服务器访问模式（开启的模式之间为 OR：满足任意一种即可进入）
     let effective_restriction = server.effective_access_restriction_enabled();
     let effective_whitelist = server.effective_whitelist_mode_enabled();
+    let effective_cs_prime = server.effective_cs_prime_enabled();
 
     // 都没开 → 无限制放行
-    if !effective_whitelist && !effective_restriction {
+    if !effective_whitelist && !effective_restriction && !effective_cs_prime {
         return Ok(allow_with_data(
             "允许进入服务器。",
             "unrestricted",
@@ -210,61 +214,71 @@ async fn check_access_live(
         ));
     }
 
-    let whitelist_approved = wl_cache.contains(steam_id64).await;
+    let whitelist_approved = if effective_whitelist {
+        wl_cache.contains(steam_id64).await
+    } else {
+        false
+    };
 
-    // 仅白名单模式：必须通过白名单才能进
-    if effective_whitelist && !effective_restriction {
-        return if whitelist_approved {
-            Ok(allow_with_data(
-                "已通过白名单审核，允许进入服务器。",
-                "whitelist",
-                None,
-                None,
-            ))
-        } else {
-            Ok(reject_with_method("当前服务器开启了白名单模式。\n您可以通过申请白名单获取进入服务器资格。\n申请地址:https://zzzxbdjbans.cngokz.com/public/apply", "whitelist_rejected", "not_whitelisted"))
-        };
+    // CS 优先账户：由游戏插件通过 Steam GameServer API 查询后上报
+    if effective_cs_prime && input.is_cs_prime == Some(true) {
+        return Ok(allow_with_data(
+            "已确认 CS 优先账户，允许进入服务器。",
+            "cs_prime",
+            None,
+            None,
+        ));
     }
 
-    // 仅进入限制：检查 rating/steam level
-    if !effective_whitelist && effective_restriction {
-        return match load_player_profile(db, config, steam_id64).await? {
-            Some(profile) => evaluate_restriction(&server, &profile),
-            None => Ok(reject_with_method(
-                "无法验证您的进入资格，请稍后再试。",
-                "restriction_rejected",
-                "profile_fetch_failed",
-            )),
-        };
-    }
-
-    // 两者都开：满足限制即可进，不满足则看白名单
-    match load_player_profile(db, config, steam_id64).await? {
-        Some(profile)
-            if profile.rating >= server.effective_min_rating()
-                && profile.steam_level >= server.effective_min_steam_level() =>
-        {
-            Ok(allow_with_data(
-                "已满足服务器进入限制，允许进入服务器。",
-                "restriction",
-                Some(profile.rating),
-                Some(profile.steam_level),
-            ))
-        }
-        _ => {
-            // 不满足限制，检查白名单
-            if whitelist_approved {
-                Ok(allow_with_data(
-                    "已通过白名单审核，允许进入服务器。",
-                    "whitelist",
-                    None,
-                    None,
-                ))
-            } else {
-                Ok(reject_with_method("你的GOKZ rating未达到进入服务器最低要求。\n您可以通过申请白名单获取进入服务器资格。\n申请地址:https://zzzxbdjbans.cngokz.com/public/apply", "restriction_rejected", "low_rating"))
+    // 进入限制（rating / steam level）
+    let mut restriction_reject: Option<AccessCheckResult> = None;
+    if effective_restriction {
+        match load_player_profile(db, config, steam_id64).await? {
+            Some(profile) => {
+                let result = evaluate_restriction(&server, &profile)?;
+                if result.allowed {
+                    return Ok(result);
+                }
+                restriction_reject = Some(result);
+            }
+            None => {
+                restriction_reject = Some(reject_with_method(
+                    "无法验证您的进入资格，请稍后再试。",
+                    "restriction_rejected",
+                    "profile_fetch_failed",
+                ));
             }
         }
     }
+
+    // 白名单
+    if effective_whitelist && whitelist_approved {
+        return Ok(allow_with_data(
+            "已通过白名单审核，允许进入服务器。",
+            "whitelist",
+            None,
+            None,
+        ));
+    }
+
+    // 均未满足：按启用模式返回拒绝原因
+    if let Some(reject) = restriction_reject {
+        return Ok(reject);
+    }
+
+    if effective_whitelist {
+        return Ok(reject_with_method(
+            "当前服务器开启了白名单模式。\n您可以通过申请白名单获取进入服务器资格。\n申请地址:https://zzzxbdjbans.cngokz.com/public/apply",
+            "whitelist_rejected",
+            "not_whitelisted",
+        ));
+    }
+
+    Ok(reject_with_method(
+        "当前服务器要求 CS 优先账户才能进入。",
+        "cs_prime_rejected",
+        "not_cs_prime",
+    ))
 }
 
 fn evaluate_restriction(
@@ -580,10 +594,12 @@ mod tests {
             min_rating,
             min_steam_level,
             whitelist_mode_enabled: false,
+            cs_prime_enabled: false,
             use_custom_access: true,
             community_whitelist_mode_enabled: false,
             community_min_rating: 0,
             community_min_steam_level: 0,
+            community_cs_prime_enabled: false,
         }
     }
 

@@ -58,6 +58,7 @@ impl Database {
           min_rating INTEGER NOT NULL DEFAULT 0,
           min_steam_level INTEGER NOT NULL DEFAULT 0,
           whitelist_mode_enabled BOOLEAN NOT NULL DEFAULT false,
+          cs_prime_enabled BOOLEAN NOT NULL DEFAULT false,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )"#,
             r#"CREATE TABLE IF NOT EXISTS player_access_cache (

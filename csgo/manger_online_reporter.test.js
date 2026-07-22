@@ -302,6 +302,7 @@ test('plugin build script compiles both SourceMod plugins', () => {
   assert.match(script, /GOKZ_TOP_SOURCE_DIR/);
   assert.match(script, /GOKZ_INCLUDE_DIR/);
   assert.match(script, /cngokz-core\.sp/);
+  assert.match(script, /cngokz-prime\.sp/);
   assert.match(script, /cngokz-server\.sp/);
   assert.match(script, /cngokz-sync\.sp/);
   assert.match(script, /cngokz-recordguard\.sp/);

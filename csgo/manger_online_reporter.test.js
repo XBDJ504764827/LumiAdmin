@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '../');
 const onlineSourcePath = resolve(root, 'csgo/addons/sourcemod/scripting/cngokz-server.sp');
+const primeSourcePath = resolve(root, 'csgo/addons/sourcemod/scripting/cngokz-prime.sp');
 const edgeSourcePath = resolve(root, 'csgo/addons/sourcemod/scripting/cngokz-sync.sp');
 const sharedIncludePath = resolve(root, 'csgo/addons/sourcemod/scripting/include/manger_shared.inc');
 const onlinePluginPath = resolve(root, 'csgo/addons/sourcemod/plugins/cngokz-server.smx');
@@ -309,6 +310,19 @@ test('plugin build script compiles both SourceMod plugins', () => {
   assert.match(script, /cngokz-global\.sp/);
 });
 
+test('prime access waits for authentication and has a CS:GO fallback signal', () => {
+  const server = read(onlineSourcePath);
+  const prime = read(primeSourcePath);
+
+  assert.match(prime, /SteamWorks_OnValidateClient/);
+  assert.match(prime, /SteamWorks_HasLicenseForApp\(client, CNGOKZ_CS_PRIME_APPID\)/);
+  assert.match(prime, /HasEntProp\(playerResource, Prop_Send, "m_bHasPrime"\)/);
+  assert.match(prime, /RegAdminCmd\("sm_cngokz_prime"/);
+  assert.match(server, /PRIME_CHECK_MAX_ATTEMPTS/);
+  assert.match(server, /Timer_RetryAccessCheck/);
+  assert.match(server, /cngokz-prime\.smx is not loaded/);
+});
+
 test('deploy workflow rebuilds and tests SourceMod plugins', () => {
   const workflow = read(deployWorkflowPath);
 
@@ -363,6 +377,7 @@ test('deploy workflow rebuilds and tests SourceMod plugins', () => {
   for (const plugin of [
     'gokz-replays.smx',
     'cngokz-core.smx',
+    'cngokz-prime.smx',
     'cngokz-server.smx',
     'cngokz-sync.smx',
     'cngokz-recordguard.smx',

@@ -188,6 +188,7 @@ jobs:
           rm -rf csgo/plugin-output
           mkdir -p csgo/plugin-output/plugins
           cp csgo/addons/sourcemod/plugins/cngokz-core.smx csgo/plugin-output/plugins/
+          cp csgo/addons/sourcemod/plugins/cngokz-prime.smx csgo/plugin-output/plugins/
           cp csgo/addons/sourcemod/plugins/gokz-replays.smx csgo/plugin-output/plugins/
           cp csgo/addons/sourcemod/plugins/cngokz-server.smx csgo/plugin-output/plugins/
           cp csgo/addons/sourcemod/plugins/cngokz-sync.smx csgo/plugin-output/plugins/
@@ -208,6 +209,7 @@ jobs:
           mkdir -p csgo/plugin-release/csgo/addons/sourcemod/plugins
           mkdir -p csgo/plugin-release/csgo/cfg/sourcemod/cngokz-lumiadmin
           cp csgo/addons/sourcemod/plugins/cngokz-core.smx csgo/plugin-release/csgo/addons/sourcemod/plugins/cngokz-core.smx
+          cp csgo/addons/sourcemod/plugins/cngokz-prime.smx csgo/plugin-release/csgo/addons/sourcemod/plugins/cngokz-prime.smx
           cp csgo/addons/sourcemod/plugins/gokz-replays.smx csgo/plugin-release/csgo/addons/sourcemod/plugins/gokz-replays.smx
           cp csgo/addons/sourcemod/plugins/cngokz-server.smx csgo/plugin-release/csgo/addons/sourcemod/plugins/cngokz-server.smx
           cp csgo/addons/sourcemod/plugins/cngokz-sync.smx csgo/plugin-release/csgo/addons/sourcemod/plugins/cngokz-sync.smx
@@ -401,7 +403,7 @@ jobs:
 
       - name: Deploy Plugin
         run: |
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugin-output/plugins/gokz-replays.smx plugin-output/plugins/cngokz-core.smx plugin-output/plugins/cngokz-server.smx plugin-output/plugins/cngokz-sync.smx plugin-output/plugins/cngokz-recordguard.smx plugin-output/plugins/cngokz-global.smx ${{ vars.GAME_USER_CNGOKZ }}@${{ vars.GAME_HOST_CNGOKZ }}:${{ vars.GAME_PATH_CNGOKZ }}/
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugin-output/plugins/gokz-replays.smx plugin-output/plugins/cngokz-core.smx plugin-output/plugins/cngokz-prime.smx plugin-output/plugins/cngokz-server.smx plugin-output/plugins/cngokz-sync.smx plugin-output/plugins/cngokz-recordguard.smx plugin-output/plugins/cngokz-global.smx ${{ vars.GAME_USER_CNGOKZ }}@${{ vars.GAME_HOST_CNGOKZ }}:${{ vars.GAME_PATH_CNGOKZ }}/
 
       - name: Finalize Plugin Deployment
         uses: appleboy/ssh-action@v1
@@ -452,7 +454,7 @@ jobs:
 
       - name: Deploy Plugin
         run: |
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugin-output/plugins/gokz-replays.smx plugin-output/plugins/cngokz-core.smx plugin-output/plugins/cngokz-server.smx plugin-output/plugins/cngokz-sync.smx plugin-output/plugins/cngokz-recordguard.smx plugin-output/plugins/cngokz-global.smx ${{ vars.GAME_USER_ILIAN }}@${{ vars.GAME_HOST_ILIAN }}:${{ vars.GAME_PATH_ILIAN }}/
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugin-output/plugins/gokz-replays.smx plugin-output/plugins/cngokz-core.smx plugin-output/plugins/cngokz-prime.smx plugin-output/plugins/cngokz-server.smx plugin-output/plugins/cngokz-sync.smx plugin-output/plugins/cngokz-recordguard.smx plugin-output/plugins/cngokz-global.smx ${{ vars.GAME_USER_ILIAN }}@${{ vars.GAME_HOST_ILIAN }}:${{ vars.GAME_PATH_ILIAN }}/
 
       - name: Finalize Plugin Deployment
         uses: appleboy/ssh-action@v1

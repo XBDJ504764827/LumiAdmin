@@ -231,8 +231,6 @@ async fn check_access_live(
     }
 
     // 进入限制（rating / steam level）
-    let mut restriction_failed = false;
-    let mut restriction_failure_code: Option<&'static str> = None;
     if effective_restriction {
         match load_player_profile(db, config, steam_id64).await? {
             Some(profile) => {
@@ -240,26 +238,6 @@ async fn check_access_live(
                 if result.allowed {
                     return Ok(result);
                 }
-                restriction_failed = true;
-                restriction_failure_code = result.failure_code.as_deref().map(|code| match code {
-                    "low_rating" => "low_rating",
-                    "low_steam_level" => "low_steam_level",
-                    other => other,
-                });
-                // Keep owned failure_code for reject_access_modes below.
-                let _ = restriction_failure_code;
-            }
-            None => {
-                // 仅开启进入限制且资料拉取失败时，给出可重试提示；组合模式下仍按组合拒绝文案处理。
-                if !effective_whitelist && !effective_cs_prime {
-                    return Ok(reject_with_method(
-                        "无法验证您的进入资格，请稍后再试。",
-                        "restriction_rejected",
-                        "profile_fetch_failed",
-                    ));
-                }
-                restriction_failed = true;
-                restriction_failure_code = Some("profile_fetch_failed");
             }
         }
     }
@@ -274,14 +252,6 @@ async fn check_access_live(
         ));
     }
 
-    // 均未满足：按启用模式组合返回拒绝原因
-    let whitelist_failed = effective_whitelist && !whitelist_approved;
-    let cs_prime_failed = effective_cs_prime && input.is_cs_prime != Some(true);
-    Ok(reject_access_modes(
-        whitelist_failed,
-        restriction_failed,
-        cs_prime_failed,
-        restriction_failure_code,
     ))
 }
 

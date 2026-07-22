@@ -231,7 +231,8 @@ async fn check_access_live(
     }
 
     // 进入限制（rating / steam level）
-    let mut restriction_reject: Option<AccessCheckResult> = None;
+    let mut restriction_failed = false;
+    let mut restriction_failure_code: Option<&'static str> = None;
     if effective_restriction {
         match load_player_profile(db, config, steam_id64).await? {
             Some(profile) => {
@@ -239,14 +240,26 @@ async fn check_access_live(
                 if result.allowed {
                     return Ok(result);
                 }
-                restriction_reject = Some(result);
+                restriction_failed = true;
+                restriction_failure_code = result.failure_code.as_deref().map(|code| match code {
+                    "low_rating" => "low_rating",
+                    "low_steam_level" => "low_steam_level",
+                    other => other,
+                });
+                // Keep owned failure_code for reject_access_modes below.
+                let _ = restriction_failure_code;
             }
             None => {
-                restriction_reject = Some(reject_with_method(
-                    "无法验证您的进入资格，请稍后再试。",
-                    "restriction_rejected",
-                    "profile_fetch_failed",
-                ));
+                // 仅开启进入限制且资料拉取失败时，给出可重试提示；组合模式下仍按组合拒绝文案处理。
+                if !effective_whitelist && !effective_cs_prime {
+                    return Ok(reject_with_method(
+                        "无法验证您的进入资格，请稍后再试。",
+                        "restriction_rejected",
+                        "profile_fetch_failed",
+                    ));
+                }
+                restriction_failed = true;
+                restriction_failure_code = Some("profile_fetch_failed");
             }
         }
     }
@@ -261,23 +274,14 @@ async fn check_access_live(
         ));
     }
 
-    // 均未满足：按启用模式返回拒绝原因
-    if let Some(reject) = restriction_reject {
-        return Ok(reject);
-    }
-
-    if effective_whitelist {
-        return Ok(reject_with_method(
-            "当前服务器开启了白名单模式。\n您可以通过申请白名单获取进入服务器资格。\n申请地址:https://zzzxbdjbans.cngokz.com/public/apply",
-            "whitelist_rejected",
-            "not_whitelisted",
-        ));
-    }
-
-    Ok(reject_with_method(
-        "当前服务器要求 CS 优先账户才能进入。",
-        "cs_prime_rejected",
-        "not_cs_prime",
+    // 均未满足：按启用模式组合返回拒绝原因
+    let whitelist_failed = effective_whitelist && !whitelist_approved;
+    let cs_prime_failed = effective_cs_prime && input.is_cs_prime != Some(true);
+    Ok(reject_access_modes(
+        whitelist_failed,
+        restriction_failed,
+        cs_prime_failed,
+        restriction_failure_code,
     ))
 }
 
@@ -288,10 +292,18 @@ fn evaluate_restriction(
     let min_rating = server.effective_min_rating();
     let min_steam_level = server.effective_min_steam_level();
     if profile.rating < min_rating {
-        return Ok(reject_with_method("你的GOKZ rating未达到进入服务器最低要求。\n您可以通过申请白名单获取进入服务器资格。\n申请地址:https://zzzxbdjbans.cngokz.com/public/apply", "restriction_rejected", "low_rating"));
+        return Ok(reject_with_method(
+            "当前服务器开启了进入限制\n您的账号未达到最低进入要求\n如有疑问加入Q群275164688寻求帮助",
+            "restriction_rejected",
+            "low_rating",
+        ));
     }
     if profile.steam_level < min_steam_level {
-        return Ok(reject_with_method("你的steam等级未达到进入服务器最低要求。\n您可以通过申请白名单获取进入服务器资格。\n申请地址:https://zzzxbdjbans.cngokz.com/public/apply", "restriction_rejected", "low_steam_level"));
+        return Ok(reject_with_method(
+            "当前服务器开启了进入限制\n您的账号未达到最低进入要求\n如有疑问加入Q群275164688寻求帮助",
+            "restriction_rejected",
+            "low_steam_level",
+        ));
     }
     Ok(allow_with_data(
         "已满足服务器进入限制，允许进入服务器。",
@@ -299,6 +311,64 @@ fn evaluate_restriction(
         Some(profile.rating),
         Some(profile.steam_level),
     ))
+}
+
+/// 根据启用且未通过的准入模式组合生成阻止提示词。
+fn reject_access_modes(
+    whitelist_failed: bool,
+    restriction_failed: bool,
+    cs_prime_failed: bool,
+    restriction_failure_code: Option<&str>,
+) -> AccessCheckResult {
+    let message = match (whitelist_failed, restriction_failed, cs_prime_failed) {
+        (true, false, false) => {
+            "当前服务器开启了白名单验证\n请前往以下地址进行申请\nhttps://zzzxbdjbans.cngokz.com/public/apply\n如有疑问加入Q群275164688寻求帮助"
+        }
+        (false, true, false) => {
+            "当前服务器开启了进入限制\n您的账号未达到最低进入要求\n如有疑问加入Q群275164688寻求帮助"
+        }
+        (false, false, true) => {
+            "您的账号非CS优先账户无法进入服务器\n如有疑问加入Q群275164688寻求帮助"
+        }
+        (true, true, false) => {
+            "您的账号未达到服务器最低进入要求并且没有获取白名单资格\n请前往以下地址获取白名单，如有疑问加入Q群275164688寻求帮助\nhttps://zzzxbdjbans.cngokz.com/public/apply"
+        }
+        (true, false, true) => {
+            "您的账号CS为非优先账号并且没有获取白名单资格\n请前往以下地址获取白名单，如有疑问加入Q群275164688寻求帮助\nhttps://zzzxbdjbans.cngokz.com/public/apply"
+        }
+        (false, true, true) => {
+            "您的账号CS为非优先账号并且未达到最低进入要求被阻止进入服务器\n如有疑问加入Q群275164688寻求帮助"
+        }
+        (true, true, true) => {
+            "您的账号CS为非优先账号并且未达到最低进入要求并且没有获取白名单资格\n请前往以下地址获取资格如有疑问加入Q群275164688寻求帮助\nhttps://zzzxbdjbans.cngokz.com/public/apply"
+        }
+        (false, false, false) => "您无法进入服务器。",
+    };
+
+    let (access_method, failure_code) = match (whitelist_failed, restriction_failed, cs_prime_failed) {
+        (true, false, false) => ("whitelist_rejected", "not_whitelisted"),
+        (false, true, false) => (
+            "restriction_rejected",
+            restriction_failure_code.unwrap_or("restriction_rejected"),
+        ),
+        (false, false, true) => ("cs_prime_rejected", "not_cs_prime"),
+        (true, true, false) => (
+            "restriction_rejected",
+            restriction_failure_code.unwrap_or("restriction_rejected"),
+        ),
+        (true, false, true) => ("whitelist_rejected", "not_whitelisted"),
+        (false, true, true) => (
+            "restriction_rejected",
+            restriction_failure_code.unwrap_or("restriction_rejected"),
+        ),
+        (true, true, true) => (
+            "restriction_rejected",
+            restriction_failure_code.unwrap_or("restriction_rejected"),
+        ),
+        (false, false, false) => ("access_rejected", "access_rejected"),
+    };
+
+    reject_with_method(message, access_method, failure_code)
 }
 
 async fn active_ban(
@@ -628,12 +698,9 @@ mod tests {
         )
         .unwrap();
         assert!(!result.allowed);
-        assert!(result
-            .message
-            .contains("你的GOKZ rating未达到进入服务器最低要求"));
-        assert!(result
-            .message
-            .contains("申请地址:https://zzzxbdjbans.cngokz.com/public/apply"));
+        assert!(result.message.contains("当前服务器开启了进入限制"));
+        assert!(result.message.contains("您的账号未达到最低进入要求"));
+        assert!(result.message.contains("Q群275164688"));
     }
 
     #[test]
@@ -647,12 +714,34 @@ mod tests {
         )
         .unwrap();
         assert!(!result.allowed);
-        assert!(result
+        assert!(result.message.contains("当前服务器开启了进入限制"));
+        assert!(result.message.contains("您的账号未达到最低进入要求"));
+        assert!(result.message.contains("Q群275164688"));
+    }
+
+    #[test]
+    fn reject_access_modes_covers_mode_combinations() {
+        assert!(reject_access_modes(true, false, false, None)
             .message
-            .contains("你的steam等级未达到进入服务器最低要求"));
-        assert!(result
+            .contains("当前服务器开启了白名单验证"));
+        assert!(reject_access_modes(false, true, false, Some("low_rating"))
             .message
-            .contains("申请地址:https://zzzxbdjbans.cngokz.com/public/apply"));
+            .contains("当前服务器开启了进入限制"));
+        assert!(reject_access_modes(false, false, true, None)
+            .message
+            .contains("非CS优先账户"));
+        assert!(reject_access_modes(true, true, false, Some("low_rating"))
+            .message
+            .contains("没有获取白名单资格"));
+        assert!(reject_access_modes(true, false, true, None)
+            .message
+            .contains("CS为非优先账号并且没有获取白名单资格"));
+        assert!(reject_access_modes(false, true, true, Some("low_steam_level"))
+            .message
+            .contains("未达到最低进入要求被阻止进入服务器"));
+        assert!(reject_access_modes(true, true, true, Some("low_rating"))
+            .message
+            .contains("没有获取白名单资格"));
     }
 
     #[test]

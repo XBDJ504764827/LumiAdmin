@@ -25,7 +25,9 @@ import {
   parseSourceModPluginInfo,
   parseSourceModPluginList,
   pluginIdentityKey,
+  readDetectedReloadPlugins,
   readSavedReloadPluginOptions,
+  writeDetectedReloadPlugins,
   writeSavedReloadPluginOptions,
 } from './communityPlugins.js';
 import {
@@ -83,6 +85,7 @@ export function CommunityPage() {
   const [tokenPanel, setTokenPanel] = useState({ serverId: null, token: '', loading: false, error: '' });
   const [rconModal, setRconModal] = useState({ open: false, serverId: null, serverName: '', executing: '', customCommand: '' });
   const [savedReloadPlugins, setSavedReloadPlugins] = useState(() => readSavedReloadPluginOptions());
+  const [detectedReloadPlugins, setDetectedReloadPlugins] = useState(() => readDetectedReloadPlugins());
   const [reloadPluginsModal, setReloadPluginsModal] = useState({
     open: false,
     group: null,
@@ -240,11 +243,13 @@ export function CommunityPage() {
       group,
       selectedPlugins: [...DEFAULT_RELOAD_PLUGINS],
       customPlugin: '',
-      detectedPlugins: [],
+      detectedPlugins: [...detectedReloadPlugins],
       error: '',
       executing: false,
       detecting: false,
-      detectMessage: '',
+      detectMessage: detectedReloadPlugins.length > 0
+        ? `已加载上次探测结果（${detectedReloadPlugins.length} 个插件）。`
+        : '',
     });
   }
 
@@ -324,7 +329,8 @@ export function CommunityPage() {
       }
     }
 
-    const detectedPlugins = normalizePluginList(detected);
+    const detectedPlugins = writeDetectedReloadPlugins(normalizePluginList(detected));
+    setDetectedReloadPlugins(detectedPlugins);
     setReloadPluginsModal((prev) => ({
       ...prev,
       detecting: false,

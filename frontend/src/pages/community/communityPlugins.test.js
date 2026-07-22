@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   BUILT_IN_RELOAD_PLUGINS,
   DEFAULT_RELOAD_PLUGINS,
+  DETECTED_RELOAD_PLUGINS_STORAGE_KEY,
   SAVED_RELOAD_PLUGINS_STORAGE_KEY,
   addPluginOption,
   buildPluginInfoCommand,
@@ -12,8 +13,10 @@ import {
   parseSourceModPluginInfo,
   parseSourceModPluginList,
   pluginIdentityKey,
+  readDetectedReloadPlugins,
   readSavedReloadPluginOptions,
   validatePluginName,
+  writeDetectedReloadPlugins,
   writeSavedReloadPluginOptions,
 } from './communityPlugins.js';
 
@@ -69,6 +72,23 @@ test('saved reload plugin options persist normalized custom plugins', () => {
   assert.deepEqual(saved, ['custom_plugin', 'disabled/other.smx']);
   assert.equal(store.get(SAVED_RELOAD_PLUGINS_STORAGE_KEY), '["custom_plugin","disabled/other.smx"]');
   assert.deepEqual(readSavedReloadPluginOptions(storage), ['custom_plugin', 'disabled/other.smx']);
+});
+
+test('detected reload plugins persist until next detection overwrites them', () => {
+  const store = new Map();
+  const storage = {
+    getItem: (key) => store.get(key) ?? null,
+    setItem: (key, value) => store.set(key, value),
+  };
+
+  const first = writeDetectedReloadPlugins([' custom_a.smx ', 'CUSTOM_A', 'disabled/other.smx'], storage);
+  assert.deepEqual(first, ['custom_a.smx', 'disabled/other.smx']);
+  assert.equal(store.get(DETECTED_RELOAD_PLUGINS_STORAGE_KEY), '["custom_a.smx","disabled/other.smx"]');
+  assert.deepEqual(readDetectedReloadPlugins(storage), ['custom_a.smx', 'disabled/other.smx']);
+
+  const next = writeDetectedReloadPlugins(['new_plugin.smx'], storage);
+  assert.deepEqual(next, ['new_plugin.smx']);
+  assert.deepEqual(readDetectedReloadPlugins(storage), ['new_plugin.smx']);
 });
 
 test('buildPluginReloadCommands builds commands for selected plugins', () => {

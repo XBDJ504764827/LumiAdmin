@@ -789,7 +789,7 @@ async fn access_check_whitelist_mode_requires_approved_global_whitelist() {
             let body = to_bytes(rejected.into_body(), usize::MAX).await.unwrap();
             let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(payload["result"]["allowed"], false);
-            assert_eq!(payload["result"]["message"], "当前服务器开启了白名单模式。\n您可以通过申请白名单获取进入服务器资格。\n申请地址:https://zzzxbdjbans.cngokz.com/public/apply");
+            assert_eq!(payload["result"]["message"], "当前服务器开启了白名单验证\n请前往以下地址进行申请\nhttps://zzzxbdjbans.cngokz.com/public/apply\n如有疑问加入Q群275164688寻求帮助");
 
             insert_whitelist_for_steamid64(&db, "76561198000000003", "approved").await?;
             app.whitelist_cache.refresh(&db).await?;
@@ -859,7 +859,7 @@ async fn access_check_restriction_uses_success_cache_and_rejects_low_values() {
             let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
             let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(payload["result"]["allowed"], false);
-            assert_eq!(payload["result"]["message"], "你的GOKZ rating未达到进入服务器最低要求。\n您可以通过申请白名单获取进入服务器资格。\n申请地址:https://zzzxbdjbans.cngokz.com/public/apply");
+            assert_eq!(payload["result"]["message"], "当前服务器开启了进入限制\n您的账号未达到最低进入要求\n如有疑问加入Q群275164688寻求帮助");
             Ok(())
         }).await;
 }

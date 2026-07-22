@@ -277,7 +277,6 @@ async fn check_access_live(
         ));
     }
 
-
     // 均未满足：按启用模式组合返回拒绝原因
     let whitelist_failed = effective_whitelist && !whitelist_approved;
     let cs_prime_failed = effective_cs_prime && input.is_cs_prime != Some(true);
@@ -349,28 +348,29 @@ fn reject_access_modes(
         (false, false, false) => "您无法进入服务器。",
     };
 
-    let (access_method, failure_code) = match (whitelist_failed, restriction_failed, cs_prime_failed) {
-        (true, false, false) => ("whitelist_rejected", "not_whitelisted"),
-        (false, true, false) => (
-            "restriction_rejected",
-            restriction_failure_code.unwrap_or("restriction_rejected"),
-        ),
-        (false, false, true) => ("cs_prime_rejected", "not_cs_prime"),
-        (true, true, false) => (
-            "restriction_rejected",
-            restriction_failure_code.unwrap_or("restriction_rejected"),
-        ),
-        (true, false, true) => ("whitelist_rejected", "not_whitelisted"),
-        (false, true, true) => (
-            "restriction_rejected",
-            restriction_failure_code.unwrap_or("restriction_rejected"),
-        ),
-        (true, true, true) => (
-            "restriction_rejected",
-            restriction_failure_code.unwrap_or("restriction_rejected"),
-        ),
-        (false, false, false) => ("access_rejected", "access_rejected"),
-    };
+    let (access_method, failure_code) =
+        match (whitelist_failed, restriction_failed, cs_prime_failed) {
+            (true, false, false) => ("whitelist_rejected", "not_whitelisted"),
+            (false, true, false) => (
+                "restriction_rejected",
+                restriction_failure_code.unwrap_or("restriction_rejected"),
+            ),
+            (false, false, true) => ("cs_prime_rejected", "not_cs_prime"),
+            (true, true, false) => (
+                "restriction_rejected",
+                restriction_failure_code.unwrap_or("restriction_rejected"),
+            ),
+            (true, false, true) => ("whitelist_rejected", "not_whitelisted"),
+            (false, true, true) => (
+                "restriction_rejected",
+                restriction_failure_code.unwrap_or("restriction_rejected"),
+            ),
+            (true, true, true) => (
+                "restriction_rejected",
+                restriction_failure_code.unwrap_or("restriction_rejected"),
+            ),
+            (false, false, false) => ("access_rejected", "access_rejected"),
+        };
 
     reject_with_method(message, access_method, failure_code)
 }
@@ -740,9 +740,11 @@ mod tests {
         assert!(reject_access_modes(true, false, true, None)
             .message
             .contains("CS为非优先账号并且没有获取白名单资格"));
-        assert!(reject_access_modes(false, true, true, Some("low_steam_level"))
-            .message
-            .contains("未达到最低进入要求被阻止进入服务器"));
+        assert!(
+            reject_access_modes(false, true, true, Some("low_steam_level"))
+                .message
+                .contains("未达到最低进入要求被阻止进入服务器")
+        );
         assert!(reject_access_modes(true, true, true, Some("low_rating"))
             .message
             .contains("没有获取白名单资格"));

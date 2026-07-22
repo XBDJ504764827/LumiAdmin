@@ -74,7 +74,10 @@ pub(crate) async fn check_plugin_access(
         let reject_reason = if result.allowed {
             None
         } else {
-            Some(result.message.as_str())
+            result
+                .audit_message
+                .as_deref()
+                .or(Some(result.message.as_str()))
         };
         let _ = access_log_service::create_access_log(
             &ctx.db,

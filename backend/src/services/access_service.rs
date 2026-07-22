@@ -40,6 +40,9 @@ pub struct AccessCheckResult {
     pub rating: Option<i32>,
     /// 玩家 Steam 等级
     pub steam_level: Option<i32>,
+    /// 仅用于后台进服日志的完整审计原因，不返回给游戏插件。
+    #[serde(skip_serializing)]
+    pub audit_message: Option<String>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -338,17 +341,29 @@ fn reject_access_modes(
     cs_prime_failure_code: Option<String>,
 ) -> AccessCheckResult {
     if cs_prime_failure_code.as_deref() == Some("prime_verification_failed") {
-        let message = match (whitelist_failed, restriction_failed) {
-            (false, false) => "无法验证您的 CS 优先账户状态，请稍后再试。",
-            (true, false) => "无法验证您的 CS 优先账户状态，并且您尚未取得白名单资格，请稍后再试。",
-            (false, true) => {
-                "无法验证您的 CS 优先账户状态，并且您的账号未达到其他进入要求，请稍后再试。"
-            }
-            (true, true) => {
-                "无法验证您的 CS 优先账户状态，并且您尚未满足服务器其他进入方式，请稍后再试。"
-            }
-        };
-        return reject_with_method(message, "cs_prime_rejected", "prime_verification_failed");
+        let mut audit_reasons = Vec::new();
+        if whitelist_failed {
+            audit_reasons.push("白名单未通过");
+        }
+        if restriction_failed {
+            audit_reasons.push(match restriction_failure_code.as_deref() {
+                Some("low_rating") => "Rating 未达标",
+                Some("low_steam_level") => "Steam 等级未达标",
+                Some("profile_fetch_failed") => "Rating/Steam 等级资料获取失败",
+                _ => "进入限制未通过",
+            });
+        }
+        audit_reasons.push("CS 优先账户状态无法验证");
+
+        let audit_message = format!("准入条件未满足：{}", audit_reasons.join("；"));
+        let player_message = format!("{audit_message}\n请稍后再试。");
+        let mut result = reject_with_method(
+            &player_message,
+            "cs_prime_rejected",
+            "prime_verification_failed",
+        );
+        result.audit_message = Some(audit_message);
+        return result;
     }
 
     let message = match (whitelist_failed, restriction_failed, cs_prime_failed) {
@@ -602,6 +617,7 @@ fn access_result_from_snapshot_decision(
         failure_code: None,
         rating: None,
         steam_level: None,
+        audit_message: None,
     }
 }
 
@@ -618,6 +634,7 @@ pub(crate) fn allow_with_data(
         failure_code: None,
         rating,
         steam_level,
+        audit_message: None,
     }
 }
 
@@ -629,6 +646,7 @@ fn reject_with_method(message: &str, access_method: &str, failure_code: &str) ->
         failure_code: Some(failure_code.to_string()),
         rating: None,
         steam_level: None,
+        audit_message: None,
     }
 }
 
@@ -816,7 +834,30 @@ mod tests {
         );
         assert!(unknown_prime
             .message
-            .contains("无法验证您的 CS 优先账户状态"));
+            .contains("准入条件未满足：CS 优先账户状态无法验证"));
+        assert_eq!(
+            unknown_prime.audit_message.as_deref(),
+            Some("准入条件未满足：CS 优先账户状态无法验证")
+        );
+
+        let combined_unknown_prime = reject_access_modes(
+            true,
+            true,
+            true,
+            Some("low_rating".to_string()),
+            Some("prime_verification_failed".to_string()),
+        );
+        assert_eq!(
+            combined_unknown_prime.audit_message.as_deref(),
+            Some("准入条件未满足：白名单未通过；Rating 未达标；CS 优先账户状态无法验证")
+        );
+        let plugin_result = serde_json::to_value(&combined_unknown_prime).unwrap();
+        assert!(plugin_result.get("audit_message").is_none());
+        assert!(plugin_result["message"]
+            .as_str()
+            .unwrap()
+            .contains("白名单未通过；Rating 未达标；CS 优先账户状态无法验证"));
+        assert!(combined_unknown_prime.message.len() < 256);
     }
 
     #[test]

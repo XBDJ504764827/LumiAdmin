@@ -221,13 +221,24 @@ async fn check_access_live(
     };
 
     // CS 优先账户：由游戏插件通过 Steam GameServer API 查询后上报
-    if effective_cs_prime && input.is_cs_prime == Some(true) {
-        return Ok(allow_with_data(
-            "已确认 CS 优先账户，允许进入服务器。",
-            "cs_prime",
-            None,
-            None,
-        ));
+    // 优先账户检查必须在进入限制之前执行，确保优先账号直接放行
+    if effective_cs_prime {
+        match input.is_cs_prime {
+            Some(true) => {
+                return Ok(allow_with_data(
+                    "已确认 CS 优先账户，允许进入服务器。",
+                    "cs_prime",
+                    None,
+                    None,
+                ));
+            }
+            Some(false) => {
+                // 非优先账号，继续后续检查（可能还有白名单/进入限制）
+            }
+            None => {
+                // 插件未上报时，保守处理：不直接拒绝，继续后续检查
+            }
+        }
     }
 
     // 进入限制（rating / steam level）

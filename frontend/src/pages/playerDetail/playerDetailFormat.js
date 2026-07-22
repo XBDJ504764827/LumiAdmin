@@ -47,6 +47,7 @@ const FAILURE_CODE_LABELS = {
   not_cs_prime: '非 CS 优先账户',
   custom_rule_rejected: '自定义规则拒绝',
   profile_fetch_failed: '无法获取玩家资料',
+  prime_verification_failed: '无法验证 CS 优先账户',
   snapshot_unavailable: '访问控制服务不可用',
 };
 

@@ -622,7 +622,12 @@ async fn resolve_player_input(
         return Ok(steam_id);
     }
 
-    anyhow::bail!("未找到匹配的玩家，请检查输入的 SteamID、IP 或玩家名称是否正确")
+    // 4) 尝试作为玩家预留联系方式查询
+    if let Some(steam_id) = lookup_steamid_by_contact(db, trimmed).await? {
+        return Ok(steam_id);
+    }
+
+    anyhow::bail!("未找到匹配的玩家，请检查输入的 SteamID、IP、玩家名称或联系方式是否正确")
 }
 
 fn is_likely_ip(input: &str) -> bool {
@@ -661,6 +666,29 @@ async fn lookup_steamid_by_name(db: &Database, name: &str) -> anyhow::Result<Opt
             SELECT steam_id64 FROM server_online_players WHERE name ILIKE $1
             UNION
             SELECT steam_id64 FROM player_server_sessions WHERE player_name ILIKE $1
+        ) AS ids LIMIT 1"#,
+    )
+    .bind(&pattern)
+    .fetch_optional(&db.pool)
+    .await?;
+    Ok(row.map(|(s,)| s))
+}
+
+async fn lookup_steamid_by_contact(db: &Database, contact: &str) -> anyhow::Result<Option<String>> {
+    let pattern = format!(
+        "%{}%",
+        contact
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    );
+    let row: Option<(String,)> = sqlx::query_as(
+        r#"SELECT steam_id64 FROM (
+            SELECT steamid64 AS steam_id64 FROM whitelist_requests WHERE contact ILIKE $1
+            UNION
+            SELECT steam_id AS steam_id64 FROM ban_appeals WHERE contact ILIKE $1
+            UNION
+            SELECT steam_id AS steam_id64 FROM map_feedback WHERE contact ILIKE $1
         ) AS ids LIMIT 1"#,
     )
     .bind(&pattern)
@@ -774,6 +802,7 @@ async fn fetch_player_candidate_rows(
                 OR wr.steamid3 ILIKE $1 ESCAPE '\'
                 OR wr.nickname ILIKE $1 ESCAPE '\'
                 OR wr.steam_persona_name ILIKE $1 ESCAPE '\'
+                OR wr.contact ILIKE $1 ESCAPE '\'
               )
             ORDER BY COALESCE(wr.updated_at, wr.applied_at) DESC NULLS LAST
             LIMIT 80
@@ -886,6 +915,7 @@ async fn fetch_player_candidate_rows(
                 ba.steam_id = NULLIF($2, '')
                 OR ba.steam_id ILIKE $1 ESCAPE '\'
                 OR ba.player_name ILIKE $1 ESCAPE '\'
+                OR ba.contact ILIKE $1 ESCAPE '\'
               )
             ORDER BY ba.created_at DESC
             LIMIT 80
@@ -904,6 +934,7 @@ async fn fetch_player_candidate_rows(
                 mf.steam_id = NULLIF($2, '')
                 OR mf.steam_id ILIKE $1 ESCAPE '\'
                 OR mf.steam_persona_name ILIKE $1 ESCAPE '\'
+                OR mf.contact ILIKE $1 ESCAPE '\'
               )
             ORDER BY mf.created_at DESC
             LIMIT 80

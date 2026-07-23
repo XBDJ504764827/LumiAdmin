@@ -37,7 +37,7 @@ function Empty({children}){return<div className="player-detail-empty">{children}
 // ── Ban Detail Popup ──
 function BanDetailPopup({item, onClose, onAction, token}) {
   const { toast } = useToast();
-  const { confirm } = useConfirmDialog();
+  const { confirm, dialog } = useConfirmDialog();
   const [acting, setActing] = useState(false);
   if (!item) return null;
   const isActive = item.status === 'active';

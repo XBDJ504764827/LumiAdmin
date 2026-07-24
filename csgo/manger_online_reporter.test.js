@@ -317,6 +317,10 @@ test('prime access waits for authentication and has a CS:GO fallback signal', ()
   assert.match(prime, /SteamWorks_OnValidateClient/);
   assert.match(prime, /SteamWorks_HasLicenseForApp\(client, CNGOKZ_CS_PRIME_APPID\)/);
   assert.match(prime, /HasEntProp\(playerResource, Prop_Send, "m_bHasPrime"\)/);
+  assert.match(prime, /int GetGameReportedPrimeStatus\(int client\)/);
+  assert.match(prime, /CNGOKZ_PRIME_GAME_SIGNAL_DELAY/);
+  assert.match(prime, /k_EUserHasLicenseResultDoesNotHaveLicense[\s\S]*?g_ClientPrimeStatus\[client\] = -1/);
+  assert.match(prime, /DELETE FROM prime_cache WHERE is_prime = 0/);
   assert.match(prime, /RegAdminCmd\("sm_cngokz_prime"/);
   assert.match(server, /PRIME_CHECK_MAX_ATTEMPTS/);
   assert.match(server, /Timer_RetryAccessCheck/);

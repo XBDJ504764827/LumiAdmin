@@ -37,7 +37,7 @@ function Empty({children}){return<div className="player-detail-empty">{children}
 // ── Ban Detail Popup ──
 function BanDetailPopup({item, onClose, onAction, token}) {
   const { toast } = useToast();
-  const { confirm } = useConfirmDialog();
+  const { confirm, dialog } = useConfirmDialog();
   const [acting, setActing] = useState(false);
   if (!item) return null;
   const isActive = item.status === 'active';
@@ -699,7 +699,7 @@ export function PlayerDetailPage() {
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" width="15" height="15" style={{flexShrink:0,color:'var(--text3)'}}><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
             <input
               type="text"
-              placeholder="输入玩家名称 / SteamID64 / SteamID2 / SteamID3 / IP..."
+              placeholder="输入玩家名称 / SteamID64 / SteamID2 / SteamID3 / IP / 联系方式..."
               value={steamInput}
               autoComplete="off"
               role="combobox"

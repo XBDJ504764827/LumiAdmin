@@ -6,10 +6,11 @@
 #pragma newdecls required
 #pragma semicolon 1
 
-#define CNGOKZ_PRIME_VERSION "0.2.0"
+#define CNGOKZ_PRIME_VERSION "0.3.0"
 #define CNGOKZ_PRIME_DB_NAME "cngokz_prime_cache"
 #define CNGOKZ_PRIME_FALSE_TTL_SECS 21600  // 非 Prime 缓存 6 小时后重查
 #define CNGOKZ_PRIME_TRUE_TTL_SECS 2592000 // Prime 缓存 30 天
+#define CNGOKZ_PRIME_GAME_SIGNAL_DELAY 1.0
 
 Database g_PrimeDb = null;
 // steamid64 -> "1"/"0"
@@ -18,6 +19,7 @@ StringMap g_PrimeMemory = null;
 StringMap g_PrimeExpires = null;
 // client -> status: -1 unknown, 0 no, 1 yes
 int g_ClientPrimeStatus[MAXPLAYERS + 1];
+float g_ClientPutInServerAt[MAXPLAYERS + 1];
 
 GlobalForward g_FwdPrimeChecked = null;
 
@@ -60,6 +62,17 @@ public void OnPluginStart()
 public void OnClientDisconnect(int client)
 {
     g_ClientPrimeStatus[client] = -1;
+    g_ClientPutInServerAt[client] = 0.0;
+}
+
+public void OnClientPutInServer(int client)
+{
+    if (client <= 0 || client > MaxClients || IsFakeClient(client))
+    {
+        return;
+    }
+
+    g_ClientPutInServerAt[client] = GetEngineTime();
 }
 
 public void OnClientAuthorized(int client, const char[] auth)
@@ -122,12 +135,21 @@ bool CheckClientPrime(int client, bool force)
         return true;
     }
 
-    if (HasGameReportedPrime(client))
+    int gamePrimeStatus = GetGameReportedPrimeStatus(client);
+    if (gamePrimeStatus == 1)
     {
         SetPrimeCache(steamId64, true);
         g_ClientPrimeStatus[client] = 1;
         FirePrimeChecked(client, true, true);
         LogMessage("[cngokz-prime] Prime confirmed by CS:GO player resource for %s", steamId64);
+        return true;
+    }
+    if (gamePrimeStatus == 0)
+    {
+        SetPrimeCache(steamId64, false);
+        g_ClientPrimeStatus[client] = 0;
+        FirePrimeChecked(client, false, true);
+        LogMessage("[cngokz-prime] Non-Prime confirmed by CS:GO player resource for %s", steamId64);
         return true;
     }
 
@@ -151,11 +173,11 @@ bool CheckClientPrime(int client, bool force)
 
     if (result == k_EUserHasLicenseResultDoesNotHaveLicense)
     {
-        SetPrimeCache(steamId64, false);
-        g_ClientPrimeStatus[client] = 0;
-        FirePrimeChecked(client, false, true);
-        LogMessage("[cngokz-prime] SteamWorks confirmed non-Prime for %s", steamId64);
-        return true;
+        // AppID 624820 only proves legacy CS:GO Full Edition ownership. Accounts
+        // that bought Prime after the CS2 release can legitimately lack it.
+        g_ClientPrimeStatus[client] = -1;
+        FirePrimeChecked(client, false, false);
+        return false;
     }
 
     // NoAuth 或其它：不写入非 Prime 缓存，保持未知
@@ -165,20 +187,32 @@ bool CheckClientPrime(int client, bool force)
     return false;
 }
 
-bool HasGameReportedPrime(int client)
+// 1 = Prime, 0 = non-Prime, -1 = unavailable/not synchronized yet.
+int GetGameReportedPrimeStatus(int client)
 {
     if (!IsClientInGame(client))
     {
-        return false;
+        return -1;
     }
 
     int playerResource = GetPlayerResourceEntity();
     if (playerResource == -1 || !HasEntProp(playerResource, Prop_Send, "m_bHasPrime"))
     {
-        return false;
+        return -1;
     }
 
-    return GetEntProp(playerResource, Prop_Send, "m_bHasPrime", 1, client) != 0;
+    int hasPrime = GetEntProp(playerResource, Prop_Send, "m_bHasPrime", 1, client);
+    if (hasPrime != 0)
+    {
+        return 1;
+    }
+
+    if (g_ClientPutInServerAt[client] <= 0.0 || GetEngineTime() - g_ClientPutInServerAt[client] < CNGOKZ_PRIME_GAME_SIGNAL_DELAY)
+    {
+        return -1;
+    }
+
+    return 0;
 }
 
 public Action CommandPrimeStatus(int client, int args)
@@ -305,6 +339,8 @@ void InitPrimeDatabase()
 
     SQL_FastQuery(g_PrimeDb, "CREATE TABLE IF NOT EXISTS prime_cache (steam_id64 TEXT PRIMARY KEY NOT NULL, is_prime INTEGER NOT NULL, checked_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)");
     SQL_FastQuery(g_PrimeDb, "CREATE INDEX IF NOT EXISTS idx_prime_expires ON prime_cache(expires_at)");
+    // 0.2.x treated a missing legacy 624820 license as definitive non-Prime.
+    SQL_FastQuery(g_PrimeDb, "DELETE FROM prime_cache WHERE is_prime = 0");
 }
 
 void FirePrimeChecked(int client, bool isPrime, bool known)

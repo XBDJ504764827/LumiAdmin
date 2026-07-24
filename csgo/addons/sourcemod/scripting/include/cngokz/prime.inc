@@ -3,7 +3,7 @@
 #endif
 #define _cngokz_prime_included
 
-// CS Prime 许可 AppID（与 CS2KZ UserHasLicenseForApp 一致）
+// 旧版 CS:GO Full Edition 许可 AppID；只能作为 Prime 的正向证据。
 #define CNGOKZ_CS_PRIME_APPID 624820
 
 /**

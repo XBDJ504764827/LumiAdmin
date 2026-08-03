@@ -588,9 +588,7 @@ fn add_linked_account_reasons(
             } else {
                 RiskSeverity::Warning
             },
-            message: format!(
-                "同 IP 关联账号存在负面历史：白名单拒绝 {rejected_count} 次"
-            ),
+            message: format!("同 IP 关联账号存在负面历史：白名单拒绝 {rejected_count} 次"),
             steamid64: None,
             ip: None,
             count: total_negative,

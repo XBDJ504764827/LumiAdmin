@@ -623,6 +623,10 @@ async fn lookup_steamid_by_contact(db: &Database, contact: &str) -> anyhow::Resu
     let row: Option<(String,)> = sqlx::query_as(
         r#"SELECT steam_id64 FROM (
             SELECT steamid64 AS steam_id64 FROM whitelist_requests WHERE contact ILIKE $1
+            UNION
+            SELECT steam_id AS steam_id64 FROM ban_appeals WHERE contact ILIKE $1
+            UNION
+            SELECT steam_id AS steam_id64 FROM map_feedback WHERE contact ILIKE $1
         ) AS ids LIMIT 1"#,
     )
     .bind(&pattern)
@@ -817,6 +821,62 @@ async fn fetch_player_candidate_rows(
             ORDER BY pal.created_at DESC
             LIMIT 80
         ) access_matches
+        UNION ALL
+        SELECT * FROM (
+            SELECT pr.target_steam_id AS steamid64,
+                   NULLIF(pr.target_player_name, '') AS display_name,
+                   '举报'::TEXT AS source,
+                   NULL::TEXT AS whitelist_status,
+                   pr.created_at AS last_seen_at
+            FROM player_reports pr
+            WHERE pr.target_steam_id IS NOT NULL
+              AND btrim(pr.target_steam_id) <> ''
+              AND (
+                pr.target_steam_id = NULLIF($2, '')
+                OR pr.target_steam_id ILIKE $1 ESCAPE '\'
+                OR pr.target_player_name ILIKE $1 ESCAPE '\'
+              )
+            ORDER BY pr.created_at DESC
+            LIMIT 80
+        ) report_matches
+        UNION ALL
+        SELECT * FROM (
+            SELECT ba.steam_id AS steamid64,
+                   NULLIF(ba.player_name, '') AS display_name,
+                   '申诉'::TEXT AS source,
+                   NULL::TEXT AS whitelist_status,
+                   ba.created_at AS last_seen_at
+            FROM ban_appeals ba
+            WHERE ba.steam_id IS NOT NULL
+              AND btrim(ba.steam_id) <> ''
+              AND (
+                ba.steam_id = NULLIF($2, '')
+                OR ba.steam_id ILIKE $1 ESCAPE '\'
+                OR ba.player_name ILIKE $1 ESCAPE '\'
+                OR ba.contact ILIKE $1 ESCAPE '\'
+              )
+            ORDER BY ba.created_at DESC
+            LIMIT 80
+        ) appeal_matches
+        UNION ALL
+        SELECT * FROM (
+            SELECT mf.steam_id AS steamid64,
+                   NULLIF(mf.steam_persona_name, '') AS display_name,
+                   '地图反馈'::TEXT AS source,
+                   NULL::TEXT AS whitelist_status,
+                   mf.created_at AS last_seen_at
+            FROM map_feedback mf
+            WHERE mf.steam_id IS NOT NULL
+              AND btrim(mf.steam_id) <> ''
+              AND (
+                mf.steam_id = NULLIF($2, '')
+                OR mf.steam_id ILIKE $1 ESCAPE '\'
+                OR mf.steam_persona_name ILIKE $1 ESCAPE '\'
+                OR mf.contact ILIKE $1 ESCAPE '\'
+              )
+            ORDER BY mf.created_at DESC
+            LIMIT 80
+        ) feedback_matches
         UNION ALL
         SELECT * FROM (
             SELECT gb.steam_id64,

@@ -71,8 +71,6 @@ pub struct RiskLinkedAccount {
     pub has_active_local_ban: bool,
     pub has_active_global_ban: bool,
     pub rejected_whitelist_count: i64,
-    pub upheld_report_count: i64,
-    pub failed_appeal_count: i64,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -106,8 +104,6 @@ struct IpUsageRow {
 struct LinkedSignalRow {
     steam_id: String,
     rejected_whitelist_count: i64,
-    upheld_report_count: i64,
-    failed_appeal_count: i64,
 }
 
 pub async fn build_player_risk_profile(
@@ -143,8 +139,6 @@ pub async fn build_player_risk_profile(
                 has_active_local_ban: false,
                 has_active_global_ban: false,
                 rejected_whitelist_count: 0,
-                upheld_report_count: 0,
-                failed_appeal_count: 0,
             });
         if !entry.shared_ips.iter().any(|ip| ip == &row.ip) {
             entry.shared_ips.push(row.ip);
@@ -181,8 +175,6 @@ pub async fn build_player_risk_profile(
         account.has_active_global_ban = linked_global_banned.contains(steam_id);
         if let Some(signal) = linked_signal_map.get(steam_id) {
             account.rejected_whitelist_count = signal.rejected_whitelist_count;
-            account.upheld_report_count = signal.upheld_report_count;
-            account.failed_appeal_count = signal.failed_appeal_count;
         }
     }
 
@@ -422,28 +414,14 @@ async fn load_linked_signals(
     }
     sqlx::query_as::<_, LinkedSignalRow>(
         r#"SELECT ids.steam_id,
-                  COALESCE(wl.rejected_count, 0)::BIGINT AS rejected_whitelist_count,
-                  COALESCE(reports.upheld_count, 0)::BIGINT AS upheld_report_count,
-                  COALESCE(appeals.failed_count, 0)::BIGINT AS failed_appeal_count
+                  COALESCE(wl.rejected_count, 0)::BIGINT AS rejected_whitelist_count
            FROM UNNEST($1::TEXT[]) AS ids(steam_id)
            LEFT JOIN (
              SELECT steamid64 AS steam_id, COUNT(*) AS rejected_count
              FROM whitelist_requests
              WHERE steamid64 = ANY($1) AND status = 'rejected'
              GROUP BY steamid64
-           ) wl ON wl.steam_id = ids.steam_id
-           LEFT JOIN (
-             SELECT target_steam_id AS steam_id, COUNT(*) AS upheld_count
-             FROM player_reports
-             WHERE target_steam_id = ANY($1) AND status = 'approved'
-             GROUP BY target_steam_id
-           ) reports ON reports.steam_id = ids.steam_id
-           LEFT JOIN (
-             SELECT steam_id, COUNT(*) AS failed_count
-             FROM ban_appeals
-             WHERE steam_id = ANY($1) AND status = 'rejected'
-             GROUP BY steam_id
-           ) appeals ON appeals.steam_id = ids.steam_id"#,
+           ) wl ON wl.steam_id = ids.steam_id"#,
     )
     .bind(steamids)
     .fetch_all(&db.pool)
@@ -596,23 +574,11 @@ fn add_linked_account_reasons(
         .iter()
         .map(|account| account.rejected_whitelist_count)
         .sum();
-    let upheld_report_count: i64 = linked_accounts
-        .iter()
-        .map(|account| account.upheld_report_count)
-        .sum();
-    let failed_appeal_count: i64 = linked_accounts
-        .iter()
-        .map(|account| account.failed_appeal_count)
-        .sum();
-    let total_negative = rejected_count + upheld_report_count + failed_appeal_count;
+    let total_negative = rejected_count;
     if total_negative > 0 {
         let latest = linked_accounts
             .iter()
-            .filter(|account| {
-                account.rejected_whitelist_count > 0
-                    || account.upheld_report_count > 0
-                    || account.failed_appeal_count > 0
-            })
+            .filter(|account| account.rejected_whitelist_count > 0)
             .filter_map(|account| account.last_seen_at)
             .max();
         reasons.push(RiskReason {
@@ -623,7 +589,7 @@ fn add_linked_account_reasons(
                 RiskSeverity::Warning
             },
             message: format!(
-                "同 IP 关联账号存在负面历史：白名单拒绝 {rejected_count} 次，举报成立 {upheld_report_count} 次，申诉失败 {failed_appeal_count} 次"
+                "同 IP 关联账号存在负面历史：白名单拒绝 {rejected_count} 次"
             ),
             steamid64: None,
             ip: None,
@@ -664,8 +630,6 @@ fn linked_account_score(account: &RiskLinkedAccount) -> i32 {
         score += 80;
     }
     score += (account.rejected_whitelist_count as i32).min(10) * 6;
-    score += (account.upheld_report_count as i32).min(10) * 8;
-    score += (account.failed_appeal_count as i32).min(10) * 4;
     score
 }
 

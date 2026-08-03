@@ -4,7 +4,7 @@ import { GokzReplayPlayer } from './GokzReplayPlayer.jsx';
 /**
  * 文件预览组件
  * 根据文件类型（video/image/audio）渲染对应的预览元素。
- * 统一 BanAppealPage 和 PlayerReportPage 中的重复实现。
+ * 统一各证据文件展示页面的重复实现。
  */
 
 export function fileIcon(category) {
@@ -105,7 +105,7 @@ export function FilePreview({ file }) {
 }
 
 /**
- * 文件列表项组件（用于申诉/举报详情弹窗）
+ * 文件列表项组件（用于证据详情弹窗）
  */
 export function FileItem({ file, children }) {
   return (

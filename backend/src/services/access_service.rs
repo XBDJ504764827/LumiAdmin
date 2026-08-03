@@ -182,7 +182,7 @@ async fn check_access_live(
         )
         .await?;
         return Ok(reject_with_method(
-            "你已被该服务器封禁。\n如有异议可前往以下地址进行申诉。\n申诉地址:https://zzzxbdjbans.cngokz.com/public/ban-appeal",
+            "你已被该服务器封禁。\n如有异议可前往社区论坛进行申诉。",
             "banned",
             "banned",
         ));

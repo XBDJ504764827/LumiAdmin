@@ -45,14 +45,6 @@ pub fn can_create_ban(actor: &Operator) -> bool {
     matches!(actor.role.as_str(), ROLE_DEVELOPER | ROLE_ADMIN)
 }
 
-pub fn can_review_ban_appeals(actor: &Operator) -> bool {
-    matches!(actor.role.as_str(), ROLE_DEVELOPER | ROLE_ADMIN)
-}
-
-pub fn can_review_player_reports(actor: &Operator) -> bool {
-    matches!(actor.role.as_str(), ROLE_DEVELOPER | ROLE_ADMIN)
-}
-
 pub fn can_manage_abnormal_records(actor: &Operator) -> bool {
     matches!(actor.role.as_str(), ROLE_DEVELOPER | ROLE_ADMIN)
 }

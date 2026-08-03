@@ -61,13 +61,12 @@ function uploadBanFilesWithProgress(banId, formData, token, onProgress) {
  * @param {boolean} props.open - 是否打开
  * @param {'create'|'edit'|'reban'} props.mode - 弹窗模式
  * @param {string|null} props.editingBanId - 编辑时的封禁 ID
- * @param {Object|null} props.reportReview - 从举报页跳转时的预填数据 { reportId, player }
  * @param {Object|null} props.prefillForm - 预填表单数据（reban 时）
  * @param {Function} props.onClose - 关闭回调
  * @param {Function} props.onSuccess - 保存成功后的回调
  * @param {string} props.token - API token
  */
-export function BanFormModal({ open, mode, editingBanId, reportReview, prefillForm, onClose, onSuccess, token }) {
+export function BanFormModal({ open, mode, editingBanId, prefillForm, onClose, onSuccess, token }) {
   const { toast } = useToast();
   const [form, setForm] = useState(emptyBanForm);
   const [error, setError] = useState('');
@@ -85,8 +84,7 @@ export function BanFormModal({ open, mode, editingBanId, reportReview, prefillFo
     if (open) {
       React.startTransition(() => {
         if (prefillForm) {
-          // Callers such as the player report page only provide fields that can
-          // be prefilled. Keep the rest of the form shape intact so validation
+          // Keep the rest of the form shape intact so validation
           // and payload building never receive undefined text fields.
           setForm({ ...emptyBanForm, ...prefillForm });
         } else {
@@ -151,9 +149,6 @@ export function BanFormModal({ open, mode, editingBanId, reportReview, prefillFo
       if (mode === 'edit' && editingBanId) {
         const result = await api.updateBan(token, editingBanId, payload);
         savedItem = result.item;
-      } else if (reportReview?.reportId) {
-        const result = await api.banPlayerReport(token, reportReview.reportId, payload);
-        savedItem = result.ban;
       } else {
         const result = await api.createBan(token, payload);
         savedItem = result.item;
@@ -170,7 +165,7 @@ export function BanFormModal({ open, mode, editingBanId, reportReview, prefillFo
       }
 
       onClose();
-      onSuccess({ mode, savedItem, uploadedFiles, uploadWarning, reportReview });
+      onSuccess({ mode, savedItem, uploadedFiles, uploadWarning });
     } catch (requestError) {
       const message = requestError?.message || '封禁提交失败，请稍后重试。';
       setError(message);

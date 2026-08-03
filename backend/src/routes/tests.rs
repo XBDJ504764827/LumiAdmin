@@ -709,7 +709,7 @@ async fn access_check_rejects_banned_player_before_other_rules() {
             let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
             let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(payload["result"]["allowed"], false);
-            assert_eq!(payload["result"]["message"], "你已被该服务器封禁。\n如有异议可前往以下地址进行申诉。\n申诉地址:https://zzzxbdjbans.cngokz.com/public/ban-appeal");
+            assert_eq!(payload["result"]["message"], "你已被该服务器封禁。\n如有异议可前往社区论坛进行申诉。");
             Ok(())
         }).await;
 }

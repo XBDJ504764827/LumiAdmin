@@ -1,17 +1,15 @@
 use crate::routes::{invalid_request, AppCtx, ListQuery};
 use crate::services::{
-    ban_appeal_service, ban_service, dashboard_service, global_ban_service, log_service,
-    map_feedback_service, notification_service, player_report_service, public_service, r2_storage,
-    rate_limit_service::extract_client_ip, whitelist_service,
+    ban_service, dashboard_service, global_ban_service, log_service, notification_service,
+    public_service, rate_limit_service::extract_client_ip, whitelist_service,
 };
 use axum::{
-    extract::{Multipart, Path, Query, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
 use std::collections::HashSet;
 use std::time::Duration;
-use uuid::Uuid;
 
 #[derive(serde::Deserialize)]
 #[allow(dead_code)]
@@ -44,15 +42,6 @@ pub(crate) struct GlobalBansBatchBody {
 #[derive(serde::Deserialize)]
 pub(crate) struct QueryBansBody {
     steam_input: String,
-}
-
-#[derive(serde::Deserialize)]
-pub(crate) struct SubmitAppealBody {
-    pub ban_id: Uuid,
-    pub steam_id: String,
-    pub player_name: String,
-    pub contact: Option<String>,
-    pub appeal_reason: String,
 }
 
 pub(crate) async fn public_whitelist(
@@ -128,13 +117,6 @@ pub(crate) async fn public_bans(
     ))
 }
 
-pub(crate) async fn public_ban_appeals_info() -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "ok": true,
-        "message": "Use POST /api/public/ban-appeals to submit a ban appeal."
-    }))
-}
-
 pub(crate) async fn resolve_steam(
     State(ctx): State<AppCtx>,
     Json(body): Json<ResolveSteamBody>,
@@ -172,7 +154,7 @@ pub(crate) async fn resolve_steam(
     }))
 }
 
-/// 按 Steam 标识符查询该玩家的活跃封禁记录（供公开申诉页使用）
+/// 按 Steam 标识符查询该玩家的活跃封禁记录（供封禁公示页使用）
 pub(crate) async fn query_active_bans(
     State(ctx): State<AppCtx>,
     Json(body): Json<QueryBansBody>,
@@ -245,90 +227,6 @@ pub(crate) async fn get_global_bans_batch(
         })?;
 
     Ok(Json(serde_json::json!({ "results": results })))
-}
-
-/// 公开页提交封禁申诉
-pub(crate) async fn submit_ban_appeal(
-    State(ctx): State<AppCtx>,
-    headers: HeaderMap,
-    Json(body): Json<SubmitAppealBody>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    let item = ban_appeal_service::create_appeal(
-        &ctx.db,
-        ban_appeal_service::CreateAppealInput {
-            ban_id: body.ban_id,
-            steam_id: body.steam_id,
-            player_name: body.player_name,
-            contact: body.contact,
-            appeal_reason: body.appeal_reason,
-        },
-    )
-    .await
-    .map_err(invalid_request)?;
-
-    let log_target = format!("{} ({})", item.player_name, item.steam_id);
-    let _ = log_service::create_log(
-        &ctx.db,
-        "guest",
-        "公共展示页",
-        "提交封禁申诉",
-        &log_target,
-        &extract_client_ip(&headers),
-    )
-    .await;
-
-    if let Err(e) = notification_service::notify_all_admins(
-        &ctx.db,
-        &ctx.notification_hub,
-        None,
-        "ban_appeal",
-        "新封禁申诉",
-        &format!("玩家 {} 提交了封禁申诉，请尽快审核。", item.player_name),
-        Some("/ban-appeal"),
-    )
-    .await
-    {
-        tracing::warn!(%e, "ban appeal notification failed");
-    }
-
-    Ok((
-        StatusCode::CREATED,
-        Json(serde_json::json!({
-            "id": item.id,
-            "appeal_id": item.id,
-            "upload_token": item.upload_token,
-            "item": item,
-        })),
-    ))
-}
-
-/// 查询玩家的申诉状态（公开接口，玩家通过 SteamID 查询自己的申诉记录和审核结果）
-pub(crate) async fn query_appeal_status(
-    State(ctx): State<AppCtx>,
-    Json(body): Json<QueryBansBody>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let resolver = &ctx.steam_resolver;
-    let parsed = resolver.resolve(&body.steam_input).await.map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
-
-    let appeals = ban_appeal_service::query_appeals_by_steam_id(&ctx.db, &parsed.steamid64)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "查询申诉状态失败");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "查询申诉状态失败"})),
-            )
-        })?;
-
-    Ok(Json(serde_json::json!({
-        "steamid64": parsed.steamid64,
-        "appeals": appeals,
-    })))
 }
 
 // ---------------------------------------------------------------------------
@@ -555,171 +453,6 @@ pub(crate) async fn preload_gokz_stats(
     Ok(Json(serde_json::Value::Object(response)))
 }
 
-/// 上传申诉辅助文件（录像、图片、录音）到 R2
-pub(crate) async fn upload_appeal_files(
-    State(ctx): State<AppCtx>,
-    headers: HeaderMap,
-    Path(appeal_id): Path<Uuid>,
-    mut multipart: Multipart,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let r2 = ctx.r2_storage.as_ref().ok_or_else(|| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({"error": "文件上传服务未配置"})),
-        )
-    })?;
-
-    // 验证申诉存在且为 pending 状态
-    let appeal_exists: Option<(String, Option<String>)> =
-        sqlx::query_as("SELECT status, upload_token_hash FROM ban_appeals WHERE id = $1")
-            .bind(appeal_id)
-            .fetch_optional(&ctx.db.pool)
-            .await
-            .map_err(|_| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": "查询申诉失败"})),
-                )
-            })?;
-
-    let (status, upload_token_hash) = appeal_exists.ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "申诉记录不存在"})),
-        )
-    })?;
-
-    let upload_token = headers
-        .get("x-appeal-upload-token")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default();
-    if !ban_appeal_service::verify_upload_token(upload_token_hash.as_deref(), upload_token) {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error": "上传凭证无效，请重新提交申诉"})),
-        ));
-    }
-
-    if status != "pending" {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "该申诉已被处理，无法上传文件"})),
-        ));
-    }
-
-    let max_size = ctx.config.appeal_file_max_size_bytes;
-    let mut uploaded: Vec<serde_json::Value> = Vec::new();
-    let mut errors: Vec<String> = Vec::new();
-
-    loop {
-        let field = match multipart.next_field().await {
-            Ok(Some(field)) => field,
-            Ok(None) => break,
-            Err(e) => {
-                tracing::warn!(%e, "读取 multipart 字段失败");
-                errors.push("读取上传内容失败".to_string());
-                break;
-            }
-        };
-
-        let file_name = match field.file_name() {
-            Some(name) => name.to_string(),
-            None => continue,
-        };
-
-        if !r2_storage::is_allowed_file_type(&file_name) {
-            errors.push(format!("不支持的文件类型: {file_name}"));
-            continue;
-        }
-
-        let content_type = field
-            .content_type()
-            .map(|c| c.to_string())
-            .unwrap_or_else(|| r2_storage::guess_content_type(&file_name).to_string());
-
-        let data = match field.bytes().await {
-            Ok(bytes) => bytes.to_vec(),
-            Err(e) => {
-                errors.push(format!("读取文件失败: {file_name} - {e}"));
-                continue;
-            }
-        };
-        let file_size = data.len();
-
-        if file_size > max_size {
-            errors.push(format!(
-                "文件 {} 超出大小限制（最大 {}MB）",
-                file_name,
-                max_size / 1024 / 1024
-            ));
-            continue;
-        }
-
-        if file_size == 0 {
-            errors.push(format!("文件为空: {file_name}"));
-            continue;
-        }
-
-        // 上传到 R2
-        match r2.upload(appeal_id, &file_name, &content_type, data).await {
-            Ok(key) => {
-                let category = r2_storage::file_category(&file_name);
-
-                // 将文件记录写入数据库
-                if let Err(e) = sqlx::query(
-                    r#"INSERT INTO appeal_files (id, appeal_id, file_name, file_size, content_type, storage_key, category)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
-                )
-                .bind(Uuid::new_v4())
-                .bind(appeal_id)
-                .bind(&file_name)
-                .bind(file_size as i64)
-                .bind(&content_type)
-                .bind(&key)
-                .bind(category)
-                .execute(&ctx.db.pool)
-                .await
-                {
-                    tracing::warn!(%e, "写入文件记录失败");
-                    // 文件已上传到 R2，数据库记录失败不影响上传结果
-                }
-
-                uploaded.push(serde_json::json!({
-                    "file_name": file_name,
-                    "file_size": file_size,
-                    "category": category,
-                }));
-            }
-            Err(e) => {
-                tracing::error!(%e, "R2 upload failed for {file_name}");
-                errors.push(format!("上传文件 {file_name} 失败，请稍后重试"));
-            }
-        }
-    }
-
-    if uploaded.is_empty() && errors.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "未选择可上传的文件"})),
-        ));
-    }
-
-    if uploaded.is_empty() && !errors.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": "所有文件上传失败",
-                "errors": errors,
-            })),
-        ));
-    }
-
-    Ok(Json(serde_json::json!({
-        "uploaded": uploaded,
-        "errors": if errors.is_empty() { None } else { Some(errors) },
-    })))
-}
-
 // QQ 机器人集成：获取待审核统计
 pub(crate) async fn qq_review_stats(
     State(ctx): State<AppCtx>,
@@ -763,7 +496,7 @@ pub(crate) async fn qq_review_stats(
     }
 
     // 获取待审核数量（包含所有类型）
-    let counts = dashboard_service::get_review_counts(&ctx.db, true)
+    let counts = dashboard_service::get_review_counts(&ctx.db)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "QQ 集成：获取待审核数量失败");
@@ -775,10 +508,8 @@ pub(crate) async fn qq_review_stats(
 
     Ok(Json(serde_json::json!({
         "whitelist": counts.whitelist,
-        "ban_appeal": counts.ban_appeal,
-        "player_report": counts.player_report,
-        "map_feedback": counts.map_feedback,
-        "total": counts.whitelist + counts.ban_appeal + counts.player_report + counts.map_feedback,
+        "abnormal_record": counts.abnormal_record,
+        "total": counts.whitelist + counts.abnormal_record,
     })))
 }
 
@@ -909,12 +640,7 @@ pub(crate) async fn qq_pending_all(
         page_size: Some(10),
     };
 
-    let (whitelist_result, appeals_result, reports_result, feedback_result) = tokio::join!(
-        whitelist_service::list_whitelist(&ctx.db, &query),
-        ban_appeal_service::list_appeals(&ctx.db, &query),
-        player_report_service::list_reports(&ctx.db, &query),
-        map_feedback_service::list_feedback(&ctx.db, &query),
-    );
+    let whitelist_result = whitelist_service::list_whitelist(&ctx.db, &query).await;
 
     // 格式化白名单申请
     let whitelist_items: Vec<serde_json::Value> = whitelist_result
@@ -932,66 +658,11 @@ pub(crate) async fn qq_pending_all(
         })
         .collect();
 
-    // 格式化封禁申诉
-    let appeal_items: Vec<serde_json::Value> = appeals_result
-        .map(|r| r.items)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|item| {
-            serde_json::json!({
-                "type": "ban_appeal",
-                "steam_id": item.steam_id,
-                "player_name": item.player_name,
-                "appeal_reason": item.appeal_reason,
-                "ban_reason": item.ban_reason,
-                "created_at": item.created_at,
-            })
-        })
-        .collect();
-
-    // 格式化玩家举报
-    let report_items: Vec<serde_json::Value> = reports_result
-        .map(|r| r.items)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|item| {
-            serde_json::json!({
-                "type": "player_report",
-                "target_steam_id": item.target_steam_id,
-                "target_player_name": item.target_player_name,
-                "report_reason": item.report_reason,
-                "created_at": item.created_at,
-            })
-        })
-        .collect();
-
-    // 格式化地图反馈
-    let feedback_items: Vec<serde_json::Value> = feedback_result
-        .map(|r| r.items)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|item| {
-            serde_json::json!({
-                "type": "map_feedback",
-                "feedback_type": item.feedback_type,
-                "steam_persona_name": item.steam_persona_name,
-                "detail": item.detail,
-                "created_at": item.created_at,
-            })
-        })
-        .collect();
-
     Ok(Json(serde_json::json!({
         "whitelist": whitelist_items,
-        "ban_appeal": appeal_items,
-        "player_report": report_items,
-        "map_feedback": feedback_items,
         "counts": {
             "whitelist": whitelist_items.len(),
-            "ban_appeal": appeal_items.len(),
-            "player_report": report_items.len(),
-            "map_feedback": feedback_items.len(),
-            "total": whitelist_items.len() + appeal_items.len() + report_items.len() + feedback_items.len(),
+            "total": whitelist_items.len(),
         }
     })))
 }

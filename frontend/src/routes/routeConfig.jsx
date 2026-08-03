@@ -8,8 +8,6 @@ const CommunityPage = lazy(() => import('../pages/community/CommunityPage.jsx').
 const RconPage = lazy(() => import('../pages/rcon/RconPage.jsx').then(m => ({ default: m.RconPage })));
 const WhitelistPage = lazy(() => import('../pages/whitelist/WhitelistPage.jsx').then(m => ({ default: m.WhitelistPage })));
 const BanPage = lazy(() => import('../pages/ban/BanPage.jsx').then(m => ({ default: m.BanPage })));
-const BanAppealPage = lazy(() => import('../pages/banAppeal/BanAppealPage.jsx').then(m => ({ default: m.BanAppealPage })));
-const PlayerReportPage = lazy(() => import('../pages/playerReport/PlayerReportPage.jsx').then(m => ({ default: m.PlayerReportPage })));
 const AbnormalRecordPage = lazy(() => import('../pages/abnormalRecord/AbnormalRecordPage.jsx').then(m => ({ default: m.AbnormalRecordPage })));
 const UsersPage = lazy(() => import('../pages/users/UsersPage.jsx').then(m => ({ default: m.UsersPage })));
 const LogsPage = lazy(() => import('../pages/logs/LogsPage.jsx').then(m => ({ default: m.LogsPage })));
@@ -20,7 +18,6 @@ const ExternalBanApiPage = lazy(() => import('../pages/api/ExternalBanApiPage.js
 const ExternalServerPage = lazy(() => import('../pages/external/ExternalServerPage.jsx').then(m => ({ default: m.ExternalServerPage })));
 const AccessLogPage = lazy(() => import('../pages/accessLog/AccessLogPage.jsx').then(m => ({ default: m.AccessLogPage })));
 const GlobalBanPage = lazy(() => import('../pages/globalBan/GlobalBanPage.jsx').then(m => ({ default: m.GlobalBanPage })));
-const MapFeedbackPage = lazy(() => import('../pages/mapFeedback/MapFeedbackPage.jsx').then(m => ({ default: m.MapFeedbackPage })));
 const PlayerDetailPage = lazy(() => import('../pages/playerDetail/PlayerDetailPage.jsx').then(m => ({ default: m.PlayerDetailPage })));
 const AuditPage = lazy(() => import('../pages/audit/AuditPage.jsx').then(m => ({ default: m.AuditPage })));
 const NotificationPage = lazy(() => import('../pages/notifications/NotificationPage.jsx').then(m => ({ default: m.NotificationPage })));
@@ -46,13 +43,10 @@ export const protectedRoutes = [
   { path: '/whitelist', element: <Lazy><WhitelistPage /></Lazy>, roles: ROUTE_ROLES.staff },
   { path: '/ban', element: <Lazy><BanPage /></Lazy>, roles: ROUTE_ROLES.staff },
   { path: '/player-detail', element: <Lazy><PlayerDetailPage /></Lazy>, roles: ROUTE_ROLES.staff },
-  { path: '/ban-appeal', element: <Lazy><BanAppealPage /></Lazy>, roles: ROUTE_ROLES.admin },
-  { path: '/player-reports', element: <Lazy><PlayerReportPage /></Lazy>, roles: ROUTE_ROLES.admin },
   { path: '/abnormal-records', element: <Lazy><AbnormalRecordPage /></Lazy>, roles: ROUTE_ROLES.admin },
   { path: '/users', element: <Lazy><UsersPage /></Lazy>, roles: ROUTE_ROLES.staff },
   { path: '/access-logs', element: <Lazy><AccessLogPage /></Lazy>, roles: ROUTE_ROLES.admin },
   { path: '/global-bans', element: <Lazy><GlobalBanPage /></Lazy>, roles: ROUTE_ROLES.admin },
-  { path: '/map-feedback', element: <Lazy><MapFeedbackPage /></Lazy>, roles: ROUTE_ROLES.admin },
   { path: '/audit', element: <Lazy><AuditPage /></Lazy>, roles: ROUTE_ROLES.staff },
   { path: '/notifications', element: <Lazy><NotificationPage /></Lazy>, roles: ROUTE_ROLES.staff },
   { path: '/logs', element: <Lazy><LogsPage /></Lazy>, roles: ROUTE_ROLES.admin },

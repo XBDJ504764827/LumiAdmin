@@ -71,11 +71,8 @@ export function sidebarSections(role) {
         { path: '/community', label: '社区组管理', icon: icons.community },
         { path: '/whitelist', label: '白名单管理', icon: icons.whitelist, pendingKey: 'whitelist' },
         { path: '/ban', label: '封禁管理', icon: icons.ban },
-        ...(canUseAdminTools ? [{ path: '/map-feedback', label: '地图反馈', icon: icons.table, pendingKey: 'mapFeedback' }] : []),
         { path: '/player-detail', label: '玩家详情', icon: icons.playerDetail },
         ...(canReviewReports ? [
-          { path: '/ban-appeal', label: '封禁申诉', icon: icons.banAppeal, pendingKey: 'banAppeal' },
-          { path: '/player-reports', label: '玩家举报', icon: icons.playerReport, pendingKey: 'playerReport' },
           { path: '/abnormal-records', label: '异常记录审核', icon: icons.abnormalRecord, pendingKey: 'abnormalRecord' },
         ] : []),
         ...(canSeeUserManagement ? [{ path: '/users', label: '网站用户管理', icon: icons.users }] : []),

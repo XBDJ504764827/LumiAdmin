@@ -111,7 +111,7 @@ const auditDelete = await call(`/${auditKey}`, {
 assert.equal(auditDelete.status, 200);
 assert.equal(await bucket.head(auditKey), null);
 
-const evidenceKey = "player-reports/8d69604c-e3f3-4555-ba07-bc3dfd6d0a9a/11111111-2222-4333-8444-555555555555-proof.png";
+const evidenceKey = "bans/8d69604c-e3f3-4555-ba07-bc3dfd6d0a9a/11111111-2222-4333-8444-555555555555-proof.png";
 const evidenceUpload = await call("/internal/upload", {
   method: "POST",
   headers: {

@@ -4,7 +4,7 @@
 
 - `wr/{mode}/{map}/{route}.replay`：全球 WR 录像，可公开下载。
 - `audit/{recordId}/{idempotencyKey}.replay`：异常审核录像，Worker 下载接口要求 API Key。
-- `appeals/`、`player-reports/`、`bans/`、`abnormal-records/`：网站证据文件，使用短时 HMAC 签名下载。
+- `bans/`、`abnormal-records/`：网站证据文件，使用短时 HMAC 签名下载。
 
 部署时将 R2 binding 命名为 `REPLAY_BUCKET`。为了兼容现有部署，Worker 也会识别
 `errorplayer` 和 `cngokz-replay` binding。`bucket_name` 可以填写现有 WR Bucket 或

@@ -366,7 +366,12 @@ pub async fn get_player_detail(
         fetch_audit_logs(db, &search_terms),
     )?;
 
-    let display_name = display_name(&whitelists, &bans, &online_records, &player_sessions);
+    let display_name = display_name(
+        &whitelists,
+        &bans,
+        &online_records,
+        &player_sessions,
+    );
     let profile = PlayerProfile {
         steamid64: steamid64.clone(),
         steamid: identity.steamid,

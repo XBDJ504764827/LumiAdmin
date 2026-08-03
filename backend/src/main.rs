@@ -168,7 +168,10 @@ async fn main() -> anyhow::Result<()> {
                         Method::DELETE,
                         Method::OPTIONS,
                     ])
-                    .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
+                    .allow_headers([
+                        header::AUTHORIZATION,
+                        header::CONTENT_TYPE,
+                    ]);
                 if let Some(origin) = cors_origin {
                     if let Ok(parsed) = origin.parse::<axum::http::HeaderValue>() {
                         cors = cors.allow_origin(parsed);

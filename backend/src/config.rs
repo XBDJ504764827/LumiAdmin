@@ -57,6 +57,12 @@ pub struct Config {
     pub appeal_file_max_size_bytes: usize,
     // QQ 机器人集成令牌（用于插件查询待审核数量等只读统计接口）
     pub qq_integration_token: Option<String>,
+    // LumiBot（QQ 机器人事件接收中心）上报配置
+    pub lumi_bot_api_url: Option<String>,
+    pub lumi_bot_api_key: Option<String>,
+    pub lumi_bot_sync_interval_secs: u64,
+    pub lumi_bot_max_attempts: u32,
+    pub lumi_bot_batch_size: usize,
 }
 
 impl Config {
@@ -201,6 +207,16 @@ impl Config {
             qq_integration_token: std::env::var("QQ_INTEGRATION_TOKEN")
                 .ok()
                 .filter(|v| !v.is_empty()),
+            // LumiBot 配置：未配置 URL/Key 时上报功能禁用（事件不入队、后台任务不启动）
+            lumi_bot_api_url: std::env::var("LUMI_BOT_API_URL")
+                .ok()
+                .filter(|v| !v.is_empty()),
+            lumi_bot_api_key: std::env::var("LUMI_BOT_API_KEY")
+                .ok()
+                .filter(|v| !v.is_empty()),
+            lumi_bot_sync_interval_secs: env_u64("LUMI_BOT_SYNC_INTERVAL_SECS", 1800),
+            lumi_bot_max_attempts: env_u64("LUMI_BOT_MAX_ATTEMPTS", 5) as u32,
+            lumi_bot_batch_size: env_u64("LUMI_BOT_BATCH_SIZE", 100) as usize,
         };
 
         // 跨字段校验
@@ -325,10 +341,16 @@ impl Config {
             app_env = %config.app_env,
             is_production = config.is_production,
             r2_enabled = config.r2_storage_enabled(),
+            lumi_bot_enabled = config.lumi_bot_enabled(),
             "应用配置已加载"
         );
 
         config
+    }
+
+    /// LumiBot 事件上报是否启用（需同时配置 API URL 与 API Key）
+    pub fn lumi_bot_enabled(&self) -> bool {
+        self.lumi_bot_api_url.is_some() && self.lumi_bot_api_key.is_some()
     }
 
     pub fn r2_storage_enabled(&self) -> bool {

@@ -150,6 +150,7 @@ LumiAdmin/
 | 过期服务器清理 | 300s | 清理超时未上报的在线玩家并标记服务器为休眠/待上报 |
 | 地图等级同步 | 6h | 从 MySQL 同步地图难度等级数据 |
 | 限流器清理 | 60s | 清理过期的限流计数器 |
+| LumiBot 事件上报 | 1800s（可配置） | 将队列中的白名单新申请等事件集中上报给 QQ 机器人（LumiBot） |
 
 ---
 
@@ -270,6 +271,21 @@ R2 信息时，业务记录本身仍可提交，只有证据文件上传不可�
 | 变量 | 说明 |
 |------|------|
 | `MYSQL_DATABASE_URL` | MySQL 连接字符串（用于地图等级同步，可选） |
+
+### LumiBot（QQ 机器人事件上报）
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `LUMI_BOT_API_URL` | 空（禁用） | LumiBot 事件接收中心地址，如 `http://127.0.0.1:8080`；与 `LUMI_BOT_API_KEY` 同时配置后启用 |
+| `LUMI_BOT_API_KEY` | 空（禁用） | LumiBot 分配的 API Key（`X-API-Key` 请求头，建议向 LumiBot 申请专属 `key-admin`） |
+| `LUMI_BOT_SYNC_INTERVAL_SECS` | `1800` | 队列集中上报周期（秒），即每 30 分钟批量上报一次 |
+| `LUMI_BOT_MAX_ATTEMPTS` | `5` | 单条事件最大重试次数，超过后标记 `failed` 不再自动重试 |
+| `LUMI_BOT_BATCH_SIZE` | `100` | 每轮最多上报的事件条数 |
+
+启用后，玩家在公开页面提交的白名单申请会写入 `lumi_bot_event_queue` 队列，
+后台任务按周期集中调用 `POST {LUMI_BOT_API_URL}/api/v1/events`
+（`source: LumiAdmin`，`event_type: WHITELIST_REQUEST_CREATED`）上报，
+由 LumiBot 再通知 QQ 管理员/用户。
 
 ### 数据库迁移
 

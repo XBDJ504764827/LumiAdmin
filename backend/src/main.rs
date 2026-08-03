@@ -67,6 +67,8 @@ async fn main() -> anyhow::Result<()> {
     services::community_service::start_stale_cleanup_loop(db.clone());
     // 启动通知清理，每 24 小时清理 30 天前的已读通知
     services::notification_service::start_cleanup_loop(db.clone(), 86400);
+    // 启动 LumiBot（QQ 机器人）事件上报队列同步（新白名单申请每 30 分钟集中上报）
+    services::lumi_bot_service::start_sync_loop(db.clone(), config.clone());
     // 启动服务器状态历史清理
     services::server_status_service::start_status_history_cleanup_loop(
         db.clone(),

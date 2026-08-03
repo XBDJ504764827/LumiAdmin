@@ -19,6 +19,7 @@ pub mod external_server_service;
 pub mod global_ban_service;
 pub mod gokz_cache;
 pub mod log_service;
+pub mod lumi_bot_service;
 pub mod map_tier_service;
 pub mod notification_service;
 pub mod observability_service;

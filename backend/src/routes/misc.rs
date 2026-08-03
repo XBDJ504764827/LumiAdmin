@@ -42,10 +42,9 @@ pub(crate) async fn review_counts(
     State(ctx): State<AppCtx>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let actor = current_operator(&ctx, &headers).await?;
-    let include_reports = matches!(actor.role.as_str(), "admin" | "developer");
+    let _actor = current_operator(&ctx, &headers).await?;
 
-    let counts = dashboard_service::get_review_counts(&ctx.db, include_reports)
+    let counts = dashboard_service::get_review_counts(&ctx.db)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "加载待审核数量失败");

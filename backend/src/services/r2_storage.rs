@@ -65,18 +65,6 @@ impl R2Storage {
         })
     }
 
-    /// 上传文件到 R2，返回存储 key
-    pub async fn upload(
-        &self,
-        appeal_id: Uuid,
-        file_name: &str,
-        content_type: &str,
-        data: Vec<u8>,
-    ) -> anyhow::Result<String> {
-        self.upload_with_prefix("appeals", appeal_id, file_name, content_type, data)
-            .await
-    }
-
     /// 上传文件到 R2 指定业务目录，返回存储 key
     pub async fn upload_with_prefix(
         &self,
@@ -474,8 +462,8 @@ mod tests {
             }
         };
 
-        let test_data = b"Hello, R2! This is a test file for LumiAdmin ban appeal upload.".to_vec();
-        let appeal_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
+        let test_data = b"Hello, R2! This is a test file for LumiAdmin upload.".to_vec();
+        let ban_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
         let file_name = "test-upload.txt";
         let content_type = "text/plain";
 
@@ -489,10 +477,10 @@ mod tests {
                 println!("  Bucket: {bucket}");
             }
         }
-        println!("  Key: appeals/{}/{}", appeal_id, file_name);
+        println!("  Key: bans/{}/{}", ban_id, file_name);
 
         match r2
-            .upload(appeal_id, file_name, content_type, test_data)
+            .upload_with_prefix("bans", ban_id, file_name, content_type, test_data)
             .await
         {
             Ok(key) => {

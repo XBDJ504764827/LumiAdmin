@@ -14,7 +14,7 @@ export default {
         return json({ error: "R2 replay bucket binding is not configured" }, 500);
       }
 
-      // LumiAdmin 后端通过此内部接口上传举报、封禁和申诉证据。
+      // LumiAdmin 后端通过此内部接口上传封禁和异常记录证据。
       if (request.method === "POST" && url.pathname === "/internal/upload") {
         if (!isAuthorized(request, env)) {
           return unauthorized();
@@ -331,7 +331,7 @@ function isSupportedObjectKey(key) {
 }
 
 function isWebsiteEvidenceKey(key) {
-  return /^(appeals|player-reports|bans|abnormal-records)\/[0-9a-f-]{36}\/[A-Za-z0-9._-]{1,512}$/i.test(key);
+  return /^(bans|abnormal-records)\/[0-9a-f-]{36}\/[A-Za-z0-9._-]{1,512}$/i.test(key);
 }
 
 function isPrivateObjectKey(key) {

@@ -70,14 +70,6 @@ impl Database {
         .execute(&self.pool)
         .await?;
 
-        // ban_appeals 复合索引
-        sqlx::query(
-            r#"CREATE INDEX IF NOT EXISTS idx_ban_appeals_ban_id_status
-           ON ban_appeals (ban_id, status)"#,
-        )
-        .execute(&self.pool)
-        .await?;
-
         #[cfg(not(test))]
         self.migrate_query_performance_indexes().await?;
 
@@ -191,14 +183,10 @@ impl Database {
         let query_perf_indexes = [
             r#"CREATE INDEX IF NOT EXISTS idx_notifications_user_created
            ON notifications (user_id, created_at DESC)"#,
-            r#"CREATE INDEX IF NOT EXISTS idx_ban_appeals_status_created
-           ON ban_appeals (status, created_at DESC)"#,
             r#"CREATE INDEX IF NOT EXISTS idx_audit_logs_source_created
            ON audit_logs (source, created_at DESC)"#,
             r#"CREATE INDEX IF NOT EXISTS idx_audit_logs_success_created
            ON audit_logs (success, created_at DESC)"#,
-            r#"CREATE INDEX IF NOT EXISTS idx_player_reports_created
-           ON player_reports (created_at DESC)"#,
         ];
         for sql in query_perf_indexes {
             sqlx::query(sql).execute(&self.pool).await?;
@@ -222,22 +210,6 @@ impl Database {
                 format!(
                     r#"CREATE INDEX IF NOT EXISTS idx_whitelist_requests_nickname_trgm
                    ON whitelist_requests USING gin (nickname {trgm_ops})"#
-                ),
-                format!(
-                    r#"CREATE INDEX IF NOT EXISTS idx_player_reports_target_steam_id_trgm
-                   ON player_reports USING gin (target_steam_id {trgm_ops})"#
-                ),
-                format!(
-                    r#"CREATE INDEX IF NOT EXISTS idx_player_reports_target_player_name_trgm
-                   ON player_reports USING gin (target_player_name {trgm_ops}) WHERE target_player_name IS NOT NULL"#
-                ),
-                format!(
-                    r#"CREATE INDEX IF NOT EXISTS idx_ban_appeals_steam_id_trgm
-                   ON ban_appeals USING gin (steam_id {trgm_ops})"#
-                ),
-                format!(
-                    r#"CREATE INDEX IF NOT EXISTS idx_ban_appeals_player_name_trgm
-                   ON ban_appeals USING gin (player_name {trgm_ops})"#
                 ),
                 format!(
                     r#"CREATE INDEX IF NOT EXISTS idx_users_username_trgm

@@ -56,4 +56,26 @@ impl Database {
 
         Ok(())
     }
+
+    pub(super) async fn migrate_player_internal_notes_schema(&self) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"CREATE TABLE IF NOT EXISTS player_internal_notes (
+          steamid64 TEXT PRIMARY KEY,
+          note TEXT NOT NULL DEFAULT '',
+          tags TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+          updated_by TEXT,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )"#,
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            r#"CREATE INDEX IF NOT EXISTS idx_player_internal_notes_updated_at
+           ON player_internal_notes (updated_at DESC)"#,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }

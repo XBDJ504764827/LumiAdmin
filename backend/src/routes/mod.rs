@@ -3,17 +3,14 @@ pub mod access;
 pub mod auth;
 pub mod ban;
 pub mod ban_api;
-pub mod ban_appeal;
 pub mod community;
 pub mod external_ban_api;
 pub mod external_server;
 pub mod global_ban;
-pub mod map_feedback;
 pub mod misc;
 pub mod notification;
 pub mod ops;
 pub mod player_detail;
-pub mod player_report;
 pub mod plugin;
 pub mod public;
 #[cfg(test)]
@@ -338,38 +335,6 @@ pub fn router(
             "/api/integration/bans/check",
             post(ban_api::check_integration_ban),
         )
-        // -- ban appeals --
-        .route("/api/ban-appeals", get(ban_appeal::list_appeals))
-        .route(
-            "/api/ban-appeals/:id/approve",
-            post(ban_appeal::approve_appeal),
-        )
-        .route(
-            "/api/ban-appeals/:id/reject",
-            post(ban_appeal::reject_appeal),
-        )
-        .route(
-            "/api/ban-appeals/:id/files",
-            get(ban_appeal::list_appeal_files).post(ban_appeal::upload_appeal_files),
-        )
-        .route(
-            "/api/ban-appeals/files/:file_id/url",
-            get(ban_appeal::get_appeal_file_url),
-        )
-        // -- player reports --
-        .route("/api/player-reports", get(player_report::list_reports))
-        .route(
-            "/api/player-reports/:id/review",
-            post(player_report::review_report),
-        )
-        .route(
-            "/api/player-reports/:id/ban",
-            post(player_report::ban_report),
-        )
-        .route(
-            "/api/player-reports/:id/files",
-            get(player_report::list_report_files).post(player_report::upload_report_files),
-        )
         // -- abnormal records --
         .route("/api/abnormal-records", get(abnormal_record::list_records))
         .route(
@@ -485,53 +450,6 @@ pub fn router(
         .route("/api/public/bans", get(public::public_bans))
         .route("/api/public/steam/resolve", post(public::resolve_steam))
         .route("/api/public/bans/query", post(public::query_active_bans))
-        .route(
-            "/api/public/ban-appeals",
-            get(public::public_ban_appeals_info).post(public::submit_ban_appeal),
-        )
-        .route(
-            "/api/public/ban-appeals/",
-            get(public::public_ban_appeals_info).post(public::submit_ban_appeal),
-        )
-        .route(
-            "/api/public/ban-appeals/query",
-            post(public::query_appeal_status),
-        )
-        .route(
-            "/api/public/ban-appeals/submit",
-            post(public::submit_ban_appeal),
-        )
-        .route(
-            "/api/public/ban-appeals/:id/files",
-            post(public::upload_appeal_files),
-        )
-        .route(
-            "/api/public/player-reports",
-            post(player_report::submit_player_report),
-        )
-        .route(
-            "/api/public/player-reports/:id/files",
-            post(player_report::upload_player_report_files),
-        )
-        .route(
-            "/api/public/player-reports/query",
-            post(player_report::query_report_status),
-        )
-        // -- public: map feedback --
-        .route(
-            "/api/public/map-feedback",
-            post(map_feedback::submit_feedback),
-        )
-        .route(
-            "/api/public/map-feedback/query",
-            post(map_feedback::query_feedback_status),
-        )
-        // -- admin: map feedback --
-        .route("/api/map-feedback", get(map_feedback::list_feedback))
-        .route(
-            "/api/map-feedback/:id/review",
-            post(map_feedback::review_feedback),
-        )
         .route(
             "/api/public/global-bans/:steamid64",
             get(public::get_global_bans),

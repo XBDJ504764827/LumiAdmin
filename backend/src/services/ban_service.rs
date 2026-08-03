@@ -442,7 +442,7 @@ pub async fn find_ban(db: &Database, id: Uuid) -> anyhow::Result<BanRecord> {
     .map_err(Into::into)
 }
 
-/// 按 SteamID64 查询该玩家的所有活跃封禁记录（供公开申诉页使用）
+/// 按 SteamID64 查询该玩家的所有活跃封禁记录（供封禁公示页使用）
 pub async fn find_active_bans_by_steamid(
     db: &Database,
     steamid64: &str,

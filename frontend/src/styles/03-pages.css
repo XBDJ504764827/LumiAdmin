@@ -321,58 +321,6 @@
 @keyframes toast-in { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: translateX(0); } }
 @keyframes toast-out { from { opacity: 1; transform: translateX(0); } to { opacity: 0; transform: translateX(40px); } }
 
-/* ── 地图反馈类型选择卡片 ── */
-.feedback-type-card {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  width: 100%;
-  padding: 14px 16px;
-  border-radius: var(--r-md);
-  border: 1px solid var(--border);
-  background: var(--surface);
-  text-align: left;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-.feedback-type-card:hover {
-  border-color: var(--border2);
-  background: var(--bg);
-}
-.feedback-type-card.active {
-  border-color: var(--accent);
-  background: var(--nav-active-bg);
-  box-shadow: 0 0 0 1px var(--accent);
-}
-.feedback-type-card:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-.feedback-type-icon {
-  font-size: 20px;
-  line-height: 1;
-  flex-shrink: 0;
-  margin-top: 2px;
-}
-.feedback-type-body {
-  flex: 1;
-  min-width: 0;
-}
-.feedback-type-label {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text);
-  margin-bottom: 2px;
-}
-.feedback-type-card.active .feedback-type-label {
-  color: var(--accent);
-}
-.feedback-type-desc {
-  font-size: 12px;
-  color: var(--text3);
-  line-height: 1.5;
-}
-
 
 
 /* ── from: 09-login.css (347 lines) ── */
@@ -992,28 +940,6 @@
 
 
 /* ── from: 11-ban-components.css (405 lines) ── */
-/* ── Ban Appeal Record Card ── */
-.ban-appeal-record {
-  display: flex;
-  gap: 12px;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  transition: all 0.15s;
-  background: var(--surface);
-}
-
-.ban-appeal-record:hover {
-  border-color: var(--accent2);
-  background: var(--surface2);
-}
-
-.ban-appeal-record.selected {
-  border-color: var(--accent2);
-  background: var(--info-bg);
-  box-shadow: 0 0 0 1px var(--accent2);
-}
-
 /* ── Ban File Upload Progress ── */
 .ban-upload-progress {
   padding: 10px 12px;

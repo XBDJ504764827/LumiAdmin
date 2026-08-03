@@ -9,30 +9,16 @@ import { buildBanFormFromRecord } from './banForm.js';
 import { formatBanDuration, formatBanSource, formatExpiresAt } from './banDisplay.js';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
-import { useLocation, useNavigate } from 'react-router-dom';
 import { formatChinaDateTime } from '../../shared/time.js';
-import { notifyPendingReviewsUpdated } from '../../hooks/usePendingReviewIndicators.js';
 import { BanApiModal } from './BanApiModal.jsx';
 import { BanDetailModal } from './BanDetailModal.jsx';
 import { BanFormModal } from './BanFormModal.jsx';
 import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 
-function buildBanFormFromPlayerReport(report) {
-  return {
-    player: report.player ?? '',
-    steam_id: report.steamId ?? '',
-    ban_type: 'steam',
-    ip_address: '',
-    reason: report.reason ? `玩家举报：${report.reason}` : '',
-  };
-}
-
 export function BanPage() {
   const { session } = useAuth();
   const { confirm, dialog } = useConfirmDialog();
   const { toast } = useToast();
-  const location = useLocation();
-  const navigate = useNavigate();
   const token = session?.token ?? null;
 
   // 列表状态
@@ -59,7 +45,6 @@ export function BanPage() {
   const [formMode, setFormMode] = useState('create');
   const [editingBanId, setEditingBanId] = useState(null);
   const [prefillForm, setPrefillForm] = useState(null);
-  const [reportReview, setReportReview] = useState(null);
 
   // 详情弹窗状态
   const [detailItem, setDetailItem] = useState(null);
@@ -73,35 +58,16 @@ export function BanPage() {
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
 
-  // 从举报页跳转预填
-  React.useEffect(() => {
-    const prefill = location.state?.playerReportPrefill;
-    if (!prefill || !canCreate) return;
-    React.startTransition(() => {
-      setFormMode('create');
-      setEditingBanId(null);
-      setPrefillForm(buildBanFormFromPlayerReport(prefill));
-      setReportReview({
-        reportId: prefill.reportId,
-        player: prefill.player || prefill.steamId,
-      });
-      setFormOpen(true);
-    });
-    navigate(location.pathname, { replace: true, state: null });
-  }, [location.state, location.pathname, navigate, canCreate]);
-
   function openCreateModal() {
     setFormMode('create');
     setEditingBanId(null);
     setPrefillForm(null);
-    setReportReview(null);
     setFormOpen(true);
   }
 
   async function openEditModal(item) {
     setFormMode('edit');
     setEditingBanId(item.id);
-    setReportReview(null);
     try {
       const result = await api.getBan(token, item.id);
       setPrefillForm(buildBanFormFromRecord(result.item ?? item));
@@ -115,15 +81,11 @@ export function BanPage() {
     setFormMode('reban');
     setEditingBanId(null);
     setPrefillForm(buildBanFormFromRecord(item));
-    setReportReview(null);
     setFormOpen(true);
   }
 
-  function handleFormSuccess({ mode, uploadedFiles, uploadWarning, reportReview: rr }) {
+  function handleFormSuccess({ mode, uploadedFiles, uploadWarning }) {
     refetch();
-    if (rr?.reportId) {
-      notifyPendingReviewsUpdated({ source: 'playerReport', action: 'ban' });
-    }
     toast({
       title: mode === 'edit' ? '保存成功' : '添加成功',
       message: mode === 'edit'
@@ -132,9 +94,7 @@ export function BanPage() {
           ? '新封禁记录已添加，辅助文件已上传。'
           : uploadWarning
             ? `新封禁记录已添加，但辅助文件上传失败：${uploadWarning}`
-            : rr?.reportId
-              ? '新封禁记录已添加，玩家举报已标记为已封禁。'
-              : '新封禁记录已添加。',
+            : '新封禁记录已添加。',
     });
   }
 
@@ -264,7 +224,6 @@ export function BanPage() {
         open={formOpen}
         mode={formMode}
         editingBanId={editingBanId}
-        reportReview={reportReview}
         prefillForm={prefillForm}
         onClose={() => setFormOpen(false)}
         onSuccess={handleFormSuccess}

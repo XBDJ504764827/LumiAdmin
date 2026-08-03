@@ -1,7 +1,6 @@
 use crate::{
     db::Database,
     services::{
-        map_feedback_service::{query_feedback_by_steam_id, MapFeedbackItem},
         player_risk_service::{self, PlayerRiskProfile},
         r2_storage::R2Storage,
         steam_service::{ParsedSteamIdentity, SteamResolver},
@@ -19,8 +18,6 @@ pub struct PlayerDetail {
     pub risk_profile: PlayerRiskProfile,
     pub whitelist: Vec<WhitelistRecord>,
     pub bans: Vec<PlayerBanRecord>,
-    pub appeals: Vec<PlayerAppealRecord>,
-    pub reports: Vec<PlayerReportRecord>,
     pub online_records: Vec<OnlineRecord>,
     pub player_sessions: Vec<PlayerServerSession>,
     pub access_logs: Vec<PlayerAccessRecord>,
@@ -28,7 +25,6 @@ pub struct PlayerDetail {
     pub admin_actions: Vec<AdminAction>,
     pub audit_logs: Vec<PlayerAuditLog>,
     pub evidence_files: Vec<EvidenceFile>,
-    pub map_feedback: Vec<MapFeedbackItem>,
     pub internal_profile: Option<PlayerInternalProfile>,
     pub timeline: Vec<TimelineEvent>,
 }
@@ -60,8 +56,6 @@ pub struct PlayerSummary {
     pub whitelist_status: Option<String>,
     pub active_ban_count: usize,
     pub ban_count: usize,
-    pub appeal_count: usize,
-    pub report_count: usize,
     pub online_server_count: usize,
     pub current_online_count: usize,
     pub access_log_count: usize,
@@ -129,38 +123,6 @@ pub struct PlayerBanRecord {
     pub removed_reason: Option<String>,
     pub removed_by: Option<String>,
     pub removed_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
-pub struct PlayerAppealRecord {
-    pub id: Uuid,
-    pub ban_id: Uuid,
-    pub steam_id: String,
-    pub player_name: String,
-    pub appeal_reason: String,
-    pub status: String,
-    pub reviewed_by: Option<String>,
-    pub review_note: Option<String>,
-    pub reviewed_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-    pub ban_reason: Option<String>,
-    pub ban_type: Option<String>,
-    pub ban_operator_name: Option<String>,
-    pub ban_server_name: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
-pub struct PlayerReportRecord {
-    pub id: Uuid,
-    pub target_steam_id: String,
-    pub target_player_name: Option<String>,
-    pub reporter_contact: Option<String>,
-    pub report_reason: String,
-    pub status: String,
-    pub reviewed_by: Option<String>,
-    pub review_note: Option<String>,
-    pub reviewed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -372,43 +334,29 @@ pub async fn get_player_detail(
     let (
         whitelists,
         bans,
-        appeals,
-        reports,
         online_records,
         player_sessions,
         access_logs,
         ip_history,
-        map_feedback,
         internal_profile,
         risk_profile,
     ) = tokio::try_join!(
         fetch_whitelist_records(db, &steamid64),
         fetch_ban_records(db, &steamid64),
-        fetch_appeal_records(db, &steamid64),
-        fetch_report_records(db, &steamid64),
         fetch_online_records(db, &steamid64),
         fetch_player_sessions(db, &steamid64),
         fetch_access_records(db, &steamid64),
         fetch_ip_history(db, &steamid64),
-        async {
-            Ok::<_, anyhow::Error>(
-                query_feedback_by_steam_id(db, &steamid64)
-                    .await
-                    .unwrap_or_default(),
-            )
-        },
         fetch_internal_profile(db, &steamid64),
         player_risk_service::build_player_risk_profile(db, &steamid64),
     )?;
-    // evidence_files 依赖 bans/appeals/reports，需在第一批完成后执行
-    let evidence_files = fetch_evidence_files(db, r2, &bans, &appeals, &reports).await?;
+    // evidence_files 依赖 bans，需在第一批完成后执行
+    let evidence_files = fetch_evidence_files(db, r2, &bans).await?;
 
     let search_terms = build_search_terms(SearchTermSources {
         identity: &identity,
         whitelists: &whitelists,
         bans: &bans,
-        appeals: &appeals,
-        reports: &reports,
         online_records: &online_records,
         player_sessions: &player_sessions,
         access_logs: &access_logs,
@@ -421,8 +369,6 @@ pub async fn get_player_detail(
     let display_name = display_name(
         &whitelists,
         &bans,
-        &appeals,
-        &reports,
         &online_records,
         &player_sessions,
     );
@@ -476,8 +422,6 @@ pub async fn get_player_detail(
         whitelist_status: whitelists.first().map(|item| item.status.clone()),
         active_ban_count: bans.iter().filter(|ban| is_active_ban(ban)).count(),
         ban_count: bans.len(),
-        appeal_count: appeals.len(),
-        report_count: reports.len(),
         online_server_count: online_records.len(),
         current_online_count: online_records.len(),
         access_log_count: access_logs.len(),
@@ -495,15 +439,12 @@ pub async fn get_player_detail(
     let timeline = build_timeline(
         &whitelists,
         &bans,
-        &appeals,
-        &reports,
         &online_records,
         &player_sessions,
         &access_logs,
         &admin_actions,
         &audit_logs,
         &evidence_files,
-        &map_feedback,
     );
 
     Ok(PlayerDetail {
@@ -512,8 +453,6 @@ pub async fn get_player_detail(
         risk_profile,
         whitelist: whitelists,
         bans,
-        appeals,
-        reports,
         online_records,
         player_sessions,
         access_logs,
@@ -521,7 +460,6 @@ pub async fn get_player_detail(
         admin_actions,
         audit_logs,
         evidence_files,
-        map_feedback,
         internal_profile,
         timeline,
     })
@@ -685,10 +623,6 @@ async fn lookup_steamid_by_contact(db: &Database, contact: &str) -> anyhow::Resu
     let row: Option<(String,)> = sqlx::query_as(
         r#"SELECT steam_id64 FROM (
             SELECT steamid64 AS steam_id64 FROM whitelist_requests WHERE contact ILIKE $1
-            UNION
-            SELECT steam_id AS steam_id64 FROM ban_appeals WHERE contact ILIKE $1
-            UNION
-            SELECT steam_id AS steam_id64 FROM map_feedback WHERE contact ILIKE $1
         ) AS ids LIMIT 1"#,
     )
     .bind(&pattern)
@@ -883,62 +817,6 @@ async fn fetch_player_candidate_rows(
             ORDER BY pal.created_at DESC
             LIMIT 80
         ) access_matches
-        UNION ALL
-        SELECT * FROM (
-            SELECT pr.target_steam_id AS steamid64,
-                   NULLIF(pr.target_player_name, '') AS display_name,
-                   '举报'::TEXT AS source,
-                   NULL::TEXT AS whitelist_status,
-                   pr.created_at AS last_seen_at
-            FROM player_reports pr
-            WHERE pr.target_steam_id IS NOT NULL
-              AND btrim(pr.target_steam_id) <> ''
-              AND (
-                pr.target_steam_id = NULLIF($2, '')
-                OR pr.target_steam_id ILIKE $1 ESCAPE '\'
-                OR pr.target_player_name ILIKE $1 ESCAPE '\'
-              )
-            ORDER BY pr.created_at DESC
-            LIMIT 80
-        ) report_matches
-        UNION ALL
-        SELECT * FROM (
-            SELECT ba.steam_id AS steamid64,
-                   NULLIF(ba.player_name, '') AS display_name,
-                   '申诉'::TEXT AS source,
-                   NULL::TEXT AS whitelist_status,
-                   ba.created_at AS last_seen_at
-            FROM ban_appeals ba
-            WHERE ba.steam_id IS NOT NULL
-              AND btrim(ba.steam_id) <> ''
-              AND (
-                ba.steam_id = NULLIF($2, '')
-                OR ba.steam_id ILIKE $1 ESCAPE '\'
-                OR ba.player_name ILIKE $1 ESCAPE '\'
-                OR ba.contact ILIKE $1 ESCAPE '\'
-              )
-            ORDER BY ba.created_at DESC
-            LIMIT 80
-        ) appeal_matches
-        UNION ALL
-        SELECT * FROM (
-            SELECT mf.steam_id AS steamid64,
-                   NULLIF(mf.steam_persona_name, '') AS display_name,
-                   '地图反馈'::TEXT AS source,
-                   NULL::TEXT AS whitelist_status,
-                   mf.created_at AS last_seen_at
-            FROM map_feedback mf
-            WHERE mf.steam_id IS NOT NULL
-              AND btrim(mf.steam_id) <> ''
-              AND (
-                mf.steam_id = NULLIF($2, '')
-                OR mf.steam_id ILIKE $1 ESCAPE '\'
-                OR mf.steam_persona_name ILIKE $1 ESCAPE '\'
-                OR mf.contact ILIKE $1 ESCAPE '\'
-              )
-            ORDER BY mf.created_at DESC
-            LIMIT 80
-        ) feedback_matches
         UNION ALL
         SELECT * FROM (
             SELECT gb.steam_id64,
@@ -1169,75 +1047,6 @@ async fn fetch_ban_records(db: &Database, steamid64: &str) -> anyhow::Result<Vec
            ) removed_user ON true
            WHERE br.steam_id = $1
            ORDER BY br.created_at DESC
-           LIMIT 100"#,
-    )
-    .bind(steamid64)
-    .fetch_all(&db.pool)
-    .await?;
-    Ok(rows)
-}
-
-async fn fetch_appeal_records(
-    db: &Database,
-    steamid64: &str,
-) -> anyhow::Result<Vec<PlayerAppealRecord>> {
-    let rows = sqlx::query_as::<_, PlayerAppealRecord>(
-        r#"SELECT ba.id, ba.ban_id, ba.steam_id, ba.player_name, ba.appeal_reason,
-                  ba.status, COALESCE(reviewer_user.display_name, ba.reviewed_by) AS reviewed_by,
-                  ba.review_note, ba.reviewed_at, ba.created_at,
-                  br.reason AS ban_reason, br.ban_type,
-                  COALESCE(ban_operator_user.display_name, br.operator_name) AS ban_operator_name,
-                  br.server_name AS ban_server_name
-           FROM ban_appeals ba
-           LEFT JOIN ban_records br ON br.id = ba.ban_id
-           LEFT JOIN LATERAL (
-             SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
-             FROM users u
-             WHERE u.username = ba.reviewed_by
-                OR u.display_name = ba.reviewed_by
-                OR NULLIF(u.remark, '') = ba.reviewed_by
-             ORDER BY CASE WHEN u.username = ba.reviewed_by THEN 0 WHEN u.display_name = ba.reviewed_by THEN 1 ELSE 2 END
-             LIMIT 1
-           ) reviewer_user ON true
-           LEFT JOIN LATERAL (
-             SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
-             FROM users u
-             WHERE u.username = br.operator_name
-                OR u.display_name = br.operator_name
-                OR NULLIF(u.remark, '') = br.operator_name
-             ORDER BY CASE WHEN u.username = br.operator_name THEN 0 WHEN u.display_name = br.operator_name THEN 1 ELSE 2 END
-             LIMIT 1
-           ) ban_operator_user ON true
-           WHERE ba.steam_id = $1
-           ORDER BY ba.created_at DESC
-           LIMIT 100"#,
-    )
-    .bind(steamid64)
-    .fetch_all(&db.pool)
-    .await?;
-    Ok(rows)
-}
-
-async fn fetch_report_records(
-    db: &Database,
-    steamid64: &str,
-) -> anyhow::Result<Vec<PlayerReportRecord>> {
-    let rows = sqlx::query_as::<_, PlayerReportRecord>(
-        r#"SELECT pr.id, pr.target_steam_id, pr.target_player_name, pr.reporter_contact,
-                  pr.report_reason, pr.status, COALESCE(reviewer_user.display_name, pr.reviewed_by) AS reviewed_by,
-                  pr.review_note, pr.reviewed_at, pr.created_at
-           FROM player_reports pr
-           LEFT JOIN LATERAL (
-             SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
-             FROM users u
-             WHERE u.username = pr.reviewed_by
-                OR u.display_name = pr.reviewed_by
-                OR NULLIF(u.remark, '') = pr.reviewed_by
-             ORDER BY CASE WHEN u.username = pr.reviewed_by THEN 0 WHEN u.display_name = pr.reviewed_by THEN 1 ELSE 2 END
-             LIMIT 1
-           ) reviewer_user ON true
-           WHERE pr.target_steam_id = $1
-           ORDER BY pr.created_at DESC
            LIMIT 100"#,
     )
     .bind(steamid64)
@@ -1907,8 +1716,6 @@ async fn fetch_evidence_files(
     db: &Database,
     r2: Option<&R2Storage>,
     bans: &[PlayerBanRecord],
-    appeals: &[PlayerAppealRecord],
-    reports: &[PlayerReportRecord],
 ) -> anyhow::Result<Vec<EvidenceFile>> {
     let mut files = Vec::new();
 
@@ -1920,38 +1727,6 @@ async fn fetch_evidence_files(
             .map(|ban| format!("封禁: {}", ban.reason))
             .unwrap_or_else(|| "封禁证据".to_string());
         files.push(map_evidence_file(row, "ban", "封禁证据", related_title, r2));
-    }
-
-    let appeal_ids: Vec<Uuid> = appeals.iter().map(|item| item.id).collect();
-    for row in fetch_file_rows(db, "appeal_files", "appeal_id", &appeal_ids).await? {
-        let related_title = appeals
-            .iter()
-            .find(|appeal| appeal.id == row.source_id)
-            .map(|appeal| format!("申诉: {}", appeal.appeal_reason))
-            .unwrap_or_else(|| "申诉证据".to_string());
-        files.push(map_evidence_file(
-            row,
-            "appeal",
-            "申诉证据",
-            related_title,
-            r2,
-        ));
-    }
-
-    let report_ids: Vec<Uuid> = reports.iter().map(|item| item.id).collect();
-    for row in fetch_file_rows(db, "player_report_files", "report_id", &report_ids).await? {
-        let related_title = reports
-            .iter()
-            .find(|report| report.id == row.source_id)
-            .map(|report| format!("举报: {}", report.report_reason))
-            .unwrap_or_else(|| "举报证据".to_string());
-        files.push(map_evidence_file(
-            row,
-            "report",
-            "举报证据",
-            related_title,
-            r2,
-        ));
     }
 
     files.sort_by_key(|b| std::cmp::Reverse(b.uploaded_at));
@@ -2016,8 +1791,6 @@ fn map_evidence_file(
 fn evidence_table(source_type: &str) -> anyhow::Result<(&'static str, &'static str, &'static str)> {
     match source_type {
         "ban" => Ok(("ban_files", "ban_id", "封禁证据")),
-        "appeal" => Ok(("appeal_files", "appeal_id", "申诉证据")),
-        "report" => Ok(("player_report_files", "report_id", "举报证据")),
         _ => anyhow::bail!("证据来源无效"),
     }
 }
@@ -2136,8 +1909,6 @@ struct SearchTermSources<'a> {
     identity: &'a ParsedSteamIdentity,
     whitelists: &'a [WhitelistRecord],
     bans: &'a [PlayerBanRecord],
-    appeals: &'a [PlayerAppealRecord],
-    reports: &'a [PlayerReportRecord],
     online_records: &'a [OnlineRecord],
     player_sessions: &'a [PlayerServerSession],
     access_logs: &'a [PlayerAccessRecord],
@@ -2160,12 +1931,6 @@ fn build_search_terms(sources: SearchTermSources<'_>) -> Vec<String> {
     }
     for item in sources.bans {
         add_search_term(&mut terms, &mut seen, item.player.as_deref());
-    }
-    for item in sources.appeals {
-        add_search_term(&mut terms, &mut seen, Some(&item.player_name));
-    }
-    for item in sources.reports {
-        add_search_term(&mut terms, &mut seen, item.target_player_name.as_deref());
     }
     for item in sources.online_records {
         add_search_term(&mut terms, &mut seen, Some(&item.name));
@@ -2194,8 +1959,6 @@ fn add_search_term(terms: &mut Vec<String>, seen: &mut HashSet<String>, value: O
 fn display_name(
     whitelists: &[WhitelistRecord],
     bans: &[PlayerBanRecord],
-    appeals: &[PlayerAppealRecord],
-    reports: &[PlayerReportRecord],
     online_records: &[OnlineRecord],
     player_sessions: &[PlayerServerSession],
 ) -> Option<String> {
@@ -2210,12 +1973,6 @@ fn display_name(
                 .find_map(|item| item.player_name.clone())
         })
         .or_else(|| bans.iter().find_map(|item| item.player.clone()))
-        .or_else(|| {
-            reports
-                .iter()
-                .find_map(|item| item.target_player_name.clone())
-        })
-        .or_else(|| appeals.iter().map(|item| item.player_name.clone()).next())
 }
 
 fn is_active_ban(ban: &PlayerBanRecord) -> bool {
@@ -2232,15 +1989,12 @@ fn is_active_ban(ban: &PlayerBanRecord) -> bool {
 fn build_timeline(
     whitelists: &[WhitelistRecord],
     bans: &[PlayerBanRecord],
-    appeals: &[PlayerAppealRecord],
-    reports: &[PlayerReportRecord],
     online_records: &[OnlineRecord],
     player_sessions: &[PlayerServerSession],
     access_logs: &[PlayerAccessRecord],
     admin_actions: &[AdminAction],
     audit_logs: &[PlayerAuditLog],
     evidence_files: &[EvidenceFile],
-    map_feedback: &[MapFeedbackItem],
 ) -> Vec<TimelineEvent> {
     let mut events = Vec::new();
 
@@ -2319,60 +2073,6 @@ fn build_timeline(
                 actor: item.removed_by.clone(),
                 status: Some("inactive".to_string()),
                 source: Some(item.source.clone()),
-                related_id: Some(item.id),
-            });
-        }
-    }
-
-    for item in appeals {
-        events.push(TimelineEvent {
-            event_type: "appeal_created".to_string(),
-            category: "appeal".to_string(),
-            title: "提交封禁申诉".to_string(),
-            description: Some(item.appeal_reason.clone()),
-            occurred_at: item.created_at,
-            actor: None,
-            status: Some(item.status.clone()),
-            source: None,
-            related_id: Some(item.id),
-        });
-        if let Some(reviewed_at) = item.reviewed_at {
-            events.push(TimelineEvent {
-                event_type: "appeal_reviewed".to_string(),
-                category: "appeal".to_string(),
-                title: "处理封禁申诉".to_string(),
-                description: item.review_note.clone(),
-                occurred_at: reviewed_at,
-                actor: item.reviewed_by.clone(),
-                status: Some(item.status.clone()),
-                source: None,
-                related_id: Some(item.id),
-            });
-        }
-    }
-
-    for item in reports {
-        events.push(TimelineEvent {
-            event_type: "report_created".to_string(),
-            category: "report".to_string(),
-            title: "收到玩家举报".to_string(),
-            description: Some(item.report_reason.clone()),
-            occurred_at: item.created_at,
-            actor: None,
-            status: Some(item.status.clone()),
-            source: None,
-            related_id: Some(item.id),
-        });
-        if let Some(reviewed_at) = item.reviewed_at {
-            events.push(TimelineEvent {
-                event_type: "report_reviewed".to_string(),
-                category: "report".to_string(),
-                title: "处理玩家举报".to_string(),
-                description: item.review_note.clone(),
-                occurred_at: reviewed_at,
-                actor: item.reviewed_by.clone(),
-                status: Some(item.status.clone()),
-                source: None,
                 related_id: Some(item.id),
             });
         }
@@ -2465,35 +2165,6 @@ fn build_timeline(
         });
     }
 
-    for item in map_feedback {
-        if let Some(created_at) = parse_rfc3339_utc(&item.created_at) {
-            events.push(TimelineEvent {
-                event_type: "map_feedback_created".to_string(),
-                category: "map_feedback".to_string(),
-                title: "提交地图反馈".to_string(),
-                description: Some(item.detail.clone()),
-                occurred_at: created_at,
-                actor: item.steam_persona_name.clone(),
-                status: Some(item.status.clone()),
-                source: Some(item.feedback_type.clone()),
-                related_id: Some(item.id),
-            });
-        }
-        if let Some(reviewed_at) = item.reviewed_at.as_deref().and_then(parse_rfc3339_utc) {
-            events.push(TimelineEvent {
-                event_type: "map_feedback_reviewed".to_string(),
-                category: "map_feedback".to_string(),
-                title: "处理地图反馈".to_string(),
-                description: item.review_note.clone(),
-                occurred_at: reviewed_at,
-                actor: item.reviewed_by.clone(),
-                status: Some(item.status.clone()),
-                source: Some(item.feedback_type.clone()),
-                related_id: Some(item.id),
-            });
-        }
-    }
-
     for item in admin_actions {
         events.push(TimelineEvent {
             event_type: "admin_action".to_string(),
@@ -2543,10 +2214,4 @@ fn build_timeline(
     events.sort_by_key(|b| std::cmp::Reverse(b.occurred_at));
     events.truncate(250);
     events
-}
-
-fn parse_rfc3339_utc(value: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(value)
-        .ok()
-        .map(|value| value.with_timezone(&Utc))
 }

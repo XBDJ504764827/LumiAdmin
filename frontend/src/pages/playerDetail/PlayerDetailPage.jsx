@@ -16,7 +16,6 @@ import {
   durLabel,
   eventSourceLabel,
   failureLabel,
-  feedbackTypeLabel,
   latestItems,
   latestWhitelistContact,
   methodLabel,
@@ -107,90 +106,6 @@ function WhitelistDetailPopup({item, onClose, onAction, token}) {
       {item.rejected_at&&<><span className="detail-label">拒绝时间</span><span className="detail-value">{formatChinaDateTime(item.rejected_at)} ({item.rejected_by||'-'})<br/>{item.rejection_reason||''}</span></>}
       {item.revoked_at&&<><span className="detail-label">撤销时间</span><span className="detail-value">{formatChinaDateTime(item.revoked_at)} ({item.revoked_by||'-'})</span></>}
       {item.approval_reason&&<><span className="detail-label">通过理由</span><span className="detail-value pre">{item.approval_reason}</span></>}
-    </div>
-  </Modal>);
-}
-
-// ── Appeal Detail Popup ──
-function AppealDetailPopup({item, onClose, onAction, token}) {
-  const { toast } = useToast();
-  const [acting, setActing] = useState(false);
-  const [note, setNote] = useState('');
-  if (!item) return null;
-  const isPending = item.status === 'pending';
-
-  async function doReview(status) { if(acting)return;setActing(true);
-    try{await api.rejectBanAppeal(token,item.id,{status,review_note:note.trim()||null});toast({title:'审核成功'});onAction();onClose();}catch(e){toast({title:'操作失败',message:e.message,tone:'danger'})}finally{setActing(false)} }
-
-  return (<Modal open={true} title="申诉详情" onClose={onClose} footer={<><button className="btn btn-outline" onClick={onClose}>关闭</button>
-    {isPending&&<><button className="action-btn action-btn-success" onClick={()=>doReview('approved')} disabled={acting}>通过</button>
-    <button className="action-btn action-btn-danger" onClick={()=>doReview('rejected')} disabled={acting}>驳回</button></>}
-  </>} >
-    {isPending&&<div className="form-group" style={{marginBottom:12}}><label>审核备注（选填）</label><textarea className="form-control" rows={2} value={note} onChange={e=>setNote(e.target.value)} placeholder="可选，向玩家说明处理结果" style={{resize:'vertical',minHeight:50}}/></div>}
-    <div className="detail-grid">
-      <span className="detail-label">状态</span><span className="detail-value"><StatusPill kind={stKind(item.status,'appeal')}>{stLabel(item.status)}</StatusPill></span>
-      <span className="detail-label">玩家</span><span className="detail-value fw-600">{item.player_name}</span>
-      <span className="detail-label">申诉理由</span><span className="detail-value pre">{item.appeal_reason}</span>
-      {item.ban_reason&&<><span className="detail-label">关联封禁</span><span className="detail-value">{item.ban_reason}</span></>}
-      <span className="detail-label">提交时间</span><span className="detail-value">{formatChinaDateTime(item.created_at)}</span>
-      {item.reviewed_by&&<><span className="detail-label">审核人</span><span className="detail-value">{item.reviewed_by}</span></>}
-      {item.review_note&&<><span className="detail-label">审核备注</span><span className="detail-value pre">{item.review_note}</span></>}
-    </div>
-  </Modal>);
-}
-
-// ── Report Detail Popup ──
-function ReportDetailPopup({item, onClose, onAction, token}) {
-  const { toast } = useToast();
-  const [acting, setActing] = useState(false);
-  const [note, setNote] = useState('');
-  if (!item) return null;
-  const isPending = item.status === 'pending';
-
-  async function doReview(status) { if(acting)return;setActing(true);
-    try{await api.reviewPlayerReport(token,item.id,{status,review_note:note.trim()||null});toast({title:'审核成功'});onAction();onClose();}catch(e){toast({title:'操作失败',message:e.message,tone:'danger'})}finally{setActing(false)} }
-
-  return (<Modal open={true} title="举报详情" onClose={onClose} footer={<><button className="btn btn-outline" onClick={onClose}>关闭</button>
-    {isPending&&<><button className="action-btn action-btn-success" onClick={()=>doReview('approved')} disabled={acting}>通过（封禁）</button><button className="action-btn action-btn-danger" onClick={()=>doReview('rejected')} disabled={acting}>驳回</button></>}
-  </>} >
-    {isPending&&<div className="form-group" style={{marginBottom:12}}><label>审核备注（选填）</label><textarea className="form-control" rows={2} value={note} onChange={e=>setNote(e.target.value)} placeholder="可选，审核备注" style={{resize:'vertical',minHeight:50}}/></div>}
-    <div className="detail-grid">
-      <span className="detail-label">状态</span><span className="detail-value"><StatusPill kind={stKind(item.status,'report')}>{stLabel(item.status)}</StatusPill></span>
-      <span className="detail-label">被举报玩家</span><span className="detail-value fw-600">{item.target_player_name||'-'}</span>
-      <span className="detail-label">举报理由</span><span className="detail-value pre">{item.report_reason}</span>
-      {item.reporter_contact&&<><span className="detail-label">举报人联系方式</span><span className="detail-value">{item.reporter_contact}</span></>}
-      <span className="detail-label">提交时间</span><span className="detail-value">{formatChinaDateTime(item.created_at)}</span>
-      {item.reviewed_by&&<><span className="detail-label">审核人</span><span className="detail-value">{item.reviewed_by}</span></>}
-      {item.review_note&&<><span className="detail-label">审核备注</span><span className="detail-value pre">{item.review_note}</span></>}
-    </div>
-  </Modal>);
-}
-
-// ── Map Feedback Detail Popup ──
-function MapFeedbackDetailPopup({item, onClose, onAction, token}) {
-  const { toast } = useToast();
-  const [acting, setActing] = useState(false);
-  const [note, setNote] = useState('');
-  if (!item) return null;
-  const isPending = item.status === 'pending';
-
-  async function doReview(status) { if(acting)return;setActing(true);
-    try{await api.reviewMapFeedback(token,item.id,{status,review_note:note.trim()||null});toast({title:'审核成功'});onAction();onClose();}catch(e){toast({title:'操作失败',message:e.message,tone:'danger'})}finally{setActing(false)} }
-
-  return (<Modal open={true} title="地图反馈详情" onClose={onClose} footer={<><button className="btn btn-outline" onClick={onClose}>关闭</button>
-    {isPending&&<><button className="action-btn action-btn-success" onClick={()=>doReview('resolved')} disabled={acting}>已解决</button><button className="action-btn action-btn-danger" onClick={()=>doReview('rejected')} disabled={acting}>驳回</button></>}
-  </>} >
-    {isPending&&<div className="form-group" style={{marginBottom:12}}><label>回复备注（选填）</label><textarea className="form-control" rows={2} value={note} onChange={e=>setNote(e.target.value)} placeholder="可选，向玩家说明处理结果" style={{resize:'vertical',minHeight:50}}/></div>}
-    <div className="detail-grid">
-      <span className="detail-label">状态</span><span className="detail-value"><StatusPill kind={stKind(item.status)}>{stLabel(item.status)}</StatusPill></span>
-      <span className="detail-label">反馈类型</span><span className="detail-value">{feedbackTypeLabel(item.feedback_type)}</span>
-      <span className="detail-label">详细内容</span><span className="detail-value pre">{item.detail}</span>
-      {item.steam_persona_name&&<><span className="detail-label">玩家昵称</span><span className="detail-value fw-600">{item.steam_persona_name}</span></>}
-      {item.contact&&<><span className="detail-label">联系方式</span><span className="detail-value">{item.contact}</span></>}
-      <span className="detail-label">提交时间</span><span className="detail-value">{formatChinaDateTime(item.created_at)}</span>
-      {item.reviewed_by&&<><span className="detail-label">审核人</span><span className="detail-value">{item.reviewed_by}</span></>}
-      {item.review_note&&<><span className="detail-label">回复备注</span><span className="detail-value pre">{item.review_note}</span></>}
-      {item.reviewed_at&&<><span className="detail-label">审核时间</span><span className="detail-value">{formatChinaDateTime(item.reviewed_at)}</span></>}
     </div>
   </Modal>);
 }
@@ -515,44 +430,7 @@ function NetworkTab({detail}) {
 }
 
 function BehaviorTab({detail, token, onRefresh}) {
-  const [popup, setPopup] = useState(null);
-  const mf = detail.map_feedback || [];
   return <>
-    <div className="lower-grid">
-      <div className="card"><div className="card-header"><div><div className="card-title">玩家自主申诉记录</div><div className="card-sub">点击行查看详情并审核。</div></div></div><div className="card-body p-0">
-        {detail.appeals.length===0?<Empty>暂无申诉记录。</Empty>:<div className="table-responsive"><table className="data-table player-record-table"><thead><tr><th>提交时间</th><th>申诉理由</th><th>关联封禁</th><th>审核人</th><th>状态</th></tr></thead><tbody>
-          {detail.appeals.map(item=><tr key={item.id} style={{cursor:'pointer'}} onClick={()=>setPopup({type:'appeal',item})}>
-            <td style={{fontFamily:'var(--mono)',fontSize:'12px',whiteSpace:'nowrap'}}>{formatChinaDateTime(item.created_at,{seconds:false})}</td>
-            <td className="text-ellipsis" style={{maxWidth:180}} title={item.appeal_reason}>{item.appeal_reason}</td>
-            <td className="text-ellipsis" style={{maxWidth:140}} title={item.ban_reason||''}>{item.ban_reason||'-'}</td>
-            <td>{item.reviewed_by||'-'}</td>
-            <td><StatusPill kind={stKind(item.status,'appeal')}>{stLabel(item.status)}</StatusPill></td>
-          </tr>)}
-        </tbody></table></div>}
-      </div></div>
-      <div className="card"><div className="card-header"><div><div className="card-title">玩家被举报记录</div><div className="card-sub">点击行查看详情并审核。</div></div></div><div className="card-body p-0">
-        {detail.reports.length===0?<Empty>暂无举报记录。</Empty>:<table className="data-table"><thead><tr><th>举报时间</th><th>理由</th><th>举报联系方式</th><th>审核人</th><th>状态</th></tr></thead><tbody>
-          {detail.reports.map(item=><tr key={item.id} style={{cursor:'pointer'}} onClick={()=>setPopup({type:'report',item})}>
-            <td style={{fontFamily:'var(--mono)',fontSize:'12px',whiteSpace:'nowrap'}}>{formatChinaDateTime(item.created_at,{seconds:false})}</td>
-            <td className="text-ellipsis" style={{maxWidth:180}}>{item.report_reason}</td>
-            <td className="text-ellipsis" style={{maxWidth:140}} title={item.reporter_contact||''}>{item.reporter_contact||'-'}</td>
-            <td>{item.reviewed_by||'-'}</td>
-            <td><StatusPill kind={stKind(item.status,'report')}>{stLabel(item.status)}</StatusPill></td>
-          </tr>)}
-        </tbody></table>}
-      </div></div>
-    </div>
-    <div className="card"><div className="card-header"><div><div className="card-title">地图反馈记录</div><div className="card-sub">点击行查看详情并快捷回复。</div></div></div><div className="card-body p-0">
-      {mf.length===0?<Empty>暂无地图反馈记录。</Empty>:<div className="table-responsive"><table className="data-table player-record-table"><thead><tr><th>提交时间</th><th>反馈类型</th><th>详细内容</th><th>审核人</th><th>状态</th></tr></thead><tbody>
-        {mf.map(item=><tr key={item.id} style={{cursor:'pointer'}} onClick={()=>setPopup({type:'feedback',item})}>
-          <td style={{fontFamily:'var(--mono)',fontSize:'12px',whiteSpace:'nowrap'}}>{formatChinaDateTime(item.created_at,{seconds:false})}</td>
-          <td><StatusPill kind={item.feedback_type==='broken'?'danger':item.feedback_type==='missing'?'warning':'default'}>{feedbackTypeLabel(item.feedback_type)}</StatusPill></td>
-          <td className="text-ellipsis" style={{maxWidth:240}} title={item.detail}>{item.detail}</td>
-          <td>{item.reviewed_by||'-'}</td>
-          <td><StatusPill kind={stKind(item.status)}>{stLabel(item.status)}</StatusPill></td>
-        </tr>)}
-      </tbody></table></div>}
-    </div></div>
     <div className="card"><div className="card-header"><div><div className="card-title">物理证据文件与媒体库</div></div></div><div className="card-body">
       {detail.evidence_files.length===0?<Empty>暂无附件证据。</Empty>:<div className="table-responsive"><table className="data-table"><thead><tr><th>文件名称</th><th>归属</th><th>尺寸</th><th>上传时间</th></tr></thead><tbody>
         {detail.evidence_files.map(file=><tr key={`${file.source_type}-${file.id}`}>
@@ -562,9 +440,6 @@ function BehaviorTab({detail, token, onRefresh}) {
         </tr>)}
       </tbody></table></div>}
     </div></div>
-    {popup?.type==='appeal'&&<AppealDetailPopup item={popup.item} onClose={()=>setPopup(null)} onAction={onRefresh} token={token}/>}
-    {popup?.type==='report'&&<ReportDetailPopup item={popup.item} onClose={()=>setPopup(null)} onAction={onRefresh} token={token}/>}
-    {popup?.type==='feedback'&&<MapFeedbackDetailPopup item={popup.item} onClose={()=>setPopup(null)} onAction={onRefresh} token={token}/>}
   </>;
 }
 
@@ -636,7 +511,7 @@ export function PlayerDetailPage() {
     else if(e.key==='Enter'&&activeCandidateIndex>=0){e.preventDefault();selectCandidate(candidates[activeCandidateIndex]);}
     else if(e.key==='Escape'){e.preventDefault();setCandidatesOpen(false);setActiveCandidateIndex(-1);}
   }
-  function refreshDetail() { const q = lastQueryRef.current || lastQuery; if(q) loadDetail(q, false); queryClient.invalidateQueries({queryKey:['whitelist']}); queryClient.invalidateQueries({queryKey:['bans']}); queryClient.invalidateQueries({queryKey:['banAppeals']}); queryClient.invalidateQueries({queryKey:['playerReports']}); queryClient.invalidateQueries({queryKey:['mapFeedback']}); }
+  function refreshDetail() { const q = lastQueryRef.current || lastQuery; if(q) loadDetail(q, false); queryClient.invalidateQueries({queryKey:['whitelist']}); queryClient.invalidateQueries({queryKey:['bans']}); }
   // 内部备注
   async function handleSaveInternal(body) {
     if(!detail)return;try{setInternalSaving(true);const r=await api.updatePlayerInternalProfile(token,detail.profile.steamid64,body);setDetail(p=>p?{...p,internal_profile:r.item}:p);toast({title:'保存成功'});}catch(e){toast({title:'保存失败',message:e.message,tone:'danger'});}finally{setInternalSaving(false);}

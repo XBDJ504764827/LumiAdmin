@@ -18,7 +18,6 @@ const MODULE_TONE = {
   '外部封禁API': 'pill-info',
   '网站用户管理': 'pill-warning',
   '封禁申诉': 'pill-warning',
-  '玩家举报': 'pill-warning',
   '公共展示页': 'pill-online',
   '认证': 'pill-info',
   '游戏封禁': 'pill-danger',

@@ -54,15 +54,12 @@ const FAILURE_CODE_LABELS = {
 const CATEGORY_LABELS = {
   whitelist: '白名单',
   ban: '封禁',
-  appeal: '申诉',
-  report: '举报',
   online: '在线',
   session: '会话',
   access: '进服',
   admin: '后台操作',
   audit: '审计',
   evidence: '证据',
-  map_feedback: '地图反馈',
 };
 
 export function stKind(status, category) {
@@ -116,11 +113,6 @@ export function textToTags(value) {
     .map((tag) => tag.trim().replace(/^#/, ''))
     .filter(Boolean)
     .filter((tag, index, all) => all.findIndex((item) => item.toLowerCase() === tag.toLowerCase()) === index);
-}
-
-export function feedbackTypeLabel(type) {
-  const labels = { missing: '地图缺失', broken: '地图损坏', request: '地图请求' };
-  return labels[type] || type || '-';
 }
 
 export function methodLabel(method) {

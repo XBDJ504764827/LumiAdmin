@@ -154,7 +154,12 @@ pub fn start_sync_loop(db: Database, config: Config) {
             match observability_service::observe_task(
                 "lumi_bot_sync",
                 sync_pending_events(&db, &config),
-                |summary| format!("本轮上报 {} 条（成功 {}，失败 {}）", summary.total, summary.sent, summary.failed),
+                |summary| {
+                    format!(
+                        "本轮上报 {} 条（成功 {}，失败 {}）",
+                        summary.total, summary.sent, summary.failed
+                    )
+                },
             )
             .await
             {
@@ -232,8 +237,8 @@ pub async fn sync_pending_events(db: &Database, config: &Config) -> anyhow::Resu
                 );
             }
             Err(error) => {
-                let attempts = record_failure(db, row.id, &error, config.lumi_bot_max_attempts as i32)
-                    .await?;
+                let attempts =
+                    record_failure(db, row.id, &error, config.lumi_bot_max_attempts as i32).await?;
                 summary.failed += 1;
                 if attempts >= config.lumi_bot_max_attempts as i32 {
                     tracing::warn!(
@@ -292,11 +297,7 @@ async fn record_failure(
 /// 向 LumiBot 上报单条事件。
 /// 按 LumiBot HTTP API 文档组装统一事件模型：
 /// `POST {api_base_url}/api/v1/events`，Header 携带 `X-API-Key`。
-async fn send_event(
-    api_base_url: &str,
-    api_key: &str,
-    row: &QueuedEventRow,
-) -> anyhow::Result<()> {
+async fn send_event(api_base_url: &str, api_key: &str, row: &QueuedEventRow) -> anyhow::Result<()> {
     let url = format!("{}/api/v1/events", api_base_url.trim_end_matches('/'));
     let body = serde_json::json!({
         "id": row.id,
@@ -380,12 +381,11 @@ mod tests {
             )
             .await?;
 
-            let (status, attempts): (String, i32) = sqlx::query_as(
-                "SELECT status, attempts FROM lumi_bot_event_queue WHERE id = $1",
-            )
-            .bind(id)
-            .fetch_one(&db.pool)
-            .await?;
+            let (status, attempts): (String, i32) =
+                sqlx::query_as("SELECT status, attempts FROM lumi_bot_event_queue WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&db.pool)
+                    .await?;
             assert_eq!(status, "pending");
             assert_eq!(attempts, 0);
             Ok(())
@@ -418,12 +418,11 @@ mod tests {
             let summary = sync_pending_events(&db, &config).await?;
             assert_eq!(summary.total, 1);
             assert_eq!(summary.failed, 1);
-            let (status, attempts): (String, i32) = sqlx::query_as(
-                "SELECT status, attempts FROM lumi_bot_event_queue WHERE id = $1",
-            )
-            .bind(id)
-            .fetch_one(&db.pool)
-            .await?;
+            let (status, attempts): (String, i32) =
+                sqlx::query_as("SELECT status, attempts FROM lumi_bot_event_queue WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&db.pool)
+                    .await?;
             assert_eq!(status, "pending");
             assert_eq!(attempts, 1);
 

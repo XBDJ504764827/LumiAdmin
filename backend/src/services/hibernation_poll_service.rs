@@ -10,7 +10,9 @@
 
 use crate::config::Config;
 use crate::db::Database;
-use crate::rcon::{parse_stats_output, parse_status_output, RconConnection, StatsResult, StatusResult};
+use crate::rcon::{
+    parse_stats_output, parse_status_output, RconConnection, StatsResult, StatusResult,
+};
 use crate::services::{community_service::SessionEndReason, observability_service};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
@@ -355,7 +357,10 @@ players : 0 humans, 0 bots (16/0 max) (hibernating)\n\
                         };
                         match body.as_str() {
                             "status" => {
-                                if write_packet(&mut stream, 1, 0, status_output).await.is_err() {
+                                if write_packet(&mut stream, 1, 0, status_output)
+                                    .await
+                                    .is_err()
+                                {
                                     return;
                                 }
                             }
@@ -417,11 +422,7 @@ players : 0 humans, 0 bots (16/0 max) (hibernating)\n\
         }
     }
 
-    async fn insert_hibernating_server(
-        db: &Database,
-        address: &str,
-        stale_seconds: i64,
-    ) -> Uuid {
+    async fn insert_hibernating_server(db: &Database, address: &str, stale_seconds: i64) -> Uuid {
         let community_id = Uuid::new_v4();
         let server_id = Uuid::new_v4();
         sqlx::query(r#"INSERT INTO communities (id, name) VALUES ($1, $2)"#)

@@ -1,6 +1,9 @@
 # LumiAdmin
 
-CS:GO / CS2 社区服务器综合管理系统，提供玩家封禁管理、社区组管理、在线玩家监控、白名单控制、玩家信息 API 分发、审计日志等功能，并通过 SourceMod 插件与游戏服务器实时联动。
+CS:GO / CS2 社区服务器综合管理系统，提供玩家封禁管理、社区组管理、在线玩家监控、白名单控制、玩家信息 API 分发、审计日志等功能，并通过 RCON / 插件 API 与游戏服务器实时联动。
+
+> 游戏服务器 SourceMod 插件已独立为 [LumiAdmin-plugins](https://github.com/LumiAdmin/LumiAdmin-plugins) 仓库，本仓库不再包含插件源码与构建。
+
 
 ---
 
@@ -10,7 +13,7 @@ CS:GO / CS2 社区服务器综合管理系统，提供玩家封禁管理、社�
 |------|------|
 | 前端 | React 18 + Vite + React Router |
 | 后端 | Rust (Axum) + SQLx (PostgreSQL) + Tokio |
-| 游戏插件 | SourceMod (SourcePawn) + RIPExt + SteamWorks + GlobalAPI |
+| 游戏插件 | SourceMod (SourcePawn)，独立仓库 [LumiAdmin-plugins](https://github.com/LumiAdmin/LumiAdmin-plugins) |
 | CI/CD | GitHub Actions + SSH + rsync |
 
 ---
@@ -57,20 +60,12 @@ LumiAdmin/
 │   ├── index.html
 │   ├── vite.config.js
 │   └── package.json
-├── csgo/                         # SourceMod 游戏插件
-│   ├── addons/sourcemod/
-│   │   ├── plugins/              # 编译后的 .smx 插件
-│   │   ├── scripting/            # SourcePawn 源码 (.sp)
-│   │   │   ├── cngokz-core.sp
-│   │   │   ├── cngokz-server.sp
-│   │   │   ├── cngokz-sync.sp
-│   │   │   ├── cngokz-recordguard.sp
-│   │   │   └── cngokz-global.sp
-│   │   └── configs/              # 插件依赖
-│   └── cfg/sourcemod/            # 插件配置文件
+├── workers/                       # Cloudflare Workers（R2 文件网关，供后端与游戏插件共用）
 ├── .github/workflows/deploy.yml  # CI/CD 自动部署
 └── docs/                         # 文档
 ```
+
+> SourceMod 游戏插件（`cngokz-*` 系列）源码与构建脚本已移至独立仓库 [LumiAdmin-plugins](https://github.com/LumiAdmin/LumiAdmin-plugins)。
 
 ---
 
@@ -106,13 +101,7 @@ LumiAdmin/
 
 ### SourceMod 插件
 
-| 插件 | 说明 |
-|------|------|
-| `cngokz-core` | CNGOKZ 公共配置与端口 Token 映射，其他 CNGOKZ 插件优先读取它的配置 |
-| `cngokz-server` | 在线玩家、服务器状态、玩家断开原因、封禁与进服权限校验上报 |
-| `cngokz-sync` | 离线操作队列与边缘封禁同步 |
-| `cngokz-recordguard` | 异常记录检测、录像捕获、R2 上传与审核后提交全球记录 |
-| `cngokz-global` | 替代原版 `gokz-global`，保留 GOKZ Global 功能并接入异常记录审核 |
+游戏服务器侧 `cngokz-*` 系列插件（core / server / sync / recordguard / global）已独立为 [LumiAdmin-plugins](https://github.com/LumiAdmin/LumiAdmin-plugins) 仓库，请前往该仓库获取源码、构建与部署文档。
 
 ---
 
@@ -132,10 +121,8 @@ LumiAdmin/
              └──────────┘  └──────────┘  └──────────┘
                     ▲
                     │
-             ┌──────────────────────┐
-             │  SourceMod 插件        │
-             │  (上报/封禁/异常记录)   │
-             └──────────────────────┘
+            SourceMod 插件（LumiAdmin-plugins）
+            上报 / 封禁 / 异常记录
 ```
 
 ### 后台定时任务
@@ -171,7 +158,7 @@ LumiAdmin/
 - Node.js >= 20
 - Rust stable（推荐通过 rustup 安装）
 - PostgreSQL >= 14
-- CS:GO / CS2 服务器 + SourceMod（可选，用于插件联动）
+- CS:GO / CS2 服务器 + SourceMod（可选，游戏插件见 [LumiAdmin-plugins](https://github.com/LumiAdmin/LumiAdmin-plugins)）
 
 ### 前端
 
@@ -372,215 +359,15 @@ R2 信息时，业务记录本身仍可提交，只有证据文件上传不可�
 
 ---
 
-## SourceMod 插件部署
-
-### 游戏服务器依赖
-
-安装 `cngokz-*` 插件前，游戏服务器需要先具备以下运行时依赖。缺少依赖时，SourceMod 会出现 `Library not found`、`Native not bound` 或插件无法加载。
-
-| 依赖 | 用途 | 缺失影响 |
-|------|------|----------|
-| MetaMod:Source | SourceMod 运行基础 | SourceMod 本身无法运行 |
-| SourceMod 1.11+ | `.smx` 插件运行环境 | 所有插件无法加载 |
-| GOKZ 3.6+ | KZ 核心、模式、计时、录像、玩家状态接口 | `cngokz-global`、`cngokz-recordguard` 无法正常工作 |
-| GOKZ Replays | 读取玩家完成地图录像 | 异常记录无法关联玩家录像 |
-| GOKZ Local DB / Local Ranks | 原版 GOKZ Global 兼容功能 | 全球封禁、本地排行相关功能不完整 |
-| GlobalAPI 2.x | GOKZ.TOP 全球接口请求 | 全球记录、地图、模式、封禁查询失败 |
-| RIPExt / REST in Pawn | 插件向 LumiAdmin 后端发送 HTTP/JSON 请求 | `cngokz-server`、`cngokz-sync`、`cngokz-recordguard` 无法访问后端 |
-| SteamWorks SourceMod Extension | 游戏服直接上传异常录像到 R2；GlobalAPI 常见环境也依赖它 | 异常录像 R2 上传失败，部分 GlobalAPI 请求可能不可用 |
-
-常见依赖文件位置：
-
-```text
-csgo/addons/sourcemod/extensions/ripext.ext.so
-csgo/addons/sourcemod/extensions/SteamWorks.ext.so
-csgo/addons/sourcemod/plugins/GlobalAPI.smx
-csgo/addons/sourcemod/plugins/GlobalAPI-Retrying-Binary.smx
-csgo/addons/sourcemod/plugins/GlobalAPI-Logging-Flatfile.smx
-csgo/addons/sourcemod/plugins/gokz-core.smx
-csgo/addons/sourcemod/plugins/gokz-replays.smx
-csgo/addons/sourcemod/plugins/gokz-localdb.smx
-csgo/addons/sourcemod/plugins/gokz-localranks.smx
-```
-
-在服务器控制台可用以下命令检查依赖：
-
-```text
-sm exts list
-sm plugins list
-```
-
-`sm exts list` 中应能看到 RIPExt 和 SteamWorks；`sm plugins list` 中应能看到 GOKZ、GlobalAPI 和 CNGOKZ 插件。
-
-### 插件包结构
-
-GitHub Actions 可选择发布游戏服务器插件包到 Releases。压缩包按游戏服务器目录组织，解压到游戏服务器根目录后路径应类似：
-
-```text
-csgo/
-├── addons/sourcemod/plugins/
-│   ├── cngokz-core.smx
-│   ├── gokz-replays.smx
-│   ├── cngokz-server.smx
-│   ├── cngokz-sync.smx
-│   ├── cngokz-recordguard.smx
-│   └── cngokz-global.smx
-└── cfg/sourcemod/cngokz-lumiadmin/
-```
-
-Release 包不会携带生成后的 `.cfg` 配置文件，避免覆盖服务器已有配置。插件首次加载时会自动生成配置文件；如果服务器上已有同名配置，则 SourceMod 不会重新生成覆盖。
-
-### 本地编译
-
-```bash
-bash csgo/build_plugins.sh
-```
-
-编译产物位于：
-
-```text
-csgo/addons/sourcemod/plugins/
-```
-
-### 安装步骤
-
-1. 先安装 MetaMod:Source、SourceMod、GOKZ、GlobalAPI、RIPExt、SteamWorks。
-2. 将以下插件放入游戏服务器的 `csgo/addons/sourcemod/plugins/`：
-
-   ```text
-   gokz-replays.smx
-   cngokz-core.smx
-   cngokz-server.smx
-   cngokz-sync.smx
-   cngokz-recordguard.smx
-   cngokz-global.smx
-   ```
-
-   项目提供的 `gokz-replays.smx` 是与当前 GOKZ Replays 兼容的审核扩展版，新增
-   `CNGOKZ_RP_ForceSaveRun` Native，使非 PB、非服务器纪录的异常跑图也能强制保存
-   临时录像。必须覆盖 GOKZ 自带的同名插件，并完整重启服务器。
-
-3. 将旧插件移动到 `csgo/addons/sourcemod/plugins/disabled/`，避免重复上报或库冲突：
-
-   ```text
-   gokz-global.smx
-   gokz-r2upload.smx
-   manger_online_reporter.smx
-   manger_edge_sync.smx
-   ```
-
-4. 加载插件或重启服务器。建议加载顺序：
-
-   ```text
-   sm plugins load cngokz-core
-   sm plugins load cngokz-server
-   sm plugins load cngokz-sync
-   sm plugins load cngokz-recordguard
-   sm plugins load cngokz-global
-   ```
-
-### 基础配置
-
-配置文件目录：
-
-```text
-csgo/cfg/sourcemod/cngokz-lumiadmin/
-```
-
-核心配置文件：
-
-```text
-csgo/cfg/sourcemod/cngokz-lumiadmin/cngokz-core.cfg
-```
-
-至少需要配置后端插件 API 地址和当前服务器端口对应的 `report_token`：
-
-```text
-cngokz_api_base_url "https://你的后端域名/api/plugin"
-cngokz_server "27015" "该服务器在网站后台生成的 report_token"
-```
-
-如果同一台机器运行多个端口，可以写多行：
-
-```text
-cngokz_server "27015" "token_for_27015"
-cngokz_server "27016" "token_for_27016"
-cngokz_server "27017" "token_for_27017"
-```
-
-### WR 与异常录像 R2 上传配置
-
-普通 WR 录像和异常审核录像默认共用同一个 Cloudflare Worker、R2 Bucket 和上传密钥，
-由插件使用不同对象前缀隔离：
-
-```text
-wr/{mode}/{map}/{route}.replay
-audit/{recordId}/{idempotencyKey}.replay
-```
-
-统一配置文件：
-
-```text
-csgo/cfg/sourcemod/cngokz-lumiadmin/cngokz-core.cfg
-```
-
-```text
-cngokz_replay_r2_enabled "1"
-cngokz_replay_r2_wr_enabled "1"
-cngokz_replay_r2_url "https://你的 Cloudflare Worker 域名/upload"
-cngokz_replay_r2_key "你的上传 API Key"
-cngokz_replay_r2_verify_cert "1"
-```
-
-`cngokz-global` 已整合原 `gokz-r2upload` 的永久服务器纪录回填、WR 上传和上一任纪录
-位移逻辑；`cngokz-recordguard` 使用同一套 URL、Key 和证书校验配置上传异常录像。
-服务器只需要维护这一套 R2 上传凭据，旧 `gokz-r2upload.smx` 和
-`cfg/sourcemod/gokz/gokz-r2upload.cfg` 不再使用。
-
-```text
-csgo/cfg/sourcemod/cngokz-lumiadmin/cngokz-recordguard.cfg
-```
-
-```text
-cngokz_recordguard_r2upload_enabled "1"
-```
-
-统一 Worker 源码和部署示例位于 `workers/replay-worker/`。Worker 允许公开下载 `wr/`
-对象；`audit/` 和网站证据对象使用鉴权或短时 HMAC 签名地址访问。
-
-### GOKZ Global 配置
-
-`cngokz-global` 替代原版 `gokz-global`，但继续使用原版 GOKZ Global 的配置文件路径：
-
-```text
-csgo/cfg/sourcemod/gokz/gokz-global.cfg
-```
-
-如果服务器原来已经能正常运行原版 `gokz-global`，通常保留原配置即可。安装 `cngokz-global` 后，需要禁用原版 `gokz-global.smx`，否则会出现库冲突或重复提交。
-
-### 快速排错
-
-| 现象 | 检查项 |
-|------|--------|
-| `Library not found: ripext` | RIPExt 是否安装到 `addons/sourcemod/extensions/`，并在 `sm exts list` 中加载 |
-| `Library not found: SteamWorks` | SteamWorks extension 是否安装并加载 |
-| `Library not found: GlobalAPI` | GlobalAPI 插件是否安装并加载 |
-| `Library not found: gokz-global` | `cngokz-global.smx` 是否加载；它会提供兼容的 `gokz-global` library |
-| 异常记录有数据但录像显示待上传 | 检查 GOKZ Replays、SteamWorks、共享 R2 URL/Key 和 `cngokz_recordguard_r2upload_enabled`；新版插件会每 30 秒重试本地缓存录像 |
-| 后端收不到在线玩家/封禁数据 | 检查 `cngokz_api_base_url`、`cngokz_server "<port>" "<token>"`、服务器端口是否与后台配置一致 |
-| 配置文件没有生成 | 检查 `csgo/cfg/sourcemod/cngokz-lumiadmin/` 是否可写 |
-
----
-
 ## 部署
 
 项目使用 GitHub Actions 自动化部署（`.github/workflows/deploy.yml`）：
 
 1. 推送到 `main` 分支自动触发
-2. 检测 `frontend/`、`backend/`、`csgo/` 各模块变更
+2. 检测 `frontend/`、`backend/` 各模块变更
 3. 仅构建有变更的模块
 4. 通过 SSH + rsync 部署到目标服务器
-5. 自动重启后端服务 / 提示重载游戏插件
+5. 自动重启后端服务（游戏插件部署见 [LumiAdmin-plugins](https://github.com/LumiAdmin/LumiAdmin-plugins)）
 
 ---
 

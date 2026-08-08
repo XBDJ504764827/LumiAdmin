@@ -102,7 +102,10 @@ pub(crate) async fn submit_whitelist(
             tracing::warn!(%e, "LumiBot 白名单申请事件入队失败");
         }
     }
-    Ok((StatusCode::CREATED, Json(serde_json::json!({ "item": item }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "item": item })),
+    ))
 }
 
 pub(crate) async fn public_bans(

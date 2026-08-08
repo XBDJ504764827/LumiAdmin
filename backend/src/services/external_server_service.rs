@@ -193,6 +193,7 @@ pub async fn test_server(db: &Database, id: Uuid) -> anyhow::Result<ExternalServ
                 player_count: info.player_count,
                 max_players: info.max_players,
                 players: info.players.iter().map(|p| p.name.clone()).collect(),
+                hibernating: false,
             };
             return Ok(ExternalServerTestResult {
                 ok: true,

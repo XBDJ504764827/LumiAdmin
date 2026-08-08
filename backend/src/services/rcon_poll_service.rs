@@ -94,6 +94,7 @@ async fn poll_once(db: &Database, servers: &[ExternalServer]) -> anyhow::Result<
                         player_count: info.player_count,
                         max_players: info.max_players,
                         players: info.players.iter().map(|p| p.name.clone()).collect(),
+                        hibernating: false,
                     }
                 }
                 Err(a2s_err) => {

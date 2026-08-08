@@ -14,11 +14,6 @@ on:
           - ilian
           - cngokz
           - all
-      publish_plugin_release:
-        description: '是否将游戏服务器插件包发布到 GitHub Releases'
-        required: true
-        default: false
-        type: boolean
 
 jobs:
   # ===== 检测变更模块 =====
@@ -27,7 +22,6 @@ jobs:
     outputs:
       frontend: ${{ steps.filter.outputs.frontend }}
       backend: ${{ steps.filter.outputs.backend }}
-      plugin: ${{ steps.filter.outputs.plugin }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,15 +36,11 @@ jobs:
             backend:
               - 'backend/**'
               - '.github/workflows/**'
-            plugin:
-              - 'csgo/**'
-              - '.github/workflows/deploy.yml'
 
       - name: Print Detection Result
         run: |
           echo "Frontend changed: ${{ steps.filter.outputs.frontend }}"
           echo "Backend changed: ${{ steps.filter.outputs.backend }}"
-          echo "Plugin changed: ${{ steps.filter.outputs.plugin }}"
 
   # ===== 前端构建 =====
   build-frontend:
@@ -151,119 +141,8 @@ jobs:
           path: backend/target/release/manger-backend
           retention-days: 1
 
-  # ===== 插件构建 =====
-  build-plugin:
-    needs: detect-changes
-    if: needs.detect-changes.outputs.plugin == 'true'
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Cache SourceMod Compiler
-        uses: actions/cache@v4
-        with:
-          path: csgo/.build
-          key: ${{ runner.os }}-sourcemod-1.11.0-git6970
-
-      - name: Checkout GOKZ Includes
-        run: |
-          rm -rf csgo/.build/gokz-top-plugins
-          git clone --depth 1 https://github.com/kzcharm/gokz-top-plugins.git csgo/.build/gokz-top-plugins
-
-      - name: Build SourceMod Plugins
-        run: GOKZ_INCLUDE_DIR="$PWD/csgo/.build/gokz-top-plugins/addons/sourcemod/scripting/include" bash csgo/build_plugins.sh
-
-      - name: Test Plugin Sources
-        run: CNGOKZ_EXPECT_COMPILED_PLUGINS=1 node --test csgo/*.test.js
-
-      - name: Stage Plugin Output
-        run: |
-          rm -rf csgo/plugin-output
-          mkdir -p csgo/plugin-output/plugins
-          cp csgo/addons/sourcemod/plugins/cngokz-core.smx csgo/plugin-output/plugins/
-          cp csgo/addons/sourcemod/plugins/cngokz-prime.smx csgo/plugin-output/plugins/
-          cp csgo/addons/sourcemod/plugins/gokz-replays.smx csgo/plugin-output/plugins/
-          cp csgo/addons/sourcemod/plugins/cngokz-server.smx csgo/plugin-output/plugins/
-          cp csgo/addons/sourcemod/plugins/cngokz-sync.smx csgo/plugin-output/plugins/
-          cp csgo/addons/sourcemod/plugins/cngokz-recordguard.smx csgo/plugin-output/plugins/
-          cp csgo/addons/sourcemod/plugins/cngokz-global.smx csgo/plugin-output/plugins/
-
-      - name: Upload Plugin Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: plugin-output
-          path: csgo/plugin-output
-          retention-days: 1
-
-      - name: Stage Game Server Release Package
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_plugin_release
-        run: |
-          rm -rf csgo/plugin-release csgo/plugin-release-assets
-          mkdir -p csgo/plugin-release/csgo/addons/sourcemod/plugins
-          mkdir -p csgo/plugin-release/csgo/cfg/sourcemod/cngokz-lumiadmin
-          cp csgo/addons/sourcemod/plugins/cngokz-core.smx csgo/plugin-release/csgo/addons/sourcemod/plugins/cngokz-core.smx
-          cp csgo/addons/sourcemod/plugins/cngokz-prime.smx csgo/plugin-release/csgo/addons/sourcemod/plugins/cngokz-prime.smx
-          cp csgo/addons/sourcemod/plugins/gokz-replays.smx csgo/plugin-release/csgo/addons/sourcemod/plugins/gokz-replays.smx
-          cp csgo/addons/sourcemod/plugins/cngokz-server.smx csgo/plugin-release/csgo/addons/sourcemod/plugins/cngokz-server.smx
-          cp csgo/addons/sourcemod/plugins/cngokz-sync.smx csgo/plugin-release/csgo/addons/sourcemod/plugins/cngokz-sync.smx
-          cp csgo/addons/sourcemod/plugins/cngokz-recordguard.smx csgo/plugin-release/csgo/addons/sourcemod/plugins/cngokz-recordguard.smx
-          cp csgo/addons/sourcemod/plugins/cngokz-global.smx csgo/plugin-release/csgo/addons/sourcemod/plugins/cngokz-global.smx
-          mkdir -p csgo/plugin-release-assets
-          package_name="cngokz-lumiadmin-csgo-plugins-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}.tar.gz"
-          tar -czf "csgo/plugin-release-assets/$package_name" -C csgo/plugin-release .
-          (cd csgo/plugin-release-assets && sha256sum "$package_name" > SHA256SUMS)
-
-      - name: Upload Game Server Package Artifact
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_plugin_release
-        uses: actions/upload-artifact@v4
-        with:
-          name: plugin-release-package
-          path: csgo/plugin-release-assets
-          retention-days: 7
-
   # ===== 发布游戏服务器插件包到 GitHub Releases =====
-  release-plugin:
-    needs: [detect-changes, build-plugin]
-    if: needs.detect-changes.outputs.plugin == 'true' && github.event_name == 'workflow_dispatch' && inputs.publish_plugin_release
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Download Game Server Package Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: plugin-release-package
-          path: plugin-release-package
-
-      - name: Publish Plugin Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: cngokz-plugins-${{ github.run_number }}
-          target_commitish: ${{ github.sha }}
-          name: CNGOKZ Game Server Plugins ${{ github.run_number }}
-          body: |
-            CNGOKZ game server plugin package built from `${{ github.sha }}`.
-
-            Extract this archive at the game server root so files land under:
-
-            - `csgo/addons/sourcemod/plugins/`
-            - `csgo/cfg/sourcemod/cngokz-lumiadmin/`
-
-            The package intentionally does not include generated config files. Existing server configs should remain managed on the server.
-          files: |
-            plugin-release-package/*.tar.gz
-            plugin-release-package/SHA256SUMS
-          fail_on_unmatched_files: true
-          overwrite_files: true
-          make_latest: true
+  # 插件已移至独立仓库 LumiAdmin-plugins，此处不再构建/发布
 
   # ===== 部署前端 → CNGOKZ =====
   deploy-frontend-cngokz:
@@ -381,104 +260,3 @@ jobs:
             chmod +x ${{ vars.WEB_PATH_ILIAN }}/manger-backend
             sudo systemctl restart manger-backend || true
 
-  # ===== 部署插件 → CNGOKZ =====
-  deploy-plugin-cngokz:
-    needs: [detect-changes, build-plugin]
-    if: needs.detect-changes.outputs.plugin == 'true' && github.event_name == 'workflow_dispatch' && (inputs.deploy_target == 'cngokz' || inputs.deploy_target == 'all')
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Download Plugin Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: plugin-output
-          path: plugin-output
-
-      - name: Setup SSH Key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.GAME_SSH_KEY_CNGOKZ }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ vars.GAME_HOST_CNGOKZ }} >> ~/.ssh/known_hosts
-
-      - name: Deploy Plugin
-        run: |
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugin-output/plugins/gokz-replays.smx plugin-output/plugins/cngokz-core.smx plugin-output/plugins/cngokz-prime.smx plugin-output/plugins/cngokz-server.smx plugin-output/plugins/cngokz-sync.smx plugin-output/plugins/cngokz-recordguard.smx plugin-output/plugins/cngokz-global.smx ${{ vars.GAME_USER_CNGOKZ }}@${{ vars.GAME_HOST_CNGOKZ }}:${{ vars.GAME_PATH_CNGOKZ }}/
-
-      - name: Finalize Plugin Deployment
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ vars.GAME_HOST_CNGOKZ }}
-          username: ${{ vars.GAME_USER_CNGOKZ }}
-          key: ${{ secrets.GAME_SSH_KEY_CNGOKZ }}
-          script: |
-            PLUGIN_DIR="${{ vars.GAME_PATH_CNGOKZ }}"
-            mkdir -p "$PLUGIN_DIR/disabled"
-            if [ -f "$PLUGIN_DIR/gokz-global.smx" ]; then
-              mv "$PLUGIN_DIR/gokz-global.smx" "$PLUGIN_DIR/disabled/gokz-global.smx"
-              echo "已将原版 gokz-global.smx 移动到 plugins/disabled/"
-            fi
-            if [ -f "$PLUGIN_DIR/gokz-r2upload.smx" ]; then
-              mv "$PLUGIN_DIR/gokz-r2upload.smx" "$PLUGIN_DIR/disabled/gokz-r2upload.smx"
-              echo "已将旧版 gokz-r2upload.smx 移动到 plugins/disabled/"
-            fi
-            if [ -f "$PLUGIN_DIR/manger_online_reporter.smx" ]; then
-              mv "$PLUGIN_DIR/manger_online_reporter.smx" "$PLUGIN_DIR/disabled/manger_online_reporter.smx"
-              echo "已将旧版 manger_online_reporter.smx 移动到 plugins/disabled/"
-            fi
-            if [ -f "$PLUGIN_DIR/manger_edge_sync.smx" ]; then
-              mv "$PLUGIN_DIR/manger_edge_sync.smx" "$PLUGIN_DIR/disabled/manger_edge_sync.smx"
-              echo "已将旧版 manger_edge_sync.smx 移动到 plugins/disabled/"
-            fi
-            echo "插件已更新（包含自定义 gokz-replays.smx），请完整重启游戏服务器。"
-
-  # ===== 部署插件 → ILIAN =====
-  deploy-plugin-ilian:
-    needs: [detect-changes, build-plugin]
-    if: needs.detect-changes.outputs.plugin == 'true' && github.event_name == 'workflow_dispatch' && (inputs.deploy_target == 'ilian' || inputs.deploy_target == 'all')
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Download Plugin Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: plugin-output
-          path: plugin-output
-
-      - name: Setup SSH Key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.GAME_SSH_KEY_ILIAN }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ vars.GAME_HOST_ILIAN }} >> ~/.ssh/known_hosts
-
-      - name: Deploy Plugin
-        run: |
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" plugin-output/plugins/gokz-replays.smx plugin-output/plugins/cngokz-core.smx plugin-output/plugins/cngokz-prime.smx plugin-output/plugins/cngokz-server.smx plugin-output/plugins/cngokz-sync.smx plugin-output/plugins/cngokz-recordguard.smx plugin-output/plugins/cngokz-global.smx ${{ vars.GAME_USER_ILIAN }}@${{ vars.GAME_HOST_ILIAN }}:${{ vars.GAME_PATH_ILIAN }}/
-
-      - name: Finalize Plugin Deployment
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ vars.GAME_HOST_ILIAN }}
-          username: ${{ vars.GAME_USER_ILIAN }}
-          key: ${{ secrets.GAME_SSH_KEY_ILIAN }}
-          script: |
-            PLUGIN_DIR="${{ vars.GAME_PATH_ILIAN }}"
-            mkdir -p "$PLUGIN_DIR/disabled"
-            if [ -f "$PLUGIN_DIR/gokz-global.smx" ]; then
-              mv "$PLUGIN_DIR/gokz-global.smx" "$PLUGIN_DIR/disabled/gokz-global.smx"
-              echo "已将原版 gokz-global.smx 移动到 plugins/disabled/"
-            fi
-            if [ -f "$PLUGIN_DIR/gokz-r2upload.smx" ]; then
-              mv "$PLUGIN_DIR/gokz-r2upload.smx" "$PLUGIN_DIR/disabled/gokz-r2upload.smx"
-              echo "已将旧版 gokz-r2upload.smx 移动到 plugins/disabled/"
-            fi
-            if [ -f "$PLUGIN_DIR/manger_online_reporter.smx" ]; then
-              mv "$PLUGIN_DIR/manger_online_reporter.smx" "$PLUGIN_DIR/disabled/manger_online_reporter.smx"
-              echo "已将旧版 manger_online_reporter.smx 移动到 plugins/disabled/"
-            fi
-            if [ -f "$PLUGIN_DIR/manger_edge_sync.smx" ]; then
-              mv "$PLUGIN_DIR/manger_edge_sync.smx" "$PLUGIN_DIR/disabled/manger_edge_sync.smx"
-              echo "已将旧版 manger_edge_sync.smx 移动到 plugins/disabled/"
-            fi
-            echo "插件已更新（包含自定义 gokz-replays.smx），请完整重启游戏服务器。"

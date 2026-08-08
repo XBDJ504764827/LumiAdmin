@@ -35,6 +35,11 @@ pub struct Config {
     pub session_cleanup_interval_secs: u64,
     pub rcon_poll_scan_interval_secs: u64,
     pub map_tier_sync_interval_secs: u64,
+    // 休眠服务器 RCON 兜底轮询（服务器空服休眠时插件无法上报，由后端通过 RCON 保持数据刷新）
+    pub hibernation_poll_enabled: bool,
+    pub hibernation_poll_scan_interval_secs: u64,
+    pub hibernation_poll_interval_secs: u64,
+    pub hibernation_poll_after_secs: i64,
     // 服务器状态历史清理
     pub status_history_cleanup_interval_secs: u64,
     pub status_history_retention_secs: u64,
@@ -57,6 +62,12 @@ pub struct Config {
     pub appeal_file_max_size_bytes: usize,
     // QQ 机器人集成令牌（用于插件查询待审核数量等只读统计接口）
     pub qq_integration_token: Option<String>,
+    // LumiBot（QQ 机器人事件接收中心）上报配置
+    pub lumi_bot_api_url: Option<String>,
+    pub lumi_bot_api_key: Option<String>,
+    pub lumi_bot_sync_interval_secs: u64,
+    pub lumi_bot_max_attempts: u32,
+    pub lumi_bot_batch_size: usize,
 }
 
 impl Config {
@@ -159,6 +170,11 @@ impl Config {
             session_cleanup_interval_secs: env_u64("SESSION_CLEANUP_INTERVAL_SECS", 600),
             rcon_poll_scan_interval_secs: env_u64("RCON_POLL_SCAN_INTERVAL_SECS", 30),
             map_tier_sync_interval_secs: env_u64("MAP_TIER_SYNC_INTERVAL_SECS", 6 * 3600),
+            // 休眠服务器 RCON 兜底轮询：默认开启；插件上报间隔默认 30s，故默认 90s 未上报视为进入休眠
+            hibernation_poll_enabled: env_bool("HIBERNATION_POLL_ENABLED", true),
+            hibernation_poll_scan_interval_secs: env_u64("HIBERNATION_POLL_SCAN_INTERVAL_SECS", 30),
+            hibernation_poll_interval_secs: env_u64("HIBERNATION_POLL_INTERVAL_SECS", 60),
+            hibernation_poll_after_secs: env_u64("HIBERNATION_POLL_AFTER_SECS", 90) as i64,
             // 服务器状态历史清理：每小时清理一次，保留 1 小时数据
             status_history_cleanup_interval_secs: env_u64(
                 "STATUS_HISTORY_CLEANUP_INTERVAL_SECS",
@@ -201,6 +217,16 @@ impl Config {
             qq_integration_token: std::env::var("QQ_INTEGRATION_TOKEN")
                 .ok()
                 .filter(|v| !v.is_empty()),
+            // LumiBot 配置：未配置 URL/Key 时上报功能禁用（事件不入队、后台任务不启动）
+            lumi_bot_api_url: std::env::var("LUMI_BOT_API_URL")
+                .ok()
+                .filter(|v| !v.is_empty()),
+            lumi_bot_api_key: std::env::var("LUMI_BOT_API_KEY")
+                .ok()
+                .filter(|v| !v.is_empty()),
+            lumi_bot_sync_interval_secs: env_u64("LUMI_BOT_SYNC_INTERVAL_SECS", 1800),
+            lumi_bot_max_attempts: env_u64("LUMI_BOT_MAX_ATTEMPTS", 5) as u32,
+            lumi_bot_batch_size: env_u64("LUMI_BOT_BATCH_SIZE", 100) as usize,
         };
 
         // 跨字段校验
@@ -240,6 +266,24 @@ impl Config {
         if config.rcon_io_timeout_secs == 0 {
             tracing::warn!("RCON_IO_TIMEOUT_SECS 为 0，已自动修正为 10");
             config.rcon_io_timeout_secs = 10;
+        }
+
+        if config.hibernation_poll_scan_interval_secs == 0 {
+            tracing::warn!("HIBERNATION_POLL_SCAN_INTERVAL_SECS 为 0，已自动修正为 30");
+            config.hibernation_poll_scan_interval_secs = 30;
+        }
+
+        if config.hibernation_poll_interval_secs == 0 {
+            tracing::warn!("HIBERNATION_POLL_INTERVAL_SECS 为 0，已自动修正为 60");
+            config.hibernation_poll_interval_secs = 60;
+        }
+
+        if config.hibernation_poll_after_secs < 30 {
+            tracing::warn!(
+                after = config.hibernation_poll_after_secs,
+                "HIBERNATION_POLL_AFTER_SECS 过小，已自动修正为 30"
+            );
+            config.hibernation_poll_after_secs = 30;
         }
 
         if config.http_timeout_secs == 0 {
@@ -325,10 +369,16 @@ impl Config {
             app_env = %config.app_env,
             is_production = config.is_production,
             r2_enabled = config.r2_storage_enabled(),
+            lumi_bot_enabled = config.lumi_bot_enabled(),
             "应用配置已加载"
         );
 
         config
+    }
+
+    /// LumiBot 事件上报是否启用（需同时配置 API URL 与 API Key）
+    pub fn lumi_bot_enabled(&self) -> bool {
+        self.lumi_bot_api_url.is_some() && self.lumi_bot_api_key.is_some()
     }
 
     pub fn r2_storage_enabled(&self) -> bool {
@@ -348,6 +398,21 @@ fn env_u64(key: &str, default: u64) -> u64 {
         Ok(val) => match val.parse::<u64>() {
             Ok(n) => n,
             Err(_) => {
+                tracing::warn!(key = key, value = %val, default = default, "环境变量解析失败，使用默认值");
+                default
+            }
+        },
+        Err(_) => default,
+    }
+}
+
+/// 布尔环境变量读取（1/true/yes/on 视为 true，其余视为 false）
+fn env_bool(key: &str, default: bool) -> bool {
+    match std::env::var(key) {
+        Ok(val) => match val.trim().to_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => true,
+            "0" | "false" | "no" | "off" => false,
+            _ => {
                 tracing::warn!(key = key, value = %val, default = default, "环境变量解析失败，使用默认值");
                 default
             }

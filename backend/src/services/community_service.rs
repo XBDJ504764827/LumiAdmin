@@ -211,17 +211,19 @@ struct OnlineReportServer {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SessionEndReason {
+pub(crate) enum SessionEndReason {
     AdminKicked,
     PlayerQuit,
     AccessRejected,
     BannedKicked,
     SnapshotMissing,
     ServerStale,
+    /// 服务器空服休眠（后端 RCON 兑底轮询确认空服后关闭残留会话）
+    ServerEmpty,
 }
 
 impl SessionEndReason {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::AdminKicked => "admin_kicked",
             Self::PlayerQuit => "player_quit",
@@ -229,6 +231,7 @@ impl SessionEndReason {
             Self::BannedKicked => "banned_kicked",
             Self::SnapshotMissing => "snapshot_missing",
             Self::ServerStale => "server_stale",
+            Self::ServerEmpty => "server_empty",
         }
     }
 
@@ -240,6 +243,7 @@ impl SessionEndReason {
             "banned_kicked" => Ok(Self::BannedKicked),
             "snapshot_missing" => Ok(Self::SnapshotMissing),
             "server_stale" => Ok(Self::ServerStale),
+            "server_empty" => Ok(Self::ServerEmpty),
             _ => anyhow::bail!("未知退出原因"),
         }
     }

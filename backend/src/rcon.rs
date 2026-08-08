@@ -158,6 +158,27 @@ pub struct StatusResult {
     pub player_count: i32,
     pub max_players: i32,
     pub players: Vec<String>,
+    /// 服务器是否处于休眠状态（空服后 sv_hibernate_when_empty 触发，
+    /// `status` 输出中带 `(hibernating)` 标记）。休眠时 SourceMod 定时器停摆，
+    /// 只有 RCON 仍可通讯。
+    pub hibernating: bool,
+}
+
+/// `stats` 命令解析结果（CS:GO 输出：CPU/In/Out/Uptime/Map changes/FPS/Players/Connects）
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct StatsResult {
+    /// CPU 使用率（%）
+    pub cpu_usage: f32,
+    /// 入站流量（KB/s）
+    pub in_rate: f32,
+    /// 出站流量（KB/s）
+    pub out_rate: f32,
+    /// 服务器运行时长（秒）
+    pub uptime_seconds: i64,
+    /// 帧率（128 tick 服务器通常为 128）
+    pub fps: f32,
+    /// 当前玩家数（含 bots）
+    pub player_count: i32,
 }
 
 pub fn parse_status_output(output: &str) -> StatusResult {
@@ -200,6 +221,10 @@ pub fn parse_status_output(output: &str) -> StatusResult {
             }
         }
     }
+    // 休眠标记：`(hibernating)` 或 `(not hibernating)`（注意后者包含前者子串，需先判断）
+    if !output.contains("(not hibernating)") && output.contains("(hibernating)") {
+        result.hibernating = true;
+    }
     for line in output.lines() {
         let line = line.trim();
         if line.starts_with('#') && line.contains('"') {
@@ -209,6 +234,56 @@ pub fn parse_status_output(output: &str) -> StatusResult {
         }
     }
     result
+}
+
+/// 解析 CS:GO `stats` 命令输出。
+///
+/// 输出格式：
+/// ```text
+/// CPU   In    Out   Uptime  Map changes  FPS   Players  Connects
+/// 0.00  0.0   0.0   0:00    0            128   0        0
+/// ```
+/// 只取第一个数据行；Uptime 支持 `H:MM` 与 `H:MM:SS` 两种格式。
+pub fn parse_stats_output(output: &str) -> StatsResult {
+    let mut result = StatsResult::default();
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        // 数据行至少 8 列且首列为数字（表头行以字母开头）
+        if fields.len() < 8 || fields[0].parse::<f32>().is_err() {
+            continue;
+        }
+        result.cpu_usage = fields[0].parse().unwrap_or(0.0);
+        result.in_rate = fields[1].parse().unwrap_or(0.0);
+        result.out_rate = fields[2].parse().unwrap_or(0.0);
+        result.uptime_seconds = parse_uptime_seconds(fields[3]);
+        result.fps = fields[5].parse().unwrap_or(0.0);
+        result.player_count = fields[6].parse().unwrap_or(0);
+        break;
+    }
+    result
+}
+
+/// 解析 `H:MM` / `H:MM:SS` 格式的运行时长（小时可超过 24，如 `120:33`）
+fn parse_uptime_seconds(value: &str) -> i64 {
+    let parts: Vec<&str> = value.split(':').collect();
+    match parts.len() {
+        2 => {
+            let hours: i64 = parts[0].trim().parse().unwrap_or(0);
+            let minutes: i64 = parts[1].trim().parse().unwrap_or(0);
+            hours * 3600 + minutes * 60
+        }
+        3 => {
+            let hours: i64 = parts[0].trim().parse().unwrap_or(0);
+            let minutes: i64 = parts[1].trim().parse().unwrap_or(0);
+            let seconds: i64 = parts[2].trim().parse().unwrap_or(0);
+            hours * 3600 + minutes * 60 + seconds
+        }
+        _ => 0,
+    }
 }
 
 /// 从 "2 humans, 0 bots (16/0 max)" 格式中提取 (current_humans, max_players)
@@ -281,6 +356,70 @@ players : 2 humans, 0 bots (16/0 max) (not hibernating)
         assert_eq!(result.player_count, 2);
         assert_eq!(result.max_players, 16);
         assert_eq!(result.players, vec![".mONESY", "灵活的小舌头"]);
+        assert!(!result.hibernating);
+    }
+
+    #[test]
+    fn parse_hibernating_status() {
+        let output = r#"hostname: CNGOKZ 2服
+version : 1.38.8.1/13881 1575/8853 secure  [G:1:15912410]
+udp/ip  : 103.219.30.7:10002  (public ip: 103.219.30.7)
+os      :  Linux
+type    :  community dedicated
+map     : kz_slumpfrageous
+players : 0 humans, 0 bots (16/0 max) (hibernating)
+
+#end"#;
+
+        let result = parse_status_output(output);
+        assert_eq!(result.player_count, 0);
+        assert_eq!(result.max_players, 16);
+        assert!(result.hibernating);
+        assert!(result.players.is_empty());
+    }
+
+    #[test]
+    fn parse_stats_csgo() {
+        let output = r#"CPU   In    Out   Uptime  Map changes  FPS   Players  Connects
+0.00  0.0   0.0   0:00    0            128   0        0"#;
+
+        let result = parse_stats_output(output);
+        assert_eq!(result.cpu_usage, 0.0);
+        assert_eq!(result.in_rate, 0.0);
+        assert_eq!(result.out_rate, 0.0);
+        assert_eq!(result.uptime_seconds, 0);
+        assert_eq!(result.fps, 128.0);
+        assert_eq!(result.player_count, 0);
+    }
+
+    #[test]
+    fn parse_stats_with_uptime_and_cpu() {
+        let output = r#"CPU   In    Out   Uptime  Map changes  FPS   Players  Connects
+12.50  3.4   2.1   120:33  5            128   5        42"#;
+
+        let result = parse_stats_output(output);
+        assert_eq!(result.cpu_usage, 12.5);
+        assert_eq!(result.in_rate, 3.4);
+        assert_eq!(result.out_rate, 2.1);
+        assert_eq!(result.uptime_seconds, 120 * 3600 + 33 * 60);
+        assert_eq!(result.fps, 128.0);
+        assert_eq!(result.player_count, 5);
+    }
+
+    #[test]
+    fn parse_stats_three_part_uptime() {
+        let output = "CPU In Out Uptime Map changes FPS Players Connects\n1.5 0.0 0.0 1:02:03 0 64 0 0";
+        let result = parse_stats_output(output);
+        assert_eq!(result.uptime_seconds, 3600 + 2 * 60 + 3);
+        assert_eq!(result.fps, 64.0);
+    }
+
+    #[test]
+    fn parse_stats_ignores_header_only() {
+        let output = "CPU   In    Out   Uptime  Map changes  FPS   Players  Connects\n";
+        let result = parse_stats_output(output);
+        assert_eq!(result.cpu_usage, 0.0);
+        assert_eq!(result.uptime_seconds, 0);
     }
 
     #[test]

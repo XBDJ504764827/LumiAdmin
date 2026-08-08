@@ -1,7 +1,7 @@
 use crate::routes::{invalid_request, AppCtx, ListQuery};
 use crate::services::{
-    ban_service, dashboard_service, global_ban_service, log_service, notification_service,
-    public_service, rate_limit_service::extract_client_ip, whitelist_service,
+    ban_service, dashboard_service, global_ban_service, log_service, lumi_bot_service,
+    notification_service, public_service, rate_limit_service::extract_client_ip, whitelist_service,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -95,7 +95,14 @@ pub(crate) async fn submit_whitelist(
     {
         tracing::warn!(%e, "whitelist apply notification failed");
     }
-    Ok((StatusCode::CREATED, Json(serde_json::json!({"item": item}))))
+    // LumiBot（QQ 机器人）事件队列：新白名单申请入队，
+    // 由后台任务每 30 分钟集中通过 LumiBot API 上报，再由 QQ 机器人通知管理员。
+    if ctx.config.lumi_bot_enabled() {
+        if let Err(e) = lumi_bot_service::enqueue_whitelist_created(&ctx.db, &item).await {
+            tracing::warn!(%e, "LumiBot 白名单申请事件入队失败");
+        }
+    }
+    Ok((StatusCode::CREATED, Json(serde_json::json!({ "item": item }))))
 }
 
 pub(crate) async fn public_bans(

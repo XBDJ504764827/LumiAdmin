@@ -21,6 +21,10 @@ impl Database {
         )
         .execute(&self.pool)
         .await?;
+        // 数据来源标记：'plugin' = 插件定时上报；'rcon' = 后端休眠兑底轮询（服务器空服休眠时插件无法上报）
+        sqlx::query(r#"ALTER TABLE server_status_history ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'plugin'"#)
+            .execute(&self.pool)
+            .await?;
         sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_server_status_history_server_id ON server_status_history (server_id, reported_at DESC)"#)
         .execute(&self.pool).await?;
         // 为清理查询添加独立索引（按时间排序，加速 DELETE ... WHERE reported_at < ...）

@@ -408,7 +408,8 @@ players : 0 humans, 0 bots (16/0 max) (hibernating)
 
     #[test]
     fn parse_stats_three_part_uptime() {
-        let output = "CPU In Out Uptime Map changes FPS Players Connects\n1.5 0.0 0.0 1:02:03 0 64 0 0";
+        let output =
+            "CPU In Out Uptime Map changes FPS Players Connects\n1.5 0.0 0.0 1:02:03 0 64 0 0";
         let result = parse_stats_output(output);
         assert_eq!(result.uptime_seconds, 3600 + 2 * 60 + 3);
         assert_eq!(result.fps, 64.0);

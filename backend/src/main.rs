@@ -63,6 +63,13 @@ async fn main() -> anyhow::Result<()> {
         db.clone(),
         config.rcon_poll_scan_interval_secs,
     );
+    // 启动休眠服务器 RCON 兑底轮询：空服休眠时插件无法上报，由后端通过 RCON 保持数据刷新
+    if config.hibernation_poll_enabled {
+        services::hibernation_poll_service::start_hibernation_poll_loop(
+            db.clone(),
+            services::hibernation_poll_service::HibernationPollConfig::from_config(&config),
+        );
+    }
     // 启动过期服务器状态清理，每 30 秒执行一次
     services::community_service::start_stale_cleanup_loop(db.clone());
     // 启动通知清理，每 24 小时清理 30 天前的已读通知

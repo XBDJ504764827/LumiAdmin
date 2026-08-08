@@ -35,6 +35,11 @@ pub struct Config {
     pub session_cleanup_interval_secs: u64,
     pub rcon_poll_scan_interval_secs: u64,
     pub map_tier_sync_interval_secs: u64,
+    // 休眠服务器 RCON 兜底轮询（服务器空服休眠时插件无法上报，由后端通过 RCON 保持数据刷新）
+    pub hibernation_poll_enabled: bool,
+    pub hibernation_poll_scan_interval_secs: u64,
+    pub hibernation_poll_interval_secs: u64,
+    pub hibernation_poll_after_secs: i64,
     // 服务器状态历史清理
     pub status_history_cleanup_interval_secs: u64,
     pub status_history_retention_secs: u64,
@@ -165,6 +170,11 @@ impl Config {
             session_cleanup_interval_secs: env_u64("SESSION_CLEANUP_INTERVAL_SECS", 600),
             rcon_poll_scan_interval_secs: env_u64("RCON_POLL_SCAN_INTERVAL_SECS", 30),
             map_tier_sync_interval_secs: env_u64("MAP_TIER_SYNC_INTERVAL_SECS", 6 * 3600),
+            // 休眠服务器 RCON 兜底轮询：默认开启；插件上报间隔默认 30s，故默认 90s 未上报视为进入休眠
+            hibernation_poll_enabled: env_bool("HIBERNATION_POLL_ENABLED", true),
+            hibernation_poll_scan_interval_secs: env_u64("HIBERNATION_POLL_SCAN_INTERVAL_SECS", 30),
+            hibernation_poll_interval_secs: env_u64("HIBERNATION_POLL_INTERVAL_SECS", 60),
+            hibernation_poll_after_secs: env_u64("HIBERNATION_POLL_AFTER_SECS", 90) as i64,
             // 服务器状态历史清理：每小时清理一次，保留 1 小时数据
             status_history_cleanup_interval_secs: env_u64(
                 "STATUS_HISTORY_CLEANUP_INTERVAL_SECS",
@@ -256,6 +266,24 @@ impl Config {
         if config.rcon_io_timeout_secs == 0 {
             tracing::warn!("RCON_IO_TIMEOUT_SECS 为 0，已自动修正为 10");
             config.rcon_io_timeout_secs = 10;
+        }
+
+        if config.hibernation_poll_scan_interval_secs == 0 {
+            tracing::warn!("HIBERNATION_POLL_SCAN_INTERVAL_SECS 为 0，已自动修正为 30");
+            config.hibernation_poll_scan_interval_secs = 30;
+        }
+
+        if config.hibernation_poll_interval_secs == 0 {
+            tracing::warn!("HIBERNATION_POLL_INTERVAL_SECS 为 0，已自动修正为 60");
+            config.hibernation_poll_interval_secs = 60;
+        }
+
+        if config.hibernation_poll_after_secs < 30 {
+            tracing::warn!(
+                after = config.hibernation_poll_after_secs,
+                "HIBERNATION_POLL_AFTER_SECS 过小，已自动修正为 30"
+            );
+            config.hibernation_poll_after_secs = 30;
         }
 
         if config.http_timeout_secs == 0 {
@@ -370,6 +398,21 @@ fn env_u64(key: &str, default: u64) -> u64 {
         Ok(val) => match val.parse::<u64>() {
             Ok(n) => n,
             Err(_) => {
+                tracing::warn!(key = key, value = %val, default = default, "环境变量解析失败，使用默认值");
+                default
+            }
+        },
+        Err(_) => default,
+    }
+}
+
+/// 布尔环境变量读取（1/true/yes/on 视为 true，其余视为 false）
+fn env_bool(key: &str, default: bool) -> bool {
+    match std::env::var(key) {
+        Ok(val) => match val.trim().to_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => true,
+            "0" | "false" | "no" | "off" => false,
+            _ => {
                 tracing::warn!(key = key, value = %val, default = default, "环境变量解析失败，使用默认值");
                 default
             }

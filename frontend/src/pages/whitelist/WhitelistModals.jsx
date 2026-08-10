@@ -81,9 +81,127 @@ function riskTone(profile) {
   return 'default';
 }
 
-function RiskProfilePanel({ profile }) {
+const RISK_GRAPH_LIMIT = 8;
+
+function RiskChip({ tone = 'default', children }) {
+  return <span className={`risk-chip risk-chip-${tone}`}>{children}</span>;
+}
+
+function accountStatusChips(account) {
+  const chips = [];
+  if (account.has_active_global_ban) chips.push(<RiskChip key="global" tone="danger">全球封禁</RiskChip>);
+  if (account.has_active_local_ban) chips.push(<RiskChip key="local" tone="danger">本地封禁</RiskChip>);
+  if (account.rejected_whitelist_count > 0) chips.push(<RiskChip key="rejected" tone="warning">白名单被拒 {account.rejected_whitelist_count} 次</RiskChip>);
+  if (chips.length === 0) chips.push(<RiskChip key="clean" tone="default">无风险标记</RiskChip>);
+  return chips;
+}
+
+// 消息中可能内嵌 RFC3339 时间戳（历史数据），统一替换为本地可读时间
+const ISO_TIME_RE = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})/g;
+
+function friendlyReasonMessage(message) {
+  return String(message || '').replace(ISO_TIME_RE, (raw) => {
+    try {
+      const formatted = formatChinaDateTime(raw, { seconds: false });
+      return formatted === raw ? raw : formatted;
+    } catch {
+      return raw;
+    }
+  });
+}
+
+// 风险原因按来源分组展示
+const REASON_GROUPS = [
+  { key: 'self', title: '当前账号风险', match: (code) => code.startsWith('self_') },
+  { key: 'linked', title: '关联账号风险', match: (code) => code.startsWith('linked_') },
+  { key: 'other', title: '其他提示', match: () => true },
+];
+
+function severityTone(severity) {
+  if (severity === 'block') return 'danger';
+  if (severity === 'warning') return 'warning';
+  return 'default';
+}
+
+function severityIcon(severity) {
+  if (severity === 'block') return '⛔';
+  if (severity === 'warning') return '⚠';
+  return 'ℹ';
+}
+
+function RiskReasonItem({ reason, accountName }) {
+  const tone = severityTone(reason.severity);
+  return (
+    <div className={`whitelist-risk-reason risk-severity-${tone}`}>
+      <span className="whitelist-risk-reason-icon">{severityIcon(reason.severity)}</span>
+      <span className="whitelist-risk-reason-text">{friendlyReasonMessage(reason.message)}</span>
+      <span className="whitelist-risk-reason-meta">
+        {reason.ip ? <code>IP：{reason.ip}</code> : null}
+        {reason.steamid64 ? <code>{accountName ? `${accountName} · ` : ''}{reason.steamid64}</code> : null}
+      </span>
+    </div>
+  );
+}
+
+// 用连线图展示当前玩家与各关联账号之间的关系，线上的标签即关联依据（共享 IP）
+function RiskLinkGraph({ profile, mainName }) {
+  const accounts = profile.linked_accounts || [];
+  const visible = accounts.slice(0, RISK_GRAPH_LIMIT);
+  const more = accounts.length - visible.length;
+  if (visible.length === 0) return null;
+
+  const selfReasons = (profile.reasons || []).filter((reason) => reason.code.startsWith('self_'));
+  const selfChips = [];
+  if (selfReasons.some((reason) => reason.code.includes('global'))) {
+    selfChips.push(<RiskChip key="global" tone="danger">全球封禁</RiskChip>);
+  }
+  if (selfReasons.some((reason) => reason.code.includes('local'))) {
+    selfChips.push(<RiskChip key="local" tone="danger">本地封禁</RiskChip>);
+  }
+
+  return (
+    <div className="whitelist-risk-graph">
+      <div className="risk-graph-row risk-graph-row-main">
+        <div className="risk-graph-stub" />
+        <div className="risk-graph-node risk-graph-node-main">
+          <div className="risk-graph-node-head">
+            <span className="risk-graph-node-role">当前玩家</span>
+            {selfChips}
+          </div>
+          <div className="risk-graph-node-name">{mainName || '(未知玩家)'}</div>
+          <code className="risk-graph-node-id">{profile.steamid64}</code>
+        </div>
+      </div>
+      {visible.map((account) => (
+        <div key={account.steamid64} className="risk-graph-row">
+          <div className="risk-graph-stub" />
+          <div className="risk-graph-arm">
+            <span className="risk-graph-ip" title="关联方式（共享 IP）">
+              共享IP：{account.shared_ips?.length ? account.shared_ips.join('、') : '未知'}
+            </span>
+          </div>
+          <div className="risk-graph-node">
+            <div className="risk-graph-node-name">{account.player_name || '(未知玩家)'}</div>
+            <code className="risk-graph-node-id">{account.steamid64}</code>
+            <div className="risk-graph-node-meta">
+              {accountStatusChips(account)}
+              {account.last_seen_at ? (
+                <span className="risk-graph-node-seen">最近出现 {formatChinaDateTime(account.last_seen_at, { seconds: false })}</span>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ))}
+      {more > 0 ? <div className="risk-graph-more">另有 {more} 个关联账号未在图中展示，详见下方风险原因。</div> : null}
+    </div>
+  );
+}
+
+function RiskProfilePanel({ profile, mainName }) {
   if (!profile || profile.action === 'allow') return null;
   const tone = riskTone(profile);
+  const reasons = profile.reasons || [];
+  const linkedAccounts = profile.linked_accounts || [];
   return (
     <div className={`whitelist-risk-panel ${tone}`}>
       <div className="whitelist-risk-panel-head">
@@ -91,27 +209,47 @@ function RiskProfilePanel({ profile }) {
         <strong>{riskActionLabel(profile.action)}</strong>
       </div>
       <div className="whitelist-risk-summary">{profile.summary}</div>
-      {profile.recommendation ? <div className="whitelist-risk-recommendation">{profile.recommendation}</div> : null}
-      {profile.reasons?.length > 0 ? (
-        <div className="whitelist-risk-reason-list">
-          {profile.reasons.map((reason, index) => (
-            <div key={`${reason.code}-${index}`} className="whitelist-risk-reason">
-              <span>{reason.message}</span>
-              {reason.ip ? <code>{reason.ip}</code> : null}
-              {reason.steamid64 ? <code>{reason.steamid64}</code> : null}
-            </div>
-          ))}
+      {linkedAccounts.length > 0 ? (
+        <div className="whitelist-risk-section">
+          <div className="whitelist-risk-section-title">关联账号</div>
+          <RiskLinkGraph profile={profile} mainName={mainName} />
         </div>
       ) : null}
-      {profile.linked_accounts?.length > 0 ? (
-        <div className="whitelist-risk-linked">
-          {profile.linked_accounts.slice(0, 5).map((account) => (
-            <div key={account.steamid64} className="whitelist-risk-linked-row">
-              <span>{account.player_name || '(未知)'}</span>
-              <code>{account.steamid64}</code>
-              <span>{account.has_active_global_ban ? '全球封禁' : account.has_active_local_ban ? '本地封禁' : '历史风险'}</span>
-            </div>
-          ))}
+      {reasons.length > 0 ? (
+        <div className="whitelist-risk-section">
+          <div className="whitelist-risk-section-title">风险原因</div>
+          <div className="whitelist-risk-reason-groups">
+            {REASON_GROUPS.map((group) => {
+              const groupReasons = reasons.filter((reason) => group.match(reason.code));
+              if (groupReasons.length === 0) return null;
+              return (
+                <div key={group.key} className="whitelist-risk-reason-group">
+                  <div className="whitelist-risk-reason-group-title">
+                    <span>{group.title}</span>
+                    <span className="whitelist-risk-reason-group-count">{groupReasons.length}</span>
+                  </div>
+                  <div className="whitelist-risk-reason-list">
+                    {groupReasons.map((reason, index) => {
+                      const account = (profile.linked_accounts || []).find((a) => a.steamid64 === reason.steamid64);
+                      return (
+                        <RiskReasonItem
+                          key={`${reason.code}-${index}`}
+                          reason={reason}
+                          accountName={account?.player_name}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+      {profile.recommendation ? (
+        <div className="whitelist-risk-recommendation">
+          <span className="whitelist-risk-recommendation-label">处理建议</span>
+          <span>{profile.recommendation}</span>
         </div>
       ) : null}
     </div>
@@ -225,6 +363,7 @@ export function ApproveModal({ open, onClose, mode = 'approve', item, bans = [],
   return (
     <Modal
       open={open}
+      wide
       title={
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ fontSize: 20, color: 'var(--accent)' }}>⚠</span>
@@ -251,7 +390,7 @@ export function ApproveModal({ open, onClose, mode = 'approve', item, bans = [],
           该玩家命中白名单风险策略。请完整查看下方风险详情，倒计时结束并填写通过理由后才可继续。
         </div>
       </div>
-      <RiskProfilePanel profile={riskProfile} />
+      <RiskProfilePanel profile={riskProfile} mainName={item?.nickname} />
       {risk ? (
         <div className={`global-ban-risk global-ban-risk-${risk.tone}`}>
           <div className="global-ban-risk-title">{risk.title}</div>
@@ -293,6 +432,7 @@ export function RiskDetailModal({ open, onClose, item }) {
   return (
     <Modal
       open={open}
+      wide
       title="关联账号风险"
       onClose={onClose}
       footer={<button className="btn btn-primary" type="button" onClick={onClose}>关闭</button>}
@@ -301,7 +441,7 @@ export function RiskDetailModal({ open, onClose, item }) {
         <div><strong>玩家:</strong> {item?.nickname ?? '-'}</div>
         <div><strong>SteamID64:</strong> <code>{item?.steamid64 ?? '-'}</code></div>
       </div>
-      <RiskProfilePanel profile={item?.risk_profile} />
+      <RiskProfilePanel profile={item?.risk_profile} mainName={item?.nickname} />
       {!item?.risk_profile || item.risk_profile.action === 'allow' ? (
         <div className="global-ban-empty">当前没有关联账号风险。</div>
       ) : null}
@@ -425,6 +565,7 @@ export function PlayerDetailModal({ open, onClose, item, canReview, submitting, 
   return (
     <Modal
       open={open}
+      wide
       title="玩家详细信息"
       onClose={onClose}
       footer={
@@ -460,7 +601,7 @@ export function PlayerDetailModal({ open, onClose, item, canReview, submitting, 
             </div>
           </div>
 
-          <RiskProfilePanel profile={item.risk_profile} />
+          <RiskProfilePanel profile={item.risk_profile} mainName={item.nickname} />
 
           <div className="form-group">
             <label className="mb-4">GOKZ.TOP 统计</label>

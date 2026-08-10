@@ -239,6 +239,14 @@ pub(crate) async fn steam_auth_callback(
         .flatten()
         .map(|p| p.persona_name);
 
+    // 获取 Steam 等级
+    let steam_level = ctx
+        .steam_resolver
+        .fetch_steam_level(&steamid64)
+        .await
+        .ok()
+        .flatten();
+
     // 计算其他 Steam 标识符
     let (steamid, steamid3) = {
         let parsed = ctx.steam_resolver.parse_local(&steamid64);
@@ -254,8 +262,8 @@ pub(crate) async fn steam_auth_callback(
     let expires_at = Utc::now() + chrono::Duration::hours(SESSION_TTL_HOURS);
 
     sqlx::query(
-        r#"INSERT INTO public_steam_auth_sessions (id, steamid64, steamid, steamid3, profile_url, persona_name, expires_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
+        r#"INSERT INTO public_steam_auth_sessions (id, steamid64, steamid, steamid3, profile_url, persona_name, steam_level, expires_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
     )
     .bind(session_id)
     .bind(&steamid64)
@@ -263,6 +271,7 @@ pub(crate) async fn steam_auth_callback(
     .bind(&steamid3)
     .bind(&profile_url)
     .bind(&persona_name)
+    .bind(steam_level.map(|l| l as i32))
     .bind(expires_at)
     .execute(&ctx.db.pool)
     .await
@@ -300,9 +309,9 @@ pub(crate) async fn steam_auth_session(
         )
     })?;
 
-    let row: Option<(uuid::Uuid, String, Option<String>, Option<String>, String, Option<String>)> =
+    let row: Option<(uuid::Uuid, String, Option<String>, Option<String>, String, Option<String>, Option<i32>)> =
         sqlx::query_as(
-            r#"SELECT id, steamid64, steamid, steamid3, profile_url, persona_name
+            r#"SELECT id, steamid64, steamid, steamid3, profile_url, persona_name, steam_level
                FROM public_steam_auth_sessions
                WHERE id = $1 AND expires_at > now()"#,
         )
@@ -317,7 +326,7 @@ pub(crate) async fn steam_auth_session(
             )
         })?;
 
-    let (_id, steamid64, steamid, steamid3, profile_url, persona_name) =
+    let (_id, steamid64, steamid, steamid3, profile_url, persona_name, steam_level) =
         row.ok_or_else(|| {
             (
                 StatusCode::NOT_FOUND,
@@ -331,6 +340,7 @@ pub(crate) async fn steam_auth_session(
         "steamid3": steamid3,
         "profile_url": profile_url,
         "persona_name": persona_name,
+        "steam_level": steam_level,
         "token": query.token,
     })))
 }

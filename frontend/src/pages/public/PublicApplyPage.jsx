@@ -25,6 +25,11 @@ export function PublicApplyPage() {
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState('');
 
+  // 额外资料状态
+  const [steamLevel, setSteamLevel] = useState(null);
+  const [gokzStats, setGokzStats] = useState(null);
+  const [statsLoading, setStatsLoading] = useState(false);
+
   // 手动输入模式（当没有 Steam 认证时）
   const [manualMode, setManualMode] = useState(false);
   const [steamInput, setSteamInput] = useState('');
@@ -97,8 +102,24 @@ export function PublicApplyPage() {
             profileUrl: data.profile_url,
             personaName: data.persona_name,
           });
+          setSteamLevel(data.steam_level ?? null);
           setNickname(data.persona_name || '');
           setAuthLoading(false);
+
+          // 异步获取 GOKZ stats（不阻塞页面）
+          if (data.steamid64) {
+            setStatsLoading(true);
+            publicApi
+              .getGokzPlayerStatsBatch(data.steamid64)
+              .then((stats) => {
+                setGokzStats(stats);
+                setStatsLoading(false);
+              })
+              .catch(() => {
+                setGokzStats(null);
+                setStatsLoading(false);
+              });
+          }
         })
         .catch((err) => {
           setAuthError(err.message || 'Steam 会话验证失败');
@@ -238,6 +259,8 @@ export function PublicApplyPage() {
     setSteamVerified(false);
     setSteamToken('');
     setSteamInfo(null);
+    setSteamLevel(null);
+    setGokzStats(null);
     setNickname('');
     setContact('');
     setMessage('');
@@ -394,6 +417,7 @@ export function PublicApplyPage() {
               <>
                 {steamVerified && steamInfo && (
                   // 已验证 Steam 身份的信息卡片
+                  <>
                   <div className="alert alert-success" style={{ marginBottom: 16 }}>
                     <span className="alert-icon">✓</span>
                     <div className="alert-content">
@@ -418,6 +442,91 @@ export function PublicApplyPage() {
                       </div>
                     </div>
                   </div>
+
+                  {/* Steam 等级 + KZ 统计面板 */}
+                  {(steamLevel != null || gokzStats) && (
+                    <div style={{
+                      background: 'var(--surface2)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 10,
+                      padding: 16,
+                      marginBottom: 16,
+                    }}>
+                      <div style={{
+                        display: 'flex', alignItems: 'center', gap: 8,
+                        marginBottom: 14, paddingBottom: 10,
+                        borderBottom: '1px solid var(--border)',
+                      }}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-color)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M3 3v18h18"/><path d="M7 16l4-8 4 4 4-6"/>
+                        </svg>
+                        <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--text1)' }}>账号数据</span>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: 10 }}>
+                        {/* Steam 等级 */}
+                        {steamLevel != null && (
+                          <div style={{
+                            background: 'var(--surface1)',
+                            border: '1px solid var(--border)',
+                            borderRadius: 8,
+                            padding: '12px 12px 10px',
+                            textAlign: 'center',
+                          }}>
+                            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 6 }}>等级</div>
+                            <div style={{
+                              fontSize: 22, fontWeight: 700, color: 'var(--accent-color)'
+                            }}>
+                              {steamLevel}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* KZ 模式 */}
+                        {['KZT', 'SKZ', 'VNL', 'OVR'].map((mode) => {
+                          const data = gokzStats?.[mode];
+                          const colorMap = { KZT: '#f59e0b', SKZ: '#3b82f6', VNL: '#10b981', OVR: '#ec4899' };
+                          const modeColor = colorMap[mode] || 'var(--accent-color)';
+                          if (!data) return null;
+                          return (
+                            <div
+                              key={mode}
+                              style={{
+                                background: 'var(--surface1)',
+                                border: '1px solid var(--border)',
+                                borderTopColor: data.rating != null ? modeColor : 'var(--border)',
+                                borderTopWidth: 3,
+                                borderRadius: 8,
+                                padding: '12px 12px 10px',
+                                textAlign: 'center',
+                              }}
+                            >
+                              <div style={{ fontSize: 12, fontWeight: 600, color: modeColor, marginBottom: 6 }}>{mode}</div>
+                              {data.rating != null ? (
+                                <>
+                                  <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text1)' }}>
+                                    {Number(data.rating).toFixed(1)}
+                                  </div>
+                                  <div style={{ fontSize: 11, color: 'var(--text4)', marginTop: 3 }}>
+                                    Rating{data.rank != null ? `  ·  #${data.rank}` : ''}
+                                  </div>
+                                </>
+                              ) : (
+                                <div style={{ fontSize: 14, color: 'var(--text4)', padding: '4px 0' }}>暂无</div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {statsLoading && (
+                        <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--text4)', marginTop: 10 }}>
+                          正在加载 KZ 数据...
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  </>
                 )}
 
                 {manualMode && (

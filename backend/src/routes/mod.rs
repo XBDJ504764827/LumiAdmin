@@ -4,6 +4,7 @@ pub mod auth;
 pub mod ban;
 pub mod ban_api;
 pub mod community;
+pub mod dashboard_analytics;
 pub mod external_ban_api;
 pub mod external_server;
 pub mod global_ban;
@@ -13,6 +14,7 @@ pub mod ops;
 pub mod player_detail;
 pub mod plugin;
 pub mod public;
+pub mod steam_auth;
 #[cfg(test)]
 pub mod tests;
 pub mod user;
@@ -134,6 +136,22 @@ pub fn router(
         .route("/api/auth/me", get(auth::me))
         // -- dashboard --
         .route("/api/dashboard", get(misc::dashboard))
+        .route(
+            "/api/dashboard/analytics/whitelist-trend",
+            get(dashboard_analytics::whitelist_trend),
+        )
+        .route(
+            "/api/dashboard/analytics/server-activity",
+            get(dashboard_analytics::server_activity),
+        )
+        .route(
+            "/api/dashboard/analytics/server-status",
+            get(dashboard_analytics::server_status),
+        )
+        .route(
+            "/api/dashboard/analytics/server-ranking",
+            get(dashboard_analytics::server_ranking),
+        )
         .route("/api/review-counts", get(misc::review_counts))
         // -- community --
         .route("/api/community/servers", get(community::community_servers))
@@ -450,6 +468,19 @@ pub fn router(
         .route("/api/public/bans", get(public::public_bans))
         .route("/api/public/steam/resolve", post(public::resolve_steam))
         .route("/api/public/bans/query", post(public::query_active_bans))
+        // -- public steam auth --
+        .route(
+            "/api/public/steam/auth/login",
+            get(steam_auth::steam_auth_login),
+        )
+        .route(
+            "/api/public/steam/auth/callback",
+            get(steam_auth::steam_auth_callback),
+        )
+        .route(
+            "/api/public/steam/auth/session",
+            get(steam_auth::steam_auth_session),
+        )
         .route(
             "/api/public/global-bans/:steamid64",
             get(public::get_global_bans),

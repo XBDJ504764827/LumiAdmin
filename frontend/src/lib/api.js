@@ -9,6 +9,11 @@ export const api = {
   logoutAllDevices: (currentToken) => request('/api/auth/logout-all', { method: 'POST', body: JSON.stringify({ current_token: currentToken }) }),
   me: (token) => request('/api/auth/me', { headers: withAuth(token) }),
   dashboard: (token) => request('/api/dashboard', { headers: withAuth(token) }),
+  // ── Dashboard Analytics 图表统计 ──
+  whitelistTrend: (token, days = 30) => request(`/api/dashboard/analytics/whitelist-trend${buildQueryString({ days })}`, { headers: withAuth(token) }),
+  serverActivity: (token, range = 'today') => request(`/api/dashboard/analytics/server-activity${buildQueryString({ range })}`, { headers: withAuth(token) }),
+  serverStatus: (token) => request('/api/dashboard/analytics/server-status', { headers: withAuth(token) }),
+  serverRanking: (token, range = '7d', limit = 10) => request(`/api/dashboard/analytics/server-ranking${buildQueryString({ range, limit })}`, { headers: withAuth(token) }),
   reviewCounts: (token) => request('/api/review-counts', { headers: withAuth(token) }),
   servers: (token) => request('/api/community/servers', { headers: withAuth(token) }),
   createCommunityGroup: (token, body) => request('/api/community/groups', { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),

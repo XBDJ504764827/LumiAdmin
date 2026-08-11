@@ -4,6 +4,11 @@ import { publicApi } from '../../lib/publicApi.js';
 import { useApiQuery } from '../../shared/useApiQuery.js';
 import { normalizeAdminPreviewRows } from './dashboardData.js';
 import { formatChinaToday, getChinaHour } from '../../shared/time.js';
+import { DashboardStats } from '../../components/dashboard/DashboardStats.jsx';
+import { WhitelistTrendChart } from '../../components/dashboard/WhitelistTrendChart.jsx';
+import { ServerActivityChart } from '../../components/dashboard/ServerActivityChart.jsx';
+import { ServerStatusChart } from '../../components/dashboard/ServerStatusChart.jsx';
+import { ServerRankingChart } from '../../components/dashboard/ServerRankingChart.jsx';
 
 function formatToday() {
   return formatChinaToday();
@@ -16,13 +21,6 @@ function greeting() {
   if (h < 14) return '中午好';
   if (h < 18) return '下午好';
   return '晚上好';
-}
-
-function serverStatusBadge(online, offline) {
-  if (online === 0 && offline === 0) return null;
-  if (offline === 0) return <span className="dash-badge dash-badge-ok">全部在线</span>;
-  if (online === 0) return <span className="dash-badge dash-badge-danger">全部离线</span>;
-  return <span className="dash-badge dash-badge-warn">{offline} 离线</span>;
 }
 
 function formatFps(fps) {
@@ -129,49 +127,12 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {/* ── 核心指标 ── */}
+      {/* ── 核心统计卡片（真实数据 + 趋势） ── */}
       <div className="dash-section-label">
         <span className="dash-section-dot" />
         核心概览
       </div>
-      <div className="dash-overview">
-        <div className="dash-overview-item">
-          <div className="dash-overview-icon dash-icon-server">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2" /><rect x="2" y="14" width="20" height="8" rx="2" ry="2" /><line x1="6" y1="6" x2="6.01" y2="6" /><line x1="6" y1="18" x2="6.01" y2="18" /></svg>
-          </div>
-          <div className="dash-overview-info">
-            <div className="dash-overview-value">{stats.total_servers}</div>
-            <div className="dash-overview-label">服务器 {serverStatusBadge(stats.online_servers, stats.offline_servers)}</div>
-          </div>
-        </div>
-        <div className="dash-overview-item">
-          <div className="dash-overview-icon dash-icon-community">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
-          </div>
-          <div className="dash-overview-info">
-            <div className="dash-overview-value">{stats.communities}</div>
-            <div className="dash-overview-label">社区组</div>
-          </div>
-        </div>
-        <div className="dash-overview-item">
-          <div className="dash-overview-icon dash-icon-player">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3" /></svg>
-          </div>
-          <div className="dash-overview-info">
-            <div className="dash-overview-value">{stats.online_players}</div>
-            <div className="dash-overview-label">在线玩家</div>
-          </div>
-        </div>
-        <div className="dash-overview-item">
-          <div className="dash-overview-icon dash-icon-admin">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>
-          </div>
-          <div className="dash-overview-info">
-            <div className="dash-overview-value">{stats.admins}</div>
-            <div className="dash-overview-label">管理员</div>
-          </div>
-        </div>
-      </div>
+      <DashboardStats stats={stats} />
 
       {/* ── 服务器性能 ── */}
       <div className="dash-section-label">
@@ -213,6 +174,30 @@ export function DashboardPage() {
           <div className="dash-perf-hint">使用率 {playerPercent}%</div>
         </div>
       </div>
+
+      {/* ── 白名单增长趋势 ── */}
+      <div className="dash-section-label">
+        <span className="dash-section-dot" />
+        数据趋势
+      </div>
+      <WhitelistTrendChart />
+
+      {/* ── 服务器活跃度 + 状态分布 ── */}
+      <div className="dash-section-label">
+        <span className="dash-section-dot" />
+        服务器实时状态
+      </div>
+      <div className="dash-charts-grid">
+        <ServerActivityChart />
+        <ServerStatusChart />
+      </div>
+
+      {/* ── 服务器活跃度排行 ── */}
+      <div className="dash-section-label">
+        <span className="dash-section-dot" />
+        活跃排行
+      </div>
+      <ServerRankingChart />
 
       {/* ── 下半区：管理员 + 白名单 ── */}
       <div className="dash-lower-grid">

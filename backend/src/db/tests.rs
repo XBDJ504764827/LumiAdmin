@@ -339,15 +339,21 @@ async fn dashboard_server_activity_buckets_sessions_by_hour_and_day() {
         .fetch_one(&db.pool)
         .await?;
 
-        // 当前小时内的两个会话（进行中 + 已结束），与具体时间无关，保证测试稳定
-        for (steam, left) in [("h1", None), ("h2", Some("30 minutes"))] {
-            sqlx::query(
+        // 当前小时内的两个会话（进行中 + 已结束）。
+        // left_at 一律以 current_hour（当前小时起点）为基准计算，
+        // 避免 now() - 30min 在整点后半小时内运行时跨小时边界，导致测试不稳定。
+        for (steam, left_minutes) in [("h1", None), ("h2", Some(40))] {
+            let left_at_sql = match left_minutes {
+                Some(mins) => format!("$7 + interval '{mins} minutes'"),
+                None => "NULL".to_string(),
+            };
+            sqlx::query(&format!(
                 r#"INSERT INTO player_server_sessions
                    (id, server_id, server_name, server_port, community_id, steam_id64, player_name, ip,
                     first_seen_at, last_seen_at, left_at)
                    VALUES ($1, $2, $3, 27015, $4, $5, $6, '127.0.0.1',
-                           $7 + interval '10 minutes', $7 + interval '10 minutes', now() - $8::INTERVAL)"#,
-            )
+                           $7 + interval '10 minutes', $7 + interval '10 minutes', {left_at_sql})"#,
+            ))
             .bind(Uuid::new_v4())
             .bind(server_id)
             .bind("活跃服")
@@ -355,11 +361,11 @@ async fn dashboard_server_activity_buckets_sessions_by_hour_and_day() {
             .bind(steam)
             .bind(steam)
             .bind(current_hour)
-            .bind(left.unwrap_or("0 seconds"))
             .execute(&db.pool)
             .await?;
         }
         // 十天前结束的旧会话：既不在今日统计中，也不在近 7 天窗口内
+        // （该会话 left_at 使用 now() 相对值即可，因为 10 天前远在任何窗口之外）
         sqlx::query(
             r#"INSERT INTO player_server_sessions
                (id, server_id, server_name, server_port, community_id, steam_id64, player_name, ip,

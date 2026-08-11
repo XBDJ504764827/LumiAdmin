@@ -1,10 +1,17 @@
 //! Steam OpenID 认证（供公共页面白名单申请使用）
 //!
+//! 支持两种模式：
+//! - 直连模式（未配置 STEAM_RELAY_URL）：后端直接向 Steam 验证 OpenID 响应
+//! - 中转模式（配置了 STEAM_RELAY_URL，服务器无法直连 Steam）：
+//!   前端跳 Cloudflare Worker 中转（/login），Worker 完成 OpenID 验证并生成
+//!   一次性 token，回调本服务 /callback?token=&state=，后端向 Worker /verify
+//!   换取 SteamID（token 用后即焚，防伪造登录）
+//!
 //! 流程：
-//! 1. 前端调用 GET /api/public/steam/auth/login 获取回调 URL
-//! 2. 前端构建 Steam OpenID URL 并重定向用户到 Steam 登录
-//! 3. Steam 回调到 GET /api/public/steam/auth/callback
-//! 4. 后端验证 OpenID 响应，创建会话，重定向回前端并附带 token
+//! 1. 前端调用 GET /api/public/steam/auth/login 获取登录跳转地址
+//! 2. 前端重定向用户到 Steam 登录（直连）或中转 Worker（中转模式）
+//! 3. Steam 回调到中转 Worker 或本服务 /callback
+//! 4. 后端验证通过后创建会话，重定向回前端并附带 token
 //! 5. 前端调用 GET /api/public/steam/auth/session?token=xxx 获取已验证的 Steam 信息
 
 use axum::{
@@ -15,11 +22,40 @@ use axum::{
 };
 use chrono::Utc;
 use serde::Deserialize;
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use super::AppCtx;
+use crate::http_client;
 
 const SESSION_TTL_HOURS: i64 = 1;
+
+// ---------------------------------------------------------------------------
+// 登录 state 管理（防登录 CSRF，10 分钟过期）
+// ---------------------------------------------------------------------------
+
+const LOGIN_STATE_TTL_SECS: u64 = 600;
+static PENDING_LOGIN_STATES: LazyLock<Mutex<HashMap<String, Instant>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn issue_login_state() -> String {
+    let state = Uuid::new_v4().simple().to_string();
+    let mut map = PENDING_LOGIN_STATES.lock().expect("state map poisoned");
+    map.retain(|_, expires_at| *expires_at > Instant::now());
+    map.insert(
+        state.clone(),
+        Instant::now() + Duration::from_secs(LOGIN_STATE_TTL_SECS),
+    );
+    state
+}
+
+fn consume_login_state(state: &str) -> bool {
+    let mut map = PENDING_LOGIN_STATES.lock().expect("state map poisoned");
+    map.retain(|_, expires_at| *expires_at > Instant::now());
+    map.remove(state).is_some()
+}
 
 // ---------------------------------------------------------------------------
 // GET /api/public/steam/auth/login
@@ -114,10 +150,63 @@ pub(crate) async fn steam_auth_login(
 
     let callback_url = format!("{}/api/public/steam/auth/callback", realm);
 
+    // 构造登录跳转地址：
+    // - 配置了 STEAM_RELAY_URL：跳 Cloudflare Worker 中转（Worker 验证 OpenID
+    //   后回跳 callback_url?token=&state=），state 由本服务签发用于防 CSRF
+    // - 未配置：直接跳 Steam OpenID（服务器可直连 Steam 时）
+    let login_url = if let Some(ref relay) = ctx.config.steam_relay_url {
+        let state = issue_login_state();
+        format!(
+            "{relay}/login?mode=login&state={state}&return_to={}",
+            percent_encode_query(&callback_url)
+        )
+    } else {
+        build_direct_steam_login_url(&realm, &callback_url)
+    };
+
     Ok(Json(serde_json::json!({
         "realm": realm,
         "callback_url": callback_url,
+        "login_url": login_url,
     })))
+}
+
+/// 构建直连 Steam OpenID 登录地址
+fn build_direct_steam_login_url(realm: &str, callback_url: &str) -> String {
+    let params = [
+        ("openid.ns", "http://specs.openid.net/auth/2.0"),
+        ("openid.mode", "checkid_setup"),
+        ("openid.return_to", callback_url),
+        ("openid.realm", realm),
+        (
+            "openid.identity",
+            "http://specs.openid.net/auth/2.0/identifier_select",
+        ),
+        (
+            "openid.claimed_id",
+            "http://specs.openid.net/auth/2.0/identifier_select",
+        ),
+    ];
+    let query = params
+        .iter()
+        .map(|(k, v)| format!("{}={}", k, percent_encode_query(v)))
+        .collect::<Vec<_>>()
+        .join("&");
+    format!("https://steamcommunity.com/openid/login?{query}")
+}
+
+/// 对 URL query 参数值做百分号编码
+fn percent_encode_query(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for b in value.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -147,6 +236,9 @@ pub(crate) struct CallbackParams {
     openid_signed: Option<String>,
     #[serde(rename = "openid.sig")]
     openid_sig: Option<String>,
+    // 中转模式参数（配置了 STEAM_RELAY_URL 时由中转 Worker 回跳携带）
+    token: Option<String>,
+    state: Option<String>,
 }
 
 pub(crate) async fn steam_auth_callback(
@@ -202,6 +294,68 @@ pub(crate) async fn steam_auth_callback(
         )));
     }
 
+    // ── 中转模式（配置了 STEAM_RELAY_URL）：回调参数为 ?token=&state= ──
+    if ctx.config.steam_relay_url.is_some() {
+        let state = params.state.as_deref().unwrap_or("");
+        if !consume_login_state(state) {
+            tracing::warn!(state = %state, "Steam 登录 state 校验失败");
+            return Ok(error_redirect("invalid_state"));
+        }
+        let token = match params.token.as_deref() {
+            Some(t) if !t.is_empty() => t,
+            _ => return Ok(error_redirect("missing_token")),
+        };
+
+        // 向中转 Worker 换取 SteamID 与资料（一次性 token，用后即焚，防伪造）
+        let relay = ctx.config.steam_relay_url.as_deref().unwrap();
+        let response = http_client::http_client()
+            .get(format!("{relay}/verify"))
+            .query(&[("token", token)])
+            .send()
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "Steam 中转 verify 请求失败");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "验证服务暂不可用" })),
+                )
+            })?
+            .error_for_status()
+            .map_err(|e| {
+                tracing::error!(error = %e, "Steam 中转 verify 返回错误");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "验证服务暂不可用" })),
+                )
+            })?;
+
+        let payload: RelayVerifyResponse = response.json().await.map_err(|e| {
+            tracing::error!(error = %e, "Steam 中转 verify 响应解析失败");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "验证服务暂不可用" })),
+            )
+        })?;
+
+        if !payload.success {
+            return Ok(error_redirect("verification_failed"));
+        }
+        let steamid64 = match payload.steamid {
+            Some(id) if id.len() == 17 && id.chars().all(|c| c.is_ascii_digit()) => id,
+            _ => return Ok(error_redirect("verification_failed")),
+        };
+
+        return create_session_and_redirect(
+            &ctx,
+            &steamid64,
+            payload.persona_name.as_deref(),
+            payload.steam_level.map(|level| level as i32),
+            &frontend_base,
+        )
+        .await;
+    }
+
+    // ── 直连模式（原 OpenID 流程）──
     // 验证必需参数
     if mode != "id_res" {
         return Ok(error_redirect("invalid_mode"));
@@ -242,9 +396,36 @@ pub(crate) async fn steam_auth_callback(
         .ok()
         .flatten();
 
+    create_session_and_redirect(
+        &ctx,
+        &steamid64,
+        persona_name.as_deref(),
+        steam_level.map(|level| level as i32),
+        &frontend_base,
+    )
+    .await
+}
+
+/// 中转 Worker /verify 的响应体（忽略其余字段）
+#[derive(Deserialize)]
+struct RelayVerifyResponse {
+    success: bool,
+    steamid: Option<String>,
+    persona_name: Option<String>,
+    steam_level: Option<u32>,
+}
+
+/// 创建 Steam 认证会话并 302 回前端（附带 steam_token）
+async fn create_session_and_redirect(
+    ctx: &AppCtx,
+    steamid64: &str,
+    persona_name: Option<&str>,
+    steam_level: Option<i32>,
+    frontend_base: &str,
+) -> Result<Redirect, (StatusCode, Json<serde_json::Value>)> {
     // 计算其他 Steam 标识符
     let (steamid, steamid3) = {
-        let parsed = ctx.steam_resolver.parse_local(&steamid64);
+        let parsed = ctx.steam_resolver.parse_local(steamid64);
         match parsed {
             Ok(p) => (p.steamid, p.steamid3),
             Err(_) => (None, None),
@@ -261,12 +442,12 @@ pub(crate) async fn steam_auth_callback(
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
     )
     .bind(session_id)
-    .bind(&steamid64)
+    .bind(steamid64)
     .bind(&steamid)
     .bind(&steamid3)
     .bind(&profile_url)
-    .bind(&persona_name)
-    .bind(steam_level.map(|l| l as i32))
+    .bind(persona_name)
+    .bind(steam_level)
     .bind(expires_at)
     .execute(&ctx.db.pool)
     .await
@@ -274,7 +455,7 @@ pub(crate) async fn steam_auth_callback(
         tracing::error!(error = %e, "创建 Steam 认证会话失败");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "创建会话失败"})),
+            Json(serde_json::json!({ "error": "创建会话失败" })),
         )
     })?;
 

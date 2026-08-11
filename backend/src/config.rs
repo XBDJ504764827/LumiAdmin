@@ -11,6 +11,8 @@ pub struct Config {
     pub steam_web_key: Option<String>,
     pub steamchina_profile_key: Option<String>,
     pub steamchina_level_key: Option<String>,
+    // Cloudflare Worker Steam 中转（服务器无法直连 Steam 时配置，如 https://cngokz-steam-auth.iquankz.cn）
+    pub steam_relay_url: Option<String>,
     pub max_request_body_bytes: usize,
     // 数据库连接池配置
     pub db_max_connections: u32,
@@ -90,6 +92,10 @@ impl Config {
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
+        let steam_relay_url = std::env::var("STEAM_RELAY_URL")
+            .ok()
+            .map(|value| value.trim().trim_end_matches('/').to_string())
+            .filter(|value| !value.is_empty());
 
         let appeal_file_max_size_bytes = match std::env::var("APPEAL_FILE_MAX_SIZE_MB") {
             Ok(val) => match val.parse::<usize>() {
@@ -145,6 +151,7 @@ impl Config {
             steam_web_key,
             steamchina_profile_key,
             steamchina_level_key,
+            steam_relay_url,
             max_request_body_bytes,
             // 数据库连接池配置
             db_max_connections: env_u32_clamped("DB_MAX_CONNECTIONS", 20, 1, 100),

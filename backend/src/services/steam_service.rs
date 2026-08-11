@@ -96,6 +96,8 @@ pub struct SteamResolver {
     steam_api_key: Option<String>,
     steam_web_key: Option<String>,
     steamchina_profile_key: Option<String>,
+    // Cloudflare Worker Steam 中转（服务器无法直连 Steam 时配置）
+    relay_url: Option<String>,
     profile_cache: Arc<RwLock<HashMap<String, CacheEntry<Option<SteamProfile>>>>>,
 }
 
@@ -105,6 +107,7 @@ impl SteamResolver {
             steam_api_key: config.steam_api_key.clone(),
             steam_web_key: config.steam_web_key.clone(),
             steamchina_profile_key: config.steamchina_profile_key.clone(),
+            relay_url: config.steam_relay_url.clone(),
             profile_cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -115,6 +118,7 @@ impl SteamResolver {
             steam_api_key: None,
             steam_web_key: None,
             steamchina_profile_key: None,
+            relay_url: None,
             profile_cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -176,6 +180,25 @@ impl SteamResolver {
 
         let input = input.trim();
         let vanity = extract_vanity(input)?;
+
+        // 中转模式：经 Cloudflare Worker 解析自定义 URL（API Key 在 Worker 侧）
+        if let Some(ref relay) = self.relay_url {
+            let response = http_client::http_client()
+                .get(format!("{relay}/vanity"))
+                .query(&[("vanityurl", vanity.as_str())])
+                .send()
+                .await?;
+            let payload: RelayVanityResponse = response.json().await?;
+            anyhow::ensure!(payload.success, "无法解析 Steam 个人主页链接");
+            let steamid64 = payload.steamid.context("Steam 接口未返回 steamid64")?;
+            return Ok(build_identity(
+                steamid64.clone(),
+                Some(steamid2_from_steamid64(&steamid64)?),
+                Some(steamid3_from_steamid64(&steamid64)?),
+                Some(format!("https://steamcommunity.com/id/{vanity}")),
+            ));
+        }
+
         let api_key = self
             .steam_api_key
             .as_deref()
@@ -260,6 +283,11 @@ impl SteamResolver {
         steamid64: &str,
         api_key: &str,
     ) -> anyhow::Result<Option<SteamProfile>> {
+        // 中转模式：全部 Steam API 请求经 Cloudflare Worker
+        if let Some(ref relay) = self.relay_url {
+            return Self::fetch_profile_from_relay(relay, steamid64).await;
+        }
+
         // 优先使用 steamchina（国内更快）
         if let Some(ref china_key) = self.steamchina_profile_key {
             if let Ok(Some(profile)) = Self::fetch_profile_from(
@@ -305,8 +333,42 @@ impl SteamResolver {
         }
     }
 
+    /// 通过中转 Worker 查询玩家资料
+    async fn fetch_profile_from_relay(
+        relay: &str,
+        steamid64: &str,
+    ) -> anyhow::Result<Option<SteamProfile>> {
+        let response = http_client::http_client()
+            .get(format!("{relay}/profile"))
+            .query(&[("steamid", steamid64)])
+            .send()
+            .await?;
+        let payload: RelayProfileResponse = response.json().await?;
+        if !payload.success {
+            return Ok(None);
+        }
+        Ok(payload
+            .persona_name
+            .filter(|name| !name.trim().is_empty())
+            .map(|name| SteamProfile { persona_name: name }))
+    }
+
     /// 获取 Steam 账号等级（需要 STEAM_WEB_KEY）
     pub async fn fetch_steam_level(&self, steamid64: &str) -> anyhow::Result<Option<u32>> {
+        // 中转模式：经 Cloudflare Worker 查询（/profile 同时返回资料与等级）
+        if let Some(ref relay) = self.relay_url {
+            let response = http_client::http_client()
+                .get(format!("{relay}/profile"))
+                .query(&[("steamid", steamid64)])
+                .send()
+                .await?;
+            if !response.status().is_success() {
+                return Ok(None);
+            }
+            let payload: RelayProfileResponse = response.json().await?;
+            return Ok(payload.steam_level);
+        }
+
         let api_key = match self
             .steam_web_key
             .as_deref()
@@ -417,6 +479,11 @@ impl SteamResolver {
         steamids: &str,
         api_key: &str,
     ) -> anyhow::Result<HashMap<String, SteamProfile>> {
+        // 中转模式：经 Cloudflare Worker 批量查询
+        if let Some(ref relay) = self.relay_url {
+            return Self::fetch_profiles_batch_from_relay(relay, steamids).await;
+        }
+
         // 优先使用 steamchina
         if let Some(ref china_key) = self.steamchina_profile_key {
             if let Ok(result) = Self::fetch_profiles_batch_from(
@@ -465,6 +532,53 @@ impl SteamResolver {
 
         Ok(result)
     }
+    /// 通过中转 Worker 批量查询玩家资料
+    async fn fetch_profiles_batch_from_relay(
+        relay: &str,
+        steamids: &str,
+    ) -> anyhow::Result<HashMap<String, SteamProfile>> {
+        let response = http_client::http_client()
+            .get(format!("{relay}/profiles"))
+            .query(&[("steamids", steamids)])
+            .send()
+            .await?;
+        let payload: RelayProfilesResponse = response.json().await?;
+
+        let mut result = HashMap::new();
+        for player in payload.players {
+            if let Some(name) = player.persona_name.filter(|name| !name.trim().is_empty()) {
+                result.insert(player.steamid, SteamProfile { persona_name: name });
+            }
+        }
+        Ok(result)
+    }
+}
+
+/// 中转 Worker /profile 的响应体（忽略其余字段）
+#[derive(Deserialize)]
+struct RelayProfileResponse {
+    success: bool,
+    persona_name: Option<String>,
+    steam_level: Option<u32>,
+}
+
+/// 中转 Worker /profiles 的响应体
+#[derive(Deserialize)]
+struct RelayProfilesResponse {
+    players: Vec<RelayPlayerSummary>,
+}
+
+#[derive(Deserialize)]
+struct RelayPlayerSummary {
+    steamid: String,
+    persona_name: Option<String>,
+}
+
+/// 中转 Worker /vanity 的响应体
+#[derive(Deserialize)]
+struct RelayVanityResponse {
+    success: bool,
+    steamid: Option<String>,
 }
 
 #[derive(Deserialize)]

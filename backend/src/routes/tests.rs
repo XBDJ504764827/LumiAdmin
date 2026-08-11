@@ -2291,3 +2291,152 @@ async fn admin_can_clear_user_steam_id() {
     })
     .await;
 }
+
+// ---------------------------------------------------------------------------
+// Steam 登录中转模式（STEAM_RELAY_URL，服务器无法直连 Steam 时经 Cloudflare Worker）
+// ---------------------------------------------------------------------------
+
+/// 启动一个 mock 中转 Worker：对任意请求返回固定 JSON（模拟 /verify 端点）
+async fn spawn_steam_relay_mock(
+    response_json: &'static str,
+) -> (String, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let handle = tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+            let mut buffer = [0u8; 4096];
+            let Ok(n) = stream.read(&mut buffer).await else {
+                continue;
+            };
+            if n == 0 {
+                continue;
+            }
+            let body = response_json;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        }
+    });
+    (url, handle)
+}
+
+#[tokio::test]
+async fn steam_login_relay_mode_creates_session_via_worker() {
+    with_test_app(async |db, mut config| {
+        let (relay_url, _handle) = spawn_steam_relay_mock(
+            r#"{"success":true,"steamid":"76561198000000001","persona_name":"测试玩家","steam_level":42}"#,
+        )
+        .await;
+        config.steam_relay_url = Some(relay_url.clone());
+        let app = test_app(config, db);
+
+        // 1. 登录接口返回中转 Worker 登录地址（含防 CSRF state）
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/public/steam/auth/login")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(res.into_body(), 65536).await?)?;
+        let login_url = body["login_url"].as_str().expect("login_url 缺失");
+        assert!(
+            login_url.starts_with(&format!("{relay_url}/login?mode=login&state=")),
+            "login_url: {login_url}"
+        );
+        let state = login_url
+            .split("state=")
+            .nth(1)
+            .and_then(|s| s.split('&').next())
+            .expect("state 缺失");
+
+        // 2. 模拟中转 Worker 验证通过后回跳：callback?token=&state=
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/public/steam/auth/callback?token=mock-token&state={state}"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let location = res
+            .headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok())
+            .expect("缺少重定向地址")
+            .to_string();
+        assert!(
+            location.contains("/public/apply?steam_token="),
+            "location: {location}"
+        );
+        let steam_token = location
+            .split("steam_token=")
+            .nth(1)
+            .expect("缺少 steam_token");
+
+        // 3. 用会话 token 获取 Steam 信息（应来自中转 Worker 返回的资料）
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/public/steam/auth/session?token={steam_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(res.into_body(), 65536).await?)?;
+        assert_eq!(body["steamid64"], "76561198000000001");
+        assert_eq!(body["persona_name"], "测试玩家");
+        assert_eq!(body["steam_level"], 42);
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn steam_login_relay_mode_rejects_forged_state() {
+    with_test_app(async |db, mut config| {
+        let (relay_url, _handle) = spawn_steam_relay_mock(
+            r#"{"success":true,"steamid":"76561198000000001","persona_name":"x","steam_level":1}"#,
+        )
+        .await;
+        config.steam_relay_url = Some(relay_url);
+        let app = test_app(config, db);
+
+        // 未签发过的 state 应被拒绝（防登录 CSRF）
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/public/steam/auth/callback?token=abc&state=forged-state")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let location = res
+            .headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok())
+            .expect("缺少重定向地址")
+            .to_string();
+        assert!(
+            location.contains("reason=invalid_state"),
+            "location: {location}"
+        );
+        Ok(())
+    })
+    .await;
+}

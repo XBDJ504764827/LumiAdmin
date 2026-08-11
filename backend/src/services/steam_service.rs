@@ -94,6 +94,7 @@ fn evict_oldest_if_needed<T>(cache: &mut HashMap<String, CacheEntry<T>>, max_siz
 #[derive(Clone)]
 pub struct SteamResolver {
     steam_api_key: Option<String>,
+    steam_web_key: Option<String>,
     steamchina_profile_key: Option<String>,
     profile_cache: Arc<RwLock<HashMap<String, CacheEntry<Option<SteamProfile>>>>>,
 }
@@ -102,6 +103,7 @@ impl SteamResolver {
     pub fn new(config: &Config) -> Self {
         Self {
             steam_api_key: config.steam_api_key.clone(),
+            steam_web_key: config.steam_web_key.clone(),
             steamchina_profile_key: config.steamchina_profile_key.clone(),
             profile_cache: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -111,6 +113,7 @@ impl SteamResolver {
     pub fn for_tests() -> Self {
         Self {
             steam_api_key: None,
+            steam_web_key: None,
             steamchina_profile_key: None,
             profile_cache: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -300,6 +303,36 @@ impl SteamResolver {
         } else {
             Ok(None)
         }
+    }
+
+    /// 获取 Steam 账号等级（需要 STEAM_WEB_KEY）
+    pub async fn fetch_steam_level(&self, steamid64: &str) -> anyhow::Result<Option<u32>> {
+        let api_key = match self.steam_web_key.as_deref().or(self.steam_api_key.as_deref()) {
+            Some(key) => key,
+            None => return Ok(None),
+        };
+
+        let response = http_client::http_client()
+            .get("https://api.steampowered.com/IPlayerService/GetSteamLevel/v1/")
+            .query(&[("key", api_key), ("steamid", steamid64)])
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Ok(None);
+        }
+
+        #[derive(Deserialize)]
+        struct LevelResponse {
+            response: LevelData,
+        }
+        #[derive(Deserialize)]
+        struct LevelData {
+            player_level: Option<u32>,
+        }
+
+        let payload: LevelResponse = response.json().await?;
+        Ok(payload.response.player_level)
     }
 
     /// 批量查询 Steam Profile（最多100个）

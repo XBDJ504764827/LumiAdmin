@@ -193,6 +193,14 @@ pub async fn build_player_risk_profile(
     add_self_global_ban_reasons(&mut reasons, &self_global_bans);
     add_linked_account_reasons(&mut reasons, &linked_accounts);
 
+    // 已展示全球封禁原因时，去掉重复的“由全球封禁同步生成的本地封禁”提示
+    if reasons
+        .iter()
+        .any(|reason| reason.code == "self_active_global_ban")
+    {
+        reasons.retain(|reason| reason.code != "self_synced_global_local_ban");
+    }
+
     let action = classify_action(&reasons);
     let severity = classify_severity(&reasons);
     let linked_banned_account_count = linked_accounts
@@ -430,6 +438,7 @@ async fn load_linked_signals(
 }
 
 fn add_self_ban_reasons(reasons: &mut Vec<RiskReason>, bans: &[ActiveBanRow]) {
+    let synced_count = bans.iter().filter(|ban| ban.source == "global_ban").count();
     for ban in bans.iter().take(3) {
         reasons.push(RiskReason {
             code: "self_active_local_ban".to_string(),
@@ -438,7 +447,7 @@ fn add_self_ban_reasons(reasons: &mut Vec<RiskReason>, bans: &[ActiveBanRow]) {
                 "当前账号存在本地有效封禁：{}{}",
                 ban.reason,
                 ban.expires_at
-                    .map(|dt| format!("，到期时间 {}", dt.to_rfc3339()))
+                    .map(|dt| format!("，到期时间 {} (UTC)", dt.format("%Y-%m-%d %H:%M")))
                     .unwrap_or_else(|| "，永久封禁".to_string())
             ),
             steamid64: Some(ban.steam_id.clone()),
@@ -446,17 +455,21 @@ fn add_self_ban_reasons(reasons: &mut Vec<RiskReason>, bans: &[ActiveBanRow]) {
             count: 1,
             last_seen_at: Some(ban.created_at),
         });
-        if ban.source == "global_ban" {
-            reasons.push(RiskReason {
-                code: "self_synced_global_local_ban".to_string(),
-                severity: RiskSeverity::Block,
-                message: "当前账号存在由全球封禁同步生成的本地封禁".to_string(),
-                steamid64: Some(ban.steam_id.clone()),
-                ip: ban.ip_address.clone(),
-                count: 1,
-                last_seen_at: Some(ban.created_at),
-            });
-        }
+    }
+    if synced_count > 0 {
+        reasons.push(RiskReason {
+            code: "self_synced_global_local_ban".to_string(),
+            severity: RiskSeverity::Block,
+            message: if synced_count > 1 {
+                format!("当前账号存在 {synced_count} 条由全球封禁同步生成的本地封禁")
+            } else {
+                "当前账号存在由全球封禁同步生成的本地封禁".to_string()
+            },
+            steamid64: None,
+            ip: None,
+            count: synced_count as i64,
+            last_seen_at: None,
+        });
     }
 }
 
@@ -588,7 +601,7 @@ fn add_linked_account_reasons(
             } else {
                 RiskSeverity::Warning
             },
-            message: format!("同 IP 关联账号存在负面历史：白名单拒绝 {rejected_count} 次"),
+            message: format!("同 IP 关联账号存在负面历史：白名单申请被拒 {rejected_count} 次"),
             steamid64: None,
             ip: None,
             count: total_negative,

@@ -13,6 +13,7 @@ pub mod ops;
 pub mod player_detail;
 pub mod plugin;
 pub mod public;
+pub mod steam_auth;
 #[cfg(test)]
 pub mod tests;
 pub mod user;
@@ -450,6 +451,19 @@ pub fn router(
         .route("/api/public/bans", get(public::public_bans))
         .route("/api/public/steam/resolve", post(public::resolve_steam))
         .route("/api/public/bans/query", post(public::query_active_bans))
+        // -- public steam auth --
+        .route(
+            "/api/public/steam/auth/login",
+            get(steam_auth::steam_auth_login),
+        )
+        .route(
+            "/api/public/steam/auth/callback",
+            get(steam_auth::steam_auth_callback),
+        )
+        .route(
+            "/api/public/steam/auth/session",
+            get(steam_auth::steam_auth_session),
+        )
         .route(
             "/api/public/global-bans/:steamid64",
             get(public::get_global_bans),

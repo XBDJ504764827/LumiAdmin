@@ -85,9 +85,7 @@ fn resolve_frontend_origin(
                 .filter(|h| !h.is_empty())
                 .map(|host| format!("{}://{}", proto, host))
         })
-        .or_else(|| {
-            cors_origin.map(|s| s.trim_end_matches('/').to_string())
-        })
+        .or_else(|| cors_origin.map(|s| s.trim_end_matches('/').to_string()))
         .unwrap_or_else(|| "http://localhost:5173".to_string())
 }
 
@@ -178,7 +176,11 @@ pub(crate) async fn steam_auth_callback(
         .or_else(|| {
             // 如果 X-Forwarded-Host 可用，用它构建正确的地址
             if let Some(host) = forwarded_host {
-                Some(format!("{}://{}", forwarded_proto, host.trim_end_matches('/')))
+                Some(format!(
+                    "{}://{}",
+                    forwarded_proto,
+                    host.trim_end_matches('/')
+                ))
             } else {
                 None
             }
@@ -309,25 +311,32 @@ pub(crate) async fn steam_auth_session(
         )
     })?;
 
-    let row: Option<(uuid::Uuid, String, Option<String>, Option<String>, String, Option<String>, Option<i32>)> =
-        sqlx::query_as(
-            r#"SELECT id, steamid64, steamid, steamid3, profile_url, persona_name, steam_level
+    let row: Option<(
+        uuid::Uuid,
+        String,
+        Option<String>,
+        Option<String>,
+        String,
+        Option<String>,
+        Option<i32>,
+    )> = sqlx::query_as(
+        r#"SELECT id, steamid64, steamid, steamid3, profile_url, persona_name, steam_level
                FROM public_steam_auth_sessions
                WHERE id = $1 AND expires_at > now()"#,
+    )
+    .bind(session_id)
+    .fetch_optional(&ctx.db.pool)
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "查询 Steam 认证会话失败");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "查询会话失败"})),
         )
-        .bind(session_id)
-        .fetch_optional(&ctx.db.pool)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "查询 Steam 认证会话失败");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "查询会话失败"})),
-            )
-        })?;
+    })?;
 
-    let (_id, steamid64, steamid, steamid3, profile_url, persona_name, steam_level) =
-        row.ok_or_else(|| {
+    let (_id, steamid64, steamid, steamid3, profile_url, persona_name, steam_level) = row
+        .ok_or_else(|| {
             (
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({"error": "会话不存在或已过期"})),

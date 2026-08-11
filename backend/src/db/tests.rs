@@ -124,6 +124,449 @@ async fn dashboard_metrics_include_all_admin_roles_in_preview() {
 }
 
 #[tokio::test]
+async fn dashboard_overview_stats_count_whitelist_and_active_players() {
+    let config = Config::from_env();
+    let base_url = config.database_url.clone();
+    let schema = format!("test_{}", Uuid::new_v4().simple());
+    let scoped_url = schema_url(&base_url, &schema);
+
+    create_schema(&base_url, &schema).await;
+
+    let result = async {
+        let db = Database::connect_for_test(&scoped_url).await?;
+        db.migrate().await?;
+
+        let today_start: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+            r#"SELECT date_trunc('day', timezone('Asia/Shanghai', now())) AT TIME ZONE 'Asia/Shanghai'"#,
+        )
+        .fetch_one(&db.pool)
+        .await?;
+
+        for (i, offset) in ["1 hour", "1 hour", "1 hour", "-1 day + 1 hour", "-1 day + 1 hour", "-2 days + 1 hour"].iter().enumerate() {
+            sqlx::query(
+                r#"INSERT INTO whitelist_requests (id, steam_id, nickname, status, approved_at)
+                   VALUES ($1, $2, $3, 'approved', $4 + $5::INTERVAL)"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(format!("steam{}", i))
+            .bind(format!("玩家{}", i))
+            .bind(today_start)
+            .bind(offset)
+            .execute(&db.pool)
+            .await?;
+        }
+        // 未审核记录不应计入新增/趋势
+        sqlx::query(
+            r#"INSERT INTO whitelist_requests (id, steam_id, nickname, status, approved_at)
+               VALUES ($1, $2, $3, 'pending', $4 + interval '1 hour')"#,
+        )
+        .bind(Uuid::new_v4())
+        .bind("pending_steam")
+        .bind("待审核玩家")
+        .bind(today_start)
+        .execute(&db.pool)
+        .await?;
+        // 通过但无通过时间的旧记录：计入总数，不计入按日统计
+        sqlx::query(
+            r#"INSERT INTO whitelist_requests (id, steam_id, nickname, status)
+               VALUES ($1, $2, $3, 'approved')"#,
+        )
+        .bind(Uuid::new_v4())
+        .bind("legacy_steam")
+        .bind("旧记录")
+        .execute(&db.pool)
+        .await?;
+
+        let community_id = Uuid::new_v4();
+        sqlx::query(r#"INSERT INTO communities (id, name) VALUES ($1, $2)"#)
+            .bind(community_id)
+            .bind("测试社区")
+            .execute(&db.pool)
+            .await?;
+        let server_id = Uuid::new_v4();
+        sqlx::query(
+            r#"INSERT INTO servers (id, community_id, name, ip, port, rcon_password, status)
+               VALUES ($1, $2, $3, $4, $5, $6, 'online')"#,
+        )
+        .bind(server_id)
+        .bind(community_id)
+        .bind("活跃服")
+        .bind("127.0.0.1")
+        .bind(27015_i32)
+        .bind("secret")
+        .execute(&db.pool)
+        .await?;
+
+        // 今日活跃 2 人（1 个进行中 + 1 个已结束）、昨日活跃 1 人
+        for (steam, first_seen_offset, left) in [
+            ("p1", "1 hour", None),
+            ("p2", "2 hours", Some("1 hour")),
+            ("p3", "1 day + 2 hours", Some("1 day + 1 hour")),
+            ("p4", "3 days", Some("2 days")),
+        ] {
+            sqlx::query(
+                r#"INSERT INTO player_server_sessions
+                   (id, server_id, server_name, server_port, community_id, steam_id64, player_name, ip,
+                    first_seen_at, last_seen_at, left_at)
+                   VALUES ($1, $2, $3, 27015, $4, $5, $6, '127.0.0.1',
+                           now() - $7::INTERVAL, now() - $7::INTERVAL, now() - $8::INTERVAL)"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(server_id)
+            .bind("活跃服")
+            .bind(community_id)
+            .bind(steam)
+            .bind(steam)
+            .bind(first_seen_offset)
+            .bind(left.unwrap_or("0 seconds"))
+            .execute(&db.pool)
+            .await?;
+        }
+
+        let metrics = dashboard_service::get_metrics(&db).await?;
+        assert_eq!(metrics.analytics.whitelist_total, 7);
+        assert_eq!(metrics.analytics.whitelist_weekly_new, 6);
+        assert_eq!(metrics.analytics.whitelist_today_new, 3);
+        assert_eq!(metrics.analytics.whitelist_yesterday_new, 2);
+        assert_eq!(metrics.analytics.players_today_active, 2);
+        assert_eq!(metrics.analytics.players_yesterday_active, 1);
+
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+
+    drop_schema(&base_url, &schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn dashboard_whitelist_trend_groups_approved_by_day() {
+    let config = Config::from_env();
+    let base_url = config.database_url.clone();
+    let schema = format!("test_{}", Uuid::new_v4().simple());
+    let scoped_url = schema_url(&base_url, &schema);
+
+    create_schema(&base_url, &schema).await;
+
+    let result = async {
+        let db = Database::connect_for_test(&scoped_url).await?;
+        db.migrate().await?;
+
+        let today_start: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+            r#"SELECT date_trunc('day', timezone('Asia/Shanghai', now())) AT TIME ZONE 'Asia/Shanghai'"#,
+        )
+        .fetch_one(&db.pool)
+        .await?;
+        let today_label: String = sqlx::query_scalar(
+            r#"SELECT to_char($1::timestamptz AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD')"#,
+        )
+        .bind(today_start)
+        .fetch_one(&db.pool)
+        .await?;
+
+        for (i, offset) in ["1 hour", "-1 day + 1 hour", "-2 days + 1 hour", "-2 days + 2 hours", "-10 days + 1 hour"].iter().enumerate() {
+            sqlx::query(
+                r#"INSERT INTO whitelist_requests (id, steam_id, nickname, status, approved_at)
+                   VALUES ($1, $2, $3, 'approved', $4 + $5::INTERVAL)"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(format!("trend_steam{}", i))
+            .bind(format!("趋势玩家{}", i))
+            .bind(today_start)
+            .bind(offset)
+            .execute(&db.pool)
+            .await?;
+        }
+
+        let trend = dashboard_service::get_whitelist_trend(&db, 7).await?;
+        assert_eq!(trend.days, 7);
+        assert_eq!(trend.items.iter().map(|item| item.count).sum::<i64>(), 4);
+        let today_item = trend
+            .items
+            .iter()
+            .find(|item| item.date == today_label)
+            .expect("趋势应包含今日数据");
+        assert_eq!(today_item.count, 1);
+        assert!(trend
+            .items
+            .iter()
+            .all(|item| !item.date.is_empty() && item.count > 0));
+
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+
+    drop_schema(&base_url, &schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn dashboard_server_activity_buckets_sessions_by_hour_and_day() {
+    let config = Config::from_env();
+    let base_url = config.database_url.clone();
+    let schema = format!("test_{}", Uuid::new_v4().simple());
+    let scoped_url = schema_url(&base_url, &schema);
+
+    create_schema(&base_url, &schema).await;
+
+    let result = async {
+        let db = Database::connect_for_test(&scoped_url).await?;
+        db.migrate().await?;
+
+        let community_id = Uuid::new_v4();
+        sqlx::query(r#"INSERT INTO communities (id, name) VALUES ($1, $2)"#)
+            .bind(community_id)
+            .bind("测试社区")
+            .execute(&db.pool)
+            .await?;
+        let server_id = Uuid::new_v4();
+        sqlx::query(
+            r#"INSERT INTO servers (id, community_id, name, ip, port, rcon_password, status)
+               VALUES ($1, $2, $3, $4, $5, $6, 'online')"#,
+        )
+        .bind(server_id)
+        .bind(community_id)
+        .bind("活跃服")
+        .bind("127.0.0.1")
+        .bind(27015_i32)
+        .bind("secret")
+        .execute(&db.pool)
+        .await?;
+
+        let current_hour: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+            r#"SELECT date_trunc('hour', now())"#,
+        )
+        .fetch_one(&db.pool)
+        .await?;
+
+        // 当前小时内的两个会话（进行中 + 已结束），与具体时间无关，保证测试稳定
+        for (steam, left) in [("h1", None), ("h2", Some("30 minutes"))] {
+            sqlx::query(
+                r#"INSERT INTO player_server_sessions
+                   (id, server_id, server_name, server_port, community_id, steam_id64, player_name, ip,
+                    first_seen_at, last_seen_at, left_at)
+                   VALUES ($1, $2, $3, 27015, $4, $5, $6, '127.0.0.1',
+                           $7 + interval '10 minutes', $7 + interval '10 minutes', now() - $8::INTERVAL)"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(server_id)
+            .bind("活跃服")
+            .bind(community_id)
+            .bind(steam)
+            .bind(steam)
+            .bind(current_hour)
+            .bind(left.unwrap_or("0 seconds"))
+            .execute(&db.pool)
+            .await?;
+        }
+        // 十天前结束的旧会话：既不在今日统计中，也不在近 7 天窗口内
+        sqlx::query(
+            r#"INSERT INTO player_server_sessions
+               (id, server_id, server_name, server_port, community_id, steam_id64, player_name, ip,
+                first_seen_at, last_seen_at, left_at)
+               VALUES ($1, $2, $3, 27015, $4, $5, $6, '127.0.0.1',
+                       now() - interval '10 days', now() - interval '10 days', now() - interval '10 days' + interval '1 hour')"#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(server_id)
+        .bind("活跃服")
+        .bind(community_id)
+        .bind("old_h")
+        .bind("旧会话")
+        .execute(&db.pool)
+        .await?;
+
+        let hourly = dashboard_service::get_server_activity(&db, "today").await?;
+        assert_eq!(hourly.unit, "hour");
+        assert!(!hourly.items.is_empty());
+        let last = hourly.items.last().expect("至少一个时间桶");
+        assert_eq!(last.active_players, 2);
+        assert_eq!(last.sessions, 2);
+        assert_eq!(hourly.items.iter().map(|item| item.active_players).sum::<i64>(), 2);
+
+        let daily = dashboard_service::get_server_activity(&db, "7d").await?;
+        assert_eq!(daily.unit, "day");
+        assert_eq!(daily.items.iter().map(|item| item.active_players).sum::<i64>(), 2);
+        assert_eq!(daily.items.iter().map(|item| item.sessions).sum::<i64>(), 2);
+
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+
+    drop_schema(&base_url, &schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn dashboard_server_status_distribution_counts_categories() {
+    let config = Config::from_env();
+    let base_url = config.database_url.clone();
+    let schema = format!("test_{}", Uuid::new_v4().simple());
+    let scoped_url = schema_url(&base_url, &schema);
+
+    create_schema(&base_url, &schema).await;
+
+    let result = async {
+        let db = Database::connect_for_test(&scoped_url).await?;
+        db.migrate().await?;
+
+        let community_id = Uuid::new_v4();
+        sqlx::query(r#"INSERT INTO communities (id, name) VALUES ($1, $2)"#)
+            .bind(community_id)
+            .bind("测试社区")
+            .execute(&db.pool)
+            .await?;
+
+        async fn insert_server(
+            db: &Database,
+            community_id: Uuid,
+            name: &str,
+            status: &str,
+            stale_offset: &str,
+        ) -> anyhow::Result<()> {
+            sqlx::query(
+                r#"INSERT INTO servers (id, community_id, name, ip, port, rcon_password, status, last_reported_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, now() - $8::INTERVAL)"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(community_id)
+            .bind(name)
+            .bind("127.0.0.1")
+            .bind(27015_i32)
+            .bind("secret")
+            .bind(status)
+            .bind(stale_offset)
+            .execute(&db.pool)
+            .await?;
+            Ok(())
+        }
+
+        insert_server(&db, community_id, "在线甲", "online", "0 seconds").await?;
+        insert_server(&db, community_id, "在线乙", "online", "1 minute").await?;
+        insert_server(&db, community_id, "上报过期", "online", "1 hour").await?;
+        insert_server(&db, community_id, "休眠服", "hibernating", "0 seconds").await?;
+        insert_server(&db, community_id, "未测试服", "untested", "0 seconds").await?;
+        insert_server(&db, community_id, "离线服", "offline", "0 seconds").await?;
+
+        let distribution = dashboard_service::get_server_status_distribution(&db).await?;
+        let by_status: std::collections::HashMap<_, _> = distribution
+            .iter()
+            .map(|item| (item.status.as_str(), item.count))
+            .collect();
+        assert_eq!(by_status.get("online"), Some(&2));
+        assert_eq!(by_status.get("hibernating"), Some(&1));
+        assert_eq!(by_status.get("untested"), Some(&1));
+        assert_eq!(by_status.get("offline"), Some(&2));
+
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+
+    drop_schema(&base_url, &schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn dashboard_server_ranking_orders_by_active_players() {
+    let config = Config::from_env();
+    let base_url = config.database_url.clone();
+    let schema = format!("test_{}", Uuid::new_v4().simple());
+    let scoped_url = schema_url(&base_url, &schema);
+
+    create_schema(&base_url, &schema).await;
+
+    let result = async {
+        let db = Database::connect_for_test(&scoped_url).await?;
+        db.migrate().await?;
+
+        let community_id = Uuid::new_v4();
+        sqlx::query(r#"INSERT INTO communities (id, name) VALUES ($1, $2)"#)
+            .bind(community_id)
+            .bind("测试社区")
+            .execute(&db.pool)
+            .await?;
+
+        async fn insert_server(
+            db: &Database,
+            community_id: Uuid,
+            name: &str,
+        ) -> anyhow::Result<Uuid> {
+            let id = Uuid::new_v4();
+            sqlx::query(
+                r#"INSERT INTO servers (id, community_id, name, ip, port, rcon_password, status)
+                   VALUES ($1, $2, $3, $4, $5, $6, 'online')"#,
+            )
+            .bind(id)
+            .bind(community_id)
+            .bind(name)
+            .bind("127.0.0.1")
+            .bind(27015_i32)
+            .bind("secret")
+            .execute(&db.pool)
+            .await?;
+            Ok(id)
+        }
+
+        async fn insert_session(
+            db: &Database,
+            community_id: Uuid,
+            server_id: Uuid,
+            steam: &str,
+            first_seen: &str,
+            left: &str,
+        ) -> anyhow::Result<()> {
+            sqlx::query(
+                r#"INSERT INTO player_server_sessions
+                   (id, server_id, server_name, server_port, community_id, steam_id64, player_name, ip,
+                    first_seen_at, last_seen_at, left_at)
+                   VALUES ($1, $2, $3, 27015, $4, $5, $6, '127.0.0.1',
+                           now() - $7::INTERVAL, now() - $7::INTERVAL, now() - $8::INTERVAL)"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(server_id)
+            .bind("排行服")
+            .bind(community_id)
+            .bind(steam)
+            .bind(steam)
+            .bind(first_seen)
+            .bind(left)
+            .execute(&db.pool)
+            .await?;
+            Ok(())
+        }
+
+        let server_a = insert_server(&db, community_id, "排行服A").await?;
+        let server_b = insert_server(&db, community_id, "排行服B").await?;
+
+        // A：2 个活跃玩家（1 进行中 + 1 已结束）
+        insert_session(&db, community_id, server_a, "a1", "1 day", "0 seconds").await?;
+        insert_session(&db, community_id, server_a, "a2", "2 days", "1 day").await?;
+        // B：1 个活跃玩家
+        insert_session(&db, community_id, server_b, "b1", "1 day", "12 hours").await?;
+        // A 上 10 天前的旧会话：超出 7 天窗口
+        insert_session(&db, community_id, server_a, "a3", "10 days", "9 days").await?;
+
+        let ranking = dashboard_service::get_server_ranking(&db, 7, 10).await?;
+        assert_eq!(ranking.len(), 2);
+        assert_eq!(ranking[0].server_name, "排行服A");
+        assert_eq!(ranking[0].active_players, 2);
+        assert_eq!(ranking[0].sessions, 2);
+        assert!(ranking[0].playtime_seconds >= 170_000, "活跃时长应接近 2 天");
+        assert_eq!(ranking[1].server_name, "排行服B");
+        assert_eq!(ranking[1].active_players, 1);
+
+        let limited = dashboard_service::get_server_ranking(&db, 7, 1).await?;
+        assert_eq!(limited.len(), 1);
+
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+
+    drop_schema(&base_url, &schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
 async fn migrate_converts_legacy_players_text_to_text_array() {
     let config = Config::from_env();
     let base_url = config.database_url;

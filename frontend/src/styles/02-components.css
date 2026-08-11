@@ -854,6 +854,177 @@
 .dash-wl-revoked { background: var(--surface2); border-color: var(--border); }
 .dash-wl-revoked .dash-wl-num { color: var(--text3); }
 
+/* ── 仪表盘统计卡片（趋势徽章） ── */
+.dash-icon-shield { background: rgba(91,141,217,0.12); color: var(--accent2); }
+.dash-icon-userplus { background: var(--nav-active-bg); color: var(--accent); }
+.dash-icon-activity { background: rgba(74,181,160,0.12); color: var(--teal); }
+.dash-trend {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+.dash-trend-up { background: var(--success-bg); color: var(--success-text); }
+.dash-trend-down { background: var(--danger-bg); color: var(--danger-text); }
+.dash-trend-flat { background: var(--surface2); color: var(--text3); }
+
+/* ── 图表 Card 统一容器 ── */
+.dash-chart-card .card-body { padding: 14px 22px 20px; }
+.dash-chart-header { align-items: center; }
+.dash-chart-heading { min-width: 0; }
+.dash-chart-body {
+  position: relative;
+  height: 320px;
+  display: flex;
+  flex-direction: column;
+}
+.dash-chart-card--ranking .dash-chart-body { height: 400px; }
+.dash-chart-fill {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.dash-chart-fill canvas {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* 图表内局部图例（仅多 Series 时显示） */
+.dash-chart-legend {
+  display: flex;
+  gap: 18px;
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+.dash-chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--text2);
+}
+.dash-chart-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dash-chart-dot-accent { background: var(--accent); }
+.dash-chart-dot-accent2 { background: var(--accent2); }
+
+/* 时间范围分段切换 */
+.seg-control {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+.seg-control-item {
+  border: 0;
+  background: transparent;
+  color: var(--text3);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 11px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease;
+  white-space: nowrap;
+}
+.seg-control-item:hover { color: var(--text2); }
+.seg-control-item.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+/* 图表 Loading 骨架屏 */
+.chart-skeleton {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 14px;
+  height: 100%;
+}
+.chart-skeleton-bar {
+  height: 13px;
+  border-radius: 7px;
+  background: linear-gradient(90deg, var(--surface2) 25%, var(--border) 50%, var(--surface2) 75%);
+  background-size: 200% 100%;
+  animation: chartShimmer 1.4s ease-in-out infinite;
+}
+@keyframes chartShimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* 状态分布环形图 + 图例 */
+.dash-donut-layout {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex: 1;
+  min-height: 0;
+}
+.dash-donut-chart {
+  position: relative;
+  width: 46%;
+  max-width: 210px;
+  height: 100%;
+  flex-shrink: 0;
+}
+.dash-donut-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.dash-donut-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12.5px;
+}
+.dash-donut-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.dash-donut-legend-name { color: var(--text2); }
+.dash-donut-legend-count {
+  margin-left: auto;
+  font-weight: 600;
+  color: var(--text);
+}
+.dash-donut-legend-pct {
+  min-width: 44px;
+  text-align: right;
+  font-size: 11.5px;
+  color: var(--text3);
+}
+
+/* 双图表并排布局 */
+.dash-charts-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.dash-charts-grid .card { margin-bottom: 0; }
+
 .modal-overlay {
   position: fixed; inset: 0;
   background: var(--modal-overlay);

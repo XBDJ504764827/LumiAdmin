@@ -138,7 +138,7 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&config.bind_addr).await?;
     let max_body = config.max_request_body_bytes;
     let request_timeout = Duration::from_secs(config.request_timeout_secs);
-    let cors_origin = config.cors_origin.clone();
+    let cors_origins = config.cors_origins();
     let steam_resolver = services::steam_service::SteamResolver::new(&config);
     // 初始化统一 GOKZ 缓存管理器
     let gokz_cache = Arc::new(services::gokz_cache::GokzCacheManager::new(db.clone()));
@@ -178,17 +178,20 @@ async fn main() -> anyhow::Result<()> {
                         Method::OPTIONS,
                     ])
                     .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
-                if let Some(origin) = cors_origin {
-                    if let Ok(parsed) = origin.parse::<axum::http::HeaderValue>() {
-                        cors = cors.allow_origin(parsed);
-                    } else {
-                        tracing::error!("CORS_ORIGIN 格式无效: {origin}，CORS 已禁用");
-                    }
-                } else {
+                if cors_origins.is_empty() {
                     tracing::warn!(
                         "CORS_ORIGIN 未配置，允许所有来源访问。生产环境请设置 CORS_ORIGIN 环境变量"
                     );
                     cors = cors.allow_origin(tower_http::cors::Any);
+                } else {
+                    for origin in &cors_origins {
+                        match origin.parse::<axum::http::HeaderValue>() {
+                            Ok(parsed) => cors = cors.allow_origin(parsed),
+                            Err(_) => {
+                                tracing::error!("CORS_ORIGIN 格式无效: {origin}，已跳过该来源")
+                            }
+                        }
+                    }
                 }
                 cors
             })

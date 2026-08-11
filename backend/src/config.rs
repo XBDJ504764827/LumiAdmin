@@ -73,6 +73,20 @@ pub struct Config {
 }
 
 impl Config {
+    /// 解析 CORS_ORIGIN（支持逗号分隔多个来源），返回去尾斜杠后的来源列表
+    pub fn cors_origins(&self) -> Vec<String> {
+        self.cors_origin
+            .as_deref()
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(|item| item.trim().trim_end_matches('/').to_string())
+                    .filter(|item| !item.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn from_env() -> Self {
         dotenvy::dotenv().ok();
         let steam_api_key = std::env::var("STEAM_API_KEY")

@@ -5,6 +5,14 @@ import { PublicPageShell } from './PublicPageShell.jsx';
 
 const STEAM_OPENID_URL = 'https://steamcommunity.com/openid/login';
 
+// Steam 回调错误码 → 用户提示文案
+const STEAM_AUTH_ERROR_REASONS = {
+  invalid_mode: 'Steam 登录响应无效，请重试。',
+  invalid_claimed_id: '无法从 Steam 获取身份信息，请重试。',
+  missing_claimed_id: 'Steam 未返回身份信息，请重试。',
+  verification_failed: 'Steam 身份验证失败，请重试。',
+};
+
 function buildSteamLoginUrl(callbackUrl, realm) {
   // 使用后端配置的 callback_url 和 realm 构建 Steam OpenID 登录 URL
   const params = new URLSearchParams();
@@ -18,12 +26,30 @@ function buildSteamLoginUrl(callbackUrl, realm) {
 }
 
 export function PublicApplyPage() {
+  // 首次渲染时一次性解析 Steam 回调 URL 参数（steam_token / steam_auth / reason）。
+  // 用惰性初始化读取，避免在 effect 中同步 setState（react-hooks/set-state-in-effect）。
+  const [steamCallback] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return {
+      token: params.get('steam_token'),
+      cancelled: params.get('steam_auth'),
+      errorReason: params.get('reason'),
+    };
+  });
+
+  const steamAuthError = steamCallback.cancelled === 'cancelled'
+    ? '您取消了 Steam 登录。'
+    : steamCallback.cancelled === 'error'
+      ? (STEAM_AUTH_ERROR_REASONS[steamCallback.errorReason] || 'Steam 登录失败，请重试。')
+      : '';
+
   // Steam 认证状态
   const [steamVerified, setSteamVerified] = useState(false);
   const [steamToken, setSteamToken] = useState('');
   const [steamInfo, setSteamInfo] = useState(null);
-  const [authLoading, setAuthLoading] = useState(true);
-  const [authError, setAuthError] = useState('');
+  // 有 token 时初始为加载中（等待异步获取会话）；无 token / 回调失败时直接为就绪
+  const [authLoading, setAuthLoading] = useState(() => Boolean(steamCallback.token));
+  const [authError, setAuthError] = useState(steamAuthError);
 
   // 额外资料状态
   const [steamLevel, setSteamLevel] = useState(null);
@@ -47,52 +73,30 @@ export function PublicApplyPage() {
 
   // ——————————————————————————————————————————————————————————————
   // 初始化：检查 URL 中是否有 steam_token（Steam 回调返回）
+  // URL 参数已在首次渲染时通过惰性初始化读取（不会在 effect 中同步 setState）；
+  // 本 effect 只负责清理 URL 与异步获取 Steam 会话信息
   // ——————————————————————————————————————————————————————————————
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const token = params.get('steam_token');
-    const cancelled = params.get('steam_auth');
-    const errorReason = params.get('reason');
-
-    if (cancelled === 'cancelled') {
-      setAuthError('您取消了 Steam 登录。');
-      setAuthLoading(false);
-      // 清理 URL
-      const url = new URL(window.location);
-      url.searchParams.delete('steam_auth');
-      window.history.replaceState({}, '', url);
-      return;
-    }
-
-    if (cancelled === 'error') {
-      // 处理 Steam 回调中的错误
-      const reasonMap = {
-        'invalid_mode': 'Steam 登录响应无效，请重试。',
-        'invalid_claimed_id': '无法从 Steam 获取身份信息，请重试。',
-        'missing_claimed_id': 'Steam 未返回身份信息，请重试。',
-        'verification_failed': 'Steam 身份验证失败，请重试。',
-      };
-      setAuthError(reasonMap[errorReason] || 'Steam 登录失败，请重试。');
-      setAuthLoading(false);
-      // 清理 URL
-      const url = new URL(window.location);
+    // 清理 URL 中的临时回调参数
+    const url = new URL(window.location);
+    if (
+      url.searchParams.has('steam_token') ||
+      url.searchParams.has('steam_auth') ||
+      url.searchParams.has('reason')
+    ) {
+      url.searchParams.delete('steam_token');
       url.searchParams.delete('steam_auth');
       url.searchParams.delete('reason');
       window.history.replaceState({}, '', url);
-      return;
     }
 
-    if (token) {
-      // 清理 URL（去掉 token 参数）
-      const url = new URL(window.location);
-      url.searchParams.delete('steam_token');
-      window.history.replaceState({}, '', url);
+    // 无 token：认证状态已在初始化时确定为非加载中
+    if (!steamCallback.token) return;
 
-      // 获取已验证的 Steam 会话信息
-      setAuthLoading(true);
-      publicApi
-        .getSteamSession(token)
-        .then((data) => {
+    // 获取已验证的 Steam 会话信息
+    publicApi
+      .getSteamSession(steamCallback.token)
+      .then((data) => {
           setSteamVerified(true);
           setSteamToken(data.token);
           setSteamInfo({
@@ -125,10 +129,7 @@ export function PublicApplyPage() {
           setAuthError(err.message || 'Steam 会话验证失败');
           setAuthLoading(false);
         });
-    } else {
-      setAuthLoading(false);
-    }
-  }, []);
+  }, [steamCallback]);
 
   // ——————————————————————————————————————————————————————————————
   // 登录按钮点击

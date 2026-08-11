@@ -1,6 +1,7 @@
 mod a2s;
 mod auth;
 mod config;
+mod cors_middleware;
 mod db;
 mod http_client;
 mod models;
@@ -14,11 +15,9 @@ mod sql_fragments;
 #[cfg(test)]
 mod test_util;
 
-use axum::{
-    extract::DefaultBodyLimit,
-    http::{header, Method, StatusCode},
-};
+use axum::{extract::DefaultBodyLimit, http::StatusCode};
 use config::Config;
+use cors_middleware::CorsState;
 use db::Database;
 use rate_limit_middleware::RateLimitState;
 use services::rate_limit_service::RateLimiters;
@@ -26,7 +25,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
-use tower_http::cors::CorsLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 
@@ -139,6 +137,11 @@ async fn main() -> anyhow::Result<()> {
     let max_body = config.max_request_body_bytes;
     let request_timeout = Duration::from_secs(config.request_timeout_secs);
     let cors_origins = config.cors_origins();
+    if cors_origins.is_empty() {
+        tracing::warn!(
+            "CORS_ORIGIN 未配置：管理后台仅允许同源访问，公开 /webhook/* 端点放行所有来源"
+        );
+    }
     let steam_resolver = services::steam_service::SteamResolver::new(&config);
     // 初始化统一 GOKZ 缓存管理器
     let gokz_cache = Arc::new(services::gokz_cache::GokzCacheManager::new(db.clone()));
@@ -163,38 +166,17 @@ async fn main() -> anyhow::Result<()> {
         rate_limit_state,
         rate_limit_middleware::rate_limit_middleware,
     ))
+    .layer(axum::middleware::from_fn_with_state(
+        CorsState {
+            allowed_origins: Arc::new(cors_origins),
+        },
+        cors_middleware::cors_middleware,
+    ))
     .layer(
         ServiceBuilder::new()
             .layer(CompressionLayer::new().gzip(true))
             .layer(DefaultBodyLimit::max(max_body))
             .layer(RequestBodyLimitLayer::new(max_body))
-            .layer({
-                let mut cors = CorsLayer::new()
-                    .allow_methods([
-                        Method::GET,
-                        Method::POST,
-                        Method::PUT,
-                        Method::DELETE,
-                        Method::OPTIONS,
-                    ])
-                    .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
-                if cors_origins.is_empty() {
-                    tracing::warn!(
-                        "CORS_ORIGIN 未配置，允许所有来源访问。生产环境请设置 CORS_ORIGIN 环境变量"
-                    );
-                    cors = cors.allow_origin(tower_http::cors::Any);
-                } else {
-                    for origin in &cors_origins {
-                        match origin.parse::<axum::http::HeaderValue>() {
-                            Ok(parsed) => cors = cors.allow_origin(parsed),
-                            Err(_) => {
-                                tracing::error!("CORS_ORIGIN 格式无效: {origin}，已跳过该来源")
-                            }
-                        }
-                    }
-                }
-                cors
-            })
             .layer(TimeoutLayer::with_status_code(
                 StatusCode::REQUEST_TIMEOUT,
                 request_timeout,

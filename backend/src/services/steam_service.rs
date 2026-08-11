@@ -307,7 +307,11 @@ impl SteamResolver {
 
     /// 获取 Steam 账号等级（需要 STEAM_WEB_KEY）
     pub async fn fetch_steam_level(&self, steamid64: &str) -> anyhow::Result<Option<u32>> {
-        let api_key = match self.steam_web_key.as_deref().or(self.steam_api_key.as_deref()) {
+        let api_key = match self
+            .steam_web_key
+            .as_deref()
+            .or(self.steam_api_key.as_deref())
+        {
             Some(key) => key,
             None => return Ok(None),
         };

@@ -1,9 +1,9 @@
 use crate::routes::{invalid_request, AppCtx, ListQuery};
-use anyhow;
 use crate::services::{
     ban_service, dashboard_service, global_ban_service, log_service, lumi_bot_service,
     notification_service, public_service, rate_limit_service::extract_client_ip, whitelist_service,
 };
+use anyhow;
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
@@ -70,10 +70,9 @@ pub(crate) async fn submit_whitelist(
 
     // 如果提供了 steam_token，验证 Steam 认证会话
     let (steam_input, nickname) = if let Some(ref token) = body.steam_token {
-        let verified_steamid64 =
-            crate::routes::steam_auth::verify_steam_session(&ctx.db, token)
-                .await
-                .map_err(invalid_request)?;
+        let verified_steamid64 = crate::routes::steam_auth::verify_steam_session(&ctx.db, token)
+            .await
+            .map_err(invalid_request)?;
         // 获取 Steam 资料
         let persona_name = resolver
             .fetch_profile(&verified_steamid64)
@@ -85,20 +84,14 @@ pub(crate) async fn submit_whitelist(
             .nickname
             .clone()
             .unwrap_or_else(|| persona_name.unwrap_or_else(|| verified_steamid64.clone()));
-        (
-            Some(verified_steamid64),
-            Some(nick),
-        )
+        (Some(verified_steamid64), Some(nick))
     } else {
         (body.steam_input.clone(), body.nickname.clone())
     };
 
-    let si = steam_input.ok_or_else(|| {
-        invalid_request(anyhow::anyhow!("请提供 Steam 标识符或 Steam 认证令牌"))
-    })?;
-    let nn = nickname.ok_or_else(|| {
-        invalid_request(anyhow::anyhow!("请提供游戏昵称"))
-    })?;
+    let si = steam_input
+        .ok_or_else(|| invalid_request(anyhow::anyhow!("请提供 Steam 标识符或 Steam 认证令牌")))?;
+    let nn = nickname.ok_or_else(|| invalid_request(anyhow::anyhow!("请提供游戏昵称")))?;
 
     let item = whitelist_service::create_public_whitelist_request(
         &ctx.db,

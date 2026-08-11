@@ -4,6 +4,7 @@ pub mod auth;
 pub mod ban;
 pub mod ban_api;
 pub mod community;
+pub mod dashboard_analytics;
 pub mod external_ban_api;
 pub mod external_server;
 pub mod global_ban;
@@ -135,6 +136,22 @@ pub fn router(
         .route("/api/auth/me", get(auth::me))
         // -- dashboard --
         .route("/api/dashboard", get(misc::dashboard))
+        .route(
+            "/api/dashboard/analytics/whitelist-trend",
+            get(dashboard_analytics::whitelist_trend),
+        )
+        .route(
+            "/api/dashboard/analytics/server-activity",
+            get(dashboard_analytics::server_activity),
+        )
+        .route(
+            "/api/dashboard/analytics/server-status",
+            get(dashboard_analytics::server_status),
+        )
+        .route(
+            "/api/dashboard/analytics/server-ranking",
+            get(dashboard_analytics::server_ranking),
+        )
         .route("/api/review-counts", get(misc::review_counts))
         // -- community --
         .route("/api/community/servers", get(community::community_servers))

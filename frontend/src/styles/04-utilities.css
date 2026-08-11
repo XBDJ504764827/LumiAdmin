@@ -395,6 +395,7 @@
 /* 900px — 紧凑布局 */
 @media (max-width: 900px) {
   .dash-hero { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .dash-charts-grid { grid-template-columns: 1fr; }
   .search-box, .searchbar { max-width: 200px; }
   .data-table th, .data-table td { padding: 9px 10px; font-size: 12px; }
   .page-header { flex-direction: column; }
@@ -457,6 +458,14 @@
   .content-section, .page { padding: 20px 16px; }
   .metrics-grid, .metric-grid { grid-template-columns: 1fr; gap: 12px; }
   .dash-overview, .dash-perf-grid { grid-template-columns: 1fr; gap: 10px; }
+  .dash-chart-card .card-body { height: 300px; }
+  .dash-chart-card--ranking .card-body { height: 380px; }
+  .dash-donut-layout { flex-direction: column; gap: 12px; }
+  .dash-donut-chart { width: 100%; max-width: none; height: 46%; min-height: 170px; }
+  .dash-donut-legend { flex-direction: row; flex-wrap: wrap; gap: 8px 18px; width: 100%; }
+  .dash-donut-legend-item { flex: 1 1 40%; min-width: 120px; }
+  .dash-chart-header { gap: 10px; }
+  .seg-control { max-width: 100%; overflow-x: auto; }
   .dash-hero { flex-direction: column; align-items: flex-start; gap: 12px; padding: 20px; }
   .dash-hero-title { font-size: 18px; }
   .search-shortcut, .searchbar span { display: none; }

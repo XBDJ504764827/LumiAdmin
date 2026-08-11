@@ -429,7 +429,7 @@ function NetworkTab({detail}) {
   </>;
 }
 
-function BehaviorTab({detail, token, onRefresh}) {
+function BehaviorTab({detail}) {
   return <>
     <div className="card"><div className="card-header"><div><div className="card-title">物理证据文件与媒体库</div></div></div><div className="card-body">
       {detail.evidence_files.length===0?<Empty>暂无附件证据。</Empty>:<div className="table-responsive"><table className="data-table"><thead><tr><th>文件名称</th><th>归属</th><th>尺寸</th><th>上传时间</th></tr></thead><tbody>
@@ -649,7 +649,7 @@ export function PlayerDetailPage() {
             {tab==='access'&&<AccessTab detail={detail}/>}
             {tab==='status'&&<StatusTab detail={detail} token={token} onRefresh={refreshDetail}/>}
             {tab==='network'&&<NetworkTab detail={detail}/>}
-            {tab==='behavior'&&<BehaviorTab detail={detail} token={token} onRefresh={refreshDetail}/>}
+            {tab==='behavior'&&<BehaviorTab detail={detail}/>}
             {tab==='audit'&&<AuditTab detail={detail}/>}
           </div>
         </main>

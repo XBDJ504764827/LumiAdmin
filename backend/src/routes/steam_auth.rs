@@ -175,15 +175,8 @@ pub(crate) async fn steam_auth_callback(
         })
         .or_else(|| {
             // 如果 X-Forwarded-Host 可用，用它构建正确的地址
-            if let Some(host) = forwarded_host {
-                Some(format!(
-                    "{}://{}",
-                    forwarded_proto,
-                    host.trim_end_matches('/')
-                ))
-            } else {
-                None
-            }
+            forwarded_host
+                .map(|host| format!("{}://{}", forwarded_proto, host.trim_end_matches('/')))
         })
         .or_else(|| {
             ctx.config
@@ -300,6 +293,17 @@ pub(crate) struct SessionQuery {
     token: String,
 }
 
+/// public_steam_auth_sessions 行（steam_auth_session 查询用）
+type SteamAuthSessionRow = (
+    Uuid,
+    String,
+    Option<String>,
+    Option<String>,
+    String,
+    Option<String>,
+    Option<i32>,
+);
+
 pub(crate) async fn steam_auth_session(
     State(ctx): State<AppCtx>,
     Query(query): Query<SessionQuery>,
@@ -311,15 +315,7 @@ pub(crate) async fn steam_auth_session(
         )
     })?;
 
-    let row: Option<(
-        uuid::Uuid,
-        String,
-        Option<String>,
-        Option<String>,
-        String,
-        Option<String>,
-        Option<i32>,
-    )> = sqlx::query_as(
+    let row: Option<SteamAuthSessionRow> = sqlx::query_as(
         r#"SELECT id, steamid64, steamid, steamid3, profile_url, persona_name, steam_level
                FROM public_steam_auth_sessions
                WHERE id = $1 AND expires_at > now()"#,

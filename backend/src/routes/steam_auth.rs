@@ -34,27 +34,39 @@ const SESSION_TTL_HOURS: i64 = 1;
 
 // ---------------------------------------------------------------------------
 // 登录 state 管理（防登录 CSRF，10 分钟过期）
+// state 同时记录发起登录时的前端地址，回调时用其回跳，
+// 避免依赖 X-Forwarded-Host / CORS_ORIGIN 等外部配置推导
 // ---------------------------------------------------------------------------
 
 const LOGIN_STATE_TTL_SECS: u64 = 600;
-static PENDING_LOGIN_STATES: LazyLock<Mutex<HashMap<String, Instant>>> =
+
+struct LoginState {
+    expires_at: Instant,
+    frontend_base: String,
+}
+
+static PENDING_LOGIN_STATES: LazyLock<Mutex<HashMap<String, LoginState>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-fn issue_login_state() -> String {
+fn issue_login_state(frontend_base: &str) -> String {
     let state = Uuid::new_v4().simple().to_string();
     let mut map = PENDING_LOGIN_STATES.lock().expect("state map poisoned");
-    map.retain(|_, expires_at| *expires_at > Instant::now());
+    map.retain(|_, entry| entry.expires_at > Instant::now());
     map.insert(
         state.clone(),
-        Instant::now() + Duration::from_secs(LOGIN_STATE_TTL_SECS),
+        LoginState {
+            expires_at: Instant::now() + Duration::from_secs(LOGIN_STATE_TTL_SECS),
+            frontend_base: frontend_base.to_string(),
+        },
     );
     state
 }
 
-fn consume_login_state(state: &str) -> bool {
+/// 校验并消费登录 state，返回其关联的前端地址（消费后即失效）
+fn consume_login_state(state: &str) -> Option<String> {
     let mut map = PENDING_LOGIN_STATES.lock().expect("state map poisoned");
-    map.retain(|_, expires_at| *expires_at > Instant::now());
-    map.remove(state).is_some()
+    map.retain(|_, entry| entry.expires_at > Instant::now());
+    map.remove(state).map(|entry| entry.frontend_base)
 }
 
 // ---------------------------------------------------------------------------
@@ -76,7 +88,7 @@ pub(crate) struct LoginQuery {
 fn resolve_frontend_origin(
     query: &LoginQuery,
     headers: &HeaderMap,
-    cors_origin: Option<&str>,
+    cors_origins: &[String],
 ) -> String {
     query
         .origin
@@ -121,7 +133,7 @@ fn resolve_frontend_origin(
                 .filter(|h| !h.is_empty())
                 .map(|host| format!("{}://{}", proto, host))
         })
-        .or_else(|| cors_origin.map(|s| s.trim_end_matches('/').to_string()))
+        .or_else(|| cors_origins.first().cloned())
         .unwrap_or_else(|| "http://localhost:5173".to_string())
 }
 
@@ -132,20 +144,18 @@ pub(crate) async fn steam_auth_login(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     // realm 和 callback_url 必须与前端实际访问的地址一致，
     // 否则 Steam 登录成功后回调会跳到错误地址（如 localhost）导致登录失败。
-    let cors_origin = ctx.config.cors_origin.clone();
-    let mut realm = resolve_frontend_origin(&query, &headers, cors_origin.as_deref());
+    let cors_origins = ctx.config.cors_origins();
+    let mut realm = resolve_frontend_origin(&query, &headers, &cors_origins);
     realm = realm.trim_end_matches('/').to_string();
 
-    // 若配置了 CORS_ORIGIN（生产环境必填），校验推导出的 origin 必须与之一致，
+    // 若配置了 CORS_ORIGIN（生产环境必填），校验推导出的 origin 必须在白名单内，
     // 避免被恶意来源利用重定向。
-    if let Some(allowed) = cors_origin.as_deref().map(|s| s.trim_end_matches('/')) {
-        if realm != allowed {
-            tracing::warn!(realm = %realm, allowed = %allowed, "Steam 登录来源与 CORS_ORIGIN 不一致");
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "不支持的来源" })),
-            ));
-        }
+    if !cors_origins.is_empty() && !cors_origins.iter().any(|origin| origin == &realm) {
+        tracing::warn!(realm = %realm, allowed = ?cors_origins, "Steam 登录来源与 CORS_ORIGIN 不一致");
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "不支持的来源" })),
+        ));
     }
 
     let callback_url = format!("{}/api/public/steam/auth/callback", realm);
@@ -155,7 +165,7 @@ pub(crate) async fn steam_auth_login(
     //   后回跳 callback_url?token=&state=），state 由本服务签发用于防 CSRF
     // - 未配置：直接跳 Steam OpenID（服务器可直连 Steam 时）
     let login_url = if let Some(ref relay) = ctx.config.steam_relay_url {
-        let state = issue_login_state();
+        let state = issue_login_state(&realm);
         format!(
             "{relay}/login?mode=login&state={state}&return_to={}",
             percent_encode_query(&callback_url)
@@ -270,12 +280,7 @@ pub(crate) async fn steam_auth_callback(
             forwarded_host
                 .map(|host| format!("{}://{}", forwarded_proto, host.trim_end_matches('/')))
         })
-        .or_else(|| {
-            ctx.config
-                .cors_origin
-                .as_deref()
-                .map(|s| s.trim_end_matches('/').to_string())
-        })
+        .or_else(|| ctx.config.cors_origins().first().cloned())
         .unwrap_or_else(|| "http://localhost:5173".to_string());
 
     // 构建回调出错的跳转地址（错误信息通过 query 参数带往前端）
@@ -297,13 +302,22 @@ pub(crate) async fn steam_auth_callback(
     // ── 中转模式（配置了 STEAM_RELAY_URL）：回调参数为 ?token=&state= ──
     if ctx.config.steam_relay_url.is_some() {
         let state = params.state.as_deref().unwrap_or("");
-        if !consume_login_state(state) {
-            tracing::warn!(state = %state, "Steam 登录 state 校验失败");
-            return Ok(error_redirect("invalid_state"));
-        }
+        let state_frontend_base = match consume_login_state(state) {
+            Some(base) => base,
+            None => {
+                tracing::warn!(state = %state, "Steam 登录 state 校验失败");
+                return Ok(error_redirect("invalid_state"));
+            }
+        };
+        // 错误跳转同样回到发起登录时的前端地址
+        let state_error_redirect = |reason: &str| {
+            Redirect::to(&format!(
+                "{state_frontend_base}/public/apply?steam_auth=error&reason={reason}"
+            ))
+        };
         let token = match params.token.as_deref() {
             Some(t) if !t.is_empty() => t,
-            _ => return Ok(error_redirect("missing_token")),
+            _ => return Ok(state_error_redirect("missing_token")),
         };
 
         // 向中转 Worker 换取 SteamID 与资料（一次性 token，用后即焚，防伪造）
@@ -338,11 +352,11 @@ pub(crate) async fn steam_auth_callback(
         })?;
 
         if !payload.success {
-            return Ok(error_redirect("verification_failed"));
+            return Ok(state_error_redirect("verification_failed"));
         }
         let steamid64 = match payload.steamid {
             Some(id) if id.len() == 17 && id.chars().all(|c| c.is_ascii_digit()) => id,
-            _ => return Ok(error_redirect("verification_failed")),
+            _ => return Ok(state_error_redirect("verification_failed")),
         };
 
         return create_session_and_redirect(
@@ -350,7 +364,7 @@ pub(crate) async fn steam_auth_callback(
             &steamid64,
             payload.persona_name.as_deref(),
             payload.steam_level.map(|level| level as i32),
-            &frontend_base,
+            &state_frontend_base,
         )
         .await;
     }

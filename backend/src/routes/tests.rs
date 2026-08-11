@@ -65,7 +65,14 @@ fn test_app(config: Config, db: Database) -> TestApp {
         whitelist_cache.clone(),
         SteamResolver::new(&config),
         gokz_cache,
-    );
+    )
+    // 与 main.rs 一致：挂载统一 CORS 策略中间件（/webhook/* 放行，其余白名单）
+    .layer(axum::middleware::from_fn_with_state(
+        crate::cors_middleware::CorsState {
+            allowed_origins: Arc::new(config.cors_origins()),
+        },
+        crate::cors_middleware::cors_middleware,
+    ));
     TestApp {
         router,
         whitelist_cache,
@@ -2436,6 +2443,104 @@ async fn steam_login_relay_mode_rejects_forged_state() {
             location.contains("reason=invalid_state"),
             "location: {location}"
         );
+        Ok(())
+    })
+    .await;
+}
+
+// ---------------------------------------------------------------------------
+// 统一 CORS 策略：/webhook/* 放行所有来源，其余路径仅白名单
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn cors_allows_any_origin_for_public_webhook() {
+    with_test_app(async |db, config| {
+        let app = test_app(config, db);
+        // 白名单外来源调用公开 webhook 端点：应带 Access-Control-Allow-Origin 回显头
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/webhook/some-public-path")
+                    .header("Origin", "https://other-site.example.com")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(
+            res.headers()
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some("https://other-site.example.com")
+        );
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn cors_rejects_unknown_origin_for_admin_routes() {
+    with_test_app(async |db, config| {
+        let app = test_app(config, db);
+        // 白名单外来源访问管理接口：不应带 Access-Control-Allow-Origin
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/dashboard")
+                    .header("Origin", "https://evil.example.com")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        assert!(res.headers().get("access-control-allow-origin").is_none());
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn cors_preflight_allows_public_webhook_for_any_origin() {
+    with_test_app(async |db, config| {
+        let app = test_app(config, db);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/webhook/xxx")
+                    .header("Origin", "https://other-site.example.com")
+                    .header("Access-Control-Request-Method", "GET")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers()
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some("https://other-site.example.com")
+        );
+        assert!(res.headers().get("access-control-allow-methods").is_some());
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn cors_preflight_rejects_unknown_origin_for_admin_routes() {
+    with_test_app(async |db, config| {
+        let app = test_app(config, db);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/api/dashboard")
+                    .header("Origin", "https://evil.example.com")
+                    .header("Access-Control-Request-Method", "GET")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
         Ok(())
     })
     .await;

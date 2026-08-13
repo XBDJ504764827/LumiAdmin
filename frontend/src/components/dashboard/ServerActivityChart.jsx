@@ -84,6 +84,14 @@ export function ServerActivityChart() {
 
   const isEmpty = !!chartData && chartData.activePlayers.every((count) => count === 0);
 
+  // 图例补充统计：窗口内活跃玩家与会话峰值
+  const summary = useMemo(() => {
+    if (!chartData) return null;
+    const peakPlayers = chartData.activePlayers.reduce((max, count) => Math.max(max, count), 0);
+    const peakSessions = chartData.sessions.reduce((max, count) => Math.max(max, count), 0);
+    return { peakPlayers, peakSessions };
+  }, [chartData]);
+
   return (
     <DashboardChartCard
       title="服务器活跃度"
@@ -103,6 +111,12 @@ export function ServerActivityChart() {
         <span className="dash-chart-legend-item">
           <i className="dash-chart-dot dash-chart-dot-accent2" />会话数
         </span>
+        {summary ? (
+          <span className="dash-chart-legend-meta">
+            <span>峰值活跃 <b>{summary.peakPlayers}</b></span>
+            <span>峰值会话 <b>{summary.peakSessions}</b></span>
+          </span>
+        ) : null}
       </div>
       <ChartCanvas type="line" data={data} options={options} ariaLabel="服务器活跃度趋势折线图" />
     </DashboardChartCard>

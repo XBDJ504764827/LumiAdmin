@@ -11,6 +11,7 @@ export function buildCreateUserPayload(form) {
     role: form.role,
     steam_id: form.steam_id?.trim() ? form.steam_id.trim() : null,
     remark: form.remark?.trim() ? form.remark.trim() : null,
+    openid: form.openid?.trim() ? form.openid.trim() : null,
   };
 }
 
@@ -20,5 +21,6 @@ export function buildUpdateUserPayload(form, includeRole) {
     role: includeRole ? form.role : undefined,
     steam_id: form.steam_id?.trim() ? form.steam_id.trim() : null,
     remark: form.remark?.trim() ? form.remark.trim() : null,
+    openid: form.openid?.trim() ? form.openid.trim() : null,
   };
 }

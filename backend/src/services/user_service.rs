@@ -15,6 +15,7 @@ pub struct UserListItem {
     pub role: String,
     pub steam_id: Option<String>,
     pub remark: Option<String>,
+    pub openid: Option<String>,
     pub enabled: bool,
     pub created_at: String,
 }
@@ -26,6 +27,7 @@ pub struct CreateUserInput {
     pub role: String,
     pub steam_id: Option<String>,
     pub remark: Option<String>,
+    pub openid: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -34,11 +36,12 @@ pub struct UpdateUserInput {
     pub role: Option<String>,
     pub steam_id: Option<String>,
     pub remark: Option<String>,
+    pub openid: Option<String>,
 }
 
 pub async fn find_user(db: &Database, id: Uuid) -> anyhow::Result<User> {
     sqlx::query_as::<_, User>(
-        r#"SELECT id, username, display_name, password_hash, role, steam_id, remark, enabled, created_at FROM users WHERE id = $1"#,
+        r#"SELECT id, username, display_name, password_hash, role, steam_id, remark, openid, enabled, created_at FROM users WHERE id = $1"#,
     )
     .bind(id)
     .fetch_one(&db.pool)
@@ -61,6 +64,7 @@ pub async fn list_users(
                 role: user.role,
                 steam_id: user.steam_id,
                 remark: user.remark,
+                openid: user.openid,
                 enabled: user.enabled,
                 created_at: user.created_at.to_rfc3339(),
             }],
@@ -89,7 +93,7 @@ pub async fn list_users(
 
     let count_sql = format!("SELECT COUNT(*) FROM users {where_clause}");
     let data_sql = format!(
-        r#"SELECT id, username, display_name, password_hash, role, steam_id, remark, enabled, created_at
+        r#"SELECT id, username, display_name, password_hash, role, steam_id, remark, openid, enabled, created_at
            FROM users {where_clause} ORDER BY created_at DESC LIMIT ${param_idx} OFFSET ${}"#,
         param_idx + 1
     );
@@ -115,6 +119,7 @@ pub async fn list_users(
             role: user.role,
             steam_id: user.steam_id,
             remark: user.remark,
+            openid: user.openid,
             enabled: user.enabled,
             created_at: user.created_at.to_rfc3339(),
         })
@@ -133,6 +138,7 @@ pub async fn create_user(db: &Database, input: CreateUserInput) -> anyhow::Resul
     let password = input.password.trim();
     let role = input.role.trim();
     let steam_id = super::normalize_optional_text(input.steam_id.as_deref());
+    let openid = super::normalize_optional_text(input.openid.as_deref());
 
     anyhow::ensure!(!username.is_empty(), "用户名不能为空");
     anyhow::ensure!(!password.is_empty(), "密码不能为空");
@@ -142,9 +148,9 @@ pub async fn create_user(db: &Database, input: CreateUserInput) -> anyhow::Resul
     let id = Uuid::new_v4();
     let row = sqlx::query_as::<_, User>(
         r#"
-        INSERT INTO users (id, username, display_name, password_hash, role, steam_id, remark)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING id, username, display_name, password_hash, role, steam_id, remark, enabled, created_at
+        INSERT INTO users (id, username, display_name, password_hash, role, steam_id, remark, openid)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id, username, display_name, password_hash, role, steam_id, remark, openid, enabled, created_at
         "#,
     )
     .bind(id)
@@ -154,6 +160,7 @@ pub async fn create_user(db: &Database, input: CreateUserInput) -> anyhow::Resul
     .bind(role)
     .bind(steam_id)
     .bind(super::normalize_optional_text(input.remark.as_deref()))
+    .bind(openid)
     .fetch_one(&db.pool)
     .await?;
 
@@ -164,6 +171,7 @@ pub async fn create_user(db: &Database, input: CreateUserInput) -> anyhow::Resul
         role: row.role,
         steam_id: row.steam_id,
         remark: row.remark,
+        openid: row.openid,
         enabled: row.enabled,
         created_at: row.created_at.to_rfc3339(),
     })
@@ -178,6 +186,7 @@ pub async fn update_user(
     let current = find_user(db, id).await?;
     let username = input.username.trim();
     let steam_id = super::normalize_optional_text(input.steam_id.as_deref());
+    let openid = super::normalize_optional_text(input.openid.as_deref());
     anyhow::ensure!(!username.is_empty(), "用户名不能为空");
 
     let role = if keep_role {
@@ -202,9 +211,10 @@ pub async fn update_user(
             display_name = $2,
             role = $3,
             steam_id = $4,
-            remark = $5
+            remark = $5,
+            openid = $6
         WHERE id = $1
-        RETURNING id, username, display_name, password_hash, role, steam_id, remark, enabled, created_at
+        RETURNING id, username, display_name, password_hash, role, steam_id, remark, openid, enabled, created_at
         "#,
     )
     .bind(id)
@@ -212,6 +222,7 @@ pub async fn update_user(
     .bind(role)
     .bind(steam_id)
     .bind(super::normalize_optional_text(input.remark.as_deref()))
+    .bind(openid)
     .fetch_one(&db.pool)
     .await?;
 
@@ -222,6 +233,7 @@ pub async fn update_user(
         role: row.role,
         steam_id: row.steam_id,
         remark: row.remark,
+        openid: row.openid,
         enabled: row.enabled,
         created_at: row.created_at.to_rfc3339(),
     })
@@ -254,7 +266,7 @@ pub async fn toggle_enabled(db: &Database, id: Uuid) -> anyhow::Result<UserListI
         UPDATE users
         SET enabled = NOT enabled
         WHERE id = $1
-        RETURNING id, username, display_name, password_hash, role, steam_id, remark, enabled, created_at
+        RETURNING id, username, display_name, password_hash, role, steam_id, remark, openid, enabled, created_at
         "#,
     )
     .bind(id)
@@ -268,6 +280,7 @@ pub async fn toggle_enabled(db: &Database, id: Uuid) -> anyhow::Result<UserListI
         role: row.role,
         steam_id: row.steam_id,
         remark: row.remark,
+        openid: row.openid,
         enabled: row.enabled,
         created_at: row.created_at.to_rfc3339(),
     })

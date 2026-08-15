@@ -27,6 +27,15 @@ export function WhitelistTrendChart() {
     [items, days],
   );
 
+  // 图例补充统计：窗口累计 / 日均 / 单日峰值
+  const summary = useMemo(() => {
+    if (!window) return null;
+    const total = window.counts.reduce((sum, count) => sum + count, 0);
+    const peak = window.counts.length > 0 ? Math.max(...window.counts) : 0;
+    const avg = window.counts.length > 0 ? total / window.counts.length : 0;
+    return { total, peak, avg: Math.round(avg * 10) / 10 };
+  }, [window]);
+
   const colors = useChartThemeColors();
   const data = useMemo(() => {
     if (!window) return null;
@@ -72,6 +81,18 @@ export function WhitelistTrendChart() {
       onRetry={() => query.refetch()}
       empty={!!window && window.counts.every((count) => count === 0)}
     >
+      {summary ? (
+        <div className="dash-chart-legend" aria-hidden="true">
+          <span className="dash-chart-legend-item">
+            <i className="dash-chart-dot dash-chart-dot-accent" />新增白名单
+          </span>
+          <span className="dash-chart-legend-meta">
+            <span>累计 <b>{summary.total}</b></span>
+            <span>日均 <b>{summary.avg}</b></span>
+            <span>峰值 <b>{summary.peak}</b>/天</span>
+          </span>
+        </div>
+      ) : null}
       <ChartCanvas
         type="line"
         data={data}

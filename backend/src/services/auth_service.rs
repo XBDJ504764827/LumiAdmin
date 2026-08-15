@@ -14,7 +14,7 @@ pub async fn login(
     ttl_hours: i64,
 ) -> anyhow::Result<SessionResponse> {
     let user = sqlx::query_as::<_, User>(
-        r#"SELECT id, username, display_name, password_hash, role, steam_id, remark, enabled, created_at FROM users WHERE username = $1"#,
+        r#"SELECT id, username, display_name, password_hash, role, steam_id, remark, openid, enabled, created_at FROM users WHERE username = $1"#,
     )
     .bind(username)
     .fetch_optional(&db.pool)

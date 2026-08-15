@@ -123,12 +123,10 @@ pub(crate) async fn submit_whitelist(
     {
         tracing::warn!(%e, "whitelist apply notification failed");
     }
-    // LumiBot（QQ 机器人）事件队列：新白名单申请入队，
-    // 由后台任务每 30 分钟集中通过 LumiBot API 上报，再由 QQ 机器人通知管理员。
-    if ctx.config.lumi_bot_enabled() {
-        if let Err(e) = lumi_bot_service::enqueue_whitelist_created(&ctx.db, &item).await {
-            tracing::warn!(%e, "LumiBot 白名单申请事件入队失败");
-        }
+    // LumiBot（QQ 机器人）事件上报：新白名单申请立即调用 LumiBot API 上报，
+    // 然后由 QQ 机器人立即推送通知；若立即上报失败则降级入队列，由后台任务兜底重试。
+    if let Err(e) = lumi_bot_service::report_whitelist_created(&ctx.db, &ctx.config, &item).await {
+        tracing::warn!(%e, "LumiBot 白名单申请事件上报失败");
     }
     Ok((
         StatusCode::CREATED,

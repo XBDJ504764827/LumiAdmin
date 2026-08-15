@@ -600,12 +600,11 @@ players : 2 humans, 0 bots (16/0 max) (not hibernating)\n\
             let polled = poller.poll_once().await?;
             assert_eq!(polled, 1, "应当轮询到 1 台上报过期的服务器");
 
-            let (status, players): (String, Vec<String>) = sqlx::query_as(
-                "SELECT status, players FROM servers WHERE id = $1",
-            )
-            .bind(server_id)
-            .fetch_one(&db.pool)
-            .await?;
+            let (status, players): (String, Vec<String>) =
+                sqlx::query_as("SELECT status, players FROM servers WHERE id = $1")
+                    .bind(server_id)
+                    .fetch_one(&db.pool)
+                    .await?;
             assert_eq!(status, "online", "有玩家在线时状态应保持在线");
             assert!(players.contains(&".mONESY".to_string()));
             assert!(players.contains(&"灵活的小舌头".to_string()));

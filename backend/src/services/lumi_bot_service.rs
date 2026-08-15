@@ -180,13 +180,12 @@ pub async fn collect_whitelist_player_info(
     .await
     .unwrap_or(false);
     // 本地封禁条数
-    let local_ban_count: i64 = sqlx::query_scalar(
-        r#"SELECT COUNT(*) FROM ban_records WHERE steam_id = $1"#,
-    )
-    .bind(steamid64)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap_or(0);
+    let local_ban_count: i64 =
+        sqlx::query_scalar(r#"SELECT COUNT(*) FROM ban_records WHERE steam_id = $1"#)
+            .bind(steamid64)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap_or(0);
     // 最近一条本地封禁原因
     let raw_local_ban_reason: Option<String> = sqlx::query_scalar(
         r#"SELECT reason FROM ban_records WHERE steam_id = $1 ORDER BY created_at DESC LIMIT 1"#,

@@ -4,6 +4,7 @@ import { useApiQuery } from '../../shared/useApiQuery.js';
 import { api } from '../../lib/api.js';
 import {
   buildServerRankingData,
+  formatNumber,
   formatPlaytime,
 } from '../../pages/dashboard/dashboardData.js';
 import { DashboardChartCard } from './DashboardChartCard.jsx';
@@ -34,6 +35,14 @@ export function ServerRankingChart() {
   const items = query.data?.data ?? null;
   const ranking = useMemo(() => (items ? buildServerRankingData(items) : null), [items]);
   const colors = useChartThemeColors();
+
+  // 图例补充统计：榜单内总会话数与总在线时长
+  const summary = useMemo(() => {
+    if (!ranking) return null;
+    const totalSessions = ranking.sessions.reduce((sum, count) => sum + count, 0);
+    const totalPlaytime = ranking.playtimeSeconds.reduce((sum, seconds) => sum + seconds, 0);
+    return { totalSessions, totalPlaytime };
+  }, [ranking]);
 
   const data = useMemo(() => {
     if (!ranking || ranking.names.length === 0) return null;
@@ -99,6 +108,17 @@ export function ServerRankingChart() {
       empty={!!ranking && ranking.names.length === 0}
       className="dash-chart-card--ranking"
     >
+      {summary ? (
+        <div className="dash-chart-legend" aria-hidden="true">
+          <span className="dash-chart-legend-item">
+            <i className="dash-chart-dot dash-chart-dot-accent" />活跃玩家
+          </span>
+          <span className="dash-chart-legend-meta">
+            <span>总会话 <b>{formatNumber(summary.totalSessions)}</b></span>
+            <span>总时长 <b>{formatPlaytime(summary.totalPlaytime)}</b></span>
+          </span>
+        </div>
+      ) : null}
       <ChartCanvas
         type="bar"
         data={data}

@@ -18,6 +18,7 @@ pub(crate) struct CreateUserBody {
     pub(crate) role: String,
     pub(crate) steam_id: Option<String>,
     pub(crate) remark: Option<String>,
+    pub(crate) openid: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -26,6 +27,7 @@ pub(crate) struct UpdateUserBody {
     pub(crate) role: Option<String>,
     pub(crate) steam_id: Option<String>,
     pub(crate) remark: Option<String>,
+    pub(crate) openid: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -73,6 +75,7 @@ pub(crate) async fn create_user(
             role: body.role,
             steam_id: body.steam_id,
             remark: body.remark,
+            openid: body.openid,
         },
     )
     .await
@@ -117,6 +120,7 @@ pub(crate) async fn update_user(
             role: body.role,
             steam_id: body.steam_id,
             remark: body.remark,
+            openid: body.openid,
         },
         keep_role,
     )

@@ -257,10 +257,18 @@ async fn apply_poll_result(
     .execute(&mut *tx)
     .await?;
 
+    // 探测到空服/休眠时如实回写休眠状态，避免兜底轮询把状态刷新回『在线』
+    // （插件恢复上报或新玩家进入后，report_online_players 会重新置回 online）。
+    let new_status = if status.hibernating || status.player_count == 0 {
+        "hibernating"
+    } else {
+        "online"
+    };
+
     sqlx::query(
         r#"
         UPDATE servers
-        SET status = 'online',
+        SET status = $5,
             last_reported_at = $2,
             max_players = GREATEST(max_players, $3),
             players = $4
@@ -271,6 +279,7 @@ async fn apply_poll_result(
     .bind(now)
     .bind(status.max_players)
     .bind(&status.players)
+    .bind(new_status)
     .execute(&mut *tx)
     .await?;
 
@@ -325,6 +334,22 @@ map     : kz_slumpfrageous\n\
 players : 0 humans, 0 bots (16/0 max) (hibernating)\n\
 \n\
 #end\n";
+
+    const ACTIVE_STATUS: &str = "hostname: CNGOKZ 测试服\n\
+version : 1.38.8.1/13881 1575/8853 secure  [G:1:15912410]\n\
+udp/ip  : 127.0.0.1:27015  (public ip: 127.0.0.1)\n\
+os      :  Linux\n\
+type    :  community dedicated\n\
+map     : kz_slumpfrageous\n\
+players : 2 humans, 0 bots (16/0 max) (not hibernating)\n\
+\n\
+# userid name uniqueid connected ping loss state rate adr\n\
+# 91 2 \".mONESY\" STEAM_1:1:712722834 10:31 64 0 active 196608 222.172.181.86:26983\n\
+# 92 3 \"灵活的小舌头\" STEAM_1:1:215367673 08:09 43 0 active 196608 112.255.145.196:9050\n\
+#end\n";
+
+    const ACTIVE_STATS: &str = "CPU   In    Out   Uptime  Map changes  FPS   Players  Connects\n\
+1.20  2.5   1.1   12:34  0            128   2        12\n";
 
     const EMPTY_STATS: &str = "CPU   In    Out   Uptime  Map changes  FPS   Players  Connects\n\
 0.00  0.0   0.0   12:34  0            0     0        0\n";
@@ -502,13 +527,13 @@ players : 0 humans, 0 bots (16/0 max) (hibernating)\n\
             let polled = poller.poll_once().await?;
             assert_eq!(polled, 1, "应当轮询到 1 台休眠服务器");
 
-            // 服务器汇总已刷新
+            // 服务器汇总已刷新：探测到空服休眠，状态应如实标记为休眠
             let (status, last_reported_at, players, max_players): (String, DateTime<Utc>, Vec<String>, i32) =
                 sqlx::query_as("SELECT status, last_reported_at, players, max_players FROM servers WHERE id = $1")
                     .bind(server_id)
                     .fetch_one(&db.pool)
                     .await?;
-            assert_eq!(status, "online");
+            assert_eq!(status, "hibernating");
             assert!(Utc::now().signed_duration_since(last_reported_at).num_seconds() < 10);
             assert!(players.is_empty(), "空服玩家列表应为空");
             assert_eq!(max_players, 16);
@@ -546,6 +571,43 @@ players : 0 humans, 0 bots (16/0 max) (hibernating)\n\
             .await?;
             assert!(left_at.is_some(), "悬挂会话应被关闭");
             assert_eq!(end_reason, "server_empty");
+
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+
+        test_util::drop_schema(&base_url, &schema).await;
+        result.unwrap();
+    }
+
+    #[tokio::test]
+    async fn poll_keeps_active_server_online() {
+        let config = Config::from_env();
+        let base_url = config.database_url.clone();
+        let schema = format!("test_{}", Uuid::new_v4().simple());
+        let scoped_url = schema_url(&base_url, &schema);
+        test_util::create_schema(&base_url, &schema).await;
+
+        let result = async {
+            let db = Database::connect_for_test(&scoped_url).await?;
+            db.migrate().await?;
+
+            // 有玩家在线的服务器（RCON 可通、非休眠标记）：兜底轮询后仍应保持在线
+            let address = spawn_fake_rcon_server(ACTIVE_STATUS, ACTIVE_STATS);
+            let server_id = insert_hibernating_server(&db, &address, 200).await;
+
+            let mut poller = HibernationPoller::new(db.clone(), test_config());
+            let polled = poller.poll_once().await?;
+            assert_eq!(polled, 1, "应当轮询到 1 台上报过期的服务器");
+
+            let (status, players): (String, Vec<String>) =
+                sqlx::query_as("SELECT status, players FROM servers WHERE id = $1")
+                    .bind(server_id)
+                    .fetch_one(&db.pool)
+                    .await?;
+            assert_eq!(status, "online", "有玩家在线时状态应保持在线");
+            assert!(players.contains(&".mONESY".to_string()));
+            assert!(players.contains(&"灵活的小舌头".to_string()));
 
             Ok::<(), anyhow::Error>(())
         }

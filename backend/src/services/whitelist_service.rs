@@ -231,7 +231,7 @@ pub async fn create_public_whitelist_request(
             "pending" => anyhow::bail!("该玩家白名单还在审核中"),
             "approved" => anyhow::bail!("该玩家白名单已通过，可以正常进入游戏"),
             "rejected" => anyhow::bail!(
-                "该玩家白名单未通过：{}",
+                "该Steam账户未通过白名单申请理由为：{}\n如有疑问可前往：https://chat.cngokz.com 论坛发帖求助\n或前往QQ群：275164688 寻求管理员帮助",
                 existing
                     .rejection_reason
                     .unwrap_or_else(|| "未填写拒绝理由".to_string())
@@ -1011,7 +1011,10 @@ mod tests {
             .await
             .unwrap_err();
 
-            assert_eq!(error.to_string(), "该玩家白名单未通过：资料不完整");
+            assert_eq!(
+                error.to_string(),
+                "该Steam账户未通过白名单申请理由为：资料不完整\n如有疑问可前往：https://chat.cngokz.com 论坛发帖求助\n或前往QQ群：275164688 寻求管理员帮助"
+            );
             Ok(())
         })
         .await;

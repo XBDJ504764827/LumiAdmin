@@ -1105,6 +1105,65 @@ async fn migrate_expands_users_schema_for_admin_management() {
 }
 
 #[tokio::test]
+async fn migrate_recovers_users_legacy_qq_account_column() {
+    let config = Config::from_env();
+    let base_url = config.database_url.clone();
+    let schema = format!("test_{}", Uuid::new_v4().simple());
+    let scoped_url = schema_url(&base_url, &schema);
+
+    create_schema(&base_url, &schema).await;
+
+    let result = async {
+        let db = Database::connect_for_test(&scoped_url).await?;
+
+        // 模拟历史环境：core 创建的完整 users 表中已同时存在旧字段 qq_account 与新字段 openid
+        sqlx::query(
+            r#"CREATE TABLE users (
+                  id UUID PRIMARY KEY,
+                  username TEXT NOT NULL,
+                  display_name TEXT NOT NULL,
+                  password_hash TEXT NOT NULL,
+                  role TEXT NOT NULL,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                  steam_id TEXT,
+                  remark TEXT,
+                  enabled BOOLEAN NOT NULL DEFAULT true,
+                  qq_account TEXT
+              )"#,
+        )
+        .execute(&db.pool)
+        .await?;
+        sqlx::query(r#"ALTER TABLE users ADD COLUMN IF NOT EXISTS openid TEXT"#)
+            .execute(&db.pool)
+            .await?;
+
+        // 迁移不应报错（应优先保留 openid，丢弃遗留的 qq_account）
+        db.migrate().await?;
+
+        let columns = sqlx::query_as::<_, (String,)>(
+            r#"
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'users'
+            ORDER BY column_name
+            "#,
+        )
+        .fetch_all(&db.pool)
+        .await?;
+        let names: Vec<String> = columns.into_iter().map(|row| row.0).collect();
+
+        assert!(names.contains(&"openid".to_string()));
+        assert!(!names.contains(&"qq_account".to_string()));
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+
+    drop_schema(&base_url, &schema).await;
+    result.unwrap();
+}
+
+#[tokio::test]
 async fn migrate_expands_ban_records_missing_manual_ban_columns() {
     let config = Config::from_env();
     let base_url = config.database_url.clone();

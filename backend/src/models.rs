@@ -11,6 +11,7 @@ pub struct User {
     pub role: String,
     pub steam_id: Option<String>,
     pub remark: Option<String>,
+    pub openid: Option<String>,
     pub enabled: bool,
     pub created_at: DateTime<Utc>,
 }

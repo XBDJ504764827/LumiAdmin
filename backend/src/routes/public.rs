@@ -1,7 +1,8 @@
-use crate::routes::{invalid_request, AppCtx, ListQuery};
+use crate::routes::{forbidden, invalid_request, AppCtx, ListQuery};
 use crate::services::{
     ban_service, dashboard_service, global_ban_service, log_service, lumi_bot_service,
-    notification_service, public_service, rate_limit_service::extract_client_ip, whitelist_service,
+    notification_service, permission_service, public_service,
+    rate_limit_service::extract_client_ip, whitelist_service,
 };
 use anyhow;
 use axum::{
@@ -11,6 +12,7 @@ use axum::{
 };
 use std::collections::HashSet;
 use std::time::Duration;
+use uuid::Uuid;
 
 #[derive(serde::Deserialize)]
 #[allow(dead_code)]
@@ -699,6 +701,226 @@ pub(crate) async fn qq_pending_all(
         "counts": {
             "whitelist": whitelist_items.len(),
             "total": whitelist_items.len(),
+        }
+    })))
+}
+
+/// 校验 QQ 集成令牌（`x-qq-token` 或 `Authorization: Bearer`）。
+fn verify_qq_token(
+    ctx: &AppCtx,
+    headers: &HeaderMap,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    let token = headers
+        .get("x-qq-token")
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| {
+            headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "))
+        });
+
+    let expected_token = ctx.config.qq_integration_token.as_deref();
+
+    match (token, expected_token) {
+        (Some(provided), Some(expected))
+            if constant_time_eq(provided.as_bytes(), expected.as_bytes()) =>
+        {
+            Ok(())
+        }
+        (None, None) => Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "error": "QQ 集成未启用。请在后端配置 QQ_INTEGRATION_TOKEN 环境变量。"
+            })),
+        )),
+        _ => Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "无效的集成令牌" })),
+        )),
+    }
+}
+
+/// QQ 机器人集成：通过 QQ 聊天审批白名单申请。
+/// body: { action: "approve"|"reject", openid, reason?, force? }
+/// 按 openid 定位后台管理员并记为操作人，渠道标记为 'qq'。
+#[derive(serde::Deserialize)]
+pub(crate) struct QqWhitelistReviewBody {
+    action: String,
+    openid: String,
+    reason: Option<String>,
+    force: Option<bool>,
+}
+
+pub(crate) async fn qq_whitelist_review(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<QqWhitelistReviewBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    verify_qq_token(&ctx, &headers)?;
+
+    let action = body.action.trim();
+    let openid = body.openid.trim();
+    if openid.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "缺少审批者 openid" })),
+        ));
+    }
+
+    // 按 openid 查找后台管理员（developer/admin/normal 且启用）
+    let user: Option<(Uuid, String, String, String, Option<String>)> = sqlx::query_as(
+        r#"SELECT id, username, display_name, role, remark FROM users
+		   WHERE openid = $1 AND enabled = true LIMIT 1"#,
+    )
+    .bind(openid)
+    .fetch_optional(&ctx.db.pool)
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "QQ 审批：按 openid 查询管理员失败");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "查询审批者失败" })),
+        )
+    })?;
+
+    let (user_id, username, display_name, role, remark) = user.ok_or_else(|| {
+        (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "该 openid 未绑定到有效管理员，或管理员已被禁用"
+            })),
+        )
+    })?;
+
+    // 审批记录落库的操作人名称：优先用网站在「备注」里配置的名称，
+    // 其次退到 display_name，再退到 username，避免把 QQ 相关标识写进审批记录。
+    let operator_label = {
+        let r = remark.as_deref().map(str::trim).unwrap_or("");
+        let d = display_name.trim();
+        let u = username.trim();
+        if !r.is_empty() {
+            r.to_string()
+        } else if !d.is_empty() {
+            d.to_string()
+        } else if !u.is_empty() {
+            u.to_string()
+        } else {
+            "管理员".to_string()
+        }
+    };
+
+    // 权限校验：是否可审批白名单
+    let operator = crate::models::Operator {
+        id: user_id,
+        username,
+        display_name: display_name.clone(),
+        role: role.clone(),
+    };
+    if !permission_service::can_review_whitelist(&operator) {
+        return Err(forbidden());
+    }
+
+    let result = match action {
+        "approve" => {
+            let force = body.force.unwrap_or(false);
+            whitelist_service::approve_whitelist(
+                &ctx.db,
+                id,
+                whitelist_service::ApproveWhitelistInput {
+                    operator_name: &operator_label,
+                    reason: body.reason.as_deref(),
+                    force,
+                    via: "qq", // QQ 聊天审批
+                },
+            )
+            .await
+        }
+        "reject" => {
+            let reason = body.reason.as_deref().unwrap_or("");
+            if reason.trim().is_empty() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": "拒绝申请必须填写原因" })),
+                ));
+            }
+            whitelist_service::reject_whitelist(&ctx.db, id, reason, &operator_label, "qq").await
+        }
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "action 只能为 approve 或 reject" })),
+            ))
+        }
+    };
+
+    let item = result.map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("已被他人审批") {
+            (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({ "error": msg, "already_reviewed": true })),
+            )
+        } else {
+            tracing::warn!(error = %e, whitelist_id = %id, "QQ 审批失败");
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": msg })),
+            )
+        }
+    })?;
+
+    let via_label = if action == "approve" {
+        "通过白名单申请(QQ)"
+    } else {
+        "拒绝白名单申请(QQ)"
+    };
+    log_service::log_action(
+        &ctx.db,
+        &operator_label,
+        "白名单管理",
+        via_label,
+        &item.nickname,
+        "qq",
+    )
+    .await;
+
+    // 读取审批渠道与状态（approved_via / rejected_via 仅落在库表，不进入通用 WhitelistItem 模型）
+    #[derive(sqlx::FromRow)]
+    struct ViaRow {
+        status: String,
+        approved_by: Option<String>,
+        approved_via: Option<String>,
+        rejected_by: Option<String>,
+        rejected_via: Option<String>,
+    }
+    let via_row: ViaRow = sqlx::query_as(
+        r#"SELECT status, approved_by, approved_via, rejected_by, rejected_via
+           FROM whitelist_requests WHERE id = $1"#,
+    )
+    .bind(id)
+    .fetch_one(&ctx.db.pool)
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, whitelist_id = %id, "QQ 审批：读取结果失败");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "读取审批结果失败" })),
+        )
+    })?;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "item": {
+            "whitelist_id": id,
+            "steamid64": item.steamid64,
+            "nickname": item.nickname,
+            "status": via_row.status,
+            "approved_by": via_row.approved_by,
+            "approved_via": via_row.approved_via,
+            "rejected_by": via_row.rejected_by,
+            "rejected_via": via_row.rejected_via,
         }
     })))
 }

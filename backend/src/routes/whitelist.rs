@@ -227,6 +227,7 @@ pub(crate) async fn approve_whitelist_request(
             operator_name: &operator_name,
             reason: body.reason.as_deref(),
             force,
+            via: "web", // 后台网页审批
         },
     )
     .await
@@ -283,9 +284,10 @@ pub(crate) async fn reject_whitelist_request(
         return Err(AppError::forbidden());
     }
     let operator_name = actor.display_name.clone();
-    let item = whitelist_service::reject_whitelist(&ctx.db, id, &body.reason, &operator_name)
-        .await
-        .map_err(AppError::bad_request)?;
+    let item =
+        whitelist_service::reject_whitelist(&ctx.db, id, &body.reason, &operator_name, "web")
+            .await
+            .map_err(AppError::bad_request)?;
     log_service::log_action(
         &ctx.db,
         &operator_name,

@@ -514,6 +514,10 @@ pub fn router(
             "/api/integration/qq/pending-all",
             get(public::qq_pending_all),
         )
+        .route(
+            "/api/integration/qq/whitelist/:id/review",
+            post(public::qq_whitelist_review),
+        )
         .with_state(AppCtx {
             config: config.clone(),
             db,

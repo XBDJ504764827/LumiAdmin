@@ -53,6 +53,8 @@ pub struct ApproveWhitelistInput<'a> {
     pub operator_name: &'a str,
     pub reason: Option<&'a str>,
     pub force: bool,
+    /// 审批渠道：'web'（后台网页）/ 'qq'（QQ 聊天）
+    pub via: &'a str,
 }
 
 #[derive(sqlx::FromRow)]
@@ -363,8 +365,10 @@ pub async fn approve_whitelist(
     id: Uuid,
     input: ApproveWhitelistInput<'_>,
 ) -> anyhow::Result<WhitelistItem> {
+    // 并发安全：先读用于风险校验与“是否存在”判断（仅诊断用），真正的审批写入
+    // 依赖下面的原子条件更新 `WHERE status='pending'`。两位管理员同时审批时，
+    // 只有一个能命中，另一个匹配 0 行 → 判定“已被他人处理”。
     let current = find_by_id(db, id).await?;
-    anyhow::ensure!(current.status == "pending", "只有待审核记录可以通过");
     let risk_profile =
         player_risk_service::build_player_risk_profile(db, &current.steamid64).await?;
     ensure_can_approve_with_risk(&risk_profile, input.force, input.reason)?;
@@ -376,23 +380,27 @@ pub async fn approve_whitelist(
             approved_at = now(),
             approved_by = $2,
             approval_reason = $3,
+            approved_via = $4,
             rejected_at = NULL,
             rejected_by = NULL,
             rejection_reason = NULL,
+            rejected_via = NULL,
             revoked_at = NULL,
             revoked_by = NULL,
             updated_at = now()
-        WHERE id = $1
+        WHERE id = $1 AND status = 'pending'
         RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
-                  applied_at, approved_at, approved_by, approval_reason,
-                  rejected_at, rejected_by, rejection_reason
+                  applied_at, approved_at, approved_by, approval_reason, approved_via,
+                  rejected_at, rejected_by, rejection_reason, rejected_via
         "#,
     )
     .bind(id)
     .bind(input.operator_name.trim())
     .bind(input.reason.and_then(|r| if r.trim().is_empty() { None } else { Some(r.trim()) }))
-    .fetch_one(&db.pool)
-    .await?;
+    .bind(input.via.trim())
+    .fetch_optional(&db.pool)
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("该申请已被他人审批，无法重复操作"))?;
 
     Ok(map_whitelist_row(row))
 }
@@ -402,9 +410,10 @@ pub async fn reject_whitelist(
     id: Uuid,
     reason: &str,
     operator_name: &str,
+    via: &str,
 ) -> anyhow::Result<WhitelistItem> {
-    let current = find_by_id(db, id).await?;
-    anyhow::ensure!(current.status == "pending", "只有待审核记录可以拒绝");
+    // 先验证记录存在（不存在会报错），真正的写入由下方原子条件更新保证并发安全
+    let _ = find_by_id(db, id).await?;
     anyhow::ensure!(!reason.trim().is_empty(), "请输入拒绝理由");
 
     let row = sqlx::query_as::<_, WhitelistRow>(
@@ -414,23 +423,27 @@ pub async fn reject_whitelist(
             rejected_at = now(),
             rejected_by = $2,
             rejection_reason = $3,
+            rejected_via = $4,
             approved_at = NULL,
             approved_by = NULL,
             approval_reason = NULL,
+            approved_via = NULL,
             revoked_at = NULL,
             revoked_by = NULL,
             updated_at = now()
-        WHERE id = $1
+        WHERE id = $1 AND status = 'pending'
         RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
-                  applied_at, approved_at, approved_by, approval_reason,
-                  rejected_at, rejected_by, rejection_reason
+                  applied_at, approved_at, approved_by, approval_reason, approved_via,
+                  rejected_at, rejected_by, rejection_reason, rejected_via
         "#,
     )
     .bind(id)
     .bind(operator_name.trim())
     .bind(reason.trim())
-    .fetch_one(&db.pool)
-    .await?;
+    .bind(via.trim())
+    .fetch_optional(&db.pool)
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("该申请已被他人审批，无法重复操作"))?;
 
     Ok(map_whitelist_row(row))
 }
@@ -843,9 +856,9 @@ fn map_whitelist_row(row: WhitelistRow) -> WhitelistItem {
 #[cfg(test)]
 mod tests {
     use super::{
-        create_manual_whitelist, create_public_whitelist_request, find_by_steamid64,
-        list_whitelist, reject_whitelist, restore_whitelist, ManualWhitelistInput,
-        PublicWhitelistRequestInput,
+        approve_whitelist, create_manual_whitelist, create_public_whitelist_request,
+        find_by_steamid64, list_whitelist, reject_whitelist, restore_whitelist,
+        ApproveWhitelistInput, ManualWhitelistInput, PublicWhitelistRequestInput,
     };
     use crate::{config::Config, db::Database, services::steam_service::SteamResolver};
     use chrono::{Duration, Utc};
@@ -1188,7 +1201,9 @@ mod tests {
                 Utc::now(),
             )
             .await;
-            let error = reject_whitelist(&db, id, "", "Alex").await.unwrap_err();
+            let error = reject_whitelist(&db, id, "", "Alex", "web")
+                .await
+                .unwrap_err();
             assert_eq!(error.to_string(), "请输入拒绝理由");
             Ok(())
         })
@@ -1257,6 +1272,64 @@ mod tests {
             assert_eq!(row.id, newer_id);
             assert_ne!(row.id, older_id);
             assert_eq!(row.nickname, "新待审记录");
+            Ok(())
+        })
+        .await;
+    }
+
+    /// 两位管理员同时审批同一条待审记录：只有先到者成功，后到者收到“已被他人审批”。
+    #[tokio::test]
+    async fn concurrent_approve_only_first_succeeds() {
+        with_test_db(async |db| {
+            let id = insert_whitelist_record(
+                &db,
+                "76561198000000031",
+                "pending",
+                "并发玩家",
+                None,
+                Utc::now(),
+            )
+            .await;
+
+            // 管理员 A 先通过（web）
+            let first = approve_whitelist(
+                &db,
+                id,
+                ApproveWhitelistInput {
+                    operator_name: "管理员A",
+                    reason: None,
+                    force: false,
+                    via: "web",
+                },
+            )
+            .await
+            .expect("第一个管理员应审批成功");
+            assert_eq!(first.status, "approved");
+            assert_eq!(first.approved_by.as_deref(), Some("管理员A"));
+
+            // 管理员 B 再审批同一条：应失败（原子条件更新 WHERE status='pending' 命中 0 行）
+            let err = approve_whitelist(
+                &db,
+                id,
+                ApproveWhitelistInput {
+                    operator_name: "管理员B",
+                    reason: None,
+                    force: false,
+                    via: "qq",
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(err.to_string().contains("已被他人审批"), "got: {}", err);
+
+            // 记录仍为第一个管理员的通过状态，未被覆盖
+            let (status, approved_by): (String, Option<String>) =
+                sqlx::query_as("SELECT status, approved_by FROM whitelist_requests WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&db.pool)
+                    .await?;
+            assert_eq!(status, "approved");
+            assert_eq!(approved_by.as_deref(), Some("管理员A"));
             Ok(())
         })
         .await;

@@ -21,6 +21,8 @@ impl Database {
             r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS source TEXT"#,
             r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ"#,
             r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS approval_reason TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS approved_via TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS rejected_via TEXT"#,
         ];
         for sql in alters {
             sqlx::query(sql).execute(&self.pool).await?;

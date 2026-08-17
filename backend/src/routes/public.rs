@@ -1,7 +1,7 @@
 use crate::routes::{forbidden, invalid_request, AppCtx, ListQuery};
 use crate::services::{
-    ban_service, dashboard_service, global_ban_service, log_service, lumi_bot_service,
-    notification_service, permission_service, public_service,
+    audit_service, ban_service, dashboard_service, global_ban_service, log_service,
+    lumi_bot_service, notification_service, permission_service, public_service,
     rate_limit_service::extract_client_ip, whitelist_service,
 };
 use anyhow;
@@ -742,14 +742,47 @@ fn verify_qq_token(
 }
 
 /// QQ 机器人集成：通过 QQ 聊天审批白名单申请。
-/// body: { action: "approve"|"reject", openid, reason?, force? }
+/// body: { action: "approve"|"reject", openid, interaction_id, reason?, force? }
 /// 按 openid 定位后台管理员并记为操作人，渠道标记为 'qq'。
 #[derive(serde::Deserialize)]
 pub(crate) struct QqWhitelistReviewBody {
     action: String,
     openid: String,
+    interaction_id: String,
     reason: Option<String>,
     force: Option<bool>,
+}
+
+fn qq_whitelist_review_replay(
+    audit_id: Uuid,
+    details: Option<serde_json::Value>,
+    whitelist_id: Uuid,
+    action: &str,
+    openid: &str,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let expected_whitelist_id = whitelist_id.to_string();
+    let matches_request = details.as_ref().is_some_and(|value| {
+        value.get("whitelist_id").and_then(|v| v.as_str()) == Some(expected_whitelist_id.as_str())
+            && value.get("action").and_then(|v| v.as_str()) == Some(action)
+            && value.get("reviewer_openid").and_then(|v| v.as_str()) == Some(openid)
+    });
+    if !matches_request {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "interaction_id 已用于其他审批请求" })),
+        ));
+    }
+    let item = details
+        .as_ref()
+        .and_then(|value| value.get("item"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "idempotent": true,
+        "audit_id": audit_id,
+        "item": item,
+    })))
 }
 
 pub(crate) async fn qq_whitelist_review(
@@ -822,37 +855,125 @@ pub(crate) async fn qq_whitelist_review(
         return Err(forbidden());
     }
 
+    let interaction_id = body.interaction_id.trim();
+    if interaction_id.is_empty() || interaction_id.len() > 200 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "interaction_id 不能为空且不能超过 200 字符" })),
+        ));
+    }
+    let reason = body
+        .reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let force = body.force.unwrap_or(false);
+    match action {
+        "approve" => {}
+        "reject" if reason.is_none() => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "拒绝申请必须填写原因" })),
+            ));
+        }
+        "reject" => {}
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "action 只能为 approve 或 reject" })),
+            ));
+        }
+    }
+
+    let idempotency_key = format!("qq-whitelist-review:{interaction_id}");
+    if let Some((audit_id, details)) = sqlx::query_as::<_, (Uuid, Option<serde_json::Value>)>(
+        "SELECT id, details FROM audit_logs WHERE idempotency_key = $1",
+    )
+    .bind(&idempotency_key)
+    .fetch_optional(&ctx.db.pool)
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "QQ 审批：查询幂等记录失败");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "查询审批幂等记录失败" })),
+        )
+    })? {
+        return qq_whitelist_review_replay(audit_id, details, id, action, openid);
+    }
+
+    match action {
+        "approve" => whitelist_service::validate_whitelist_approval(&ctx.db, id, force, reason)
+            .await
+            .map_err(invalid_request)?,
+        "reject" => {}
+        _ => unreachable!(),
+    }
+
+    let mut tx = ctx.db.pool.begin().await.map_err(|e| {
+        tracing::error!(error = %e, "QQ 审批：开启事务失败");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "开启审批事务失败" })),
+        )
+    })?;
+
+    // 同一 interaction_id 跨实例串行处理；拿到锁后再次查询审计记录，
+    // 重复投递直接返回第一次提交的权威结果。
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(&idempotency_key)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "QQ 审批：获取幂等锁失败");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "获取审批幂等锁失败" })),
+            )
+        })?;
+
+    if let Some((audit_id, details)) = sqlx::query_as::<_, (Uuid, Option<serde_json::Value>)>(
+        "SELECT id, details FROM audit_logs WHERE idempotency_key = $1",
+    )
+    .bind(&idempotency_key)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "QQ 审批：查询幂等记录失败");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "查询审批幂等记录失败" })),
+        )
+    })? {
+        tx.rollback().await.ok();
+        return qq_whitelist_review_replay(audit_id, details, id, action, openid);
+    }
+
     let result = match action {
         "approve" => {
-            let force = body.force.unwrap_or(false);
-            whitelist_service::approve_whitelist(
-                &ctx.db,
+            whitelist_service::approve_whitelist_tx(
+                &mut tx,
                 id,
                 whitelist_service::ApproveWhitelistInput {
                     operator_name: &operator_label,
-                    reason: body.reason.as_deref(),
+                    reason,
                     force,
-                    via: "qq", // QQ 聊天审批
+                    via: "qq",
                 },
             )
             .await
         }
         "reject" => {
-            let reason = body.reason.as_deref().unwrap_or("");
-            if reason.trim().is_empty() {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": "拒绝申请必须填写原因" })),
-                ));
-            }
-            whitelist_service::reject_whitelist(&ctx.db, id, reason, &operator_label, "qq").await
+            whitelist_service::reject_whitelist_tx(
+                &mut tx,
+                id,
+                reason.unwrap_or_default(),
+                &operator_label,
+                "qq",
+            )
+            .await
         }
-        _ => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "action 只能为 approve 或 reject" })),
-            ))
-        }
+        _ => unreachable!(),
     };
 
     let item = result.map_err(|e| {
@@ -871,6 +992,96 @@ pub(crate) async fn qq_whitelist_review(
         }
     })?;
 
+    let response_item = if action == "approve" {
+        serde_json::json!({
+            "whitelist_id": id,
+            "steamid64": item.steamid64,
+            "nickname": item.nickname,
+            "status": "approved",
+            "approved_by": operator_label,
+            "approved_via": "qq",
+            "rejected_by": null,
+            "rejected_via": null,
+        })
+    } else {
+        serde_json::json!({
+            "whitelist_id": id,
+            "steamid64": item.steamid64,
+            "nickname": item.nickname,
+            "status": "rejected",
+            "approved_by": null,
+            "approved_via": null,
+            "rejected_by": operator_label,
+            "rejected_via": "qq",
+        })
+    };
+
+    let operation = if action == "approve" {
+        "whitelist_approve"
+    } else {
+        "whitelist_reject"
+    };
+    let details = serde_json::json!({
+        "channel": "qq",
+        "interaction_id": interaction_id,
+        "whitelist_id": id,
+        "reviewer_openid": openid,
+        "reviewer_user_id": user_id,
+        "reviewer_username": operator.username,
+        "reviewer_role": operator.role,
+        "action": action,
+        "force": force,
+        "item": response_item,
+    });
+    let client_ip = {
+        let value = extract_client_ip(&headers);
+        (!value.trim().is_empty()).then_some(value)
+    };
+    let audit = audit_service::write_audit_log_in_transaction(
+        &mut tx,
+        audit_service::AuditLogInput {
+            operation: operation.to_string(),
+            target: item.steamid64.clone(),
+            target_type: "whitelist".to_string(),
+            player_name: Some(item.nickname.clone()),
+            reason: reason.map(ToOwned::to_owned),
+            duration_minutes: None,
+            operator_name: operator_label.clone(),
+            operator_steamid: None,
+            source: "qq".to_string(),
+            server_id: None,
+            server_name: None,
+            server_port: None,
+            success: true,
+            message: Some(format!(
+                "QQ {}白名单申请，ID: {id}",
+                if action == "approve" {
+                    "通过"
+                } else {
+                    "拒绝"
+                }
+            )),
+            idempotency_key: Some(idempotency_key),
+        },
+        client_ip,
+        Some(details),
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, whitelist_id = %id, "QQ 审批：审计写入失败，事务回滚");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "审批审计写入失败" })),
+        )
+    })?;
+    tx.commit().await.map_err(|e| {
+        tracing::error!(error = %e, whitelist_id = %id, "QQ 审批：提交事务失败");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "提交审批事务失败" })),
+        )
+    })?;
+
     let via_label = if action == "approve" {
         "通过白名单申请(QQ)"
     } else {
@@ -886,42 +1097,11 @@ pub(crate) async fn qq_whitelist_review(
     )
     .await;
 
-    // 读取审批渠道与状态（approved_via / rejected_via 仅落在库表，不进入通用 WhitelistItem 模型）
-    #[derive(sqlx::FromRow)]
-    struct ViaRow {
-        status: String,
-        approved_by: Option<String>,
-        approved_via: Option<String>,
-        rejected_by: Option<String>,
-        rejected_via: Option<String>,
-    }
-    let via_row: ViaRow = sqlx::query_as(
-        r#"SELECT status, approved_by, approved_via, rejected_by, rejected_via
-           FROM whitelist_requests WHERE id = $1"#,
-    )
-    .bind(id)
-    .fetch_one(&ctx.db.pool)
-    .await
-    .map_err(|e| {
-        tracing::error!(error = %e, whitelist_id = %id, "QQ 审批：读取结果失败");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "读取审批结果失败" })),
-        )
-    })?;
-
     Ok(Json(serde_json::json!({
         "ok": true,
-        "item": {
-            "whitelist_id": id,
-            "steamid64": item.steamid64,
-            "nickname": item.nickname,
-            "status": via_row.status,
-            "approved_by": via_row.approved_by,
-            "approved_via": via_row.approved_via,
-            "rejected_by": via_row.rejected_by,
-            "rejected_via": via_row.rejected_via,
-        }
+        "idempotent": false,
+        "audit_id": audit.id,
+        "item": response_item,
     })))
 }
 

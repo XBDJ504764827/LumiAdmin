@@ -264,6 +264,7 @@ R2 信息时，业务记录本身仍可提交，只有证据文件上传不可�
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
+| `QQ_INTEGRATION_TOKEN` | 空（禁用） | LumiBot 调用 QQ 审批/统计接口的令牌，与 LumiBot 的 `LUMIADMIN_QQ_TOKEN` 一致 |
 | `LUMI_BOT_API_URL` | 空（禁用） | LumiBot 事件接收中心地址，如 `http://127.0.0.1:8080`；与 `LUMI_BOT_API_KEY` 同时配置后启用 |
 | `LUMI_BOT_API_KEY` | 空（禁用） | LumiBot 分配的 API Key（`X-API-Key` 请求头，建议向 LumiBot 申请专属 `key-admin`） |
 | `LUMI_BOT_SYNC_INTERVAL_SECS` | `1800` | 队列集中上报周期（秒），即每 30 分钟批量上报一次 |
@@ -274,6 +275,11 @@ R2 信息时，业务记录本身仍可提交，只有证据文件上传不可�
 后台任务按周期集中调用 `POST {LUMI_BOT_API_URL}/api/v1/events`
 （`source: LumiAdmin`，`event_type: WHITELIST_REQUEST_CREATED`）上报，
 由 LumiBot 再通知 QQ 管理员/用户。
+
+LumiBot 点击审批调用 `POST /api/integration/qq/whitelist/:id/review`，请求体包含
+`action`、审批人 `openid`、QQ `interaction_id`、可选 `reason` 和 `force`。
+LumiAdmin 使用 `interaction_id` 生成唯一幂等键，在同一 PostgreSQL 事务中更新
+白名单申请并写入 `audit_logs`；重复请求返回第一次审批的 `audit_id` 与结果。
 
 ### 数据库迁移
 

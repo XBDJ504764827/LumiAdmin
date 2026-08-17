@@ -2236,6 +2236,93 @@ async fn normal_admin_can_approve_but_cannot_revoke_whitelist() {
 }
 
 #[tokio::test]
+async fn qq_whitelist_review_is_idempotent_and_writes_authoritative_audit() {
+    with_test_app(async |db, mut config| {
+        const OPENID: &str = "qq-openid-audit-test";
+        const TOKEN: &str = "qq-integration-test-token";
+        const INTERACTION_ID: &str = "interaction-audit-test-1";
+
+        config.qq_integration_token = Some(TOKEN.to_string());
+        ensure_test_user_exists(&db, "11111111-1111-1111-1111-111111111111").await?;
+        sqlx::query("UPDATE users SET openid = $1 WHERE id = $2::uuid")
+            .bind(OPENID)
+            .bind("11111111-1111-1111-1111-111111111111")
+            .execute(&db.pool)
+            .await?;
+        let whitelist_id = insert_whitelist(&db, "pending").await;
+        let app = test_app(config, db.clone());
+        let request_body = json!({
+            "action": "approve",
+            "openid": OPENID,
+            "interaction_id": INTERACTION_ID,
+            "force": false
+        })
+        .to_string();
+
+        let first = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/integration/qq/whitelist/{whitelist_id}/review"
+                    ))
+                    .header("x-qq-token", TOKEN)
+                    .header("content-type", "application/json")
+                    .body(Body::from(request_body.clone()))
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(first.status(), StatusCode::OK);
+        let first_payload: serde_json::Value =
+            serde_json::from_slice(&to_bytes(first.into_body(), usize::MAX).await?)?;
+        assert_eq!(first_payload["idempotent"], false);
+        assert_eq!(first_payload["item"]["status"], "approved");
+
+        let second = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/integration/qq/whitelist/{whitelist_id}/review"
+                    ))
+                    .header("x-qq-token", TOKEN)
+                    .header("content-type", "application/json")
+                    .body(Body::from(request_body))
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(second.status(), StatusCode::OK);
+        let second_payload: serde_json::Value =
+            serde_json::from_slice(&to_bytes(second.into_body(), usize::MAX).await?)?;
+        assert_eq!(second_payload["idempotent"], true);
+        assert_eq!(second_payload["audit_id"], first_payload["audit_id"]);
+        assert_eq!(second_payload["item"], first_payload["item"]);
+
+        let idempotency_key = format!("qq-whitelist-review:{INTERACTION_ID}");
+        let audit_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM audit_logs WHERE idempotency_key = $1")
+                .bind(&idempotency_key)
+                .fetch_one(&db.pool)
+                .await?;
+        assert_eq!(audit_count, 1);
+
+        let (source, details): (String, Option<serde_json::Value>) =
+            sqlx::query_as("SELECT source, details FROM audit_logs WHERE idempotency_key = $1")
+                .bind(&idempotency_key)
+                .fetch_one(&db.pool)
+                .await?;
+        assert_eq!(source, "qq");
+        let details = details.expect("QQ audit details should be present");
+        assert_eq!(details["interaction_id"], INTERACTION_ID);
+        assert_eq!(details["reviewer_openid"], OPENID);
+        assert_eq!(details["whitelist_id"], whitelist_id.to_string());
+
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn admin_can_create_user_without_steam_id() {
     with_test_app(async |db, config| {
         let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;

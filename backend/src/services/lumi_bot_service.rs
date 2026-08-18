@@ -63,6 +63,117 @@ pub struct SyncSummary {
     pub failed: usize,
 }
 
+/// LumiBot 事件队列概况。
+#[derive(Debug, Clone, Serialize)]
+pub struct QueueOverview {
+    pub pending: i64,
+    pub sent: i64,
+    pub failed: i64,
+    pub last_sent_at: Option<DateTime<Utc>>,
+    pub last_failure_at: Option<DateTime<Utc>>,
+}
+
+/// LumiBot 集成状态，供管理后台的运维页面使用。
+#[derive(Debug, Clone, Serialize)]
+pub struct StatusOverview {
+    pub configured: bool,
+    pub api_url: Option<String>,
+    pub reachable: bool,
+    pub latency_ms: Option<u64>,
+    pub checked_at: DateTime<Utc>,
+    pub health_error: Option<String>,
+    pub queue: QueueOverview,
+    pub sync_task: Option<observability_service::TaskMetric>,
+    pub last_error: Option<String>,
+}
+
+/// 获取 LumiBot 集成状态。
+///
+/// 健康探测与队列查询都在后端完成，前端不会接触 API Key。探测超时固定为
+/// 3 秒，避免管理页面因为 LumiBot 不可达而长时间阻塞。
+pub async fn status(db: &Database, config: &Config) -> anyhow::Result<StatusOverview> {
+    let checked_at = Utc::now();
+    let api_url = config
+        .lumi_bot_api_url
+        .as_ref()
+        .map(|url| url.trim_end_matches('/').to_string());
+    let configured = config.lumi_bot_enabled();
+
+    let (reachable, latency_ms, health_error) = if configured {
+        let health_url = format!("{}/health", api_url.as_deref().unwrap_or_default());
+        let started = std::time::Instant::now();
+        match tokio::time::timeout(
+            Duration::from_secs(3),
+            http_client::http_client().get(health_url).send(),
+        )
+        .await
+        {
+            Ok(Ok(response)) if response.status().is_success() => {
+                (true, Some(started.elapsed().as_millis() as u64), None)
+            }
+            Ok(Ok(response)) => (
+                false,
+                Some(started.elapsed().as_millis() as u64),
+                Some(format!("LumiBot 返回 HTTP {}", response.status())),
+            ),
+            Ok(Err(error)) => (
+                false,
+                Some(started.elapsed().as_millis() as u64),
+                Some(error.to_string()),
+            ),
+            Err(_) => (false, Some(3_000), Some("健康检查超时（3 秒）".to_string())),
+        }
+    } else {
+        (
+            false,
+            None,
+            Some("未配置 LUMI_BOT_API_URL / LUMI_BOT_API_KEY".to_string()),
+        )
+    };
+
+    let (pending, sent, failed, last_sent_at, last_failure_at): (
+        i64,
+        i64,
+        i64,
+        Option<DateTime<Utc>>,
+        Option<DateTime<Utc>>,
+    ) = sqlx::query_as(
+        r#"
+        SELECT
+            COUNT(*) FILTER (WHERE status = 'pending'),
+            COUNT(*) FILTER (WHERE status = 'sent'),
+            COUNT(*) FILTER (WHERE status = 'failed'),
+            MAX(sent_at),
+            MAX(updated_at) FILTER (WHERE status = 'failed')
+        FROM lumi_bot_event_queue
+        "#,
+    )
+    .fetch_one(&db.pool)
+    .await
+    .context("读取 LumiBot 事件队列状态失败")?;
+
+    let sync_task = observability_service::task_metric("lumi_bot_sync");
+    let last_error = sync_task.as_ref().and_then(|task| task.last_error.clone());
+
+    Ok(StatusOverview {
+        configured,
+        api_url,
+        reachable,
+        latency_ms,
+        checked_at,
+        health_error,
+        queue: QueueOverview {
+            pending,
+            sent,
+            failed,
+            last_sent_at,
+            last_failure_at,
+        },
+        sync_task,
+        last_error,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // 入队
 // ---------------------------------------------------------------------------
@@ -624,6 +735,8 @@ async fn send_event(api_base_url: &str, api_key: &str, row: &QueuedEventRow) -> 
 mod tests {
     use super::*;
     use crate::{config::Config, db::Database, test_util};
+    use axum::{http::StatusCode, routing::get, Router};
+    use tokio::task::JoinHandle;
     use uuid::Uuid;
 
     fn schema_url(base_url: &str, schema: &str) -> String {
@@ -654,6 +767,99 @@ mod tests {
 
         drop_schema(&base_url, &schema).await;
         result.unwrap();
+    }
+
+    async fn spawn_health_server(status_code: StatusCode) -> (String, JoinHandle<()>) {
+        let app = Router::new().route("/health", get(move || async move { status_code }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{address}"), task)
+    }
+
+    #[tokio::test]
+    async fn status_reports_unconfigured_integration_and_queue_counts() {
+        with_test_db(async |db| {
+            sqlx::query(
+                r#"INSERT INTO lumi_bot_event_queue
+                   (id, event_type, level, status, sent_at, updated_at)
+                   VALUES
+                   ($1, 'TEST_PENDING', 'info', 'pending', NULL, now()),
+                   ($2, 'TEST_SENT', 'info', 'sent', now() - interval '1 minute', now()),
+                   ($3, 'TEST_FAILED', 'error', 'failed', NULL, now() - interval '2 minutes')"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(Uuid::new_v4())
+            .bind(Uuid::new_v4())
+            .execute(&db.pool)
+            .await?;
+
+            let mut config = Config::from_env();
+            config.lumi_bot_api_url = None;
+            config.lumi_bot_api_key = None;
+
+            let overview = status(&db, &config).await?;
+            assert!(!overview.configured);
+            assert!(!overview.reachable);
+            assert_eq!(overview.api_url, None);
+            assert_eq!(overview.latency_ms, None);
+            assert!(overview.health_error.is_some());
+            assert_eq!(overview.queue.pending, 1);
+            assert_eq!(overview.queue.sent, 1);
+            assert_eq!(overview.queue.failed, 1);
+            assert!(overview.queue.last_sent_at.is_some());
+            assert!(overview.queue.last_failure_at.is_some());
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn status_reports_reachable_health_endpoint() {
+        with_test_db(async |db| {
+            let (api_url, server) = spawn_health_server(StatusCode::OK).await;
+            let mut config = Config::from_env();
+            config.lumi_bot_api_url = Some(format!("{api_url}/"));
+            config.lumi_bot_api_key = Some("test-key".to_string());
+
+            let overview = status(&db, &config).await;
+            server.abort();
+            let overview = overview?;
+
+            assert!(overview.configured);
+            assert!(overview.reachable);
+            assert_eq!(overview.api_url.as_deref(), Some(api_url.as_str()));
+            assert!(overview.latency_ms.is_some());
+            assert_eq!(overview.health_error, None);
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn status_reports_unhealthy_http_response() {
+        with_test_db(async |db| {
+            let (api_url, server) = spawn_health_server(StatusCode::SERVICE_UNAVAILABLE).await;
+            let mut config = Config::from_env();
+            config.lumi_bot_api_url = Some(api_url);
+            config.lumi_bot_api_key = Some("test-key".to_string());
+
+            let overview = status(&db, &config).await;
+            server.abort();
+            let overview = overview?;
+
+            assert!(overview.configured);
+            assert!(!overview.reachable);
+            assert!(overview.latency_ms.is_some());
+            assert!(overview
+                .health_error
+                .as_deref()
+                .is_some_and(|error| error.contains("503 Service Unavailable")));
+            Ok(())
+        })
+        .await;
     }
 
     /// 立即上报失败时降级入队，事件不丢失

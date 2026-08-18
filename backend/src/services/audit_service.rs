@@ -2,6 +2,7 @@ use crate::db::Database;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
+use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -102,6 +103,48 @@ pub async fn write_audit_log_with_context(
     .bind(&details)
     .bind(&input.idempotency_key)
     .fetch_one(&db.pool)
+    .await?;
+    Ok(row)
+}
+
+/// 在调用方事务中写入审计日志，用于业务状态与审计记录原子提交。
+pub async fn write_audit_log_in_transaction(
+    tx: &mut Transaction<'_, Postgres>,
+    input: AuditLogInput,
+    client_ip: Option<String>,
+    details: Option<Value>,
+) -> anyhow::Result<AuditLogItem> {
+    let id = Uuid::new_v4();
+    let row = sqlx::query_as::<_, AuditLogItem>(
+        r#"INSERT INTO audit_logs (
+            id, operation, target, target_type, player_name, reason, duration_minutes,
+            operator_name, operator_steamid, source, server_id, server_name, server_port,
+            success, message, client_ip, details, idempotency_key, created_at
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, now())
+           RETURNING id, operation, target, target_type, player_name, reason, duration_minutes,
+                     operator_name, operator_steamid, source, server_id, server_name, server_port,
+                     success, message, client_ip, details, idempotency_key, created_at"#,
+    )
+    .bind(id)
+    .bind(&input.operation)
+    .bind(&input.target)
+    .bind(&input.target_type)
+    .bind(&input.player_name)
+    .bind(&input.reason)
+    .bind(input.duration_minutes)
+    .bind(&input.operator_name)
+    .bind(&input.operator_steamid)
+    .bind(&input.source)
+    .bind(input.server_id)
+    .bind(&input.server_name)
+    .bind(input.server_port)
+    .bind(input.success)
+    .bind(&input.message)
+    .bind(&client_ip)
+    .bind(&details)
+    .bind(&input.idempotency_key)
+    .fetch_one(&mut **tx)
     .await?;
     Ok(row)
 }

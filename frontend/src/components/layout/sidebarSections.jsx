@@ -47,6 +47,7 @@ export function sidebarSections(role) {
         { path: '/audit', label: '审计日志', icon: icons.audit },
         { path: '/logs', label: '操作日志', icon: icons.logs },
         { path: '/ops', label: '系统观测', icon: icons.ops },
+        { path: '/lumi-bot', label: 'LumiBot 状态', icon: icons.ops },
       ],
     },
     {

@@ -8,6 +8,7 @@ use crate::{
 };
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use sqlx::{Postgres, Transaction};
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -368,11 +369,31 @@ pub async fn approve_whitelist(
     // 并发安全：先读用于风险校验与“是否存在”判断（仅诊断用），真正的审批写入
     // 依赖下面的原子条件更新 `WHERE status='pending'`。两位管理员同时审批时，
     // 只有一个能命中，另一个匹配 0 行 → 判定“已被他人处理”。
+    validate_whitelist_approval(db, id, input.force, input.reason).await?;
+
+    let mut tx = db.pool.begin().await?;
+    let item = approve_whitelist_tx(&mut tx, id, input).await?;
+    tx.commit().await?;
+    Ok(item)
+}
+
+pub async fn validate_whitelist_approval(
+    db: &Database,
+    id: Uuid,
+    force: bool,
+    reason: Option<&str>,
+) -> anyhow::Result<()> {
     let current = find_by_id(db, id).await?;
     let risk_profile =
         player_risk_service::build_player_risk_profile(db, &current.steamid64).await?;
-    ensure_can_approve_with_risk(&risk_profile, input.force, input.reason)?;
+    ensure_can_approve_with_risk(&risk_profile, force, reason)
+}
 
+pub async fn approve_whitelist_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+    input: ApproveWhitelistInput<'_>,
+) -> anyhow::Result<WhitelistItem> {
     let row = sqlx::query_as::<_, WhitelistRow>(
         r#"
         UPDATE whitelist_requests
@@ -398,7 +419,7 @@ pub async fn approve_whitelist(
     .bind(input.operator_name.trim())
     .bind(input.reason.and_then(|r| if r.trim().is_empty() { None } else { Some(r.trim()) }))
     .bind(input.via.trim())
-    .fetch_optional(&db.pool)
+    .fetch_optional(&mut **tx)
     .await?
     .ok_or_else(|| anyhow::anyhow!("该申请已被他人审批，无法重复操作"))?;
 
@@ -416,6 +437,19 @@ pub async fn reject_whitelist(
     let _ = find_by_id(db, id).await?;
     anyhow::ensure!(!reason.trim().is_empty(), "请输入拒绝理由");
 
+    let mut tx = db.pool.begin().await?;
+    let item = reject_whitelist_tx(&mut tx, id, reason, operator_name, via).await?;
+    tx.commit().await?;
+    Ok(item)
+}
+
+pub async fn reject_whitelist_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+    reason: &str,
+    operator_name: &str,
+    via: &str,
+) -> anyhow::Result<WhitelistItem> {
     let row = sqlx::query_as::<_, WhitelistRow>(
         r#"
         UPDATE whitelist_requests
@@ -441,7 +475,7 @@ pub async fn reject_whitelist(
     .bind(operator_name.trim())
     .bind(reason.trim())
     .bind(via.trim())
-    .fetch_optional(&db.pool)
+    .fetch_optional(&mut **tx)
     .await?
     .ok_or_else(|| anyhow::anyhow!("该申请已被他人审批，无法重复操作"))?;
 

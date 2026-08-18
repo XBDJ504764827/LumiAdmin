@@ -435,6 +435,7 @@ pub fn router(
         .route("/api/docs/endpoints", get(misc::api_endpoint_docs))
         // -- ops --
         .route("/api/ops/overview", get(ops::overview))
+        .route("/api/ops/lumi-bot", get(ops::lumi_bot_status))
         // -- player access logs --
         .route("/api/player-access/logs", get(access::list_access_logs))
         // -- global bans --

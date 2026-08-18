@@ -385,6 +385,16 @@ pub fn list_endpoints() -> Vec<EndpointDoc> {
             roles: &["admin", "developer"],
         },
         EndpointDoc {
+            module: "系统观测",
+            tone: "info",
+            name: "LumiBot 状态",
+            method: "GET",
+            endpoint: "/api/ops/lumi-bot",
+            description: "检查 LumiBot 连通性、事件队列统计与后台同步任务状态",
+            auth_required: true,
+            roles: &["admin", "developer"],
+        },
+        EndpointDoc {
             module: "API 文档",
             tone: "info",
             name: "接口元数据列表",
@@ -450,6 +460,11 @@ mod tests {
         assert!(endpoints
             .iter()
             .any(|item| item.endpoint == "/api/plugin/bans/check" && item.method == "POST"));
+        assert!(endpoints.iter().any(|item| {
+            item.endpoint == "/api/ops/lumi-bot"
+                && item.method == "GET"
+                && item.roles == ["admin", "developer"]
+        }));
     }
 
     #[test]

@@ -12,6 +12,7 @@ const AbnormalRecordPage = lazy(() => import('../pages/abnormalRecord/AbnormalRe
 const UsersPage = lazy(() => import('../pages/users/UsersPage.jsx').then(m => ({ default: m.UsersPage })));
 const LogsPage = lazy(() => import('../pages/logs/LogsPage.jsx').then(m => ({ default: m.LogsPage })));
 const OpsOverviewPage = lazy(() => import('../pages/ops/OpsOverviewPage.jsx').then(m => ({ default: m.OpsOverviewPage })));
+const LumiBotStatusPage = lazy(() => import('../pages/ops/LumiBotStatusPage.jsx').then(m => ({ default: m.LumiBotStatusPage })));
 const ApiListPage = lazy(() => import('../pages/api/ApiListPage.jsx').then(m => ({ default: m.ApiListPage })));
 const PlayerApiPage = lazy(() => import('../pages/api/PlayerApiPage.jsx').then(m => ({ default: m.PlayerApiPage })));
 const ExternalBanApiPage = lazy(() => import('../pages/api/ExternalBanApiPage.jsx').then(m => ({ default: m.ExternalBanApiPage })));
@@ -51,6 +52,7 @@ export const protectedRoutes = [
   { path: '/notifications', element: <Lazy><NotificationPage /></Lazy>, roles: ROUTE_ROLES.staff },
   { path: '/logs', element: <Lazy><LogsPage /></Lazy>, roles: ROUTE_ROLES.admin },
   { path: '/ops', element: <Lazy><OpsOverviewPage /></Lazy>, roles: ROUTE_ROLES.admin },
+  { path: '/lumi-bot', element: <Lazy><LumiBotStatusPage /></Lazy>, roles: ROUTE_ROLES.admin },
   { path: '/docs/api', element: <Lazy><ApiListPage /></Lazy>, roles: ROUTE_ROLES.admin },
   { path: '/player-api', element: <Lazy><PlayerApiPage /></Lazy>, roles: ROUTE_ROLES.admin },
   { path: '/external-ban-api', element: <Lazy><ExternalBanApiPage /></Lazy>, roles: ROUTE_ROLES.admin },

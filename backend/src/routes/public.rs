@@ -34,6 +34,11 @@ pub(crate) struct QqWhitelistStatusQuery {
     steam_input: String,
 }
 
+#[derive(serde::Deserialize)]
+pub(crate) struct QqBanStatusQuery {
+    steam_input: String,
+}
+
 #[derive(serde::Serialize)]
 pub(crate) struct SteamResolveResponse {
     steamid64: String,
@@ -91,6 +96,60 @@ pub(crate) async fn qq_whitelist_status(
         "steamid64": identity.steamid64,
         "steamid": identity.steamid,
         "items": items,
+    })))
+}
+
+/// QQ 机器人集成：查询指定 Steam 标识的本地与全球封禁历史。
+///
+/// 使用与 QQ 审批和 `/wl` 查询相同的集成令牌。全球封禁数据来自
+/// LumiAdmin 本地同步表，不在用户请求期间访问 KZTimer Global API。
+pub(crate) async fn qq_ban_status(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Query(query): Query<QqBanStatusQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    verify_qq_token(&ctx, &headers)?;
+
+    let steam_input = query.steam_input.trim();
+    if steam_input.is_empty() || steam_input.len() > 500 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "steam_input 不能为空且不能超过 500 字符" })),
+        ));
+    }
+
+    let identity = ctx
+        .steam_resolver
+        .resolve(steam_input)
+        .await
+        .map_err(invalid_request)?;
+    let local_bans = ban_service::list_public_status_by_steamid(&ctx.db, &identity.steamid64)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, steamid64 = %identity.steamid64, "QQ 集成：查询网站封禁状态失败");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "查询封禁状态失败" })),
+            )
+        })?;
+    let global_bans = global_ban_service::public_global_ban_status_for_steamid(
+        &ctx.db,
+        &identity.steamid64,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, steamid64 = %identity.steamid64, "QQ 集成：查询全球封禁状态失败");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "查询封禁状态失败" })),
+        )
+    })?;
+
+    Ok(Json(serde_json::json!({
+        "steamid64": identity.steamid64,
+        "steamid": identity.steamid,
+        "local_bans": local_bans,
+        "global_bans": global_bans,
     })))
 }
 

@@ -425,6 +425,16 @@ pub fn list_endpoints() -> Vec<EndpointDoc> {
             roles: &["guest"],
         },
         EndpointDoc {
+            module: "QQ 集成",
+            tone: "danger",
+            name: "QQ 封禁状态查询",
+            method: "GET",
+            endpoint: "/api/integration/qq/ban/status",
+            description: "供 LumiBot /ban 指令查询网站封禁与全球封禁历史",
+            auth_required: true,
+            roles: &["qq-integration"],
+        },
+        EndpointDoc {
             module: "公共展示",
             tone: "danger",
             name: "封禁公示",

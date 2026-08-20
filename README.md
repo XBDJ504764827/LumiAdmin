@@ -278,6 +278,11 @@ R2 信息时，业务记录本身仍可提交，只有证据文件上传不可�
 
 LumiBot 点击审批调用 `POST /api/integration/qq/whitelist/:id/review`，请求体包含
 `action`、审批人 `openid`、QQ `interaction_id`、可选 `reason` 和 `force`。
+
+LumiBot 的 `/wl <steamid64/steamid2>` 指令调用
+`GET /api/integration/qq/whitelist/status?steam_input=...` 查询白名单状态。
+该接口支持 SteamID64、SteamID2 和 Steam 个人主页 URL，返回指定账号的全部历史
+白名单记录（状态、时间和拒绝原因），不返回联系方式、审核人等敏感字段。
 LumiAdmin 使用 `interaction_id` 生成唯一幂等键，在同一 PostgreSQL 事务中更新
 白名单申请并写入 `audit_logs`；重复请求返回第一次审批的 `audit_id` 与结果。
 

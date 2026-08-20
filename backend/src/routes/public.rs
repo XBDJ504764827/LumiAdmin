@@ -29,6 +29,11 @@ pub(crate) struct ResolveSteamBody {
     steam_input: String,
 }
 
+#[derive(serde::Deserialize)]
+pub(crate) struct QqWhitelistStatusQuery {
+    steam_input: String,
+}
+
 #[derive(serde::Serialize)]
 pub(crate) struct SteamResolveResponse {
     steamid64: String,
@@ -46,6 +51,47 @@ pub(crate) struct GlobalBansBatchBody {
 #[derive(serde::Deserialize)]
 pub(crate) struct QueryBansBody {
     steam_input: String,
+}
+
+/// QQ 机器人集成：查询指定 Steam 标识的全部白名单历史记录。
+///
+/// 使用与 QQ 审批相同的集成令牌。只返回 Steam 标识、状态、时间和拒绝原因，
+/// 不暴露联系方式、审核人等后台敏感信息。
+pub(crate) async fn qq_whitelist_status(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Query(query): Query<QqWhitelistStatusQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    verify_qq_token(&ctx, &headers)?;
+
+    let steam_input = query.steam_input.trim();
+    if steam_input.is_empty() || steam_input.len() > 500 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "steam_input 不能为空且不能超过 500 字符" })),
+        ));
+    }
+
+    let identity = ctx
+        .steam_resolver
+        .resolve(steam_input)
+        .await
+        .map_err(invalid_request)?;
+    let items = whitelist_service::list_status_by_steamid64(&ctx.db, &identity.steamid64)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, steamid64 = %identity.steamid64, "QQ 集成：查询白名单状态失败");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "查询白名单状态失败" })),
+            )
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "steamid64": identity.steamid64,
+        "steamid": identity.steamid,
+        "items": items,
+    })))
 }
 
 pub(crate) async fn public_whitelist(

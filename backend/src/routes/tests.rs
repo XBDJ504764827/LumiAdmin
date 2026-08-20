@@ -2236,6 +2236,78 @@ async fn normal_admin_can_approve_but_cannot_revoke_whitelist() {
 }
 
 #[tokio::test]
+async fn qq_whitelist_status_returns_all_history_records() {
+    with_test_app(async |db, mut config| {
+        const TOKEN: &str = "qq-integration-status-test-token";
+        const STEAMID64: &str = "76561198012345678";
+        config.qq_integration_token = Some(TOKEN.to_string());
+        insert_whitelist_for_steamid64(&db, STEAMID64, "pending").await?;
+        insert_whitelist_for_steamid64(&db, STEAMID64, "rejected").await?;
+        let app = test_app(config, db);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/api/integration/qq/whitelist/status?steam_input={STEAMID64}"
+                    ))
+                    .header("x-qq-token", TOKEN)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await?)?;
+        assert_eq!(payload["steamid64"], STEAMID64);
+        assert_eq!(payload["items"].as_array().unwrap().len(), 2);
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn qq_whitelist_status_accepts_steamid2_and_rejects_invalid_token() {
+    with_test_app(async |db, mut config| {
+        const TOKEN: &str = "qq-integration-status-test-token-2";
+        config.qq_integration_token = Some(TOKEN.to_string());
+        let steamid64 = "76561197960290419";
+        insert_whitelist_for_steamid64(&db, steamid64, "approved").await?;
+        let app = test_app(config, db);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/integration/qq/whitelist/status?steam_input=STEAM_0%3A1%3A12345")
+                    .header("x-qq-token", TOKEN)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await?)?;
+        assert_eq!(payload["steamid64"], steamid64);
+
+        let unauthorized = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/integration/qq/whitelist/status?steam_input=76561197960290419")
+                    .header("x-qq-token", "wrong-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn qq_whitelist_review_is_idempotent_and_writes_authoritative_audit() {
     with_test_app(async |db, mut config| {
         const OPENID: &str = "qq-openid-audit-test";

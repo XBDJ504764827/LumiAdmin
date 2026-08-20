@@ -85,6 +85,19 @@ struct WhitelistRow {
     rejection_reason: Option<String>,
 }
 
+#[derive(Debug, serde::Serialize)]
+pub struct WhitelistStatusItem {
+    pub id: Uuid,
+    pub steamid64: String,
+    pub steamid: Option<String>,
+    pub status: String,
+    pub applied_at: String,
+    pub approved_at: Option<String>,
+    pub rejected_at: Option<String>,
+    pub revoked_at: Option<String>,
+    pub rejection_reason: Option<String>,
+}
+
 #[allow(dead_code)]
 #[derive(sqlx::FromRow)]
 struct WhitelistStatusRow {
@@ -664,6 +677,46 @@ async fn approve_existing_record(
     .await?;
 
     Ok(map_whitelist_row(row))
+}
+
+/// 查询指定 SteamID64 的全部白名单历史记录，按最近更新时间倒序返回。
+///
+/// 该方法供 LumiBot 等内部集成接口使用；不返回联系方式、审核人等敏感字段。
+pub async fn list_status_by_steamid64(
+    db: &Database,
+    steamid64: &str,
+) -> anyhow::Result<Vec<WhitelistStatusItem>> {
+    let rows = sqlx::query_as::<_, WhitelistStatusRow>(
+        r#"
+        SELECT id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
+               applied_at, approved_at, approved_by, approval_reason,
+               rejected_at, rejected_by, rejection_reason,
+               revoked_at, revoked_by, source
+        FROM whitelist_requests
+        WHERE steamid64 = $1
+        ORDER BY COALESCE(updated_at, revoked_at, rejected_at, approved_at, applied_at) DESC,
+                 applied_at DESC,
+                 id DESC
+        "#,
+    )
+    .bind(steamid64)
+    .fetch_all(&db.pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| WhitelistStatusItem {
+            id: row.id,
+            steamid64: row.steamid64,
+            steamid: row.steamid,
+            status: row.status,
+            applied_at: row.applied_at.to_rfc3339(),
+            approved_at: row.approved_at.map(|value| value.to_rfc3339()),
+            rejected_at: row.rejected_at.map(|value| value.to_rfc3339()),
+            revoked_at: row.revoked_at.map(|value| value.to_rfc3339()),
+            rejection_reason: row.rejection_reason,
+        })
+        .collect())
 }
 
 async fn find_by_steamid64(

@@ -331,6 +331,49 @@ pub async fn public_global_bans_for_steamid(
         .collect())
 }
 
+/// QQ `/ban` 指令使用的全球封禁历史记录。
+/// 与公开展示接口不同，这里保留已过期记录，便于查询完整历史。
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct PublicGlobalBanStatusItem {
+    #[sqlx(rename = "kzt_ban_id")]
+    #[serde(rename = "id")]
+    pub kzt_ban_id: i64,
+    #[sqlx(rename = "steam_id64")]
+    #[serde(rename = "steamid64")]
+    pub steam_id64: String,
+    #[sqlx(rename = "player_name")]
+    pub player_name: Option<String>,
+    #[sqlx(rename = "steam_id")]
+    pub steam_id: Option<String>,
+    pub ban_type: String,
+    pub notes: Option<String>,
+    pub stats: Option<String>,
+    pub expires_on: Option<String>,
+    pub created_on: Option<String>,
+    pub updated_on: Option<String>,
+    pub is_expired: bool,
+    pub manual_unbanned: bool,
+}
+
+pub async fn public_global_ban_status_for_steamid(
+    db: &Database,
+    steamid64: &str,
+) -> anyhow::Result<Vec<PublicGlobalBanStatusItem>> {
+    sqlx::query_as::<_, PublicGlobalBanStatusItem>(
+        r#"SELECT kzt_ban_id::BIGINT AS kzt_ban_id, steam_id64, player_name, steam_id, ban_type,
+                  notes, stats, expires_on, created_on, updated_on,
+                  is_expired, manual_unbanned
+           FROM global_bans
+           WHERE steam_id64 = $1
+           ORDER BY created_on DESC NULLS LAST, synced_at DESC, kzt_ban_id DESC
+           LIMIT 3000"#,
+    )
+    .bind(steamid64.trim())
+    .fetch_all(&db.pool)
+    .await
+    .map_err(Into::into)
+}
+
 pub async fn public_global_bans_batch(
     db: &Database,
     steamids: &[String],

@@ -44,6 +44,18 @@ test('buildUpdateUserPayload converts empty steamid to null', () => {
   assert.equal(payload.openid, null);
 });
 
+test('user payload carries the whitelist notification switch', () => {
+  const payload = buildUpdateUserPayload({
+    username: 'alex',
+    steam_id: '',
+    remark: '',
+    openid: '12345',
+    whitelist_notification_enabled: false,
+  }, false);
+
+  assert.equal(payload.whitelist_notification_enabled, false);
+});
+
 test('validateCreateUserForm does not require steamid', () => {
   assert.equal(validateCreateUserForm({ username: 'alex', password: 'secret', steam_id: '' }), '');
 });

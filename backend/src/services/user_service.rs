@@ -16,6 +16,7 @@ pub struct UserListItem {
     pub steam_id: Option<String>,
     pub remark: Option<String>,
     pub openid: Option<String>,
+    pub whitelist_notification_enabled: bool,
     pub enabled: bool,
     pub created_at: String,
 }
@@ -28,6 +29,7 @@ pub struct CreateUserInput {
     pub steam_id: Option<String>,
     pub remark: Option<String>,
     pub openid: Option<String>,
+    pub whitelist_notification_enabled: bool,
 }
 
 #[derive(Deserialize)]
@@ -37,16 +39,32 @@ pub struct UpdateUserInput {
     pub steam_id: Option<String>,
     pub remark: Option<String>,
     pub openid: Option<String>,
+    pub whitelist_notification_enabled: Option<bool>,
 }
 
+const USER_COLUMNS: &str = "id, username, display_name, password_hash, role, steam_id, remark, openid, whitelist_notification_enabled, enabled, created_at";
+
 pub async fn find_user(db: &Database, id: Uuid) -> anyhow::Result<User> {
-    sqlx::query_as::<_, User>(
-        r#"SELECT id, username, display_name, password_hash, role, steam_id, remark, openid, enabled, created_at FROM users WHERE id = $1"#,
-    )
-    .bind(id)
-    .fetch_one(&db.pool)
-    .await
-    .map_err(Into::into)
+    sqlx::query_as::<_, User>(&format!("SELECT {USER_COLUMNS} FROM users WHERE id = $1"))
+        .bind(id)
+        .fetch_one(&db.pool)
+        .await
+        .map_err(Into::into)
+}
+
+fn to_list_item(user: User) -> UserListItem {
+    UserListItem {
+        id: user.id,
+        username: user.username,
+        display_name: user.display_name,
+        role: user.role,
+        steam_id: user.steam_id,
+        remark: user.remark,
+        openid: user.openid,
+        whitelist_notification_enabled: user.whitelist_notification_enabled,
+        enabled: user.enabled,
+        created_at: user.created_at.to_rfc3339(),
+    }
 }
 
 pub async fn list_users(
@@ -57,17 +75,7 @@ pub async fn list_users(
     if actor.role == "normal" {
         let user = find_user(db, actor.id).await?;
         return Ok(crate::routes::PaginatedResponse {
-            items: vec![UserListItem {
-                id: user.id,
-                username: user.username,
-                display_name: user.display_name,
-                role: user.role,
-                steam_id: user.steam_id,
-                remark: user.remark,
-                openid: user.openid,
-                enabled: user.enabled,
-                created_at: user.created_at.to_rfc3339(),
-            }],
+            items: vec![to_list_item(user)],
             total: 1,
             page: 1,
             page_size: 20,
@@ -93,8 +101,7 @@ pub async fn list_users(
 
     let count_sql = format!("SELECT COUNT(*) FROM users {where_clause}");
     let data_sql = format!(
-        r#"SELECT id, username, display_name, password_hash, role, steam_id, remark, openid, enabled, created_at
-           FROM users {where_clause} ORDER BY created_at DESC LIMIT ${param_idx} OFFSET ${}"#,
+        "SELECT {USER_COLUMNS} FROM users {where_clause} ORDER BY created_at DESC LIMIT ${param_idx} OFFSET ${}",
         param_idx + 1
     );
 
@@ -112,17 +119,7 @@ pub async fn list_users(
         .fetch_all(&db.pool)
         .await?
         .into_iter()
-        .map(|user| UserListItem {
-            id: user.id,
-            username: user.username,
-            display_name: user.display_name,
-            role: user.role,
-            steam_id: user.steam_id,
-            remark: user.remark,
-            openid: user.openid,
-            enabled: user.enabled,
-            created_at: user.created_at.to_rfc3339(),
-        })
+        .map(to_list_item)
         .collect();
 
     Ok(crate::routes::PaginatedResponse {
@@ -146,13 +143,11 @@ pub async fn create_user(db: &Database, input: CreateUserInput) -> anyhow::Resul
 
     let password_hash = hash_password(password)?;
     let id = Uuid::new_v4();
-    let row = sqlx::query_as::<_, User>(
-        r#"
-        INSERT INTO users (id, username, display_name, password_hash, role, steam_id, remark, openid)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        RETURNING id, username, display_name, password_hash, role, steam_id, remark, openid, enabled, created_at
-        "#,
-    )
+    let row = sqlx::query_as::<_, User>(&format!(
+        "INSERT INTO users (id, username, display_name, password_hash, role, steam_id, remark, openid, whitelist_notification_enabled)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING {USER_COLUMNS}"
+    ))
     .bind(id)
     .bind(username)
     .bind(username)
@@ -161,20 +156,11 @@ pub async fn create_user(db: &Database, input: CreateUserInput) -> anyhow::Resul
     .bind(steam_id)
     .bind(super::normalize_optional_text(input.remark.as_deref()))
     .bind(openid)
+    .bind(input.whitelist_notification_enabled)
     .fetch_one(&db.pool)
     .await?;
 
-    Ok(UserListItem {
-        id: row.id,
-        username: row.username,
-        display_name: row.display_name,
-        role: row.role,
-        steam_id: row.steam_id,
-        remark: row.remark,
-        openid: row.openid,
-        enabled: row.enabled,
-        created_at: row.created_at.to_rfc3339(),
-    })
+    Ok(to_list_item(row))
 }
 
 pub async fn update_user(
@@ -187,6 +173,9 @@ pub async fn update_user(
     let username = input.username.trim();
     let steam_id = super::normalize_optional_text(input.steam_id.as_deref());
     let openid = super::normalize_optional_text(input.openid.as_deref());
+    let whitelist_notification_enabled = input
+        .whitelist_notification_enabled
+        .unwrap_or(current.whitelist_notification_enabled);
     anyhow::ensure!(!username.is_empty(), "用户名不能为空");
 
     let role = if keep_role {
@@ -204,39 +193,29 @@ pub async fn update_user(
         "权限等级不合法"
     );
 
-    let row = sqlx::query_as::<_, User>(
-        r#"
-        UPDATE users
-        SET username = $2,
-            display_name = $2,
-            role = $3,
-            steam_id = $4,
-            remark = $5,
-            openid = $6
-        WHERE id = $1
-        RETURNING id, username, display_name, password_hash, role, steam_id, remark, openid, enabled, created_at
-        "#,
-    )
+    let row = sqlx::query_as::<_, User>(&format!(
+        "UPDATE users
+         SET username = $2,
+             display_name = $2,
+             role = $3,
+             steam_id = $4,
+             remark = $5,
+             openid = $6,
+             whitelist_notification_enabled = $7
+         WHERE id = $1
+         RETURNING {USER_COLUMNS}"
+    ))
     .bind(id)
     .bind(username)
     .bind(role)
     .bind(steam_id)
     .bind(super::normalize_optional_text(input.remark.as_deref()))
     .bind(openid)
+    .bind(whitelist_notification_enabled)
     .fetch_one(&db.pool)
     .await?;
 
-    Ok(UserListItem {
-        id: row.id,
-        username: row.username,
-        display_name: row.display_name,
-        role: row.role,
-        steam_id: row.steam_id,
-        remark: row.remark,
-        openid: row.openid,
-        enabled: row.enabled,
-        created_at: row.created_at.to_rfc3339(),
-    })
+    Ok(to_list_item(row))
 }
 
 pub async fn update_password(db: &Database, id: Uuid, password: &str) -> anyhow::Result<()> {
@@ -261,27 +240,15 @@ pub async fn delete_user(db: &Database, id: Uuid) -> anyhow::Result<()> {
 }
 
 pub async fn toggle_enabled(db: &Database, id: Uuid) -> anyhow::Result<UserListItem> {
-    let row = sqlx::query_as::<_, User>(
-        r#"
-        UPDATE users
-        SET enabled = NOT enabled
-        WHERE id = $1
-        RETURNING id, username, display_name, password_hash, role, steam_id, remark, openid, enabled, created_at
-        "#,
-    )
+    let row = sqlx::query_as::<_, User>(&format!(
+        "UPDATE users
+         SET enabled = NOT enabled
+         WHERE id = $1
+         RETURNING {USER_COLUMNS}"
+    ))
     .bind(id)
     .fetch_one(&db.pool)
     .await?;
 
-    Ok(UserListItem {
-        id: row.id,
-        username: row.username,
-        display_name: row.display_name,
-        role: row.role,
-        steam_id: row.steam_id,
-        remark: row.remark,
-        openid: row.openid,
-        enabled: row.enabled,
-        created_at: row.created_at.to_rfc3339(),
-    })
+    Ok(to_list_item(row))
 }

@@ -396,6 +396,7 @@ pub async fn report_whitelist_created(
         r#"SELECT DISTINCT openid FROM users
            WHERE role IN ('developer', 'admin', 'normal')
              AND enabled = true
+             AND whitelist_notification_enabled = true
              AND openid IS NOT NULL AND openid <> ''"#,
     )
     .fetch_all(&db.pool)
@@ -870,6 +871,18 @@ mod tests {
             config.lumi_bot_api_url = Some("http://127.0.0.1:9".to_string()); // 必然连接失败
             config.lumi_bot_api_key = Some("key-admin".to_string());
 
+            sqlx::query(
+                r#"INSERT INTO users
+                   (id, username, display_name, password_hash, role, openid, whitelist_notification_enabled)
+                   VALUES
+                   ($1, 'notify-user', 'Notify User', 'test', 'normal', 'openid-enabled', true),
+                   ($2, 'muted-user', 'Muted User', 'test', 'normal', 'openid-disabled', false)"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(Uuid::new_v4())
+            .execute(&db.pool)
+            .await?;
+
             // 构造白名单申请项
             let item = WhitelistItem {
                 id: Uuid::new_v4(),
@@ -900,6 +913,12 @@ mod tests {
             .fetch_one(&db.pool)
             .await?;
             assert_eq!(count, 1);
+            let data: serde_json::Value = sqlx::query_scalar(
+                "SELECT data FROM lumi_bot_event_queue WHERE status = 'pending'",
+            )
+            .fetch_one(&db.pool)
+            .await?;
+            assert_eq!(data["openids"], serde_json::json!(["openid-enabled"]));
             Ok(())
         })
         .await;

@@ -147,7 +147,7 @@ async fn create_session_for_user(db: &Database, user_id: &str) -> anyhow::Result
     ensure_test_user_exists(db, user_id).await?;
 
     let user = sqlx::query_as::<_, crate::models::User>(
-            r#"SELECT id, username, display_name, password_hash, role, steam_id, remark, openid, enabled, created_at FROM users WHERE id = $1::uuid"#,
+            r#"SELECT id, username, display_name, password_hash, role, steam_id, remark, openid, whitelist_notification_enabled, enabled, created_at FROM users WHERE id = $1::uuid"#,
         )
         .bind(user_id)
         .fetch_one(&db.pool)

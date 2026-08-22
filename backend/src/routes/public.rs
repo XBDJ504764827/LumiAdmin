@@ -849,6 +849,8 @@ fn verify_qq_token(
 /// QQ 机器人集成：通过 QQ 聊天审批白名单申请。
 /// body: { action: "approve"|"reject", openid, interaction_id, reason?, force? }
 /// 按 openid 定位后台管理员并记为操作人，渠道标记为 'qq'。
+/// 所有判定（openid 绑定 / 启用 / 角色权限）都会写入 audit_logs（source='qq_bot'），
+/// 供 LumiBot 状态页展示，方便线上排查"点了没反应 / 无权限"的问题。
 #[derive(serde::Deserialize)]
 pub(crate) struct QqWhitelistReviewBody {
     action: String,
@@ -900,64 +902,12 @@ pub(crate) async fn qq_whitelist_review(
 
     let action = body.action.trim();
     let openid = body.openid.trim();
+
     if openid.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": "缺少审批者 openid" })),
         ));
-    }
-
-    // 按 openid 查找后台管理员（developer/admin/normal 且启用）
-    let user: Option<(Uuid, String, String, String, Option<String>)> = sqlx::query_as(
-        r#"SELECT id, username, display_name, role, remark FROM users
-		   WHERE openid = $1 AND enabled = true LIMIT 1"#,
-    )
-    .bind(openid)
-    .fetch_optional(&ctx.db.pool)
-    .await
-    .map_err(|e| {
-        tracing::error!(error = %e, "QQ 审批：按 openid 查询管理员失败");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "查询审批者失败" })),
-        )
-    })?;
-
-    let (user_id, username, display_name, role, remark) = user.ok_or_else(|| {
-        (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": "该 openid 未绑定到有效管理员，或管理员已被禁用"
-            })),
-        )
-    })?;
-
-    // 审批记录落库的操作人名称：优先用网站在「备注」里配置的名称，
-    // 其次退到 display_name，再退到 username，避免把 QQ 相关标识写进审批记录。
-    let operator_label = {
-        let r = remark.as_deref().map(str::trim).unwrap_or("");
-        let d = display_name.trim();
-        let u = username.trim();
-        if !r.is_empty() {
-            r.to_string()
-        } else if !d.is_empty() {
-            d.to_string()
-        } else if !u.is_empty() {
-            u.to_string()
-        } else {
-            "管理员".to_string()
-        }
-    };
-
-    // 权限校验：是否可审批白名单
-    let operator = crate::models::Operator {
-        id: user_id,
-        username,
-        display_name: display_name.clone(),
-        role: role.clone(),
-    };
-    if !permission_service::can_review_whitelist(&operator) {
-        return Err(forbidden());
     }
 
     let interaction_id = body.interaction_id.trim();
@@ -988,6 +938,136 @@ pub(crate) async fn qq_whitelist_review(
                 Json(serde_json::json!({ "error": "action 只能为 approve 或 reject" })),
             ));
         }
+    }
+
+    // 按 openid 查找可审批的后台管理员。通知开关只控制是否发送新申请通知，
+    // 不参与审批授权：只要账号已启用、openid 匹配且角色允许审批即可操作。
+    // 判定结果写入 audit_logs（source='qq_bot'），便于 LumiBot 状态页排查。
+    let user: Option<(Uuid, String, String, String, Option<String>)> = sqlx::query_as(
+        r#"SELECT id, username, display_name, role, remark FROM users
+           WHERE openid = $1
+             AND enabled = true
+             AND role IN ('developer', 'admin', 'normal')
+           LIMIT 1"#,
+    )
+    .bind(openid)
+    .fetch_optional(&ctx.db.pool)
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "QQ 审批：按 openid 查询管理员失败");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "查询审批者失败" })),
+        )
+    })?;
+
+    let (user_id, username, display_name, role, remark) = match user {
+        Some(user) => user,
+        None => {
+            tracing::warn!(openid = %openid, "QQ 审批拒绝：openid 未绑定启用中的可审批管理员");
+            let _ = audit_service::write_audit_log_with_context(
+                &ctx.db,
+                audit_service::AuditLogInput {
+                    operation: "qq_review_denied".to_string(),
+                    target: id.to_string(),
+                    target_type: "whitelist".to_string(),
+                    player_name: None,
+                    reason: Some("该 openid 未绑定到有效管理员，或管理员已被禁用".to_string()),
+                    duration_minutes: None,
+                    operator_name: openid.to_string(),
+                    operator_steamid: None,
+                    source: "qq_bot".to_string(),
+                    server_id: None,
+                    server_name: None,
+                    server_port: None,
+                    success: false,
+                    message: Some("QQ 审批被拒绝：openid 未绑定启用中的可审批管理员".to_string()),
+                    idempotency_key: None,
+                },
+                None,
+                Some(serde_json::json!({
+                    "action": action,
+                    "openid": openid,
+                    "whitelist_id": id,
+                    "interaction_id": interaction_id,
+                    "reason": reason,
+                })),
+            )
+            .await;
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "该 openid 未绑定到有效管理员，或管理员已被禁用"
+                })),
+            ));
+        }
+    };
+
+    // 审批记录落库的操作人名称：优先用网站在「备注」里配置的名称，
+    // 其次退到 display_name，再退到 username，避免把 QQ 相关标识写进审批记录。
+    let operator_label = {
+        let r = remark.as_deref().map(str::trim).unwrap_or("");
+        let d = display_name.trim();
+        let u = username.trim();
+        if !r.is_empty() {
+            r.to_string()
+        } else if !d.is_empty() {
+            d.to_string()
+        } else if !u.is_empty() {
+            u.to_string()
+        } else {
+            "管理员".to_string()
+        }
+    };
+
+    // 权限校验：是否可审批白名单
+    let operator = crate::models::Operator {
+        id: user_id,
+        username,
+        display_name: display_name.clone(),
+        role: role.clone(),
+    };
+    if !permission_service::can_review_whitelist(&operator) {
+        tracing::warn!(
+            openid = %openid,
+            role = %operator.role,
+            "QQ 审批拒绝：管理员角色没有白名单审批权限"
+        );
+        let _ = audit_service::write_audit_log_with_context(
+            &ctx.db,
+            audit_service::AuditLogInput {
+                operation: "qq_review_denied".to_string(),
+                target: id.to_string(),
+                target_type: "whitelist".to_string(),
+                player_name: None,
+                reason: Some("该管理员角色没有白名单审批权限".to_string()),
+                duration_minutes: None,
+                operator_name: operator_label.clone(),
+                operator_steamid: None,
+                source: "qq_bot".to_string(),
+                server_id: None,
+                server_name: None,
+                server_port: None,
+                success: false,
+                message: Some(format!(
+                    "QQ 审批被拒绝：角色 {} 无白名单审批权限",
+                    operator.role
+                )),
+                idempotency_key: None,
+            },
+            None,
+            Some(serde_json::json!({
+                "action": action,
+                "openid": openid,
+                "whitelist_id": id,
+                "interaction_id": interaction_id,
+                "role": operator.role,
+                "user_id": user_id,
+                "reason": reason,
+            })),
+        )
+        .await;
+        return Err(forbidden());
     }
 
     let idempotency_key = format!("qq-whitelist-review:{interaction_id}");

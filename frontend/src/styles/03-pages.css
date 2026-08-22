@@ -1653,6 +1653,15 @@
 .lumi-bot-task-card { margin-top: 16px; }
 .lumi-bot-task-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; }
 .lumi-bot-task-error { padding: 0 20px 18px; color: var(--danger-text); font-size: 12px; overflow-wrap: anywhere; }
+.lumi-bot-audit-card { margin-top: 16px; }
+.lumi-bot-audit-empty { padding: 18px 0; color: var(--text2); font-size: 13px; text-align: center; }
+.lumi-bot-audit-msg { max-width: 420px; overflow-wrap: anywhere; }
+.lumi-bot-event-toolbar { display: flex; align-items: center; gap: 10px; }
+.lumi-bot-event-msg { max-width: 460px; overflow-wrap: anywhere; }
+.lumi-bot-event-msg-error { color: var(--danger-text); }
+@media (max-width: 680px) {
+  .lumi-bot-event-toolbar { flex-direction: column; align-items: flex-start; }
+}
 
 @media (max-width: 1200px) {
   .ops-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

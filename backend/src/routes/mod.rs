@@ -520,6 +520,11 @@ pub fn router(
             get(public::qq_pending_all),
         )
         .route(
+            "/api/integration/qq/whitelist/status",
+            get(public::qq_whitelist_status),
+        )
+        .route("/api/integration/qq/ban/status", get(public::qq_ban_status))
+        .route(
             "/api/integration/qq/whitelist/:id/review",
             post(public::qq_whitelist_review),
         )

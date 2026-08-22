@@ -2236,6 +2236,157 @@ async fn normal_admin_can_approve_but_cannot_revoke_whitelist() {
 }
 
 #[tokio::test]
+async fn qq_whitelist_status_returns_all_history_records() {
+    with_test_app(async |db, mut config| {
+        const TOKEN: &str = "qq-integration-status-test-token";
+        const STEAMID64: &str = "76561198012345678";
+        config.qq_integration_token = Some(TOKEN.to_string());
+        insert_whitelist_for_steamid64(&db, STEAMID64, "pending").await?;
+        insert_whitelist_for_steamid64(&db, STEAMID64, "rejected").await?;
+        let app = test_app(config, db);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/api/integration/qq/whitelist/status?steam_input={STEAMID64}"
+                    ))
+                    .header("x-qq-token", TOKEN)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await?)?;
+        assert_eq!(payload["steamid64"], STEAMID64);
+        assert_eq!(payload["items"].as_array().unwrap().len(), 2);
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn qq_whitelist_status_accepts_steamid2_and_rejects_invalid_token() {
+    with_test_app(async |db, mut config| {
+        const TOKEN: &str = "qq-integration-status-test-token-2";
+        config.qq_integration_token = Some(TOKEN.to_string());
+        let steamid64 = "76561197960290419";
+        insert_whitelist_for_steamid64(&db, steamid64, "approved").await?;
+        let app = test_app(config, db);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/integration/qq/whitelist/status?steam_input=STEAM_0%3A1%3A12345")
+                    .header("x-qq-token", TOKEN)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await?)?;
+        assert_eq!(payload["steamid64"], steamid64);
+
+        let unauthorized = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/integration/qq/whitelist/status?steam_input=76561197960290419")
+                    .header("x-qq-token", "wrong-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn qq_ban_status_returns_local_and_global_history() {
+    with_test_app(async |db, mut config| {
+        const TOKEN: &str = "qq-integration-ban-status-test-token";
+        const STEAMID64: &str = "76561198012345678";
+        config.qq_integration_token = Some(TOKEN.to_string());
+
+        sqlx::query(
+            r#"INSERT INTO ban_records (
+                id, player, steam_id, ban_type, duration_minutes, expires_at,
+                reason, status, operator_name, source, created_at
+            ) VALUES ($1, '测试玩家', $2, 'steam', 0, NULL,
+                      '网站封禁原因', 'active', '测试管理员', 'manual', now())"#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(STEAMID64)
+        .execute(&db.pool)
+        .await?;
+
+        sqlx::query(
+            r#"INSERT INTO global_bans (
+                id, kzt_ban_id, steam_id64, player_name, steam_id, ban_type,
+                notes, stats, expires_on, created_on, updated_on, is_expired,
+                manual_unbanned
+            ) VALUES ($1, 900001, $2, '测试玩家', 'STEAM_0:1:12345', 'cheat',
+                      '全球封禁原因', NULL, '9999-12-31T00:00:00Z',
+                      '2026-08-20T05:00:00Z', '2026-08-20T05:00:00Z', false, false)"#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(STEAMID64)
+        .execute(&db.pool)
+        .await?;
+
+        sqlx::query(
+            r#"INSERT INTO global_bans (
+                id, kzt_ban_id, steam_id64, player_name, ban_type,
+                notes, created_on, is_expired, manual_unbanned
+            ) VALUES ($1, 900002, $2, '测试玩家', 'bhop_hack',
+                      '历史全球封禁', '2026-08-01T05:00:00Z', true, true)"#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(STEAMID64)
+        .execute(&db.pool)
+        .await?;
+
+        let app = test_app(config, db);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/api/integration/qq/ban/status?steam_input={STEAMID64}"
+                    ))
+                    .header("x-qq-token", TOKEN)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        let response_status = response.status();
+        let response_body = to_bytes(response.into_body(), usize::MAX).await?;
+        assert_eq!(
+            response_status,
+            StatusCode::OK,
+            "response body: {}",
+            String::from_utf8_lossy(&response_body)
+        );
+        let payload: serde_json::Value = serde_json::from_slice(&response_body)?;
+        assert_eq!(payload["steamid64"], STEAMID64);
+        assert_eq!(payload["local_bans"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["local_bans"][0]["reason"], "网站封禁原因");
+        assert_eq!(payload["global_bans"].as_array().unwrap().len(), 2);
+        assert_eq!(payload["global_bans"][0]["manual_unbanned"], false);
+        assert_eq!(payload["global_bans"][1]["manual_unbanned"], true);
+        assert!(payload["local_bans"][0].get("operator_name").is_none());
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn qq_whitelist_review_is_idempotent_and_writes_authoritative_audit() {
     with_test_app(async |db, mut config| {
         const OPENID: &str = "qq-openid-audit-test";

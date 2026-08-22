@@ -55,6 +55,75 @@ struct QueuedEventRow {
     occurred_at: DateTime<Utc>,
 }
 
+/// 事件队列逐条日志（供 LumiBot 状态页排查 bot 上报问题）。
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct EventLogItem {
+    pub id: Uuid,
+    pub event_type: String,
+    pub level: String,
+    pub title: Option<String>,
+    pub message: Option<String>,
+    pub status: String,
+    pub attempts: i32,
+    pub last_error: Option<String>,
+    pub occurred_at: DateTime<Utc>,
+    pub queued_at: DateTime<Utc>,
+    pub sent_at: Option<DateTime<Utc>>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// 事件日志查询输入。
+#[derive(Debug, Clone, Default)]
+pub struct EventLogQuery {
+    pub status: Option<String>,
+    pub page: i64,
+    pub page_size: i64,
+}
+
+/// 获取 LumiBot 事件日志（按入队时间倒序）。
+///
+/// status 仅允许 `pending` / `sent` / `failed`，非法值按未过滤处理。
+pub async fn list_queue_events(
+    db: &Database,
+    query: &EventLogQuery,
+) -> anyhow::Result<(Vec<EventLogItem>, i64)> {
+    let status = query
+        .status
+        .as_deref()
+        .filter(|value| matches!(*value, "pending" | "sent" | "failed"));
+
+    let count_sql = match status {
+        Some(value) => {
+            format!(r#"SELECT COUNT(*) FROM lumi_bot_event_queue WHERE status = '{value}'"#)
+        }
+        None => r#"SELECT COUNT(*) FROM lumi_bot_event_queue"#.to_string(),
+    };
+    let data_sql = match status {
+        Some(value) => format!(
+            r#"SELECT id, event_type, level, title, message, status, attempts, last_error,
+                      occurred_at, queued_at, sent_at, updated_at
+               FROM lumi_bot_event_queue
+               WHERE status = '{value}'
+               ORDER BY queued_at DESC
+               LIMIT $1 OFFSET $2"#
+        ),
+        None => r#"SELECT id, event_type, level, title, message, status, attempts, last_error,
+                          occurred_at, queued_at, sent_at, updated_at
+               FROM lumi_bot_event_queue
+               ORDER BY queued_at DESC
+               LIMIT $1 OFFSET $2"#
+            .to_string(),
+    };
+
+    let total: i64 = sqlx::query_scalar(&count_sql).fetch_one(&db.pool).await?;
+    let items: Vec<EventLogItem> = sqlx::query_as(&data_sql)
+        .bind(query.page_size)
+        .bind((query.page - 1) * query.page_size)
+        .fetch_all(&db.pool)
+        .await?;
+    Ok((items, total))
+}
+
 /// 一轮同步的结果统计
 #[derive(Debug, Default, Serialize)]
 pub struct SyncSummary {
@@ -435,10 +504,15 @@ pub async fn report_whitelist_created(
         }),
     };
 
-    // 未配置 LumiBot：不启动上报
+    // 未配置 LumiBot：仍写入队列便于排查（事件保留在队列中，待配置后由后台任务补报）
     if !config.lumi_bot_enabled() {
         tracing::info!(
-            "LumiBot 未配置（缺少 LUMI_BOT_API_URL / LUMI_BOT_API_KEY），白名单申请事件未上报"
+            "LumiBot 未配置（缺少 LUMI_BOT_API_URL / LUMI_BOT_API_KEY），白名单申请事件已入队待配置后上报"
+        );
+        let queued_id = enqueue_event(db, input).await?;
+        tracing::info!(
+            queued_id = %queued_id,
+            "白名单申请事件已写入 LumiBot 事件队列（等待配置后上报）"
         );
         return Ok(());
     }
@@ -466,6 +540,23 @@ pub async fn report_whitelist_created(
 
     match send_event_payload(api_base_url, api_key, &body).await {
         Ok(()) => {
+            // 先入队再标记成功：保证事件日志完整（queued_at 即提交时间，sent_at 为上报时间）
+            let queued_id = enqueue_event(db, input.clone()).await?;
+            sqlx::query(
+                r#"
+                UPDATE lumi_bot_event_queue
+                SET status = 'sent',
+                    sent_at = now(),
+                    attempts = 1,
+                    last_error = NULL,
+                    updated_at = now()
+                WHERE id = $1
+                "#,
+            )
+            .bind(queued_id)
+            .execute(&db.pool)
+            .await
+            .context("标记 LumiBot 事件为已上报失败")?;
             tracing::info!(
                 event_id = %id,
                 event_type = %input.event_type,
@@ -919,6 +1010,67 @@ mod tests {
             .fetch_one(&db.pool)
             .await?;
             assert_eq!(data["openids"], serde_json::json!(["openid-enabled"]));
+            Ok(())
+        })
+        .await;
+    }
+
+    /// 立即上报成功时也写入事件日志（status='sent'），保证状态页能看到全部事件
+    #[tokio::test]
+    async fn report_whitelist_created_records_success_as_sent() {
+        with_test_db(async |db| {
+            // 健康检查 + 事件上报共用同一个监听端口：/health 返回 200，/api/v1/events 返回 202
+            let app = axum::Router::new()
+                .route(
+                    "/health",
+                    axum::routing::get(|| async { axum::http::StatusCode::OK }),
+                )
+                .route(
+                    "/api/v1/events",
+                    axum::routing::post(|| async { axum::http::StatusCode::ACCEPTED }),
+                );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            });
+
+            let mut config = Config::from_env();
+            config.lumi_bot_api_url = Some(format!("http://{address}"));
+            config.lumi_bot_api_key = Some("key-admin".to_string());
+
+            let item = WhitelistItem {
+                id: Uuid::new_v4(),
+                steamid64: "76561198000000002".to_string(),
+                steamid: Some("STEAM_1:0:2".to_string()),
+                steamid3: Some("[U:1:2]".to_string()),
+                profile_url: None,
+                nickname: "玩家B".to_string(),
+                steam_persona_name: None,
+                contact: None,
+                status: "pending".to_string(),
+                applied_at: Utc::now().to_rfc3339(),
+                approved_at: None,
+                approved_by: None,
+                approval_reason: None,
+                rejected_at: None,
+                rejected_by: None,
+                rejection_reason: None,
+                risk_profile: None,
+            };
+
+            report_whitelist_created(&db, &config, &item).await?;
+            server.abort();
+
+            // 立即上报成功后应写入事件日志并标记为已上报
+            let (status, attempts): (String, i32) = sqlx::query_as(
+                "SELECT status, attempts FROM lumi_bot_event_queue WHERE data->>'steamid64' = $1",
+            )
+            .bind("76561198000000002")
+            .fetch_one(&db.pool)
+            .await?;
+            assert_eq!(status, "sent");
+            assert_eq!(attempts, 1);
             Ok(())
         })
         .await;

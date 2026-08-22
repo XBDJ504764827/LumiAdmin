@@ -147,7 +147,7 @@ async fn create_session_for_user(db: &Database, user_id: &str) -> anyhow::Result
     ensure_test_user_exists(db, user_id).await?;
 
     let user = sqlx::query_as::<_, crate::models::User>(
-            r#"SELECT id, username, display_name, password_hash, role, steam_id, remark, openid, enabled, created_at FROM users WHERE id = $1::uuid"#,
+            r#"SELECT id, username, display_name, password_hash, role, steam_id, remark, openid, whitelist_notification_enabled, enabled, created_at FROM users WHERE id = $1::uuid"#,
         )
         .bind(user_id)
         .fetch_one(&db.pool)
@@ -2467,6 +2467,64 @@ async fn qq_whitelist_review_is_idempotent_and_writes_authoritative_audit() {
         assert_eq!(details["interaction_id"], INTERACTION_ID);
         assert_eq!(details["reviewer_openid"], OPENID);
         assert_eq!(details["whitelist_id"], whitelist_id.to_string());
+
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn qq_whitelist_review_all_staff_roles_have_permission() {
+    with_test_app(async |db, mut config| {
+        const TOKEN: &str = "qq-integration-staff-roles-token";
+        config.qq_integration_token = Some(TOKEN.to_string());
+
+        let cases = [
+            (
+                "22222222-2222-2222-2222-222222222222",
+                "qq-openid-developer",
+            ),
+            ("11111111-1111-1111-1111-111111111111", "qq-openid-admin"),
+            ("33333333-3333-3333-3333-333333333333", "qq-openid-normal"),
+        ];
+
+        for (index, (user_id, openid)) in cases.into_iter().enumerate() {
+            ensure_test_user_exists(&db, user_id).await?;
+            sqlx::query("UPDATE users SET openid = $1, enabled = true WHERE id = $2::uuid")
+                .bind(openid)
+                .bind(user_id)
+                .execute(&db.pool)
+                .await?;
+
+            let whitelist_id = insert_whitelist(&db, "pending").await;
+            let app = test_app(config.clone(), db.clone());
+            let request = Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/integration/qq/whitelist/{whitelist_id}/review"
+                ))
+                .header("x-qq-token", TOKEN)
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "action": "approve",
+                        "openid": openid,
+                        "interaction_id": format!("staff-role-interaction-{index}"),
+                    })
+                    .to_string(),
+                ))
+                .unwrap();
+
+            let response = app.oneshot(request).await?;
+            let status = response.status();
+            if status != StatusCode::OK {
+                let body = to_bytes(response.into_body(), usize::MAX).await?;
+                anyhow::bail!(
+                    "QQ 审批角色 {openid} 返回 {status}: {}",
+                    String::from_utf8_lossy(&body)
+                );
+            }
+        }
 
         Ok(())
     })

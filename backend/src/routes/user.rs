@@ -11,6 +11,10 @@ use crate::services::{
     log_service, permission_service, rate_limit_service::extract_client_ip, user_service,
 };
 
+fn default_whitelist_notification_enabled() -> bool {
+    true
+}
+
 #[derive(Deserialize)]
 pub(crate) struct CreateUserBody {
     pub(crate) username: String,
@@ -19,6 +23,8 @@ pub(crate) struct CreateUserBody {
     pub(crate) steam_id: Option<String>,
     pub(crate) remark: Option<String>,
     pub(crate) openid: Option<String>,
+    #[serde(default = "default_whitelist_notification_enabled")]
+    pub(crate) whitelist_notification_enabled: bool,
 }
 
 #[derive(Deserialize)]
@@ -28,6 +34,7 @@ pub(crate) struct UpdateUserBody {
     pub(crate) steam_id: Option<String>,
     pub(crate) remark: Option<String>,
     pub(crate) openid: Option<String>,
+    pub(crate) whitelist_notification_enabled: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -76,6 +83,7 @@ pub(crate) async fn create_user(
             steam_id: body.steam_id,
             remark: body.remark,
             openid: body.openid,
+            whitelist_notification_enabled: body.whitelist_notification_enabled,
         },
     )
     .await
@@ -121,6 +129,7 @@ pub(crate) async fn update_user(
             steam_id: body.steam_id,
             remark: body.remark,
             openid: body.openid,
+            whitelist_notification_enabled: body.whitelist_notification_enabled,
         },
         keep_role,
     )

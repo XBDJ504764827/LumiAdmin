@@ -12,6 +12,7 @@ export function buildCreateUserPayload(form) {
     steam_id: form.steam_id?.trim() ? form.steam_id.trim() : null,
     remark: form.remark?.trim() ? form.remark.trim() : null,
     openid: form.openid?.trim() ? form.openid.trim() : null,
+    whitelist_notification_enabled: form.whitelist_notification_enabled !== false,
   };
 }
 
@@ -22,5 +23,6 @@ export function buildUpdateUserPayload(form, includeRole) {
     steam_id: form.steam_id?.trim() ? form.steam_id.trim() : null,
     remark: form.remark?.trim() ? form.remark.trim() : null,
     openid: form.openid?.trim() ? form.openid.trim() : null,
+    whitelist_notification_enabled: form.whitelist_notification_enabled !== false,
   };
 }

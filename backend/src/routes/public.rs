@@ -907,10 +907,14 @@ pub(crate) async fn qq_whitelist_review(
         ));
     }
 
-    // 按 openid 查找后台管理员（developer/admin/normal 且启用）
+    // 按 openid 查找可审批的后台管理员。通知开关只控制是否发送新申请通知，
+    // 不参与审批授权：只要账号已启用、openid 匹配且角色允许审批即可操作。
     let user: Option<(Uuid, String, String, String, Option<String>)> = sqlx::query_as(
         r#"SELECT id, username, display_name, role, remark FROM users
-		   WHERE openid = $1 AND enabled = true LIMIT 1"#,
+           WHERE openid = $1
+             AND enabled = true
+             AND role IN ('developer', 'admin', 'normal')
+           LIMIT 1"#,
     )
     .bind(openid)
     .fetch_optional(&ctx.db.pool)
@@ -923,14 +927,18 @@ pub(crate) async fn qq_whitelist_review(
         )
     })?;
 
-    let (user_id, username, display_name, role, remark) = user.ok_or_else(|| {
-        (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": "该 openid 未绑定到有效管理员，或管理员已被禁用"
-            })),
-        )
-    })?;
+    let (user_id, username, display_name, role, remark) = match user {
+        Some(user) => user,
+        None => {
+            tracing::warn!(openid = %openid, "QQ 审批拒绝：openid 未绑定启用中的可审批管理员");
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "该 openid 未绑定到有效管理员，或管理员已被禁用"
+                })),
+            ));
+        }
+    };
 
     // 审批记录落库的操作人名称：优先用网站在「备注」里配置的名称，
     // 其次退到 display_name，再退到 username，避免把 QQ 相关标识写进审批记录。
@@ -957,6 +965,11 @@ pub(crate) async fn qq_whitelist_review(
         role: role.clone(),
     };
     if !permission_service::can_review_whitelist(&operator) {
+        tracing::warn!(
+            openid = %openid,
+            role = %operator.role,
+            "QQ 审批拒绝：管理员角色没有白名单审批权限"
+        );
         return Err(forbidden());
     }
 

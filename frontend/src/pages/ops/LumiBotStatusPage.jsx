@@ -83,6 +83,51 @@ function AuditLogTable({ logs }) {
   );
 }
 
+function auditKind(item) {
+  if (item?.success === false) return 'danger';
+  if (item?.operation?.startsWith('qq_review_denied')) return 'danger';
+  return 'success';
+}
+
+function auditStatusText(item) {
+  if (item?.success === false) return '失败';
+  return '成功';
+}
+
+function auditOperationLabel(item) {
+  const op = item?.operation ?? '';
+  if (op.startsWith('qq_review_denied')) return '审批拒绝';
+  if (op === 'whitelist_approve') return '通过';
+  if (op === 'whitelist_reject') return '拒绝';
+  return op;
+}
+
+function AuditLogTable({ logs }) {
+  if (!logs || logs.length === 0) {
+    return <div className="lumi-bot-audit-empty">暂无 QQ 审批记录。管理员点击「通过/拒绝」按钮后，这里会展示后端判定结果。</div>;
+  }
+  return (
+    <div className="table-responsive">
+      <table className="data-table">
+        <thead>
+          <tr><th>时间</th><th>结果</th><th>操作</th><th>操作人（openid）</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+          {logs.map((item) => (
+            <tr key={item.id}>
+              <td className="text-muted-light">{formatChinaDateTime(item.created_at)}</td>
+              <td><StatusPill kind={auditKind(item)}>{auditStatusText(item)}</StatusPill></td>
+              <td>{auditOperationLabel(item)}</td>
+              <td className="steam-id">{item.operator_name || '-'}</td>
+              <td className="lumi-bot-audit-msg">{item.message || item.reason || '-'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function formatDuration(seconds = 0) {
   if (seconds < 60) return `${seconds} 秒`;
   const minutes = Math.floor(seconds / 60);

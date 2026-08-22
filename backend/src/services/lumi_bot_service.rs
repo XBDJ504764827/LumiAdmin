@@ -93,7 +93,9 @@ pub async fn list_queue_events(
         .filter(|value| matches!(*value, "pending" | "sent" | "failed"));
 
     let count_sql = match status {
-        Some(value) => format!(r#"SELECT COUNT(*) FROM lumi_bot_event_queue WHERE status = '{value}'"#),
+        Some(value) => {
+            format!(r#"SELECT COUNT(*) FROM lumi_bot_event_queue WHERE status = '{value}'"#)
+        }
         None => r#"SELECT COUNT(*) FROM lumi_bot_event_queue"#.to_string(),
     };
     let data_sql = match status {

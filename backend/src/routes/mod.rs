@@ -440,6 +440,7 @@ pub fn router(
         // -- ops --
         .route("/api/ops/overview", get(ops::overview))
         .route("/api/ops/lumi-bot", get(ops::lumi_bot_status))
+        .route("/api/ops/lumi-bot/events", get(ops::lumi_bot_events))
         // -- player access logs --
         .route("/api/player-access/logs", get(access::list_access_logs))
         // -- global bans --

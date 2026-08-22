@@ -1,9 +1,42 @@
 import { api } from '../../lib/api.js';
 import { useApiQuery } from '../../shared/useApiQuery.js';
 import { PageState } from '../../shared/PageState.jsx';
+import { Pagination } from '../../shared/Pagination.jsx';
 import { StatusPill } from '../../shared/StatusPill.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { IconActivity, IconRefresh } from '../../shared/Icons.jsx';
+import { useState } from 'react';
+
+function eventKind(item) {
+  if (item?.status === 'failed') return 'danger';
+  if (item?.status === 'pending') return 'warning';
+  return item?.status === 'sent' ? 'success' : 'default';
+}
+
+function eventStatusText(item) {
+  if (item?.status === 'pending') return '待上报';
+  if (item?.status === 'sent') return '已上报';
+  if (item?.status === 'failed') return '失败死信';
+  return item?.status ?? '-';
+}
+
+function eventLevelTag(level) {
+  const kind = level === 'error' || level === 'critical' ? 'danger' : level === 'warning' ? 'warning' : 'info';
+  return <StatusPill kind={kind}>{level || '-'}</StatusPill>;
+}
+
+function eventTitle(item) {
+  return item?.title || item?.event_type || `事件 ${String(item?.id ?? '').slice(0, 8)}`;
+}
+
+function eventMessage(item) {
+  const message = item?.message || item?.last_error || '-';
+  return (
+    <span className={"lumi-bot-event-msg" + (item?.last_error ? ' lumi-bot-event-msg-error' : '')}>
+      {message}
+    </span>
+  );
+}
 
 function auditKind(item) {
   if (item?.success === false) return 'danger';
@@ -81,6 +114,107 @@ function Metric({ label, value, hint, tone = 'info' }) {
         <div className="ops-metric-value">{value}</div>
         <div className="ops-metric-label">{label}</div>
         {hint ? <div className="ops-metric-hint">{hint}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+const LUMI_BOT_EVENT_PAGE_SIZE = 10;
+
+const EVENT_STATUS_FILTERS = [
+  { value: '', label: '全部状态' },
+  { value: 'pending', label: '待上报' },
+  { value: 'sent', label: '已上报' },
+  { value: 'failed', label: '失败死信' },
+];
+
+function EventLogTable({ logs }) {
+  if (!logs || logs.length === 0) {
+    return <div className="lumi-bot-audit-empty">暂无 LumiBot 事件记录。</div>;
+  }
+  return (
+    <div className="table-responsive">
+      <table className="data-table">
+        <thead>
+          <tr><th>时间</th><th>状态</th><th>级别</th><th>事件</th><th>说明</th><th>重试</th></tr>
+        </thead>
+        <tbody>
+          {logs.map((item) => (
+            <tr key={item.id}>
+              <td className="text-muted-light">{formatChinaDateTime(item.queued_at)}</td>
+              <td><StatusPill kind={eventKind(item)}>{eventStatusText(item)}</StatusPill></td>
+              <td>{eventLevelTag(item.level)}</td>
+              <td>{eventTitle(item)}</td>
+              <td>{eventMessage(item)}</td>
+              <td className="text-muted-light">{item.attempts ?? 0}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// LumiBot 事件日志：lumi_bot_event_queue 中每条事件的逐条记录
+// （提交时间、当前状态、重试次数、最近失败原因），按状态筛选 + 分页查看。
+function LumiBotEventLogCard() {
+  const [status, setStatus] = useState('');
+  const [page, setPage] = useState(1);
+
+  const { data, isLoading, error, refetch, isFetching } = useApiQuery(
+    ['lumiBotEvents', status, page],
+    (token) =>
+      api.lumiBotEvents(token, {
+        status: status || undefined,
+        page,
+        page_size: LUMI_BOT_EVENT_PAGE_SIZE,
+      }),
+    { refetchInterval: 15_000, refetchOnWindowFocus: false },
+  );
+
+  const items = data?.items ?? [];
+  const total = data?.total ?? 0;
+
+  const selectStatus = (value) => {
+    setStatus(value);
+    setPage(1);
+  };
+
+  return (
+    <div className="card lumi-bot-audit-card">
+      <div className="card-header">
+        <div>
+          <div className="card-title">事件日志</div>
+          <div className="card-sub">lumi_bot_event_queue 中每条事件的提交、上报与失败原因（每 15 秒自动刷新）</div>
+        </div>
+        <div className="lumi-bot-event-toolbar">
+          <select
+            className="filter-select"
+            value={status}
+            onChange={(event) => selectStatus(event.target.value)}
+            aria-label="按状态筛选事件"
+          >
+            {EVENT_STATUS_FILTERS.map((filter) => (
+              <option key={filter.value} value={filter.value}>
+                {filter.label}
+              </option>
+            ))}
+          </select>
+          <button className="btn btn-outline" type="button" onClick={() => refetch()} disabled={isFetching}>
+            <IconRefresh size={14} />
+            {isFetching ? '刷新中...' : '刷新'}
+          </button>
+        </div>
+      </div>
+      <div className="card-body">
+        {isLoading ? <PageState title="正在读取事件日志" /> : null}
+        {!isLoading && error ? <PageState tone="danger" title="无法读取事件日志" message={error.message} action={refetch} /> : null}
+        {!isLoading && !error ? (
+          <>
+            <EventLogTable logs={items} />
+            <Pagination page={page} pageSize={LUMI_BOT_EVENT_PAGE_SIZE} total={total} onChange={setPage} />
+          </>
+        ) : null}
       </div>
     </div>
   );
@@ -235,6 +369,8 @@ export function LumiBotStatusPage() {
               <AuditLogTable logs={auditLogs} />
             </div>
           </div>
+
+          <LumiBotEventLogCard />
         </>
       ) : null}
     </div>

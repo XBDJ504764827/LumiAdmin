@@ -83,6 +83,7 @@ export const api = {
   logs: (token, params = {}) => request(`/api/logs${buildQueryString(params)}`, { headers: withAuth(token) }),
   opsOverview: (token) => request('/api/ops/overview', { headers: withAuth(token) }),
   lumiBotStatus: (token) => request('/api/ops/lumi-bot', { headers: withAuth(token) }),
+  lumiBotAuditLogs: (token, params = {}) => request(`/api/ops/lumi-bot/audit-logs${buildQueryString(params)}`, { headers: withAuth(token) }),
   docsEndpoints: (token) => request('/api/docs/endpoints', { headers: withAuth(token) }),
   accessLogs: (token, params = {}) => request(`/api/player-access/logs${buildQueryString(params)}`, { headers: withAuth(token) }),
   // Global Bans

@@ -5,6 +5,51 @@ import { StatusPill } from '../../shared/StatusPill.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { IconActivity, IconRefresh } from '../../shared/Icons.jsx';
 
+function auditKind(item) {
+  if (item?.success === false) return 'danger';
+  if (item?.operation?.startsWith('qq_review_denied')) return 'danger';
+  return 'success';
+}
+
+function auditStatusText(item) {
+  if (item?.success === false) return '失败';
+  return '成功';
+}
+
+function auditOperationLabel(item) {
+  const op = item?.operation ?? '';
+  if (op.startsWith('qq_review_denied')) return '审批拒绝';
+  if (op === 'whitelist_approve') return '通过';
+  if (op === 'whitelist_reject') return '拒绝';
+  return op;
+}
+
+function AuditLogTable({ logs }) {
+  if (!logs || logs.length === 0) {
+    return <div className="lumi-bot-audit-empty">暂无 QQ 审批记录。管理员点击「通过/拒绝」按钮后，这里会展示后端判定结果。</div>;
+  }
+  return (
+    <div className="table-responsive">
+      <table className="data-table">
+        <thead>
+          <tr><th>时间</th><th>结果</th><th>操作</th><th>操作人（openid）</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+          {logs.map((item) => (
+            <tr key={item.id}>
+              <td className="text-muted-light">{formatChinaDateTime(item.created_at)}</td>
+              <td><StatusPill kind={auditKind(item)}>{auditStatusText(item)}</StatusPill></td>
+              <td>{auditOperationLabel(item)}</td>
+              <td className="steam-id">{item.operator_name || '-'}</td>
+              <td className="lumi-bot-audit-msg">{item.message || item.reason || '-'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function formatDuration(seconds = 0) {
   if (seconds < 60) return `${seconds} 秒`;
   const minutes = Math.floor(seconds / 60);
@@ -48,6 +93,14 @@ export function LumiBotStatusPage() {
     { refetchInterval: 15_000, refetchOnWindowFocus: false },
   );
 
+  // QQ 按钮审批日志：管理员点击「通过/拒绝」后，后端每次判定（绑定/启用/角色）
+  // 都会写入 audit_logs（source='qq_bot'）。这里每 10 秒自动刷新，方便在线排查。
+  const { data: auditData, refetch: refetchAudit, isFetching: auditFetching } = useApiQuery(
+    ['lumiBotAuditLogs'],
+    (token) => api.lumiBotAuditLogs(token, { page: 1, page_size: 50 }),
+    { refetchInterval: 10_000, refetchOnWindowFocus: false },
+  );
+  const auditLogs = auditData?.items ?? [];
   const status = data?.data;
   const connection = connectionStatus(status);
   const task = taskStatus(status?.sync_task);
@@ -165,6 +218,22 @@ export function LumiBotStatusPage() {
               <div className="ops-kv"><span>下次执行</span><strong>{formatChinaDateTime(taskData?.next_run_at)}</strong></div>
             </div>
             {taskData?.last_error ? <div className="lumi-bot-task-error">最近错误：{taskData.last_error}</div> : null}
+          </div>
+
+          <div className="card lumi-bot-audit-card">
+            <div className="card-header">
+              <div>
+                <div className="card-title">QQ 审批记录</div>
+                <div className="card-sub">管理员点击「通过/拒绝」按钮后，后端每次判定都会记录在这里（每 10 秒自动刷新）</div>
+              </div>
+              <button className="btn btn-outline" type="button" onClick={() => refetchAudit()} disabled={auditFetching}>
+                <IconRefresh size={14} />
+                {auditFetching ? '刷新中...' : '刷新'}
+              </button>
+            </div>
+            <div className="card-body">
+              <AuditLogTable logs={auditLogs} />
+            </div>
           </div>
         </>
       ) : null}

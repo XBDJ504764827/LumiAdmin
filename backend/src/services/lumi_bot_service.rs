@@ -107,13 +107,12 @@ pub async fn list_queue_events(
                ORDER BY queued_at DESC
                LIMIT $1 OFFSET $2"#
         ),
-        None => format!(
-            r#"SELECT id, event_type, level, title, message, status, attempts, last_error,
-                      occurred_at, queued_at, sent_at, updated_at
+        None => r#"SELECT id, event_type, level, title, message, status, attempts, last_error,
+                          occurred_at, queued_at, sent_at, updated_at
                FROM lumi_bot_event_queue
                ORDER BY queued_at DESC
                LIMIT $1 OFFSET $2"#
-        ),
+            .to_string(),
     };
 
     let total: i64 = sqlx::query_scalar(&count_sql).fetch_one(&db.pool).await?;

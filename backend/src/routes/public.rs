@@ -903,38 +903,6 @@ pub(crate) async fn qq_whitelist_review(
     let action = body.action.trim();
     let openid = body.openid.trim();
 
-    // 审批请求的每个判定阶段都写入 audit_logs（source='qq_bot'），
-    // 供 LumiBot 状态页展示，方便线上排查"点了没反应 / 无权限"的问题。
-    #[allow(unused)]
-    let write_review_log =
-        |ctx: &AppCtx, operation: &str, message: String, details: serde_json::Value| {
-            let result = async {
-                audit_service::write_audit_log_with_context(
-                    &ctx.db,
-                    audit_service::AuditLogInput {
-                        operation: operation.to_string(),
-                        target: id.to_string(),
-                        target_type: "whitelist".to_string(),
-                        player_name: None,
-                        reason: None,
-                        duration_minutes: None,
-                        operator_name: openid.to_string(),
-                        operator_steamid: None,
-                        source: "qq_bot".to_string(),
-                        server_id: None,
-                        server_name: None,
-                        server_port: None,
-                        success: true,
-                        message: Some(message),
-                        idempotency_key: None,
-                    },
-                    None,
-                    Some(details),
-                )
-                .await
-            };
-            let _ = result;
-        };
     if openid.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,

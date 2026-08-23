@@ -251,6 +251,7 @@ pub struct PlayerAuditLog {
     pub player_name: Option<String>,
     pub reason: Option<String>,
     pub duration_minutes: Option<i32>,
+    pub operator_id: Option<Uuid>,
     pub operator_name: String,
     pub operator_steamid: Option<String>,
     pub source: String,
@@ -1934,20 +1935,12 @@ async fn fetch_audit_logs(
         .join(" OR ");
     let sql = format!(
         r#"SELECT al.id, al.operation, al.target, al.target_type, al.player_name,
-                  al.reason, al.duration_minutes,
-                  COALESCE(operator_user.display_name, al.operator_name) AS operator_name,
+                  al.reason, al.duration_minutes, al.operator_id,
+                  al.operator_name,
                   al.operator_steamid, al.source, al.server_id, al.server_name, al.server_port,
                   al.success, al.message, al.idempotency_key, al.created_at
            FROM audit_logs al
-           LEFT JOIN LATERAL (
-             SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
-             FROM users u
-             WHERE u.username = al.operator_name
-                OR u.display_name = al.operator_name
-                OR NULLIF(u.remark, '') = al.operator_name
-             ORDER BY CASE WHEN u.username = al.operator_name THEN 0 WHEN u.display_name = al.operator_name THEN 1 ELSE 2 END
-             LIMIT 1
-           ) operator_user ON true
+           LEFT JOIN users operator_user ON operator_user.id = al.operator_id
            WHERE {conditions}
            ORDER BY al.created_at DESC
            LIMIT 100"#

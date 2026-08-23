@@ -8,6 +8,7 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
+use std::time::Duration;
 use uuid::Uuid;
 
 use crate::routes::AppCtx;
@@ -124,15 +125,19 @@ async fn handle_ws(
     let (mut sender, mut receiver) = socket.split();
 
     // 从第一条消息获取 token 进行认证
-    let token = match receiver.next().await {
-        Some(Ok(Message::Text(text))) => match serde_json::from_str::<serde_json::Value>(&text) {
-            Ok(msg) if msg.get("type").and_then(|t| t.as_str()) == Some("auth") => msg
-                .get("token")
-                .and_then(|t| t.as_str())
-                .and_then(|s| Uuid::parse_str(s).ok()),
+    let token = match tokio::time::timeout(Duration::from_secs(5), receiver.next()).await {
+        Ok(message) => match message {
+            Some(Ok(Message::Text(text))) => match serde_json::from_str::<serde_json::Value>(&text)
+            {
+                Ok(msg) if msg.get("type").and_then(|t| t.as_str()) == Some("auth") => msg
+                    .get("token")
+                    .and_then(|t| t.as_str())
+                    .and_then(|s| Uuid::parse_str(s).ok()),
+                _ => None,
+            },
             _ => None,
         },
-        _ => None,
+        Err(_) => None,
     };
 
     let Some(token) = token else {
@@ -162,7 +167,10 @@ async fn handle_ws(
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
 
-    notification_service::register_connection(&hub, user_id, tx.clone()).await;
+    if !notification_service::register_connection(&hub, user_id, tx.clone()).await {
+        let _ = sender.close().await;
+        return;
+    }
 
     let send_hub = hub.clone();
     let send_tx = tx.clone();
@@ -196,12 +204,22 @@ async fn handle_ws(
     let recv_hub = hub.clone();
     let recv_user_id = user_id;
     let recv_tx = tx.clone();
+    let recv_db = db.clone();
+    let recv_token = token;
     let recv_task = tokio::spawn(async move {
-        while let Some(Ok(msg)) = receiver.next().await {
-            match msg {
-                Message::Close(_) => break,
-                Message::Ping(_) => {}
-                _ => {}
+        let mut verify_interval = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            tokio::select! {
+                message = receiver.next() => match message {
+                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                    Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {},
+                    Some(Ok(_)) => {},
+                },
+                _ = verify_interval.tick() => {
+                    if crate::services::auth_service::current_session(&recv_db, recv_token).await.is_err() {
+                        break;
+                    }
+                }
             }
         }
         notification_service::unregister_connection(&recv_hub, &recv_user_id, &recv_tx).await;

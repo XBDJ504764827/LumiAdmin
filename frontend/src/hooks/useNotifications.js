@@ -16,9 +16,11 @@ export function useNotifications() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [connected, setConnected] = useState(false);
   const wsRef = useRef(null);
   const reconnectTimer = useRef(null);
   const reconnectAttempts = useRef(0);
+  const notificationIds = useRef(new Set());
 
   const token = session?.token ?? null;
 
@@ -35,6 +37,7 @@ export function useNotifications() {
     setLoading(true);
     try {
       const data = await api.notifications(token, { page, page_size: 20 });
+      notificationIds.current = new Set((data.items ?? []).map(item => item.id));
       setNotifications(data.items);
     } catch {} finally {
       setLoading(false);
@@ -99,6 +102,7 @@ export function useNotifications() {
 
       ws.onopen = () => {
         reconnectAttempts.current = 0;
+        setConnected(true);
         ws.send(JSON.stringify({ type: 'auth', token }));
       };
 
@@ -106,15 +110,21 @@ export function useNotifications() {
         try {
           const msg = JSON.parse(event.data);
           if (msg.type === 'notification' && msg.data) {
-            setNotifications(prev => [msg.data, ...prev].slice(0, 50));
-            setUnreadCount(prev => prev + 1);
+            if (notificationIds.current.has(msg.data.id)) return;
+            notificationIds.current.add(msg.data.id);
+            setNotifications(prev => {
+              return [msg.data, ...prev].slice(0, 50);
+            });
+            setUnreadCount(prev => prev + (msg.data.read ? 0 : 1));
           }
         } catch {}
       };
 
       ws.onclose = () => {
+        setConnected(false);
         if (!alive) return;
-        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000);
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000)
+          + Math.floor(Math.random() * 500);
         reconnectAttempts.current++;
         reconnectTimer.current = setTimeout(connect, delay);
       };
@@ -134,5 +144,5 @@ export function useNotifications() {
     };
   }, [token, fetchUnreadCount]);
 
-  return { unreadCount, notifications, loading, fetchNotifications, markRead, markAllRead, fetchUnreadCount };
+  return { unreadCount, notifications, loading, connected, fetchNotifications, markRead, markAllRead, fetchUnreadCount };
 }

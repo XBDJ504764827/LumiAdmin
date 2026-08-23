@@ -90,17 +90,31 @@ impl Database {
     }
 
     pub async fn seed(&self, config: &Config) -> anyhow::Result<()> {
-        let password_hash = crate::password::hash_password(&config.dev_password)?;
-        sqlx::query(
-            r#"INSERT INTO users (id, username, display_name, password_hash, role, steam_id, remark)
-               VALUES
-               ('22222222-2222-2222-2222-222222222222', $1, 'DevAdmin', $2, 'developer', '76561198000000000', '开发管理员')
-               ON CONFLICT (username) DO UPDATE SET password_hash = $2"#,
+        // 仅在数据库中还没有任何可登录管理员时创建初始开发管理员。
+        // 绝不能在每次启动时根据 DEV_PASSWORD 覆盖已有账号密码，否则管理员
+        // 在后台修改的密码会在下一次部署/重启时失效。
+        let has_admin: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM users WHERE role IN ('developer', 'admin', 'normal'))",
         )
-        .bind(&config.dev_username)
-        .bind(&password_hash)
-        .execute(&self.pool)
+        .fetch_one(&self.pool)
         .await?;
+
+        if !has_admin {
+            let password_hash = crate::password::hash_password(&config.dev_password)?;
+            sqlx::query(
+                r#"INSERT INTO users (id, username, display_name, password_hash, role, steam_id, remark)
+                   VALUES
+                   ('22222222-2222-2222-2222-222222222222', $1, 'DevAdmin', $2, 'developer', '76561198000000000', '开发管理员')
+                   ON CONFLICT (username) DO NOTHING"#,
+            )
+            .bind(&config.dev_username)
+            .bind(&password_hash)
+            .execute(&self.pool)
+            .await?;
+            tracing::info!(username = %config.dev_username, "数据库没有管理员，已创建初始开发管理员账号");
+        } else {
+            tracing::debug!("数据库中已存在管理员，跳过初始账号创建");
+        }
 
         // 修复所有存储为明文的密码（非 $argon2 开头的）
         let rows: Vec<(uuid::Uuid, String)> = sqlx::query_as(

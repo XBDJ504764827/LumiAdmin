@@ -83,14 +83,6 @@ function AuditLogTable({ logs }) {
   );
 }
 
-function formatDuration(seconds = 0) {
-  if (seconds < 60) return `${seconds} 秒`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} 分钟`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours} 小时 ${minutes % 60} 分钟`;
-}
-
 function connectionStatus(status) {
   if (!status?.configured) return { label: '未配置', kind: 'default' };
   if (status.reachable) return { label: '在线', kind: 'success' };

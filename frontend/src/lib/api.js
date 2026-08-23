@@ -8,6 +8,7 @@ export const api = {
   logout: (token) => request('/api/auth/logout', { method: 'POST', headers: withAuth(token) }),
   logoutAllDevices: (currentToken) => request('/api/auth/logout-all', { method: 'POST', body: JSON.stringify({ current_token: currentToken }) }),
   me: (token) => request('/api/auth/me', { headers: withAuth(token) }),
+  permissions: (token) => request('/api/auth/permissions', { headers: withAuth(token) }),
   dashboard: (token) => request('/api/dashboard', { headers: withAuth(token) }),
   // ── Dashboard Analytics 图表统计 ──
   whitelistTrend: (token, days = 30) => request(`/api/dashboard/analytics/whitelist-trend${buildQueryString({ days })}`, { headers: withAuth(token) }),

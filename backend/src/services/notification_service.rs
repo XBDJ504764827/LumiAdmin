@@ -62,8 +62,14 @@ pub async fn register_connection(
     hub: &NotificationHub,
     user_id: Uuid,
     tx: tokio::sync::mpsc::UnboundedSender<serde_json::Value>,
-) {
-    hub.write().await.entry(user_id).or_default().push(tx);
+) -> bool {
+    let mut guard = hub.write().await;
+    let connections = guard.entry(user_id).or_default();
+    if connections.len() >= 3 {
+        return false;
+    }
+    connections.push(tx);
+    true
 }
 
 pub async fn unregister_connection(

@@ -23,6 +23,7 @@ test('defaultSessionFromToken builds pending session only when token exists', ()
     displayName: '',
     role: 'guest',
     roleLabel: '未登录',
+    permissions: [],
   });
 });
 
@@ -43,6 +44,7 @@ test('normalizeSession maps backend session payload to frontend shape', () => {
     displayName: 'Alex',
     role: 'admin',
     roleLabel: '系统管理员',
+    permissions: [],
   });
 });
 

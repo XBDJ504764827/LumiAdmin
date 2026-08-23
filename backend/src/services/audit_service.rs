@@ -13,6 +13,9 @@ pub struct AuditLogInput {
     pub player_name: Option<String>,
     pub reason: Option<String>,
     pub duration_minutes: Option<i32>,
+    /// 稳定关联操作管理员；插件/离线同步等外部来源可以为空。
+    pub operator_id: Option<Uuid>,
+    /// 操作时的名称快照，避免管理员改名后历史记录显示改变。
     pub operator_name: String,
     pub operator_steamid: Option<String>,
     pub source: String,
@@ -33,6 +36,7 @@ pub struct AuditLogItem {
     pub player_name: Option<String>,
     pub reason: Option<String>,
     pub duration_minutes: Option<i32>,
+    pub operator_id: Option<Uuid>,
     pub operator_name: String,
     pub operator_steamid: Option<String>,
     pub source: String,
@@ -76,12 +80,12 @@ pub async fn write_audit_log_with_context(
     let row = sqlx::query_as::<_, AuditLogItem>(
         r#"INSERT INTO audit_logs (
             id, operation, target, target_type, player_name, reason, duration_minutes,
-            operator_name, operator_steamid, source, server_id, server_name, server_port,
+            operator_id, operator_name, operator_steamid, source, server_id, server_name, server_port,
             success, message, client_ip, details, idempotency_key, created_at
            )
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, now())
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, now())
            RETURNING id, operation, target, target_type, player_name, reason, duration_minutes,
-                     operator_name, operator_steamid, source, server_id, server_name, server_port,
+                     operator_id, operator_name, operator_steamid, source, server_id, server_name, server_port,
                      success, message, client_ip, details, idempotency_key, created_at"#,
     )
     .bind(id)
@@ -91,6 +95,7 @@ pub async fn write_audit_log_with_context(
     .bind(&input.player_name)
     .bind(&input.reason)
     .bind(input.duration_minutes)
+    .bind(input.operator_id)
     .bind(&input.operator_name)
     .bind(&input.operator_steamid)
     .bind(&input.source)
@@ -118,12 +123,12 @@ pub async fn write_audit_log_in_transaction(
     let row = sqlx::query_as::<_, AuditLogItem>(
         r#"INSERT INTO audit_logs (
             id, operation, target, target_type, player_name, reason, duration_minutes,
-            operator_name, operator_steamid, source, server_id, server_name, server_port,
+            operator_id, operator_name, operator_steamid, source, server_id, server_name, server_port,
             success, message, client_ip, details, idempotency_key, created_at
            )
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, now())
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, now())
            RETURNING id, operation, target, target_type, player_name, reason, duration_minutes,
-                     operator_name, operator_steamid, source, server_id, server_name, server_port,
+                     operator_id, operator_name, operator_steamid, source, server_id, server_name, server_port,
                      success, message, client_ip, details, idempotency_key, created_at"#,
     )
     .bind(id)
@@ -133,6 +138,7 @@ pub async fn write_audit_log_in_transaction(
     .bind(&input.player_name)
     .bind(&input.reason)
     .bind(input.duration_minutes)
+    .bind(input.operator_id)
     .bind(&input.operator_name)
     .bind(&input.operator_steamid)
     .bind(&input.source)
@@ -208,24 +214,12 @@ pub async fn list_audit_logs(
         format!("WHERE {}", conditions.join(" AND "))
     };
 
-    let operator_join = r#"LEFT JOIN LATERAL (
-        SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
-        FROM users u
-        WHERE u.username = al.operator_name
-           OR u.display_name = al.operator_name
-           OR NULLIF(u.remark, '') = al.operator_name
-        ORDER BY CASE
-            WHEN u.username = al.operator_name THEN 0
-            WHEN u.display_name = al.operator_name THEN 1
-            ELSE 2
-        END
-        LIMIT 1
-    ) operator_user ON true"#;
+    let operator_join = r#"LEFT JOIN users operator_user ON operator_user.id = al.operator_id"#;
 
     let count_sql = format!("SELECT COUNT(*) FROM audit_logs al {operator_join} {where_clause}");
     let data_sql = format!(
         r#"SELECT id, operation, target, target_type, player_name, reason, duration_minutes,
-                  COALESCE(operator_user.display_name, al.operator_name) AS operator_name, operator_steamid, source, server_id, server_name, server_port,
+                  al.operator_id, al.operator_name, operator_steamid, source, server_id, server_name, server_port,
                   success, message, client_ip, details, idempotency_key, created_at
            FROM audit_logs al {operator_join} {}
            ORDER BY created_at DESC

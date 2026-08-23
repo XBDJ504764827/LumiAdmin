@@ -347,7 +347,7 @@ pub(crate) async fn execute_rcon(
     Json(body): Json<RconCommandBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let actor = current_operator(&ctx, &headers).await?;
-    if !permission_service::can_manage_community_mutation(&actor) {
+    if !permission_service::can_execute_rcon(&actor) {
         return Err(forbidden());
     }
 
@@ -356,6 +356,7 @@ pub(crate) async fn execute_rcon(
         server_id,
         &body.command,
         community_rcon::RconTimeouts::from_config(&ctx.config),
+        actor.role == "developer",
     )
     .await
     .map_err(invalid_request)?;
@@ -364,7 +365,11 @@ pub(crate) async fn execute_rcon(
         &actor.display_name,
         "RCON命令",
         "执行RCON命令",
-        &format!("服务器 {} → {}", server_id, body.command),
+        &format!(
+            "服务器 {} → {}",
+            server_id,
+            community_rcon::audit_command(&body.command)
+        ),
         &extract_client_ip(&headers),
     )
     .await

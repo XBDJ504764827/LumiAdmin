@@ -1,17 +1,15 @@
 //! LumiBot（QQ 机器人事件接收中心）集成服务
 //!
-//! 外部事件（目前为白名单新申请）在产生时 **立即** 通过 LumiBot HTTP API
-//! `POST /api/v1/events` 上报，触发 QQ 机器人立即推送通知。
-//! 若立即上报失败，事件会降级写入 `lumi_bot_event_queue` 表，由后台任务
-//! 每隔 `LUMI_BOT_SYNC_INTERVAL_SECS`（默认 1800s = 30 分钟）集中兜底重试，
-//! 避免事件丢失。
+//! 外部事件（目前为白名单新申请）在产生时先写入
+//! `lumi_bot_event_queue` 表，用户请求立即返回；后台任务再通过
+//! LumiBot HTTP API `POST /api/v1/events` 异步发送并重试，避免外部服务阻塞业务请求。
 //!
 //! 协议说明见 LumiBot HTTP API 文档：
 //! - 请求头：`Content-Type: application/json` + `X-API-Key`
 //! - 成功响应：HTTP 202 `{"success": true, "event_id": "..."}`
 //! - 失败响应：HTTP 400/401/429/500 `{"success": false, "error": "..."}`
 //!
-//! 兜底队列中上报失败的事件保留为 pending，下轮重试；超过最大重试次数后标记为
+//! 队列中上报失败的事件保留为 pending，下轮重试；超过最大重试次数后标记为
 //! failed（死信），不再自动重试，便于人工排查。
 
 use crate::{
@@ -444,14 +442,10 @@ pub async fn collect_whitelist_player_info(
     }
 }
 
-/// 白名单新申请上报（公开页面提交 / 撤销后重新申请都会产生新申请）。
+/// 白名单新申请入队（公开页面提交 / 撤销后重新申请都会产生新申请）。
 ///
-/// 级别使用 `warning`：与 LumiBot 默认通知规则（warning 及以上默认触发 QQ
-/// 通知）对齐，确保管理员能及时收到审核提醒。
-///
-/// 上报策略：白名单申请产生时 **立即** 调用 LumiBot API 上报，再由 QQ 机器人
-/// 立即推送通知；若立即上报失败（网络/服务不可用等），则降级写入
-/// `lumi_bot_event_queue`，由后台定时任务兜底重试，避免事件丢失。
+/// 该函数只做本地数据库工作，绝不等待 LumiBot 网络请求。后台 worker 会
+/// 通过带 claim 的队列异步发送并重试，保证用户请求不会被外部服务拖住。
 pub async fn report_whitelist_created(
     db: &Database,
     config: &Config,
@@ -504,88 +498,17 @@ pub async fn report_whitelist_created(
         }),
     };
 
-    // 未配置 LumiBot：仍写入队列便于排查（事件保留在队列中，待配置后由后台任务补报）
-    if !config.lumi_bot_enabled() {
-        tracing::info!(
-            "LumiBot 未配置（缺少 LUMI_BOT_API_URL / LUMI_BOT_API_KEY），白名单申请事件已入队待配置后上报"
-        );
-        let queued_id = enqueue_event(db, input).await?;
-        tracing::info!(
-            queued_id = %queued_id,
-            "白名单申请事件已写入 LumiBot 事件队列（等待配置后上报）"
-        );
-        return Ok(());
-    }
-
-    let api_base_url = config
-        .lumi_bot_api_url
-        .as_deref()
-        .context("LUMI_BOT_API_URL 未配置")?;
-    let api_key = config
-        .lumi_bot_api_key
-        .as_deref()
-        .context("LUMI_BOT_API_KEY 未配置")?;
-
-    let id = Uuid::new_v4();
-    let occurred_at = Utc::now();
-    let body = build_event_body(
-        id,
-        &input.event_type,
-        &input.level,
-        Some(&input.title),
-        Some(&input.message),
-        &input.data,
-        &occurred_at,
-    );
-
-    match send_event_payload(api_base_url, api_key, &body).await {
-        Ok(()) => {
-            // 先入队再标记成功：保证事件日志完整（queued_at 即提交时间，sent_at 为上报时间）
-            let queued_id = enqueue_event(db, input.clone()).await?;
-            sqlx::query(
-                r#"
-                UPDATE lumi_bot_event_queue
-                SET status = 'sent',
-                    sent_at = now(),
-                    attempts = 1,
-                    last_error = NULL,
-                    updated_at = now()
-                WHERE id = $1
-                "#,
-            )
-            .bind(queued_id)
-            .execute(&db.pool)
-            .await
-            .context("标记 LumiBot 事件为已上报失败")?;
-            tracing::info!(
-                event_id = %id,
-                event_type = %input.event_type,
-                "白名单申请事件已立即上报 LumiBot"
-            );
-            Ok(())
-        }
-        Err(error) => {
-            // 立即上报失败，降级入队由后台任务兜底重试
-            tracing::warn!(
-                %error,
-                event_id = %id,
-                "白名单申请事件立即上报失败，降级入队等待后台重试"
-            );
-            let queued_id = enqueue_event(db, input).await?;
-            tracing::warn!(
-                queued_id = %queued_id,
-                "白名单申请事件已写入 LumiBot 事件队列（后台兜底重试）"
-            );
-            Ok(())
-        }
-    }
+    let queued_id = enqueue_event(db, input).await?;
+    tracing::info!(queued_id = %queued_id, "白名单申请事件已写入 LumiBot 异步队列");
+    let _ = config; // 保留配置参数以兼容调用方；发送由后台任务决定是否启用。
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
-// 后台定时兜底重试任务
+// 后台定时异步发送任务
 //
-// 白名单事件在产生时已立即上报；仅当立即上报失败时才入队，由本任务集中
-// 兜底重试，避免事件因临时的网络/服务不可用而丢失。
+// 所有事件都先进入持久化队列，由本任务 claim 后发送、重试并记录死信，
+// 避免 LumiBot 不可用时阻塞业务请求。
 // ---------------------------------------------------------------------------
 
 /// 启动 LumiBot 事件上报循环。
@@ -653,14 +576,26 @@ pub async fn sync_pending_events(db: &Database, config: &Config) -> anyhow::Resu
         .as_deref()
         .context("LUMI_BOT_API_KEY 未配置")?;
 
+    sqlx::query(
+        "UPDATE lumi_bot_event_queue SET status = 'pending', locked_at = NULL, locked_by = NULL WHERE status = 'pending' AND locked_at < now() - interval '5 minutes'",
+    )
+    .execute(&db.pool)
+    .await?;
+
     let rows: Vec<QueuedEventRow> = sqlx::query_as(
-        r#"
-        SELECT id, event_type, level, title, message, data, occurred_at
-        FROM lumi_bot_event_queue
-        WHERE status = 'pending' AND attempts < $1
-        ORDER BY occurred_at ASC, queued_at ASC
-        LIMIT $2
-        "#,
+        r#"WITH claimed AS (
+             SELECT id
+             FROM lumi_bot_event_queue
+             WHERE status = 'pending' AND attempts < $1 AND next_attempt_at <= now()
+             ORDER BY occurred_at ASC, queued_at ASC
+             FOR UPDATE SKIP LOCKED
+             LIMIT $2
+           )
+           UPDATE lumi_bot_event_queue q
+           SET locked_at = now(), locked_by = pg_backend_pid()::text, updated_at = now()
+           FROM claimed
+           WHERE q.id = claimed.id
+           RETURNING q.id, q.event_type, q.level, q.title, q.message, q.data, q.occurred_at"#,
     )
     .bind(config.lumi_bot_max_attempts as i32)
     .bind(config.lumi_bot_batch_size as i64)
@@ -681,7 +616,10 @@ pub async fn sync_pending_events(db: &Database, config: &Config) -> anyhow::Resu
                     UPDATE lumi_bot_event_queue
                     SET status = 'sent',
                         sent_at = now(),
+                        attempts = attempts + 1,
                         last_error = NULL,
+                        locked_at = NULL,
+                        locked_by = NULL,
                         updated_at = now()
                     WHERE id = $1
                     "#,
@@ -734,10 +672,13 @@ async fn record_failure(
     let (attempts,): (i32,) = sqlx::query_as(
         r#"
         UPDATE lumi_bot_event_queue
-        SET attempts = attempts + 1,
-            last_error = $2,
-            status = CASE WHEN attempts + 1 >= $3 THEN 'failed' ELSE 'pending' END,
-            updated_at = now()
+                    SET attempts = attempts + 1,
+                        last_error = $2,
+                        status = CASE WHEN attempts + 1 >= $3 THEN 'failed' ELSE 'pending' END,
+                        next_attempt_at = now() + make_interval(secs => LEAST(3600, power(2, attempts + 1)::int * 5)),
+                        locked_at = NULL,
+                        locked_by = NULL,
+                        updated_at = now()
         WHERE id = $1
         RETURNING attempts
         "#,
@@ -954,7 +895,7 @@ mod tests {
         .await;
     }
 
-    /// 立即上报失败时降级入队，事件不丢失
+    /// 事件入队后由后台异步发送，事件不丢失
     #[tokio::test]
     async fn report_whitelist_created_falls_back_to_enqueue_on_failure() {
         with_test_db(async |db| {
@@ -997,7 +938,7 @@ mod tests {
 
             report_whitelist_created(&db, &config, &item).await?;
 
-            // 立即上报失败后应降级入队兜底重试
+            // 请求只写入 pending 队列，后台任务负责重试
             let count: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM lumi_bot_event_queue WHERE status = 'pending'",
             )
@@ -1015,7 +956,7 @@ mod tests {
         .await;
     }
 
-    /// 立即上报成功时也写入事件日志（status='sent'），保证状态页能看到全部事件
+    /// 即使 LumiBot 可达，请求也只写入队列，避免外部 HTTP 阻塞用户请求。
     #[tokio::test]
     async fn report_whitelist_created_records_success_as_sent() {
         with_test_db(async |db| {
@@ -1062,15 +1003,15 @@ mod tests {
             report_whitelist_created(&db, &config, &item).await?;
             server.abort();
 
-            // 立即上报成功后应写入事件日志并标记为已上报
+            // 请求返回时任务仍处于待发送状态，由后台 worker 异步处理。
             let (status, attempts): (String, i32) = sqlx::query_as(
                 "SELECT status, attempts FROM lumi_bot_event_queue WHERE data->>'steamid64' = $1",
             )
             .bind("76561198000000002")
             .fetch_one(&db.pool)
             .await?;
-            assert_eq!(status, "sent");
-            assert_eq!(attempts, 1);
+            assert_eq!(status, "pending");
+            assert_eq!(attempts, 0);
             Ok(())
         })
         .await;
@@ -1204,6 +1145,10 @@ mod tests {
             assert_eq!(attempts, 1);
 
             // 第二轮：再次失败，达到上限，标记 failed
+            sqlx::query("UPDATE lumi_bot_event_queue SET next_attempt_at = now() WHERE id = $1")
+                .bind(id)
+                .execute(&db.pool)
+                .await?;
             let summary = sync_pending_events(&db, &config).await?;
             assert_eq!(summary.total, 1);
             assert_eq!(summary.failed, 1);

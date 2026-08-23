@@ -74,6 +74,8 @@ async fn main() -> anyhow::Result<()> {
     services::notification_service::start_cleanup_loop(db.clone(), 86400);
     // 启动 LumiBot（QQ 机器人）事件上报队列同步（新白名单申请每 30 分钟集中上报）
     services::lumi_bot_service::start_sync_loop(db.clone(), config.clone());
+    // 外部封禁同步采用持久化 outbox，业务请求只入队，由后台 worker 重试发送。
+    services::external_ban_api_service::start_sync_loop(db.clone());
     // 启动服务器状态历史清理
     services::server_status_service::start_status_history_cleanup_loop(
         db.clone(),
@@ -124,6 +126,15 @@ async fn main() -> anyhow::Result<()> {
         db.clone(),
         whitelist_cache.clone(),
         config.server_config_cache_refresh_interval_secs,
+    );
+
+    // 使用 PostgreSQL LISTEN/NOTIFY 立即刷新访问相关缓存；固定周期刷新作为兜底。
+    services::access_cache::start_cache_invalidation_listener(
+        db.clone(),
+        access_snapshot.clone(),
+        server_config_cache.clone(),
+        active_ban_cache.clone(),
+        whitelist_cache.clone(),
     );
 
     // 启动限流器

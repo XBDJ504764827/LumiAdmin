@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Modal } from '../../shared/Modal.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { InternalNoteBadge } from '../../shared/InternalNote.jsx';
+import { publicApi } from '../../lib/publicApi.js';
 
 // ---------------------------------------------------------------------------
 // 全球封禁记录列表（共享组件）
@@ -500,13 +501,8 @@ async function fetchPlayerKzStats(steamid64) {
 
   const results = {};
   try {
-    const response = await fetch('/api/public/gokz/player-stats/batch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ steamid64 }),
-    });
-    if (response.ok) {
-      const data = await response.json();
+    const data = await publicApi.gokzPlayerStatsBatch(steamid64);
+    if (data) {
       for (const mode of KZ_MODES) {
         const s = data[mode.key];
         results[mode.key] = s && s.rating != null ? {

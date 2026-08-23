@@ -134,6 +134,7 @@ pub fn router(
         .route("/api/auth/logout", post(auth::logout))
         .route("/api/auth/logout-all", post(auth::logout_all_devices))
         .route("/api/auth/me", get(auth::me))
+        .route("/api/auth/permissions", get(auth::permissions))
         // -- dashboard --
         .route("/api/dashboard", get(misc::dashboard))
         .route(

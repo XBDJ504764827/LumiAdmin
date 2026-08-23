@@ -85,7 +85,7 @@ async fn poll_once(db: &Database, servers: &[ExternalServer]) -> anyhow::Result<
         async move {
             let address = format!("{}:{}", server.ip, server.port);
 
-            let status = match crate::a2s::query_server(&address, 5) {
+            let status = match crate::a2s::query_server(&address, 5).await {
                 Ok(info) => {
                     tracing::debug!(server = %server.name, players = info.player_count, map = %info.current_map, "A2S poll success");
                     StatusResult {

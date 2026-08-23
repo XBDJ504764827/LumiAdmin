@@ -288,13 +288,37 @@ pub fn router(
         // -- player detail --
         .route("/api/player-detail", get(player_detail::get_player_detail))
         .route(
+            "/api/player-detail/tags",
+            get(player_detail::list_player_tags).post(player_detail::create_player_tag),
+        )
+        .route(
+            "/api/player-detail/tags/:tag_id",
+            delete(player_detail::delete_player_tag),
+        )
+        .route(
             "/api/player-detail/search",
             get(player_detail::search_player_candidates),
+        )
+        .route(
+            "/api/player-detail/:steamid64/report",
+            get(player_detail::player_report),
+        )
+        .route(
+            "/api/player-detail/:steamid64/linked-accounts/batch",
+            post(player_detail::linked_account_batch_action),
+        )
+        .route(
+            "/api/player-detail/:steamid64/evidence/:source_type/:file_id/download",
+            get(player_detail::download_evidence),
         )
         .route(
             "/api/player-detail/internal/:steamid64",
             get(player_detail::get_player_internal_profile)
                 .put(player_detail::update_player_internal_profile),
+        )
+        .route(
+            "/api/player-detail/internal/:steamid64/history",
+            get(player_detail::player_internal_note_history),
         )
         .route(
             "/api/player-detail/evidence/:source_type/:file_id",

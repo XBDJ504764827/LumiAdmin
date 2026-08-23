@@ -118,6 +118,13 @@ pub fn can_manage_player_internal_data(actor: &Operator) -> bool {
     matches!(actor.role.as_str(), ROLE_DEVELOPER | ROLE_ADMIN)
 }
 
+pub fn can_view_player_internal_data(actor: &Operator) -> bool {
+    matches!(
+        actor.role.as_str(),
+        ROLE_DEVELOPER | ROLE_ADMIN | ROLE_NORMAL
+    )
+}
+
 /// 返回前端可用于隐藏功能入口的能力列表。后端接口仍会执行独立鉴权。
 pub fn permissions_for_role(role: &str) -> Vec<String> {
     let mut permissions = vec![

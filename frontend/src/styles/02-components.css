@@ -574,6 +574,23 @@
 .player-mini-event-main span { color: var(--text2); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .player-timeline-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.player-filter-date,.player-filter-check { display:inline-flex; align-items:center; gap:5px; padding:5px 8px; border:1px solid var(--border); border-radius:6px; color:var(--text2); font-size:11px; background:var(--surface2); }
+.player-filter-date input { border:0; background:transparent; color:inherit; font:inherit; }
+.player-filter-check input { accent-color:var(--accent); }
+.player-relation-graph { display:grid; grid-template-columns:minmax(160px, 220px) minmax(0,1fr); gap:12px; align-items:start; padding:14px; background:var(--surface2); border-bottom:1px solid var(--border); }
+.player-relation-center { position:sticky; top:90px; padding:12px; border:1px solid var(--accent); border-radius:8px; background:var(--surface); text-align:center; }
+.player-relation-center strong { display:block; margin-bottom:4px; }
+.player-relation-ip { display:grid; grid-template-columns:130px minmax(0,1fr); gap:10px; align-items:start; padding:8px 0; border-bottom:1px dashed var(--border); }
+.player-relation-ip:last-child { border-bottom:0; }
+.player-relation-ip code { color:var(--accent); font-size:11px; }
+.player-relation-accounts { display:flex; flex-wrap:wrap; gap:6px; }
+.player-relation-account { display:inline-flex; flex-direction:column; gap:2px; padding:6px 8px; border:1px solid var(--border); border-radius:6px; background:var(--surface); text-align:left; }
+.player-relation-account input { margin-right:5px; }
+.player-risk-reasons { display:flex; flex-direction:column; gap:6px; margin-top:10px; }
+.player-risk-reason { padding:7px 9px; border-left:3px solid var(--border2); background:var(--surface2); color:var(--text2); font-size:12px; }
+.player-risk-reason.warning { border-left-color:var(--warning-text); }
+.player-risk-reason.block { border-left-color:var(--danger-text); }
+@media(max-width:768px){.player-relation-graph{grid-template-columns:1fr}.player-relation-center{position:static}.player-relation-ip{grid-template-columns:1fr}}
 .player-event-timeline { position: relative; display: flex; flex-direction: column; gap: 12px; }
 .player-event-item { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; }
 .player-event-marker { position: relative; display: flex; justify-content: center; }

@@ -182,15 +182,38 @@ function OverviewTab({detail, globalBans}) {
           </div>}
         </div>
       </div>
+      <div className="card">
+        <div className="card-header"><div><div className="card-title">风险评分解释</div><div className="card-sub">每个结论都显示对应证据，便于复核和申诉。</div></div></div>
+        <div className="card-body">
+          {!riskProfile?.reasons?.length ? <Empty>暂无风险信号。</Empty> : <div className="player-risk-reasons">
+            {riskProfile.reasons.map((reason, index) => <div className={`player-risk-reason ${reason.severity}`} key={`${reason.code}-${index}`}>
+              <strong>{reason.message}</strong>
+              {(reason.ip || reason.steamid64 || reason.count) && <div className="player-table-sub">{reason.ip ? `IP: ${reason.ip} ` : ''}{reason.steamid64 ? `账号: ${reason.steamid64} ` : ''}{reason.count ? `次数: ${reason.count}` : ''}</div>}
+            </div>)}
+          </div>}
+        </div>
+      </div>
     </div>
   </>;
 }
 
 function TimelineTab({detail}) {
   const [filter, setFilter] = useState('all');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [onlyBans, setOnlyBans] = useState(false);
+  const [onlyAccessFailures, setOnlyAccessFailures] = useState(false);
   const timeline = detail.timeline || [];
   const categories = Array.from(new Set(timeline.map(item=>item.category))).filter(Boolean);
-  const visible = filter==='all'?timeline:timeline.filter(item=>item.category===filter);
+  const visible = timeline.filter(item => {
+    if (filter !== 'all' && item.category !== filter) return false;
+    if (onlyBans && item.category !== 'ban') return false;
+    if (onlyAccessFailures && !(item.category === 'access' && item.status === 'failed')) return false;
+    const timestamp = new Date(item.occurred_at).getTime();
+    if (from && timestamp < new Date(`${from}T00:00:00`).getTime()) return false;
+    if (to && timestamp > new Date(`${to}T23:59:59.999`).getTime()) return false;
+    return true;
+  });
 
   return <div className="card">
     <div className="card-header">
@@ -200,6 +223,10 @@ function TimelineTab({detail}) {
       <div className="player-timeline-filters">
         <button type="button" className={`profile-tab ${filter==='all'?'active':''}`} onClick={()=>setFilter('all')}>全部</button>
         {categories.map(category=><button type="button" key={category} className={`profile-tab ${filter===category?'active':''}`} onClick={()=>setFilter(category)}>{categoryLabel(category)}</button>)}
+        <label className="player-filter-date">开始 <input type="date" value={from} onChange={e=>setFrom(e.target.value)}/></label>
+        <label className="player-filter-date">结束 <input type="date" value={to} onChange={e=>setTo(e.target.value)}/></label>
+        <label className="player-filter-check"><input type="checkbox" checked={onlyBans} onChange={e=>setOnlyBans(e.target.checked)}/> 只看封禁</label>
+        <label className="player-filter-check"><input type="checkbox" checked={onlyAccessFailures} onChange={e=>setOnlyAccessFailures(e.target.checked)}/> 只看进服失败</label>
       </div>
       {visible.length===0?<Empty>暂无匹配事件。</Empty>:<div className="player-event-timeline">
         {visible.map((event,i)=><div className={`player-event-item ${event.status==='failed'?'danger':''}`} key={`${event.event_type}-${event.related_id||i}-${event.occurred_at}`}>
@@ -336,7 +363,7 @@ function OverviewStrip({detail, globalBans}) {
   </div>;
 }
 
-function PlayerSummaryRail({detail, globalBans, canEdit, onSaveInternal, internalSaving, onShowGlobalBans}) {
+function PlayerSummaryRail({detail, globalBans, canEdit, onSaveInternal, internalSaving, onShowGlobalBans, tagCatalog}) {
   const profile = detail.profile || {};
   const summary = detail.summary || {};
   const currentOnline = detail.online_records || [];
@@ -392,15 +419,47 @@ function PlayerSummaryRail({detail, globalBans, canEdit, onSaveInternal, interna
           {tags.length>0?<div className="player-summary-tags">{tags.map(tag=><span key={tag}>#{tag}</span>)}</div>:null}
         </div>
       ) : <div className="player-summary-empty">暂无备注或标签。</div>}
-      {canEdit&&<InternalBtn key={detail.profile.steamid64} detail={detail} onSave={onSaveInternal} saving={internalSaving}/>}
+      {canEdit&&<InternalBtn key={detail.profile.steamid64} detail={detail} onSave={onSaveInternal} saving={internalSaving} tagCatalog={tagCatalog}/>}
+      {detail.internal_note_history?.length>0&&<details style={{marginTop:10}}><summary style={{cursor:'pointer',fontSize:12,color:'var(--text2)'}}>查看备注变更历史 ({detail.internal_note_history.length})</summary><div className="player-table-sub" style={{marginTop:8}}>{detail.internal_note_history.slice(0,8).map(item=><div key={item.id} style={{padding:'6px 0',borderBottom:'1px dashed var(--border)'}}><strong>{item.changed_by_name}</strong> · {formatChinaDateTime(item.changed_at,{seconds:false})}<br/>{item.note||'清空备注'}{item.tags?.length?` · ${item.tags.map(tag=>`#${tag}`).join(' ')}`:''}</div>)}</div></details>}
     </div>
   </aside>;
 }
 
-function NetworkTab({detail}) {
+function NetworkTab({detail, token}) {
   const ipHistory = detail.ip_history || [];
   const sessions = detail.player_sessions || [];
+  const { toast } = useToast();
+  const [selected, setSelected] = useState([]);
+  const [tag, setTag] = useState('');
+  const [acting, setActing] = useState(false);
+  const toggle = (id) => setSelected(prev => prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]);
+  async function batch(action) {
+    if (!tag.trim() || selected.length === 0 || acting) return;
+    setActing(true);
+    try {
+      await api.linkedAccountsBatch(token, detail.profile.steamid64, { steamids64: selected, action, tag: tag.trim() });
+      toast({ title: action === 'add_tag' ? '关联账号已批量标记' : '关联账号标签已移除' });
+      setSelected([]);
+    } catch (error) { toast({ title: '批量操作失败', message: error.message, tone: 'danger' }); }
+    finally { setActing(false); }
+  }
   return <>
+    <div className="card"><div className="card-header"><div><div className="card-title">账号 / IP 关系图</div><div className="card-sub">节点表示账号，连线标签表示共享 IP。勾选关联账号后可批量标记。</div></div></div>
+      <div className="player-relation-graph">
+        <div className="player-relation-center"><strong>{detail.profile.display_name || '当前玩家'}</strong><code>{detail.profile.steamid64}</code><div className="player-table-sub">中心账号</div></div>
+        <div>{ipHistory.length === 0 ? <Empty>暂无可绘制的 IP 关系。</Empty> : ipHistory.map(entry => <div className="player-relation-ip" key={entry.ip}>
+          <code>{entry.ip}</code><div className="player-relation-accounts">
+            {(entry.linked_accounts || []).map(account => <label className="player-relation-account" key={entry.ip + '-' + account.steam_id64}>
+              <span><input type="checkbox" checked={selected.includes(account.steam_id64)} onChange={() => toggle(account.steam_id64)} />{account.player_name || '未知玩家'}</span>
+              <code>{account.steam_id64}</code>
+              <span className="player-table-sub">共享 IP · {account.access_count || 0} 次访问</span>
+            </label>)}
+            {(!entry.linked_accounts || entry.linked_accounts.length === 0) && <span className="player-table-sub">暂无其他账号</span>}
+          </div>
+        </div>)}</div>
+      </div>
+      {selected.length > 0 && <div className="card-body" style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}><strong>已选 {selected.length} 个账号</strong><input className="form-control" style={{maxWidth:220}} value={tag} onChange={e=>setTag(e.target.value)} placeholder="标签名称"/><button className="btn btn-primary btn-sm" disabled={acting||!tag.trim()} onClick={()=>batch('add_tag')}>批量添加标签</button><button className="btn btn-outline btn-sm" disabled={acting||!tag.trim()} onClick={()=>batch('remove_tag')}>批量移除标签</button></div>}
+    </div>
     <div className="card"><div className="card-header"><div><div className="card-title">深度 IP 交叉与设备追踪表</div><div className="card-sub"><strong style={{color:'var(--accent)'}}>逆向检索同 IP 的关联 Steam 账号</strong>，包含关联账号白名单和封禁状态。</div></div></div><div className="card-body p-0">
       {ipHistory.length===0?<Empty>暂无 IP 登录记录。</Empty>:<div className="table-responsive"><table className="data-table tree-table"><thead><tr><th>IP</th><th>首次/最后活跃</th><th>服务器</th><th>关联账号 / 白名单</th></tr></thead><tbody>
         {ipHistory.map(entry=>{const lb=entry.linked_accounts?.filter(a=>a.has_local_ban).length||0;const gb=entry.linked_accounts?.filter(a=>a.has_global_ban).length||0;const banned=lb+gb;return <React.Fragment key={entry.ip}>
@@ -429,14 +488,16 @@ function NetworkTab({detail}) {
   </>;
 }
 
-function BehaviorTab({detail}) {
+function BehaviorTab({detail, token}) {
+  const { toast } = useToast();
   return <>
     <div className="card"><div className="card-header"><div><div className="card-title">物理证据文件与媒体库</div></div></div><div className="card-body">
-      {detail.evidence_files.length===0?<Empty>暂无附件证据。</Empty>:<div className="table-responsive"><table className="data-table"><thead><tr><th>文件名称</th><th>归属</th><th>尺寸</th><th>上传时间</th></tr></thead><tbody>
+      {detail.evidence_files.length===0?<Empty>暂无附件证据。</Empty>:<div className="table-responsive"><table className="data-table"><thead><tr><th>文件名称</th><th>归属</th><th>尺寸</th><th>上传时间</th><th>操作</th></tr></thead><tbody>
         {detail.evidence_files.map(file=><tr key={`${file.source_type}-${file.id}`}>
           <td style={{fontFamily:'var(--mono)',fontWeight:600,fontSize:'12px'}}>{file.file_name}</td><td>{file.source_label}</td>
           <td style={{fontFamily:'var(--mono)'}}>{(file.file_size/1024/1024).toFixed(1)} MB</td>
           <td style={{fontFamily:'var(--mono)',fontSize:'12px'}}>{formatChinaDateTime(file.uploaded_at,{seconds:false})}</td>
+          <td><button type="button" className="action-btn" onClick={async()=>{try{const result=await api.downloadPlayerEvidence(token,detail.profile.steamid64,file.source_type,file.id);if(result.url)window.open(result.url,'_blank','noopener,noreferrer');}catch(error){toast({title:'下载失败',message:error.message,tone:'danger'});}}}>下载</button></td>
         </tr>)}
       </tbody></table></div>}
     </div></div>
@@ -471,7 +532,7 @@ export function PlayerDetailPage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const token = session?.token ?? null;
-  const canEdit = session?.role === 'developer' || session?.role === 'admin';
+  const canEdit = session?.permissions?.includes('player_internal.manage') || session?.role === 'developer' || session?.role === 'admin';
   const [steamInput, setSteamInput] = useState('');
   const [lastQuery, setLastQuery] = useState('');
   const lastQueryRef = useRef('');
@@ -480,6 +541,7 @@ export function PlayerDetailPage() {
   const [error, setError] = useState('');
   const [tab, setTab] = useState('overview');
   const [internalSaving, setInternalSaving] = useState(false);
+  const [tagCatalog, setTagCatalog] = useState([]);
   const [globalBans, setGlobalBans] = useState(null);
   const [showGlobalBans, setShowGlobalBans] = useState(false);
   const [candidates, setCandidates] = useState([]);
@@ -489,6 +551,11 @@ export function PlayerDetailPage() {
   const [activeCandidateIndex, setActiveCandidateIndex] = useState(-1);
   const searchWrapRef = useRef(null);
   const suppressCandidateSearchRef = useRef(false);
+
+  useEffect(() => {
+    if (!token) return;
+    api.playerTags(token).then(result => setTagCatalog(result.items || [])).catch(() => setTagCatalog([]));
+  }, [token]);
 
   // 加载玩家详情
   async function loadDetail(input, resetTab = true) {
@@ -512,9 +579,23 @@ export function PlayerDetailPage() {
     else if(e.key==='Escape'){e.preventDefault();setCandidatesOpen(false);setActiveCandidateIndex(-1);}
   }
   function refreshDetail() { const q = lastQueryRef.current || lastQuery; if(q) loadDetail(q, false); queryClient.invalidateQueries({queryKey:['whitelist']}); queryClient.invalidateQueries({queryKey:['bans']}); }
+  async function exportReport() {
+    if (!detail?.profile?.steamid64) return;
+    try {
+      const report = await api.playerReport(token, detail.profile.steamid64);
+      const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `player-investigation-${detail.profile.steamid64}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      toast({ title: '调查报告已导出' });
+    } catch (error) { toast({ title: '导出失败', message: error.message, tone: 'danger' }); }
+  }
   // 内部备注
   async function handleSaveInternal(body) {
-    if(!detail)return;try{setInternalSaving(true);const r=await api.updatePlayerInternalProfile(token,detail.profile.steamid64,body);setDetail(p=>p?{...p,internal_profile:r.item}:p);toast({title:'保存成功'});}catch(e){toast({title:'保存失败',message:e.message,tone:'danger'});}finally{setInternalSaving(false);}
+    if(!detail)return;try{setInternalSaving(true);const r=await api.updatePlayerInternalProfile(token,detail.profile.steamid64,body);const history=await api.playerInternalNoteHistory(token,detail.profile.steamid64).catch(()=>null);setDetail(p=>p?{...p,internal_profile:r.item,internal_note_history:history?.items||p.internal_note_history}:p);toast({title:'保存成功'});}catch(e){toast({title:'保存失败',message:e.message,tone:'danger'});}finally{setInternalSaving(false);}
   }
 
   // 查询全球封禁
@@ -565,7 +646,7 @@ export function PlayerDetailPage() {
 
   return (<div id="player-detail" className="content-section active">
     <div className="breadcrumb"><span>核心管理</span><span className="sep">›</span><span className="current">玩家全息档案</span></div>
-    <div className="page-header"><div><div className="page-title">玩家详情</div><div className="page-sub">集中查看身份、风险、封禁、进服和工单记录。</div></div></div>
+    <div className="page-header"><div><div className="page-title">玩家详情</div><div className="page-sub">集中查看身份、风险、封禁、进服和工单记录。</div></div>{detail&&<button type="button" className="btn btn-outline" onClick={exportReport}>导出调查报告</button>}</div>
 
     <div className="card player-search-card">
       <form className="player-detail-search" onSubmit={e=>{e.preventDefault();submitSearch();}}>
@@ -638,6 +719,7 @@ export function PlayerDetailPage() {
           onSaveInternal={handleSaveInternal}
           internalSaving={internalSaving}
           onShowGlobalBans={()=>setShowGlobalBans(true)}
+          tagCatalog={tagCatalog}
         />
         <main className="player-detail-main">
           <OverviewStrip detail={detail} globalBans={globalBans}/>
@@ -648,8 +730,8 @@ export function PlayerDetailPage() {
             {tab==='timeline'&&<TimelineTab detail={detail}/>}
             {tab==='access'&&<AccessTab detail={detail}/>}
             {tab==='status'&&<StatusTab detail={detail} token={token} onRefresh={refreshDetail}/>}
-            {tab==='network'&&<NetworkTab detail={detail}/>}
-            {tab==='behavior'&&<BehaviorTab detail={detail}/>}
+            {tab==='network'&&<NetworkTab detail={detail} token={token}/>}
+            {tab==='behavior'&&<BehaviorTab detail={detail} token={token}/>}
             {tab==='audit'&&<AuditTab detail={detail}/>}
           </div>
         </main>
@@ -660,13 +742,14 @@ export function PlayerDetailPage() {
   </div>);
 }
 
-function InternalBtn({detail, onSave, saving}) {
+function InternalBtn({detail, onSave, saving, tagCatalog=[]}) {
   const [open, setOpen] = useState(false);
   const [note, setNote] = useState(detail.internal_profile?.note??'');
   const [tt, setTt] = useState(tagsToText(detail.internal_profile?.tags??[]));
   if(!open)return <button className="btn btn-outline player-internal-edit-btn" onClick={()=>setOpen(true)}>编辑备注</button>;
   return <div className="player-internal-editor">
     <input className="form-control" value={note} onChange={e=>setNote(e.target.value)} placeholder="内部备注"/>
+    {tagCatalog.length>0&&<div className="player-summary-tags">{tagCatalog.map(tag=><button type="button" className="badge-tag" style={{borderColor:tag.color,color:tag.color}} key={tag.id} onClick={()=>setTt(current=>textToTags(`${current},${tag.name}`).join(', '))}>{tag.name}</button>)}</div>}
     <div className="player-internal-editor-row">
       <input className="form-control" value={tt} onChange={e=>setTt(e.target.value)} placeholder="标签"/>
       <button className="btn btn-primary btn-sm" disabled={saving} onClick={()=>{onSave({note,tags:textToTags(tt)});setOpen(false);}}>{saving?'保存中...':'保存'}</button>

@@ -26,6 +26,7 @@ pub struct PlayerDetail {
     pub audit_logs: Vec<PlayerAuditLog>,
     pub evidence_files: Vec<EvidenceFile>,
     pub internal_profile: Option<PlayerInternalProfile>,
+    pub internal_note_history: Vec<PlayerInternalNoteHistory>,
     pub timeline: Vec<TimelineEvent>,
 }
 
@@ -77,6 +78,27 @@ pub struct PlayerInternalProfile {
     pub tags: Vec<String>,
     pub updated_by: Option<String>,
     pub updated_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct PlayerInternalNoteHistory {
+    pub id: Uuid,
+    pub steamid64: String,
+    pub note: String,
+    pub tags: Vec<String>,
+    pub changed_by: Option<Uuid>,
+    pub changed_by_name: String,
+    pub changed_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct PlayerTagDefinition {
+    pub id: Uuid,
+    pub name: String,
+    pub color: String,
+    pub description: String,
+    pub created_by: Option<Uuid>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -251,6 +273,7 @@ pub struct PlayerAuditLog {
     pub player_name: Option<String>,
     pub reason: Option<String>,
     pub duration_minutes: Option<i32>,
+    pub operator_id: Option<Uuid>,
     pub operator_name: String,
     pub operator_steamid: Option<String>,
     pub source: String,
@@ -288,6 +311,7 @@ struct EvidenceFileRow {
     file_name: String,
     file_size: i64,
     content_type: String,
+    #[allow(dead_code)]
     storage_key: String,
     category: String,
     tags: Vec<String>,
@@ -300,6 +324,13 @@ struct EvidenceFileRow {
 pub struct PlayerInternalProfileInput {
     pub note: Option<String>,
     pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PlayerTagInput {
+    pub name: String,
+    pub color: String,
+    pub description: String,
 }
 
 #[derive(Debug, Clone)]
@@ -324,7 +355,6 @@ pub struct TimelineEvent {
 pub async fn get_player_detail(
     db: &Database,
     resolver: &SteamResolver,
-    r2: Option<&R2Storage>,
     steam_input: &str,
 ) -> anyhow::Result<PlayerDetail> {
     let steamid64 = resolve_player_input(db, resolver, steam_input).await?;
@@ -339,6 +369,7 @@ pub async fn get_player_detail(
         access_logs,
         ip_history,
         internal_profile,
+        internal_note_history,
         risk_profile,
     ) = tokio::try_join!(
         fetch_whitelist_records(db, &steamid64),
@@ -348,10 +379,11 @@ pub async fn get_player_detail(
         fetch_access_records(db, &steamid64),
         fetch_ip_history(db, &steamid64),
         fetch_internal_profile(db, &steamid64),
+        fetch_internal_note_history(db, &steamid64),
         player_risk_service::build_player_risk_profile(db, &steamid64),
     )?;
     // evidence_files 依赖 bans，需在第一批完成后执行
-    let evidence_files = fetch_evidence_files(db, r2, &bans).await?;
+    let evidence_files = fetch_evidence_files(db, &bans).await?;
 
     let search_terms = build_search_terms(SearchTermSources {
         identity: &identity,
@@ -456,6 +488,7 @@ pub async fn get_player_detail(
         audit_logs,
         evidence_files,
         internal_profile,
+        internal_note_history,
         timeline,
     })
 }
@@ -616,13 +649,11 @@ async fn lookup_steamid_by_contact(db: &Database, contact: &str) -> anyhow::Resu
             .replace('_', "\\_")
     );
     let row: Option<(String,)> = sqlx::query_as(
-        r#"SELECT steam_id64 FROM (
-            SELECT steamid64 AS steam_id64 FROM whitelist_requests WHERE contact ILIKE $1
-            UNION
-            SELECT steam_id AS steam_id64 FROM ban_appeals WHERE contact ILIKE $1
-            UNION
-            SELECT steam_id AS steam_id64 FROM map_feedback WHERE contact ILIKE $1
-        ) AS ids LIMIT 1"#,
+        r#"SELECT steamid64 AS steam_id64
+           FROM whitelist_requests
+           WHERE contact ILIKE $1
+           ORDER BY COALESCE(updated_at, applied_at) DESC NULLS LAST
+           LIMIT 1"#,
     )
     .bind(&pattern)
     .fetch_optional(&db.pool)
@@ -818,60 +849,22 @@ async fn fetch_player_candidate_rows(
         ) access_matches
         UNION ALL
         SELECT * FROM (
-            SELECT pr.target_steam_id AS steamid64,
-                   NULLIF(pr.target_player_name, '') AS display_name,
-                   '举报'::TEXT AS source,
+            SELECT ar.steam_id64,
+                   NULLIF(ar.player_name, '') AS display_name,
+                   '异常记录'::TEXT AS source,
                    NULL::TEXT AS whitelist_status,
-                   pr.created_at AS last_seen_at
-            FROM player_reports pr
-            WHERE pr.target_steam_id IS NOT NULL
-              AND btrim(pr.target_steam_id) <> ''
+                   ar.created_at AS last_seen_at
+            FROM abnormal_records ar
+            WHERE ar.steam_id64 IS NOT NULL
+              AND btrim(ar.steam_id64) <> ''
               AND (
-                pr.target_steam_id = NULLIF($2, '')
-                OR pr.target_steam_id ILIKE $1 ESCAPE '\'
-                OR pr.target_player_name ILIKE $1 ESCAPE '\'
+                ar.steam_id64 = NULLIF($2, '')
+                OR ar.steam_id64 ILIKE $1 ESCAPE '\'
+                OR ar.player_name ILIKE $1 ESCAPE '\'
               )
-            ORDER BY pr.created_at DESC
+            ORDER BY ar.created_at DESC
             LIMIT 80
-        ) report_matches
-        UNION ALL
-        SELECT * FROM (
-            SELECT ba.steam_id AS steamid64,
-                   NULLIF(ba.player_name, '') AS display_name,
-                   '申诉'::TEXT AS source,
-                   NULL::TEXT AS whitelist_status,
-                   ba.created_at AS last_seen_at
-            FROM ban_appeals ba
-            WHERE ba.steam_id IS NOT NULL
-              AND btrim(ba.steam_id) <> ''
-              AND (
-                ba.steam_id = NULLIF($2, '')
-                OR ba.steam_id ILIKE $1 ESCAPE '\'
-                OR ba.player_name ILIKE $1 ESCAPE '\'
-                OR ba.contact ILIKE $1 ESCAPE '\'
-              )
-            ORDER BY ba.created_at DESC
-            LIMIT 80
-        ) appeal_matches
-        UNION ALL
-        SELECT * FROM (
-            SELECT mf.steam_id AS steamid64,
-                   NULLIF(mf.steam_persona_name, '') AS display_name,
-                   '地图反馈'::TEXT AS source,
-                   NULL::TEXT AS whitelist_status,
-                   mf.created_at AS last_seen_at
-            FROM map_feedback mf
-            WHERE mf.steam_id IS NOT NULL
-              AND btrim(mf.steam_id) <> ''
-              AND (
-                mf.steam_id = NULLIF($2, '')
-                OR mf.steam_id ILIKE $1 ESCAPE '\'
-                OR mf.steam_persona_name ILIKE $1 ESCAPE '\'
-                OR mf.contact ILIKE $1 ESCAPE '\'
-              )
-            ORDER BY mf.created_at DESC
-            LIMIT 80
-        ) feedback_matches
+        ) abnormal_record_matches
         UNION ALL
         SELECT * FROM (
             SELECT gb.steam_id64,
@@ -941,6 +934,7 @@ pub async fn upsert_player_internal_profile(
     db: &Database,
     steamid64: &str,
     input: PlayerInternalProfileInput,
+    changed_by: Option<Uuid>,
     updated_by: &str,
 ) -> anyhow::Result<PlayerInternalProfile> {
     let steamid64 = steamid64.trim();
@@ -951,6 +945,7 @@ pub async fn upsert_player_internal_profile(
     let note = normalize_note(input.note, 2000)?;
     let tags = normalize_tags(input.tags)?;
 
+    let mut tx = db.pool.begin().await?;
     let row = sqlx::query_as::<_, PlayerInternalProfile>(
         r#"INSERT INTO player_internal_notes (steamid64, note, tags, updated_by, updated_at, created_at)
            VALUES ($1, $2, $3, $4, now(), now())
@@ -965,8 +960,52 @@ pub async fn upsert_player_internal_profile(
     .bind(note)
     .bind(tags)
     .bind(updated_by)
-    .fetch_one(&db.pool)
+    .fetch_one(&mut *tx)
     .await?;
+
+    sqlx::query(
+        r#"INSERT INTO player_internal_note_history
+             (steamid64, note, tags, changed_by, changed_by_name)
+           VALUES ($1, $2, $3, $4, $5)"#,
+    )
+    .bind(steamid64)
+    .bind(&row.note)
+    .bind(&row.tags)
+    .bind(changed_by)
+    .bind(updated_by)
+    .execute(&mut *tx)
+    .await?;
+
+    // Keep the legacy free-form tags and the searchable tag catalog in sync.
+    sqlx::query("DELETE FROM player_tag_assignments WHERE steamid64 = $1")
+        .bind(steamid64)
+        .execute(&mut *tx)
+        .await?;
+    for tag_name in &row.tags {
+        sqlx::query(
+            r#"INSERT INTO player_tag_definitions (name)
+               VALUES ($1)
+               ON CONFLICT DO NOTHING"#,
+        )
+        .bind(tag_name)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            r#"INSERT INTO player_tag_assignments
+                 (steamid64, tag_id, assigned_by, assigned_by_name)
+               SELECT $1, id, $2, $3
+               FROM player_tag_definitions
+               WHERE lower(name) = lower($4)
+               ON CONFLICT DO NOTHING"#,
+        )
+        .bind(steamid64)
+        .bind(changed_by)
+        .bind(updated_by)
+        .bind(tag_name)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
     Ok(row)
 }
 
@@ -1004,7 +1043,6 @@ pub async fn update_evidence_metadata(
         source_type,
         source_label,
         source_label.to_string(),
-        None,
     ))
 }
 
@@ -1020,7 +1058,213 @@ pub async fn fetch_internal_profile(
     .bind(steamid64)
     .fetch_optional(&db.pool)
     .await?;
-    Ok(row)
+    let Some(mut row) = row else {
+        return Ok(None);
+    };
+    let assigned: Vec<(String,)> = sqlx::query_as(
+        r#"SELECT t.name
+           FROM player_tag_assignments a
+           JOIN player_tag_definitions t ON t.id = a.tag_id
+           WHERE a.steamid64 = $1
+           ORDER BY lower(t.name)"#,
+    )
+    .bind(steamid64)
+    .fetch_all(&db.pool)
+    .await
+    .unwrap_or_default();
+    for (tag,) in assigned {
+        if !row
+            .tags
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(&tag))
+        {
+            row.tags.push(tag);
+        }
+    }
+    Ok(Some(row))
+}
+
+pub async fn fetch_internal_note_history(
+    db: &Database,
+    steamid64: &str,
+) -> anyhow::Result<Vec<PlayerInternalNoteHistory>> {
+    sqlx::query_as::<_, PlayerInternalNoteHistory>(
+        r#"SELECT id, steamid64, note, tags, changed_by, changed_by_name, changed_at
+           FROM player_internal_note_history
+           WHERE steamid64 = $1
+           ORDER BY changed_at DESC
+           LIMIT 100"#,
+    )
+    .bind(steamid64)
+    .fetch_all(&db.pool)
+    .await
+    .map_err(Into::into)
+}
+
+pub async fn list_player_tags(db: &Database) -> anyhow::Result<Vec<PlayerTagDefinition>> {
+    sqlx::query_as::<_, PlayerTagDefinition>(
+        r#"SELECT id, name, color, description, created_by, created_at
+           FROM player_tag_definitions ORDER BY lower(name)"#,
+    )
+    .fetch_all(&db.pool)
+    .await
+    .map_err(Into::into)
+}
+
+pub async fn batch_update_player_tag(
+    db: &Database,
+    steamids64: &[String],
+    tag_name: &str,
+    add: bool,
+    operator_id: Uuid,
+    operator_name: &str,
+) -> anyhow::Result<usize> {
+    let tag_name = tag_name.trim();
+    anyhow::ensure!(
+        !tag_name.is_empty() && tag_name.chars().count() <= 24,
+        "标签无效"
+    );
+    let mut ids = Vec::new();
+    for steamid64 in steamids64.iter().take(100) {
+        let value = steamid64.trim();
+        anyhow::ensure!(
+            value.len() == 17 && value.chars().all(|ch| ch.is_ascii_digit()),
+            "SteamID64 格式无效"
+        );
+        if !ids.iter().any(|item: &String| item == value) {
+            ids.push(value.to_string());
+        }
+    }
+    anyhow::ensure!(!ids.is_empty(), "没有可操作的关联账号");
+
+    let mut tx = db.pool.begin().await?;
+    sqlx::query("INSERT INTO player_tag_definitions (name) VALUES ($1) ON CONFLICT DO NOTHING")
+        .bind(tag_name)
+        .execute(&mut *tx)
+        .await?;
+    let tag_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM player_tag_definitions WHERE lower(name) = lower($1)")
+            .bind(tag_name)
+            .fetch_one(&mut *tx)
+            .await?;
+
+    for steamid64 in &ids {
+        if add {
+            sqlx::query(
+                r#"INSERT INTO player_tag_assignments
+                     (steamid64, tag_id, assigned_by, assigned_by_name)
+                   VALUES ($1, $2, $3, $4)
+                   ON CONFLICT (steamid64, tag_id) DO UPDATE
+                     SET assigned_by = EXCLUDED.assigned_by,
+                         assigned_by_name = EXCLUDED.assigned_by_name"#,
+            )
+            .bind(steamid64)
+            .bind(tag_id)
+            .bind(operator_id)
+            .bind(operator_name)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                r#"INSERT INTO player_internal_notes (steamid64, note, tags, updated_by)
+                   VALUES ($1, '', ARRAY[$2]::TEXT[], $3)
+                   ON CONFLICT (steamid64) DO UPDATE
+                   SET tags = CASE WHEN $2 = ANY(player_internal_notes.tags)
+                                   THEN player_internal_notes.tags
+                                   ELSE array_append(player_internal_notes.tags, $2) END,
+                       updated_by = EXCLUDED.updated_by,
+                       updated_at = now()"#,
+            )
+            .bind(steamid64)
+            .bind(tag_name)
+            .bind(operator_name)
+            .execute(&mut *tx)
+            .await?;
+        } else {
+            sqlx::query("DELETE FROM player_tag_assignments WHERE steamid64 = $1 AND tag_id = $2")
+                .bind(steamid64)
+                .bind(tag_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("UPDATE player_internal_notes SET tags = array_remove(tags, $2), updated_by = $3, updated_at = now() WHERE steamid64 = $1")
+                .bind(steamid64)
+                .bind(tag_name)
+                .bind(operator_name)
+                .execute(&mut *tx)
+                .await?;
+        }
+        sqlx::query(
+            r#"INSERT INTO player_internal_note_history
+                 (steamid64, note, tags, changed_by, changed_by_name)
+               SELECT steamid64, note, tags, $2, $3
+               FROM player_internal_notes WHERE steamid64 = $1"#,
+        )
+        .bind(steamid64)
+        .bind(operator_id)
+        .bind(operator_name)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(ids.len())
+}
+
+pub async fn evidence_download_url(
+    db: &Database,
+    r2: &R2Storage,
+    steamid64: &str,
+    source_type: &str,
+    file_id: Uuid,
+) -> anyhow::Result<String> {
+    let (table, foreign_key, _) = evidence_table(source_type)?;
+    let sql = match source_type {
+        "ban" => format!(
+            "SELECT f.storage_key FROM {table} f JOIN ban_records b ON b.id = f.{foreign_key} WHERE f.id = $1 AND b.steam_id = $2"
+        ),
+        _ => anyhow::bail!("证据来源无效"),
+    };
+    let key: Option<String> = sqlx::query_scalar(&sql)
+        .bind(file_id)
+        .bind(steamid64)
+        .fetch_optional(&db.pool)
+        .await?;
+    let key = key.ok_or_else(|| anyhow::anyhow!("证据不存在或不属于该玩家"))?;
+    Ok(r2.presigned_url(&key, 900))
+}
+
+pub async fn create_player_tag(
+    db: &Database,
+    input: PlayerTagInput,
+    created_by: Uuid,
+) -> anyhow::Result<PlayerTagDefinition> {
+    let name = input.name.trim();
+    anyhow::ensure!(!name.is_empty() && name.len() <= 40, "标签名称长度无效");
+    let color = input.color.trim();
+    anyhow::ensure!(
+        color.is_empty() || (color.starts_with('#') && color.len() == 7),
+        "标签颜色无效"
+    );
+    let color = if color.is_empty() { "#64748b" } else { color };
+    sqlx::query_as::<_, PlayerTagDefinition>(
+        r#"INSERT INTO player_tag_definitions (name, color, description, created_by)
+           VALUES ($1, $2, $3, $4)
+           RETURNING id, name, color, description, created_by, created_at"#,
+    )
+    .bind(name)
+    .bind(color)
+    .bind(input.description.trim())
+    .bind(created_by)
+    .fetch_one(&db.pool)
+    .await
+    .map_err(Into::into)
+}
+
+pub async fn delete_player_tag(db: &Database, tag_id: Uuid) -> anyhow::Result<()> {
+    let result = sqlx::query("DELETE FROM player_tag_definitions WHERE id = $1")
+        .bind(tag_id)
+        .execute(&db.pool)
+        .await?;
+    anyhow::ensure!(result.rows_affected() == 1, "标签不存在");
+    Ok(())
 }
 
 async fn fetch_whitelist_records(
@@ -1769,7 +2013,6 @@ async fn fetch_linked_accounts(
 
 async fn fetch_evidence_files(
     db: &Database,
-    r2: Option<&R2Storage>,
     bans: &[PlayerBanRecord],
 ) -> anyhow::Result<Vec<EvidenceFile>> {
     let mut files = Vec::new();
@@ -1781,7 +2024,7 @@ async fn fetch_evidence_files(
             .find(|ban| ban.id == row.source_id)
             .map(|ban| format!("封禁: {}", ban.reason))
             .unwrap_or_else(|| "封禁证据".to_string());
-        files.push(map_evidence_file(row, "ban", "封禁证据", related_title, r2));
+        files.push(map_evidence_file(row, "ban", "封禁证据", related_title));
     }
 
     files.sort_by_key(|b| std::cmp::Reverse(b.uploaded_at));
@@ -1823,7 +2066,6 @@ fn map_evidence_file(
     source_type: &str,
     source_label: &str,
     related_title: String,
-    r2: Option<&R2Storage>,
 ) -> EvidenceFile {
     EvidenceFile {
         source_type: source_type.to_string(),
@@ -1839,7 +2081,8 @@ fn map_evidence_file(
         note: row.note,
         uploaded_by: row.uploaded_by,
         uploaded_at: row.uploaded_at,
-        url: r2.map(|storage| storage.presigned_url(&row.storage_key, 3600)),
+        // Signed URLs are issued only by the audited download endpoint.
+        url: None,
     }
 }
 
@@ -1934,20 +2177,12 @@ async fn fetch_audit_logs(
         .join(" OR ");
     let sql = format!(
         r#"SELECT al.id, al.operation, al.target, al.target_type, al.player_name,
-                  al.reason, al.duration_minutes,
-                  COALESCE(operator_user.display_name, al.operator_name) AS operator_name,
+                  al.reason, al.duration_minutes, al.operator_id,
+                  al.operator_name,
                   al.operator_steamid, al.source, al.server_id, al.server_name, al.server_port,
                   al.success, al.message, al.idempotency_key, al.created_at
            FROM audit_logs al
-           LEFT JOIN LATERAL (
-             SELECT COALESCE(NULLIF(u.remark, ''), u.username) AS display_name
-             FROM users u
-             WHERE u.username = al.operator_name
-                OR u.display_name = al.operator_name
-                OR NULLIF(u.remark, '') = al.operator_name
-             ORDER BY CASE WHEN u.username = al.operator_name THEN 0 WHEN u.display_name = al.operator_name THEN 1 ELSE 2 END
-             LIMIT 1
-           ) operator_user ON true
+           LEFT JOIN users operator_user ON operator_user.id = al.operator_id
            WHERE {conditions}
            ORDER BY al.created_at DESC
            LIMIT 100"#

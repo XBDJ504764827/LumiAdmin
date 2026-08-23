@@ -223,11 +223,19 @@ pub async fn update_password(db: &Database, id: Uuid, password: &str) -> anyhow:
     anyhow::ensure!(!password.is_empty(), "密码不能为空");
 
     let password_hash = hash_password(password)?;
-    sqlx::query(r#"UPDATE users SET password_hash = $2 WHERE id = $1"#)
+    let mut tx = db.pool.begin().await?;
+    let result = sqlx::query(r#"UPDATE users SET password_hash = $2 WHERE id = $1"#)
         .bind(id)
         .bind(&password_hash)
-        .execute(&db.pool)
+        .execute(&mut *tx)
         .await?;
+    anyhow::ensure!(result.rows_affected() == 1, "用户不存在");
+    // 密码变更后撤销所有既有会话，避免旧 token 继续访问。
+    sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
     Ok(())
 }
 

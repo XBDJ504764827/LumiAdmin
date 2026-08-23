@@ -215,9 +215,10 @@ impl GokzCacheManager {
         let rows: Vec<GokzBatchRow> = sqlx::query_as(
             r#"SELECT steamid64, kzt_data, skz_data, vnl_data, ovr_data
                FROM player_access_cache
-               WHERE steamid64 = ANY($1) AND expires_at > now()"#,
+               WHERE steamid64 = ANY($1) AND rating_source = $2 AND expires_at > now()"#,
         )
         .bind(steamids)
+        .bind(GOKZ_STATS_RATING_SOURCE)
         .fetch_all(&self.db.pool)
         .await
         .unwrap_or_default();

@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useAuth, useAuthStore } from './state/store.js';
 import { ToastProvider } from './shared/Toast.jsx';
 import { AppShell } from './components/layout/AppShell.jsx';
-import { publicRoutes, protectedRoutes } from './routes/routeConfig.jsx';
+import { publicRoutes, protectedRoutes, canViewRoute } from './routes/routeConfig.jsx';
 import { NotFoundPage } from './pages/notFound/NotFoundPage.jsx';
 import { PageState } from './shared/PageState.jsx';
 
@@ -44,7 +44,7 @@ function defaultProtectedPath(role) {
 }
 
 function GuardedRoute({ route, session }) {
-  return route.roles.includes(session?.role)
+  return canViewRoute(route, session)
     ? route.element
     : <Navigate to={defaultProtectedPath(session?.role)} replace />;
 }

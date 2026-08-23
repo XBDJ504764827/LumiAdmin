@@ -4,17 +4,23 @@ use crate::{
     http_client,
     services::{
         access_cache::{ActiveBanCache, WhitelistCache},
-        access_snapshot_service, player_risk_service, plugin_ban_service, server_config_cache,
+        access_snapshot_service,
+        gokz_cache::GokzCacheManager,
+        player_risk_service, plugin_ban_service, server_config_cache,
     },
 };
 use chrono::{DateTime, Duration, Utc};
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration as StdDuration;
+use tokio::time::timeout;
 use tracing::warn;
 
 const GOKZ_RATING_SCOPES: [&str; 4] = ["KZT", "SKZ", "VNL", "OVR"];
 pub(crate) const ACCESS_RATING_SOURCE: &str = "scoped_max";
+static GOKZ_NEGATIVE_CACHE: OnceLock<Mutex<HashMap<String, std::time::Instant>>> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 pub struct AccessCheckInput {
@@ -85,6 +91,7 @@ struct SteamLevelResponse {
     player_level: Option<i32>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn check_access(
     db: &Database,
     config: &Config,
@@ -92,6 +99,7 @@ pub async fn check_access(
     server_cache: &Arc<server_config_cache::ServerConfigCache>,
     ban_cache: &ActiveBanCache,
     wl_cache: &WhitelistCache,
+    gokz_cache: &GokzCacheManager,
     input: AccessCheckInput,
 ) -> anyhow::Result<AccessCheckResult> {
     let steam_id64 = normalize_steamid64(&input.steam_id64)?;
@@ -103,6 +111,7 @@ pub async fn check_access(
         server_cache,
         ban_cache,
         wl_cache,
+        gokz_cache,
     )
     .await
     {
@@ -132,6 +141,7 @@ pub async fn check_access(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn check_access_live(
     db: &Database,
     config: &Config,
@@ -140,6 +150,7 @@ async fn check_access_live(
     server_cache: &Arc<server_config_cache::ServerConfigCache>,
     ban_cache: &ActiveBanCache,
     wl_cache: &WhitelistCache,
+    gokz_cache: &GokzCacheManager,
 ) -> anyhow::Result<AccessCheckResult> {
     // 使用缓存获取服务器配置
     let server = server_cache
@@ -249,7 +260,7 @@ async fn check_access_live(
     let mut restriction_failed = false;
     let mut restriction_failure_code: Option<String> = None;
     if effective_restriction {
-        match load_player_profile(db, config, steam_id64).await? {
+        match load_player_profile(db, config, steam_id64, gokz_cache).await? {
             Some(profile) => {
                 let result = evaluate_restriction(&server, &profile)?;
                 if result.allowed {
@@ -455,6 +466,7 @@ async fn load_player_profile(
     db: &Database,
     config: &Config,
     steam_id64: &str,
+    gokz_cache: &GokzCacheManager,
 ) -> anyhow::Result<Option<PlayerAccessProfile>> {
     if let Some(cached) = read_cache(db, steam_id64).await? {
         if cached.expires_at > Utc::now() {
@@ -465,7 +477,7 @@ async fn load_player_profile(
         }
     }
 
-    let Some(profile) = fetch_player_profile(config, steam_id64).await? else {
+    let Some(profile) = fetch_player_profile(config, steam_id64, gokz_cache).await? else {
         return Ok(None);
     };
     write_cache(db, steam_id64, &profile).await?;
@@ -514,6 +526,7 @@ async fn write_cache(
 async fn fetch_player_profile(
     config: &Config,
     steam_id64: &str,
+    gokz_cache: &GokzCacheManager,
 ) -> anyhow::Result<Option<PlayerAccessProfile>> {
     let has_level_key = config.steamchina_level_key.is_some() || config.steam_web_key.is_some();
     if !has_level_key {
@@ -521,8 +534,30 @@ async fn fetch_player_profile(
         return Ok(None);
     }
 
-    let steam_level = fetch_steam_level(config, steam_id64).await;
-    let rating = fetch_best_gokz_rating(steam_id64).await;
+    let steam_level = timeout(
+        StdDuration::from_secs(10),
+        fetch_steam_level(config, steam_id64),
+    )
+    .await
+    .ok()
+    .flatten();
+    let rating = gokz_cache.get(steam_id64).await.and_then(|stats| {
+        [stats.kzt, stats.skz, stats.vnl, stats.ovr]
+            .into_iter()
+            .filter_map(|mode| mode.and_then(|value| value.rating))
+            .max_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|value| value.trunc() as i32)
+    });
+    let rating = match rating {
+        Some(value) => Some(value),
+        None => timeout(
+            StdDuration::from_secs(10),
+            fetch_best_gokz_rating(steam_id64),
+        )
+        .await
+        .ok()
+        .flatten(),
+    };
     let steam_level = match steam_level {
         Some(level) => Some(level),
         None => {
@@ -549,6 +584,15 @@ async fn fetch_player_profile(
 }
 
 async fn fetch_best_gokz_rating(steam_id64: &str) -> Option<i32> {
+    let negative_cache = GOKZ_NEGATIVE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if negative_cache
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(steam_id64).copied())
+        .is_some_and(|at| at.elapsed() < StdDuration::from_secs(60))
+    {
+        return None;
+    }
     let ratings = join_all(
         GOKZ_RATING_SCOPES
             .iter()
@@ -558,6 +602,10 @@ async fn fetch_best_gokz_rating(steam_id64: &str) -> Option<i32> {
 
     let best_rating = best_gokz_rating(ratings);
     if best_rating.is_none() {
+        if let Ok(mut cache) = negative_cache.lock() {
+            cache.retain(|_, at| at.elapsed() < StdDuration::from_secs(60));
+            cache.insert(steam_id64.to_string(), std::time::Instant::now());
+        }
         warn!(
             steam_id64,
             "GOKZ 四个模式 rating 查询全部失败，进入限制将放行"

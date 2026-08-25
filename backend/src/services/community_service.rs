@@ -23,6 +23,9 @@ pub struct ServerItem {
     pub max_players: i32,
     pub last_tested_at: Option<String>,
     pub last_reported_at: Option<String>,
+    pub control_last_seen_at: Option<String>,
+    pub lgsm_instance: Option<String>,
+    pub control_agent_id: Option<Uuid>,
     pub access_restriction_enabled: bool,
     pub min_rating: i32,
     pub min_steam_level: i32,
@@ -172,6 +175,9 @@ struct CommunityRow {
     max_players: Option<i32>,
     last_tested_at: Option<chrono::DateTime<chrono::Utc>>,
     last_reported_at: Option<chrono::DateTime<chrono::Utc>>,
+    control_last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
+    lgsm_instance: Option<String>,
+    control_agent_id: Option<Uuid>,
     access_restriction_enabled: Option<bool>,
     min_rating: Option<i32>,
     min_steam_level: Option<i32>,
@@ -193,6 +199,9 @@ struct ServerDetailRow {
     max_players: i32,
     last_tested_at: Option<chrono::DateTime<chrono::Utc>>,
     last_reported_at: Option<chrono::DateTime<chrono::Utc>>,
+    control_last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
+    lgsm_instance: Option<String>,
+    control_agent_id: Option<Uuid>,
     access_restriction_enabled: bool,
     min_rating: i32,
     min_steam_level: i32,
@@ -270,6 +279,9 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
             s.max_players,
             s.last_tested_at,
             s.last_reported_at,
+            s.control_last_seen_at,
+            s.lgsm_instance,
+            s.control_agent_id,
             s.access_restriction_enabled,
             s.min_rating,
             s.min_steam_level,
@@ -336,6 +348,9 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
                 max_players: row.max_players.unwrap_or(0),
                 last_tested_at: row.last_tested_at.map(|value| value.to_rfc3339()),
                 last_reported_at: row.last_reported_at.map(|value| value.to_rfc3339()),
+                control_last_seen_at: row.control_last_seen_at.map(|value| value.to_rfc3339()),
+                lgsm_instance: row.lgsm_instance,
+                control_agent_id: row.control_agent_id,
                 access_restriction_enabled: row.access_restriction_enabled.unwrap_or(false),
                 min_rating: row.min_rating.unwrap_or(0),
                 min_steam_level: row.min_steam_level.unwrap_or(0),
@@ -441,6 +456,9 @@ pub async fn create_server(
         max_players: input.max_players,
         last_tested_at: Some(chrono::Utc::now().to_rfc3339()),
         last_reported_at: None,
+        control_last_seen_at: None,
+        lgsm_instance: None,
+        control_agent_id: None,
         access_restriction_enabled: input.access_restriction_enabled,
         min_rating: input.min_rating,
         min_steam_level: input.min_steam_level,
@@ -488,7 +506,7 @@ pub async fn update_server(
                 access_restriction_enabled = $9, min_rating = $10, min_steam_level = $11, whitelist_mode_enabled = $12,
                 cs_prime_enabled = $13, max_players = $14, use_custom_access = $15
             WHERE id = $1
-            RETURNING id, name, ip, port, report_token, note, status, players, max_players, last_tested_at, last_reported_at,
+            RETURNING id, name, ip, port, report_token, note, status, players, max_players, last_tested_at, last_reported_at, control_last_seen_at, lgsm_instance, control_agent_id,
                       access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled, cs_prime_enabled, use_custom_access
             "#,
         )
@@ -518,7 +536,7 @@ pub async fn update_server(
                 access_restriction_enabled = $7, min_rating = $8, min_steam_level = $9, whitelist_mode_enabled = $10,
                 cs_prime_enabled = $11, max_players = $12, use_custom_access = $13
             WHERE id = $1
-            RETURNING id, name, ip, port, report_token, note, status, players, max_players, last_tested_at, last_reported_at,
+            RETURNING id, name, ip, port, report_token, note, status, players, max_players, last_tested_at, last_reported_at, control_last_seen_at, lgsm_instance, control_agent_id,
                       access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled, cs_prime_enabled, use_custom_access
             "#,
         )
@@ -554,6 +572,9 @@ pub async fn update_server(
         max_players: row.max_players,
         last_tested_at: row.last_tested_at.map(|value| value.to_rfc3339()),
         last_reported_at: row.last_reported_at.map(|value| value.to_rfc3339()),
+        control_last_seen_at: row.control_last_seen_at.map(|value| value.to_rfc3339()),
+        lgsm_instance: row.lgsm_instance,
+        control_agent_id: row.control_agent_id,
         access_restriction_enabled: row.access_restriction_enabled,
         min_rating: row.min_rating,
         min_steam_level: row.min_steam_level,

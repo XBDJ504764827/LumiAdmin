@@ -109,6 +109,22 @@ pub struct PowerInput {
     pub action: String,
 }
 
+#[derive(Debug, sqlx::FromRow)]
+struct InstallTokenLookup {
+    id: Uuid,
+    community_id: Uuid,
+    expires_at: DateTime<Utc>,
+    used_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct ServerControlLookup {
+    id: Uuid,
+    control_agent_id: Option<Uuid>,
+    community_id: Uuid,
+    lgsm_instance: Option<String>,
+}
+
 fn generate_token() -> String {
     Uuid::new_v4().simple().to_string()
 }
@@ -160,14 +176,19 @@ pub async fn register_agent(db: &Database, input: RegisterAgentInput) -> anyhow:
     let token = input.install_token.trim().to_string();
     anyhow::ensure!(!token.is_empty(), "install_token 不能为空");
 
-    let row: Option<(Uuid, Uuid, DateTime<Utc>, Option<DateTime<Utc>>)> = sqlx::query_as(
+    let row: Option<InstallTokenLookup> = sqlx::query_as(
         r#"SELECT id, community_id, expires_at, used_at FROM control_install_tokens WHERE token = $1"#,
     )
     .bind(&token)
     .fetch_optional(&db.pool)
     .await?;
-    let (install_id, community_id, expires_at, used_at) =
-        row.ok_or_else(|| anyhow::anyhow!("安装口令无效"))?;
+    let lookup = row.ok_or_else(|| anyhow::anyhow!("安装口令无效"))?;
+    let InstallTokenLookup {
+        id: install_id,
+        community_id,
+        expires_at,
+        used_at,
+    } = lookup;
     anyhow::ensure!(used_at.is_none(), "安装口令已使用");
     anyhow::ensure!(expires_at > Utc::now(), "安装口令已过期");
 
@@ -554,15 +575,20 @@ pub async fn create_power_job(
         ["restart", "start", "stop"].contains(&act.as_str()),
         "action 只能为 restart/start/stop"
     );
-    let server: Option<(Uuid, Option<Uuid>, Uuid, Option<String>)> = sqlx::query_as(
+    let server: Option<ServerControlLookup> = sqlx::query_as(
         r#"SELECT id, control_agent_id, community_id, lgsm_instance FROM servers WHERE id = $1"#,
     )
     .bind(server_id)
     .fetch_optional(&db.pool)
     .await?;
-    let (sid, agent_id, community_id, lgsm_instance) =
-        server.ok_or_else(|| anyhow::anyhow!("服务器不存在"))?;
-    let agent_id = agent_id
+    let lookup = server.ok_or_else(|| anyhow::anyhow!("服务器不存在"))?;
+    let ServerControlLookup {
+        id: sid,
+        control_agent_id: agent_id_opt,
+        community_id,
+        lgsm_instance,
+    } = lookup;
+    let agent_id = agent_id_opt
         .ok_or_else(|| anyhow::anyhow!("该服务器未绑定控制 Agent，请先安装并完成发现确认"))?;
     anyhow::ensure!(
         lgsm_instance.is_some() || true,

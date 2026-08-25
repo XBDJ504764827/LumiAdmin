@@ -37,6 +37,7 @@ pub mod rcon_poll_service;
 pub mod server_config_cache;
 pub mod server_status_service;
 pub mod steam_name_refresh_service;
+pub mod control_service;
 pub mod steam_service;
 pub mod user_service;
 pub mod whitelist_service;

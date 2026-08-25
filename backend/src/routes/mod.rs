@@ -4,6 +4,7 @@ pub mod auth;
 pub mod ban;
 pub mod ban_api;
 pub mod community;
+pub mod control;
 pub mod dashboard_analytics;
 pub mod external_ban_api;
 pub mod external_server;
@@ -196,6 +197,39 @@ pub fn router(
             "/api/community/servers/:server_id/rcon",
             post(community::execute_rcon),
         )
+        // -- control (LGSM) --
+        .route("/api/control/install.sh", get(control::install_script))
+        .route(
+            "/api/community/groups/:group_id/control/install-token",
+            post(control::create_install_token),
+        )
+        .route(
+            "/api/community/groups/:group_id/control/discoveries",
+            get(control::list_discoveries),
+        )
+        .route(
+            "/api/community/groups/:group_id/control/discoveries/confirm",
+            post(control::confirm_discoveries),
+        )
+        .route(
+            "/api/community/groups/:group_id/control/agents",
+            get(control::list_agents),
+        )
+        .route(
+            "/api/community/servers/:server_id/control/power",
+            post(control::power_server),
+        )
+        .route(
+            "/api/community/servers/:server_id/control/jobs",
+            get(control::list_jobs),
+        )
+        .route(
+            "/api/plugin/control/register",
+            post(control::register_agent),
+        )
+        .route("/api/plugin/control/discover", post(control::discover))
+        .route("/api/plugin/control/poll", post(control::poll))
+        .route("/api/plugin/control/result", post(control::report_result))
         // -- plugin --
         .route(
             "/api/plugin/online-players/report",

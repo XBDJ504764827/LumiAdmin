@@ -202,7 +202,10 @@ pub async fn register_agent(db: &Database, input: RegisterAgentInput) -> anyhow:
     Ok(agent)
 }
 
-pub async fn report_discoveries(db: &Database, input: DiscoverInput) -> anyhow::Result<Vec<DiscoveryRow>> {
+pub async fn report_discoveries(
+    db: &Database,
+    input: DiscoverInput,
+) -> anyhow::Result<Vec<DiscoveryRow>> {
     let token = input.token.trim();
     anyhow::ensure!(!token.is_empty(), "token 不能为空");
     let agent: Option<AgentRow> = sqlx::query_as(
@@ -236,10 +239,18 @@ pub async fn report_discoveries(db: &Database, input: DiscoverInput) -> anyhow::
         if let Some(p) = port {
             anyhow::ensure!(p > 0 && p < 65535, "端口无效");
         }
-        let server_name = cand.server_name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-        let rcon = cand.rcon_password.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let server_name = cand
+            .server_name
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let rcon = cand
+            .rcon_password
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         let instance_path = cand.instance_path.unwrap_or_default();
-        let raw = cand.raw.unwrap_or(serde_json::Value::Object(Default::default()));
+        let raw = cand
+            .raw
+            .unwrap_or(serde_json::Value::Object(Default::default()));
 
         // Check if already exists as pending with same tuple, update
         let existing: Option<(Uuid,)> = sqlx::query_as(
@@ -314,7 +325,10 @@ pub async fn report_discoveries(db: &Database, input: DiscoverInput) -> anyhow::
     Ok(results)
 }
 
-pub async fn list_discoveries(db: &Database, community_id: Uuid) -> anyhow::Result<Vec<DiscoveryRow>> {
+pub async fn list_discoveries(
+    db: &Database,
+    community_id: Uuid,
+) -> anyhow::Result<Vec<DiscoveryRow>> {
     let rows: Vec<DiscoveryRow> = sqlx::query_as(
         r#"SELECT id, community_id, agent_id, instance_name, instance_path, ip, port, server_name, rcon_password, status, server_id, raw, created_at, updated_at
            FROM control_discoveries WHERE community_id = $1 ORDER BY created_at DESC"#,
@@ -336,7 +350,10 @@ pub async fn list_agents(db: &Database, community_id: Uuid) -> anyhow::Result<Ve
     Ok(rows
         .into_iter()
         .map(|r| {
-            let online = r.last_seen_at.map(|t| (now - t).num_seconds() < AGENT_OFFLINE_SECS).unwrap_or(false);
+            let online = r
+                .last_seen_at
+                .map(|t| (now - t).num_seconds() < AGENT_OFFLINE_SECS)
+                .unwrap_or(false);
             AgentStatus {
                 id: r.id,
                 community_id: r.community_id,
@@ -369,19 +386,27 @@ pub async fn confirm_discoveries(
         .await?;
         let disc = disc.ok_or_else(|| anyhow::anyhow!("发现记录不存在"))?;
         anyhow::ensure!(disc.status == "pending", "该记录已处理");
-        let port = disc.port.ok_or_else(|| anyhow::anyhow!(format!("实例 {} 缺少端口，请先在游戏服配置中补全port", disc.instance_name)))?;
+        let port = disc.port.ok_or_else(|| {
+            anyhow::anyhow!(format!(
+                "实例 {} 缺少端口，请先在游戏服配置中补全port",
+                disc.instance_name
+            ))
+        })?;
         let ip = disc.ip.clone();
         // dedup servers
-        let exists: Option<(Uuid,)> = sqlx::query_as(r#"SELECT id FROM servers WHERE ip = $1 AND port = $2 LIMIT 1"#)
-            .bind(&ip)
-            .bind(port)
-            .fetch_optional(&db.pool)
-            .await?;
-        if exists.is_some() {
-            sqlx::query(r#"UPDATE control_discoveries SET status='skipped', updated_at=now() WHERE id=$1"#)
-                .bind(did)
-                .execute(&db.pool)
+        let exists: Option<(Uuid,)> =
+            sqlx::query_as(r#"SELECT id FROM servers WHERE ip = $1 AND port = $2 LIMIT 1"#)
+                .bind(&ip)
+                .bind(port)
+                .fetch_optional(&db.pool)
                 .await?;
+        if exists.is_some() {
+            sqlx::query(
+                r#"UPDATE control_discoveries SET status='skipped', updated_at=now() WHERE id=$1"#,
+            )
+            .bind(did)
+            .execute(&db.pool)
+            .await?;
             continue;
         }
         let name = disc
@@ -484,9 +509,21 @@ pub async fn report_job_result(db: &Database, input: ResultInput) -> anyhow::Res
     .fetch_optional(&db.pool)
     .await?;
     let job = job.ok_or_else(|| anyhow::anyhow!("任务不存在"))?;
-    anyhow::ensure!(job.status == "running" || job.status == "pending", "任务已结束");
-    let status = if input.exit_code.unwrap_or(1) == 0 { "success" } else { "failed" };
-    let output = input.output.unwrap_or_default().chars().take(8000).collect::<String>();
+    anyhow::ensure!(
+        job.status == "running" || job.status == "pending",
+        "任务已结束"
+    );
+    let status = if input.exit_code.unwrap_or(1) == 0 {
+        "success"
+    } else {
+        "failed"
+    };
+    let output = input
+        .output
+        .unwrap_or_default()
+        .chars()
+        .take(8000)
+        .collect::<String>();
     sqlx::query(r#"UPDATE control_jobs SET status=$2, output=$3, finished_at=now() WHERE id=$1"#)
         .bind(job.id)
         .bind(status)
@@ -517,14 +554,16 @@ pub async fn create_power_job(
         ["restart", "start", "stop"].contains(&act.as_str()),
         "action 只能为 restart/start/stop"
     );
-    let server: Option<(Uuid, Option<Uuid>, Uuid, Option<String>)> =
-        sqlx::query_as(r#"SELECT id, control_agent_id, community_id, lgsm_instance FROM servers WHERE id = $1"#)
-            .bind(server_id)
-            .fetch_optional(&db.pool)
-            .await?;
+    let server: Option<(Uuid, Option<Uuid>, Uuid, Option<String>)> = sqlx::query_as(
+        r#"SELECT id, control_agent_id, community_id, lgsm_instance FROM servers WHERE id = $1"#,
+    )
+    .bind(server_id)
+    .fetch_optional(&db.pool)
+    .await?;
     let (sid, agent_id, community_id, lgsm_instance) =
         server.ok_or_else(|| anyhow::anyhow!("服务器不存在"))?;
-    let agent_id = agent_id.ok_or_else(|| anyhow::anyhow!("该服务器未绑定控制 Agent，请先安装并完成发现确认"))?;
+    let agent_id = agent_id
+        .ok_or_else(|| anyhow::anyhow!("该服务器未绑定控制 Agent，请先安装并完成发现确认"))?;
     anyhow::ensure!(
         lgsm_instance.is_some() || true,
         "该服务器缺少 lgsm 实例信息"

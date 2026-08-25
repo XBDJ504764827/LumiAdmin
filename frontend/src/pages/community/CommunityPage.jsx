@@ -554,7 +554,7 @@ export function CommunityPage() {
       setServerControlJobs(r.jobs ?? []);
     } catch(e){ toast({ title:'下发失败', message:e.message, tone:'danger'}); } finally { setRconModal((p)=>({ ...p, executing:''})); }
   }
-  function openRconModal(server) {
+  function _openRconModal(server) {
     return openServerControlModal(server);
   }
 

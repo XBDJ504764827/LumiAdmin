@@ -48,14 +48,18 @@ pub(crate) async fn create_install_token(
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.trim_end_matches('/').to_string())
         })
-        .or_else(|| ctx.config.cors_origin.clone().map(|o| o.split(',').next().unwrap_or("").trim().to_string()))
+        .or_else(|| {
+            ctx.config
+                .cors_origin
+                .clone()
+                .map(|o| o.split(',').next().unwrap_or("").trim().to_string())
+        })
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "https://YOUR_DOMAIN".to_string());
 
-    let info =
-        control_service::create_install_token(&ctx.db, community_id, actor.id, &base_url)
-            .await
-            .map_err(invalid_request)?;
+    let info = control_service::create_install_token(&ctx.db, community_id, actor.id, &base_url)
+        .await
+        .map_err(invalid_request)?;
     if let Err(e) = log_service::create_log(
         &ctx.db,
         &actor.display_name,
@@ -162,12 +166,19 @@ pub(crate) async fn power_server(
             return Err(forbidden());
         }
     } else {
-        return Err(invalid_request(anyhow::anyhow!("action 只能为 restart/start/stop")));
+        return Err(invalid_request(anyhow::anyhow!(
+            "action 只能为 restart/start/stop"
+        )));
     }
     let job = control_service::create_power_job(&ctx.db, server_id, &action, actor.id)
         .await
         .map_err(invalid_request)?;
-    let action_label: &str = match action.as_str() { "restart"=>"强制重启", "start"=>"强制启动", "stop"=>"强制关机", _=>action.as_str() };
+    let action_label: &str = match action.as_str() {
+        "restart" => "强制重启",
+        "start" => "强制启动",
+        "stop" => "强制关机",
+        _ => action.as_str(),
+    };
     if let Err(e) = log_service::create_log(
         &ctx.db,
         &actor.display_name,
@@ -229,19 +240,25 @@ pub(crate) async fn poll(
         .await
         .map_err(|e| {
             if e.to_string().contains("Agent口令无效") {
-                (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": e.to_string() })))
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
             } else {
                 invalid_request(e)
             }
         })?;
     if let Some(j) = job {
         // enrich with lgsm_instance
-        let lgsm: Option<(Option<String>,)> = sqlx::query_as(r#"SELECT lgsm_instance FROM servers WHERE id = $1"#)
-            .bind(j.server_id)
-            .fetch_optional(&ctx.db.pool)
-            .await
-            .map_err(|e| invalid_request(anyhow::anyhow!(e.to_string())))?;
-        let lgsm_instance = lgsm.and_then(|r| r.0).unwrap_or_else(|| "csgoserver".to_string());
+        let lgsm: Option<(Option<String>,)> =
+            sqlx::query_as(r#"SELECT lgsm_instance FROM servers WHERE id = $1"#)
+                .bind(j.server_id)
+                .fetch_optional(&ctx.db.pool)
+                .await
+                .map_err(|e| invalid_request(anyhow::anyhow!(e.to_string())))?;
+        let lgsm_instance = lgsm
+            .and_then(|r| r.0)
+            .unwrap_or_else(|| "csgoserver".to_string());
         Ok(Json(serde_json::json!({
             "job": {
                 "id": j.id,
@@ -264,7 +281,10 @@ pub(crate) async fn report_result(
         .await
         .map_err(|e| {
             if e.to_string().contains("Agent口令无效") {
-                (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": e.to_string() })))
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
             } else {
                 invalid_request(e)
             }

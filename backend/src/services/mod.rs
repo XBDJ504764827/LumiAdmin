@@ -10,6 +10,7 @@ pub mod ban_expiry_service;
 pub mod ban_service;
 pub mod community_rcon;
 pub mod community_service;
+pub mod control_service;
 pub mod dashboard_service;
 pub mod display_name;
 pub mod docs_service;

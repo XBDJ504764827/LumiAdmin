@@ -2841,3 +2841,55 @@ async fn cors_preflight_rejects_unknown_origin_for_admin_routes() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn audit_logs_list_works_when_operator_id_is_set() {
+    with_test_app(async |db, config| {
+        // 复现生产问题：audit_logs 关联 users 后 id/created_at 列名歧义
+        let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
+        // operator_id 指向已存在的用户（FK 约束），从而触发 users 关联
+        insert_audit_log_with_operator(&db, "11111111-1111-1111-1111-111111111111").await?;
+        let app = test_app(config, db.clone());
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/api/audit/logs?page=1&page_size=20")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "审计日志列表不应因 join users 产生歧义错误"
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["total"], 1);
+        assert_eq!(payload["items"][0]["operation"], "ban");
+        assert_eq!(
+            payload["items"][0]["operator_id"],
+            "11111111-1111-1111-1111-111111111111"
+        );
+        Ok(())
+    })
+    .await;
+}
+
+async fn insert_audit_log_with_operator(db: &Database, operator_id: &str) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO audit_logs (
+            id, operation, target, target_type, operator_id, operator_name, source, success, created_at
+        )
+        VALUES ($1, 'ban', '76561198000000000', 'steam', $2, 'DevAdmin', 'web', true, now())
+        "#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(Uuid::parse_str(operator_id)?)
+    .execute(&db.pool)
+    .await?;
+    Ok(())
+}

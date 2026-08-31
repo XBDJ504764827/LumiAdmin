@@ -144,6 +144,15 @@ async fn main() -> anyhow::Result<()> {
         whitelist_cache.clone(),
     );
 
+    // 使用 PostgreSQL LISTEN/NOTIFY 立即刷新访问相关缓存；固定周期刷新作为兜底。
+    services::access_cache::start_cache_invalidation_listener(
+        db.clone(),
+        access_snapshot.clone(),
+        server_config_cache.clone(),
+        active_ban_cache.clone(),
+        whitelist_cache.clone(),
+    );
+
     // 启动限流器
     let rate_limiters = Arc::new(RateLimiters::new());
     rate_limiters.clone().start_cleanup_task();

@@ -20,6 +20,7 @@ pub mod steam_auth;
 pub mod tests;
 pub mod user;
 pub mod whitelist;
+pub mod whitelist_config;
 
 use axum::{
     http::{header, HeaderMap, StatusCode},
@@ -360,6 +361,14 @@ pub fn router(
         )
         // -- whitelist --
         .route("/api/whitelist", get(whitelist::whitelist))
+        .route(
+            "/api/whitelist/auto-approve-config",
+            get(whitelist_config::get_auto_approve_config),
+        )
+        .route(
+            "/api/whitelist/auto-approve-config",
+            put(whitelist_config::update_auto_approve_config),
+        )
         .route("/api/whitelist/manual", post(whitelist::create_whitelist))
         .route(
             "/api/whitelist/:id/approve",

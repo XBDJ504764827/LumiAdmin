@@ -12,6 +12,7 @@ import { formatChinaDateTime } from '../../shared/time.js';
 import { notifyPendingReviewsUpdated, usePendingReviewIndicators } from '../../hooks/usePendingReviewIndicators.js';
 import { fetchGlobalBansBatch, parseBanData, inferGlobalBanRisk } from './whitelistGlobalBans.js';
 import { ManualCreateModal, RejectModal, ApproveModal, BanDetailModal, PlayerDetailModal, RiskDetailModal } from './WhitelistModals.jsx';
+import { ToggleSwitch } from '../community/CommunityComponents.jsx';
 import { InternalNoteInline } from '../../shared/InternalNote.jsx';
 import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 
@@ -57,11 +58,24 @@ function RiskBadge({ item, onClick }) {
   );
 }
 
+function AutoApproveHint({ enabled, hours, appliedAt, now }) {
+  if (!enabled) return null;
+  const applied = appliedAt ? new Date(appliedAt).getTime() : 0;
+  if (!applied) return null;
+  const autoAt = applied + hours * 3600 * 1000;
+  if (autoAt <= now) return <span className="auto-approve-hint auto-approve-hint-ready">⏱ 即将自动通过</span>;
+  const remainMs = autoAt - now;
+  const remainH = Math.floor(remainMs / 3600000);
+  const remainM = Math.floor((remainMs % 3600000) / 60000);
+  const remainText = remainH > 0 ? `${remainH}小时${remainM}分钟` : `${remainM}分钟`;
+  return <span className="auto-approve-hint">⏱ {remainText}后自动通过</span>;
+}
+
 // ---------------------------------------------------------------------------
 // 表格内联辅助函数（消除三个 tab 分支的重复 JSX）
 // ---------------------------------------------------------------------------
 
-function renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail) {
+function renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail, autoApprove, now) {
   const itemBans = globalBans[item.steamid64];
   const hasGlobalBan = Array.isArray(itemBans) && itemBans.length > 0;
   return (
@@ -75,6 +89,9 @@ function renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail) {
         </button>
       )}
       <RiskBadge item={item} onClick={openRiskDetail} />
+      {item.status === 'pending' && riskAction(item) === 'allow' ? (
+        <AutoApproveHint enabled={autoApprove.enabled} hours={autoApprove.hours} appliedAt={item.applied_at} now={now} />
+      ) : null}
       <InternalNoteInline steamid64={item.steamid64} />
     </td>
   );
@@ -142,6 +159,9 @@ export function WhitelistPage() {
   const [riskDetailModal, setRiskDetailModal] = useState({ open: false, item: null });
   const [detailModal, setDetailModal] = useState({ open: false, item: null });
   const [refreshing, setRefreshing] = useState(false);
+  const [autoApproveConfig, setAutoApproveConfig] = useState({ enabled: true, hours: 3, loading: true });
+  const [savingAutoApprove, setSavingAutoApprove] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const [playerContextMenu, setPlayerContextMenu] = useState({
     open: false, x: 0, y: 0, steamid64: '', nickname: '',
   });
@@ -426,9 +446,50 @@ export function WhitelistPage() {
     } finally { setRefreshing(false); }
   }
 
+  // 倒计时提示：每 60 秒刷新一次当前时间（避免渲染期间调用 Date.now）
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  // 自动通过配置加载（白名单管理页面专用）
+  useEffect(() => {
+    if (!canManualCreate) return;
+    let cancelled = false;
+    api.whitelistAutoApproveConfig(token)
+      .then((data) => { if (!cancelled) setAutoApproveConfig({ ...data.config, loading: false }); })
+      .catch(() => { if (!cancelled) setAutoApproveConfig((prev) => ({ ...prev, loading: false })); });
+    return () => { cancelled = true; };
+  }, [token, canManualCreate]);
+
+  async function handleAutoApproveToggle(nextEnabled) {
+    try {
+      setSavingAutoApprove(true);
+      const data = await api.updateWhitelistAutoApproveConfig(token, { enabled: nextEnabled, hours: autoApproveConfig.hours });
+      setAutoApproveConfig({ ...data.config, loading: false });
+      toast({ title: '已保存', message: `低风险白名单自动通过已${nextEnabled ? '开启' : '关闭'}。` });
+    } catch (actionError) {
+      toast({ title: '操作失败', message: actionError.message, tone: 'danger' });
+    } finally { setSavingAutoApprove(false); }
+  }
+
+  async function handleAutoApproveHoursChange(nextHours) {
+    const hours = Math.max(1, Math.min(72, Number(nextHours) || 3));
+    try {
+      setSavingAutoApprove(true);
+      const data = await api.updateWhitelistAutoApproveConfig(token, { enabled: autoApproveConfig.enabled, hours });
+      setAutoApproveConfig({ ...data.config, loading: false });
+      toast({ title: '已保存', message: `低风险自动通过等待时长已设为 ${hours} 小时。` });
+    } catch (actionError) {
+      toast({ title: '操作失败', message: actionError.message, tone: 'danger' });
+    } finally { setSavingAutoApprove(false); }
+  }
+
   // ---------------------------------------------------------------------------
   // 派生值
   // ---------------------------------------------------------------------------
+  const autoApprovePanelVisible = canManualCreate && !autoApproveConfig.loading;
+  const lastAutoApproveAt = autoApproveConfig.updated_at;
 
   const globalBans = globalBansRef.current;
   const items = data?.items ?? [];
@@ -463,6 +524,37 @@ export function WhitelistPage() {
           {canRefreshSteam ? <button className="btn btn-outline" onClick={handleRefreshAllSteamNames} disabled={refreshing}>{refreshing ? '刷新中...' : '刷新Steam名称'}</button> : null}
         </div>
       </div>
+
+      {autoApprovePanelVisible ? (
+        <div className="card auto-approve-panel">
+          <div className="card-body flex items-center gap-16 flex-wrap">
+            <div className="flex items-center gap-10">
+              <ToggleSwitch checked={autoApproveConfig.enabled} onChange={handleAutoApproveToggle} disabled={savingAutoApprove} />
+              <div>
+                <div className="fw-600 fs-14">低风险自动通过</div>
+                <div className="text-muted-light fs-12">开启后，低风险（无封禁/全球封禁/IP关联风险）玩家申请满 {autoApproveConfig.hours} 小时无人审核将自动通过</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-6 ml-auto">
+              <span className="text-muted-light fs-12">等待时长</span>
+              <input
+                type="number"
+                className="input auto-approve-hours-input"
+                value={autoApproveConfig.hours}
+                min={1}
+                max={72}
+                disabled={savingAutoApprove}
+                onChange={(e) => setAutoApproveConfig((prev) => ({ ...prev, hours: Number(e.target.value) || 3 }))}
+                onBlur={(e) => handleAutoApproveHoursChange(e.target.value)}
+                style={{ width: 64 }}
+              />
+              <span className="text-muted-light fs-12">小时</span>
+              <span className={`status-pill ${autoApproveConfig.enabled ? 'pill-online' : 'pill-default'}`}>{autoApproveConfig.enabled ? '已开启' : '已关闭'}</span>
+              {lastAutoApproveAt ? <span className="text-muted-light fs-12">最近设置：{formatChinaDateTime(lastAutoApproveAt)}</span> : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="tabs">
         <button className={`tab ${tab === 'pending' ? 'active' : ''}`} onClick={() => switchTab('pending')}>
@@ -505,7 +597,7 @@ export function WhitelistPage() {
                 {!isLoading && !error && items.length === 0 ? <TableEmpty colSpan={tab === 'pending' ? 7 : 10} text="当前分区暂无记录" /> : null}
                 {!isLoading && !error && tab === 'pending' ? items.map((item) => (
                     <tr key={item.id} className={rowClassName(item, globalBans)} onContextMenu={(event) => handlePendingRowContextMenu(event, item)}>
-                      {renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail)}
+                      {renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail, autoApproveConfig, now)}
                       {renderSteamNameCell(item, canRefreshSteam, refreshing, handleRefreshSteamName)}
                       <td className="steam-id" data-player-info="true" data-label="SteamID64">{item.steamid64}</td>
                       <td className="steam-id" data-player-info="true" data-label="SteamID2">{item.steamid ?? '-'}</td>

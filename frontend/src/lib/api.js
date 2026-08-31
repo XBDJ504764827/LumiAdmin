@@ -65,6 +65,8 @@ export const api = {
   rejectWhitelist: (token, id, body) => request(`/api/whitelist/${id}/reject`, { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   restoreWhitelist: (token, id, body = {}) => request(`/api/whitelist/${id}/restore`, { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   revokeWhitelist: (token, id, body = {}) => request(`/api/whitelist/${id}/revoke`, { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
+  whitelistAutoApproveConfig: (token) => request('/api/whitelist/auto-approve-config', { headers: withAuth(token) }),
+  updateWhitelistAutoApproveConfig: (token, body) => request('/api/whitelist/auto-approve-config', { method: 'PUT', headers: withAuth(token), body: JSON.stringify(body) }),
   refreshSingleSteamName: (token, id) => request(`/api/whitelist/${id}/refresh-steam-name`, { method: 'POST', headers: withAuth(token), body: JSON.stringify({}) }),
   refreshAllSteamNames: (token, status = null) => {
     const body = status ? { status } : {};

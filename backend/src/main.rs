@@ -127,6 +127,13 @@ async fn main() -> anyhow::Result<()> {
         whitelist_cache.clone(),
         config.server_config_cache_refresh_interval_secs,
     );
+    // 启动白名单低风险自动通过（低风险申请满 3 小时无人审核自动通过）
+    services::whitelist_auto_approve_service::start_auto_approve_loop(
+        db.clone(),
+        whitelist_cache.clone(),
+        config.clone(),
+        60,
+    );
 
     // 使用 PostgreSQL LISTEN/NOTIFY 立即刷新访问相关缓存；固定周期刷新作为兜底。
     services::access_cache::start_cache_invalidation_listener(

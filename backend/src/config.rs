@@ -70,6 +70,8 @@ pub struct Config {
     pub lumi_bot_sync_interval_secs: u64,
     pub lumi_bot_max_attempts: u32,
     pub lumi_bot_batch_size: usize,
+    // 管理后台地址（用于 QQ 通知中的“点击查看详情”链接）
+    pub admin_web_url: Option<String>,
 }
 
 impl Config {
@@ -248,6 +250,10 @@ impl Config {
             lumi_bot_sync_interval_secs: env_u64("LUMI_BOT_SYNC_INTERVAL_SECS", 1800),
             lumi_bot_max_attempts: env_u64("LUMI_BOT_MAX_ATTEMPTS", 5) as u32,
             lumi_bot_batch_size: env_u64("LUMI_BOT_BATCH_SIZE", 100) as usize,
+            admin_web_url: std::env::var("ADMIN_WEB_URL")
+                .ok()
+                .map(|v| v.trim().trim_end_matches('/').to_string())
+                .filter(|v| !v.is_empty()),
         };
 
         // 跨字段校验

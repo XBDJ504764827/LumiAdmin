@@ -2113,3 +2113,38 @@
 }
 .pagination-ellipsis { color: var(--text3); font-size: 12px; padding: 0 6px; }
 .pagination-info { margin-left: auto; font-size: 12.5px; color: var(--text3); }
+
+/* ── 白名单低风险自动通过 ── */
+.auto-approve-panel { margin-top: 12px; }
+.auto-approve-panel .card-body { padding: 12px 16px; }
+.auto-approve-hours-input {
+  width: 64px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text1);
+  font-size: 13px;
+  text-align: center;
+}
+.auto-approve-hours-input:focus { outline: none; border-color: var(--accent); }
+.auto-approve-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  margin-left: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface2));
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  vertical-align: middle;
+}
+.auto-approve-hint-ready {
+  border-color: color-mix(in srgb, var(--warning-text) 45%, var(--border));
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}

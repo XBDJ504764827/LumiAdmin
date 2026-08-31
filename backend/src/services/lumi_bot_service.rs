@@ -31,6 +31,9 @@ pub const SOURCE_LUMI_ADMIN: &str = "LumiAdmin";
 /// 是否触发 QQ 通知由 LumiBot 侧通知规则决定）
 pub const EVENT_WHITELIST_REQUEST_CREATED: &str = "WHITELIST_REQUEST_CREATED";
 
+/// 低风险白名单自动通过事件类型（info 级别，默认不触发管理员通知，仅作记录与扩展）
+pub const EVENT_WHITELIST_AUTO_APPROVED: &str = "WHITELIST_AUTO_APPROVED";
+
 /// 事件入队输入
 #[derive(Debug, Clone, Serialize)]
 pub struct EventInput {
@@ -282,6 +285,10 @@ pub struct WhitelistNotifyPlayerInfo {
     pub local_ban_reason: Option<String>,
     /// 是否在全球封禁中留有记录
     pub has_global_ban: bool,
+    /// 全球封禁原因（最近一条，ban_type + notes）
+    pub global_ban_reason: Option<String>,
+    /// 全球封禁原因列表（全部未过期记录，最多 5 条）
+    pub global_ban_reasons: Vec<String>,
     /// 是否存在未解封（未过期）的封禁记录
     pub has_active_ban: bool,
     /// 未解封封禁条数
@@ -384,6 +391,33 @@ pub async fn collect_whitelist_player_info(
     .fetch_one(&db.pool)
     .await
     .unwrap_or(false);
+    // 全球封禁原因（未过期，ban_type + notes 拼接，最多 5 条）
+    let global_ban_rows: Vec<(String, Option<String>)> = sqlx::query_as(
+        r#"SELECT ban_type, notes FROM global_bans
+           WHERE steam_id64 = $1 AND is_expired = false AND manual_unbanned = false
+           ORDER BY COALESCE(created_on, updated_on) DESC, synced_at DESC
+           LIMIT 5"#,
+    )
+    .bind(steamid64)
+    .fetch_all(&db.pool)
+    .await
+    .unwrap_or_default();
+    let global_ban_reasons: Vec<String> = global_ban_rows
+        .into_iter()
+        .map(|(ban_type, notes)| {
+            // 违规展示以 ban_type 为主，notes 附在后；用户示例仅显示 ban_type
+            let notes = notes
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            match notes {
+                Some(notes) if !notes.eq_ignore_ascii_case(ban_type.trim()) => {
+                    format!("{ban_type} - {notes}")
+                }
+                _ => ban_type,
+            }
+        })
+        .collect();
+    let global_ban_reason: Option<String> = global_ban_reasons.first().cloned();
     // 是否有未解封（未过期）的封禁记录
     let has_active_ban: bool = sqlx::query_scalar(
         r#"SELECT EXISTS(SELECT 1 FROM ban_records
@@ -436,6 +470,8 @@ pub async fn collect_whitelist_player_info(
         local_ban_count,
         local_ban_reason,
         has_global_ban,
+        global_ban_reason,
+        global_ban_reasons,
         has_active_ban,
         active_ban_count,
         active_ban_reason,
@@ -465,6 +501,80 @@ pub async fn report_whitelist_created(
     .fetch_all(&db.pool)
     .await
     .unwrap_or_default();
+    // 风险动作：低风险（allow）在无人审核时将由系统自动通过；其余等待管理员
+    let risk_action: Option<String> =
+        crate::services::player_risk_service::build_player_risk_profile(db, &item.steamid64)
+            .await
+            .ok()
+            .map(|profile| match profile.action {
+                crate::services::player_risk_service::RiskAction::Allow => "allow",
+                crate::services::player_risk_service::RiskAction::Warn => "warn",
+                crate::services::player_risk_service::RiskAction::RequireForce => "require_force",
+                crate::services::player_risk_service::RiskAction::Deny => "deny",
+            })
+            .map(str::to_string);
+    // 中文风险标签（供 QQ 通知直接展示）：低风险 / 历史风险 / 高风险（需强制通过）
+    let risk_label = risk_action.as_deref().map(|action| match action {
+        "allow" => "低风险",
+        "warn" => "历史风险",
+        "require_force" | "deny" => "高风险",
+        _ => action,
+    });
+    // 风险展示（带 emoji 前缀，供 QQ 模板直接渲染）
+    let risk_display = risk_label.map(|label| match label {
+        "低风险" => "🟢 低风险".to_string(),
+        "历史风险" => "🟡 历史风险".to_string(),
+        "高风险" => "🔴 高风险".to_string(),
+        other => format!("⚠️ {other}"),
+    });
+    // 封禁展示：全球封禁用 ❌ 前缀；组合标记
+    let mut ban_flags: Vec<&str> = Vec::new();
+    if player_info.has_global_ban {
+        ban_flags.push("❌ 全球封禁");
+    }
+    if player_info.has_local_ban {
+        ban_flags.push("本地封禁");
+    }
+    if player_info.has_active_ban {
+        ban_flags.push("未解封");
+    }
+    let ban_flags = if ban_flags.is_empty() {
+        "无".to_string()
+    } else {
+        ban_flags.join(" / ")
+    };
+    // 违规原因：优先全球封禁原因（同用户示例：仅 ban_type 一行），其次未解封原因，再退本地封禁原因
+    let ban_reason = player_info
+        .global_ban_reason
+        .clone()
+        .or_else(|| player_info.active_ban_reason.clone())
+        .or_else(|| player_info.local_ban_reason.clone());
+    // 自动通过配置（开关 + 等待小时数），供通知展示“预计自动通过”信息
+    let auto_approve = crate::services::whitelist_auto_approve_service::load_config(db)
+        .await
+        .unwrap_or(
+            crate::services::whitelist_auto_approve_service::AutoApproveConfig {
+                enabled: false,
+                hours: 3,
+                updated_by: None,
+                updated_at: Utc::now(),
+            },
+        );
+    // 自动审核文案：低风险（allow）→ 显示等待时长；中/高风险 → 等待管理员手动审核
+    let is_low_risk = risk_action.as_deref() == Some("allow");
+    let auto_approve_text = if !is_low_risk {
+        "风险玩家等待管理员进行手动审核".to_string()
+    } else if auto_approve.enabled {
+        format!("{}小时", auto_approve.hours)
+    } else {
+        "未开启".to_string()
+    };
+    // 详情链接：优先管理后台白名单页（ADMIN_WEB_URL），其次 Steam 主页
+    let detail_url = config
+        .admin_web_url
+        .as_ref()
+        .map(|base| format!("{base}/whitelist"))
+        .or_else(|| item.profile_url.clone());
     let input = EventInput {
         event_type: EVENT_WHITELIST_REQUEST_CREATED.to_string(),
         level: "warning".to_string(),
@@ -480,6 +590,8 @@ pub async fn report_whitelist_created(
             "steamid3": item.steamid3,
             "nickname": item.nickname,
             "steam_persona_name": item.steam_persona_name,
+            // 通知展示用昵称
+            "nickname_show": display_name,
             "contact": item.contact,
             "profile_url": item.profile_url,
             "applied_at": item.applied_at,
@@ -490,9 +602,22 @@ pub async fn report_whitelist_created(
             "local_ban_count": player_info.local_ban_count,
             "local_ban_reason": player_info.local_ban_reason,
             "has_global_ban": player_info.has_global_ban,
+            "global_ban_reason": player_info.global_ban_reason,
+            "global_ban_reasons": player_info.global_ban_reasons,
             "has_active_ban": player_info.has_active_ban,
             "active_ban_count": player_info.active_ban_count,
             "active_ban_reason": player_info.active_ban_reason,
+            // 风险动作（allow / warn / require_force / deny）与自动通过信息
+            "risk_action": risk_action,
+            "risk_label": risk_label,
+            // 展示字段（供 QQ 模板直接渲染）
+            "risk_display": risk_display,
+            "ban_flags": ban_flags,
+            "ban_reason": ban_reason,
+            "detail_url": detail_url,
+            "auto_approve_text": auto_approve_text,
+            "auto_approve_enabled": auto_approve.enabled,
+            "auto_approve_hours": auto_approve.hours,
             // 优先发给 LumiBot 配置的默认管理员；若配置了管理员 openid 则同时定向通知
             "openids": admin_openids,
         }),
@@ -502,6 +627,71 @@ pub async fn report_whitelist_created(
     tracing::info!(queued_id = %queued_id, "白名单申请事件已写入 LumiBot 异步队列");
     let _ = config; // 保留配置参数以兼容调用方；发送由后台任务决定是否启用。
     Ok(())
+}
+
+/// 低风险白名单自动通过事件上报（info 级别，不做管理员通知，仅记录）。
+/// 自动通过后调用，让 LumiBot 侧能够感知系统行为（通知规则由 LumiBot 决定）。
+pub async fn report_whitelist_auto_approved(
+    db: &Database,
+    config: &Config,
+    item: &WhitelistItem,
+    hours: i64,
+) -> anyhow::Result<()> {
+    let display_name = item.steam_persona_name.as_deref().unwrap_or(&item.nickname);
+    let input = EventInput {
+        event_type: EVENT_WHITELIST_AUTO_APPROVED.to_string(),
+        level: "info".to_string(),
+        title: "白名单自动通过".to_string(),
+        message: format!(
+            "玩家 {}（{}）的低风险白名单申请已自动通过（等待 {} 小时无人审核）",
+            display_name, item.steamid64, hours
+        ),
+        data: serde_json::json!({
+            "whitelist_id": item.id,
+            "steamid64": item.steamid64,
+            "nickname": item.nickname,
+            "steam_persona_name": item.steam_persona_name,
+            "hours": hours,
+            "approved_at": item.approved_at,
+        }),
+    };
+
+    if !config.lumi_bot_enabled() {
+        return Ok(());
+    }
+    let api_base_url = config
+        .lumi_bot_api_url
+        .as_deref()
+        .context("LUMI_BOT_API_URL 未配置")?;
+    let api_key = config
+        .lumi_bot_api_key
+        .as_deref()
+        .context("LUMI_BOT_API_KEY 未配置")?;
+
+    let id = Uuid::new_v4();
+    let occurred_at = Utc::now();
+    let body = build_event_body(
+        id,
+        &input.event_type,
+        &input.level,
+        Some(&input.title),
+        Some(&input.message),
+        &input.data,
+        &occurred_at,
+    );
+
+    match send_event_payload(api_base_url, api_key, &body).await {
+        Ok(()) => {
+            tracing::info!(event_id = %id, event_type = %input.event_type, "白名单自动通过事件已上报 LumiBot");
+            Ok(())
+        }
+        Err(error) => {
+            // 立即上报失败，降级入队由后台任务兜底重试
+            tracing::warn!(%error, event_id = %id, "白名单自动通过事件立即上报失败，降级入队");
+            enqueue_event(db, input).await?;
+            Ok(())
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

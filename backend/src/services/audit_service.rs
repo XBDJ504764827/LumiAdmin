@@ -164,12 +164,12 @@ pub async fn list_audit_logs(
     let mut param_idx = 1u32;
 
     if let Some(ref _server_id) = query.server_id {
-        conditions.push(format!("server_id = ${}", param_idx));
+        conditions.push(format!("al.server_id = ${}", param_idx));
         param_idx += 1;
     }
     if let Some(ref operation) = query.operation {
         if !operation.trim().is_empty() {
-            conditions.push(format!("operation = ${}", param_idx));
+            conditions.push(format!("al.operation = ${}", param_idx));
             param_idx += 1;
         }
     }
@@ -184,7 +184,7 @@ pub async fn list_audit_logs(
     }
     if let Some(ref target) = query.target {
         if !target.trim().is_empty() {
-            conditions.push(format!("target ILIKE ${}", param_idx));
+            conditions.push(format!("al.target ILIKE ${}", param_idx));
             param_idx += 1;
         }
     }
@@ -199,12 +199,12 @@ pub async fn list_audit_logs(
     }
     if let Some(ref source) = query.source {
         if !source.trim().is_empty() {
-            conditions.push(format!("source = ${}", param_idx));
+            conditions.push(format!("al.source = ${}", param_idx));
             param_idx += 1;
         }
     }
     if let Some(_success) = query.success {
-        conditions.push(format!("success = ${}", param_idx));
+        conditions.push(format!("al.success = ${}", param_idx));
         param_idx += 1;
     }
 
@@ -218,11 +218,11 @@ pub async fn list_audit_logs(
 
     let count_sql = format!("SELECT COUNT(*) FROM audit_logs al {operator_join} {where_clause}");
     let data_sql = format!(
-        r#"SELECT id, operation, target, target_type, player_name, reason, duration_minutes,
-                  al.operator_id, al.operator_name, operator_steamid, source, server_id, server_name, server_port,
-                  success, message, client_ip, details, idempotency_key, created_at
+        r#"SELECT al.id, al.operation, al.target, al.target_type, al.player_name, al.reason, al.duration_minutes,
+                  al.operator_id, al.operator_name, al.operator_steamid, al.source, al.server_id, al.server_name, al.server_port,
+                  al.success, al.message, al.client_ip, al.details, al.idempotency_key, al.created_at
            FROM audit_logs al {operator_join} {}
-           ORDER BY created_at DESC
+           ORDER BY al.created_at DESC
            LIMIT ${} OFFSET ${}"#,
         where_clause,
         param_idx,

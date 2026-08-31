@@ -569,6 +569,14 @@ pub async fn report_whitelist_created(
     } else {
         "未开启".to_string()
     };
+    // 通知级别：只有需要人工审核的申请才推送 QQ（提醒管理员审核）——
+    // 低风险且自动通过开启时交由系统自动通过，info 级别仅作记录，
+    // LumiBot 侧规则（WHITELIST_REQUEST_CREATED 要求 >= warning）会过滤不推送。
+    let notify_level = if is_low_risk && auto_approve.enabled {
+        "info"
+    } else {
+        "warning"
+    };
     // 详情链接：优先管理后台白名单页（ADMIN_WEB_URL），其次 Steam 主页
     let detail_url = config
         .admin_web_url
@@ -577,7 +585,7 @@ pub async fn report_whitelist_created(
         .or_else(|| item.profile_url.clone());
     let input = EventInput {
         event_type: EVENT_WHITELIST_REQUEST_CREATED.to_string(),
-        level: "warning".to_string(),
+        level: notify_level.to_string(),
         title: "新白名单申请".to_string(),
         message: format!(
             "玩家 {}（{}）提交了白名单申请，等待审核",
@@ -1144,6 +1152,91 @@ mod tests {
             Ok(())
         })
         .await;
+    }
+
+    /// 低风险玩家（无封禁、无风险关联）提交申请：level 应为 info，
+    /// LumiBot 侧规则（>= warning 才推送）会过滤，不打扰管理员。
+    #[tokio::test]
+    async fn low_risk_whitelist_request_is_info_level() {
+        with_test_db(async |db| {
+            let mut config = Config::from_env();
+            config.lumi_bot_api_url = None;
+            config.lumi_bot_api_key = None;
+
+            // 干净玩家：无任何封禁 / IP 关联记录 → RiskAction::Allow
+            let item = test_whitelist_item("76561198000000001", "低风险玩家");
+
+            report_whitelist_created(&db, &config, &item).await?;
+
+            let (level, risk_action): (String, Option<String>) = sqlx::query_as(
+                "SELECT level, data->>'risk_action' FROM lumi_bot_event_queue WHERE data->>'steamid64' = $1",
+            )
+            .bind("76561198000000001")
+            .fetch_one(&db.pool)
+            .await?;
+            assert_eq!(risk_action.as_deref(), Some("allow"));
+            assert_eq!(level, "info", "低风险玩家申请应以 info 级别上报，避免 QQ 推送");
+            Ok(())
+        })
+        .await;
+    }
+
+    /// 中高风险玩家（存在有效本地封禁）提交申请：level 应为 warning，
+    /// 需要管理员人工审核，应推送 QQ 通知。
+    #[tokio::test]
+    async fn high_risk_whitelist_request_is_warning_level() {
+        with_test_db(async |db| {
+            let mut config = Config::from_env();
+            config.lumi_bot_api_url = None;
+            config.lumi_bot_api_key = None;
+
+            let steamid64 = "76561198000000002";
+            // 写入一条有效本地封禁 → RiskAction::Deny（高风险）
+            sqlx::query(
+                r#"INSERT INTO ban_records
+                   (id, player, steam_id, status, operator_name, reason, created_at)
+                   VALUES (gen_random_uuid(), '高风险玩家', $1, 'active', 'admin', '违规', now())"#,
+            )
+            .bind(steamid64)
+            .execute(&db.pool)
+            .await?;
+
+            let item = test_whitelist_item(steamid64, "高风险玩家");
+            report_whitelist_created(&db, &config, &item).await?;
+
+            let (level, risk_action): (String, Option<String>) = sqlx::query_as(
+                "SELECT level, data->>'risk_action' FROM lumi_bot_event_queue WHERE data->>'steamid64' = $1",
+            )
+            .bind(steamid64)
+            .fetch_one(&db.pool)
+            .await?;
+            assert_eq!(risk_action.as_deref(), Some("deny"));
+            assert_eq!(level, "warning", "高风险玩家申请应以 warning 级别上报，触发 QQ 推送");
+            Ok(())
+        })
+        .await;
+    }
+
+    fn test_whitelist_item(steamid64: &str, nickname: &str) -> WhitelistItem {
+        WhitelistItem {
+            id: Uuid::new_v4(),
+            steamid64: steamid64.to_string(),
+            steamid: Some(format!("STEAM_1:0:{}", &steamid64[10..])),
+            steamid3: Some(format!("[U:1:{}]", &steamid64[10..])),
+            profile_url: None,
+            nickname: nickname.to_string(),
+            steam_persona_name: Some(nickname.to_string()),
+            contact: None,
+            status: "pending".to_string(),
+            applied_at: Utc::now().to_rfc3339(),
+            approved_at: None,
+            approved_by: None,
+            approval_reason: None,
+            rejected_at: None,
+            rejected_by: None,
+            rejection_reason: None,
+            risk_profile: None,
+        }
     }
 
     /// 即使 LumiBot 可达，请求也只写入队列，避免外部 HTTP 阻塞用户请求。

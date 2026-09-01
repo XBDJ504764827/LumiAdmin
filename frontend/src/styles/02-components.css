@@ -577,20 +577,39 @@
 .player-filter-date,.player-filter-check { display:inline-flex; align-items:center; gap:5px; padding:5px 8px; border:1px solid var(--border); border-radius:6px; color:var(--text2); font-size:11px; background:var(--surface2); }
 .player-filter-date input { border:0; background:transparent; color:inherit; font:inherit; }
 .player-filter-check input { accent-color:var(--accent); }
-.player-relation-graph { display:grid; grid-template-columns:minmax(160px, 220px) minmax(0,1fr); gap:12px; align-items:start; padding:14px; background:var(--surface2); border-bottom:1px solid var(--border); }
-.player-relation-center { position:sticky; top:90px; padding:12px; border:1px solid var(--accent); border-radius:8px; background:var(--surface); text-align:center; }
-.player-relation-center strong { display:block; margin-bottom:4px; }
-.player-relation-ip { display:grid; grid-template-columns:130px minmax(0,1fr); gap:10px; align-items:start; padding:8px 0; border-bottom:1px dashed var(--border); }
-.player-relation-ip:last-child { border-bottom:0; }
-.player-relation-ip code { color:var(--accent); font-size:11px; }
-.player-relation-accounts { display:flex; flex-wrap:wrap; gap:6px; }
-.player-relation-account { display:inline-flex; flex-direction:column; gap:2px; padding:6px 8px; border:1px solid var(--border); border-radius:6px; background:var(--surface); text-align:left; }
-.player-relation-account input { margin-right:5px; }
+.player-relation-graph { display:grid; grid-template-columns:minmax(170px, 230px) minmax(0,1fr); gap:14px; align-items:start; padding:16px; background:var(--surface2); border-bottom:1px solid var(--border); }
+.player-relation-center { position:sticky; top:90px; display:flex; flex-direction:column; align-items:center; gap:6px; padding:16px 12px; border:1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius:12px; background:var(--surface); text-align:center; box-shadow:0 2px 10px rgba(0,0,0,.06); }
+.player-relation-center-avatar { width:42px; height:42px; display:flex; align-items:center; justify-content:center; border-radius:50%; background:color-mix(in srgb, var(--accent) 18%, transparent); color:var(--accent); font-weight:800; font-size:15px; letter-spacing:.5px; }
+.player-relation-center strong { display:block; font-size:14px; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.player-relation-center code { font-size:10.5px; color:var(--text2); word-break:break-all; }
+.player-relation-center-tags { display:flex; flex-wrap:wrap; justify-content:center; gap:4px; margin-top:2px; }
+.player-relation-list { display:flex; flex-direction:column; gap:10px; min-width:0; }
+.player-relation-ip { display:flex; flex-direction:column; gap:8px; padding:10px 12px; border:1px solid var(--border); border-radius:10px; background:var(--surface); }
+.player-relation-ip-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.player-relation-ip-badge { display:inline-flex; align-items:center; gap:5px; padding:3px 8px; border-radius:6px; background:color-mix(in srgb, var(--accent) 10%, transparent); border:1px solid color-mix(in srgb, var(--accent) 25%, transparent); color:var(--accent); }
+.player-relation-ip-badge code { font-size:11.5px; font-weight:600; }
+.player-relation-ip-count { margin-left:auto; font-size:11px; color:var(--text3); font-weight:600; }
+.player-relation-ip-count.danger { color:var(--danger-text); }
+.player-relation-accounts { display:grid; grid-template-columns:repeat(auto-fill, minmax(215px, 1fr)); gap:8px; }
+.player-relation-account { position:relative; display:flex; align-items:center; gap:8px; padding:9px 10px; border:1px solid var(--border); border-radius:9px; background:var(--surface); cursor:pointer; transition:border-color .15s, box-shadow .15s, transform .15s; }
+.player-relation-account:hover { border-color:var(--accent); box-shadow:0 2px 8px rgba(0,0,0,.08); transform:translateY(-1px); }
+.player-relation-account.selected { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 7%, var(--surface)); box-shadow:0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent) inset; }
+.player-relation-account.flagged { border-left:3px solid var(--danger-dot); }
+.player-relation-account-check { display:flex; align-items:center; }
+.player-relation-account-check input { accent-color:var(--accent); cursor:pointer; }
+.player-relation-account-avatar { width:28px; height:28px; flex:0 0 28px; display:flex; align-items:center; justify-content:center; border-radius:50%; background:color-mix(in srgb, var(--accent) 14%, transparent); color:var(--accent); font-weight:700; font-size:12px; }
+.player-relation-account-body { display:flex; flex-direction:column; gap:1px; min-width:0; }
+.player-relation-account-name { font-size:12.5px; font-weight:600; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.player-relation-account-id { font-size:10px; color:var(--text3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.player-relation-account-meta { display:flex; align-items:center; gap:6px; font-size:10.5px; color:var(--text3); }
+.player-relation-account-ban { color:var(--danger-text); font-weight:600; }
+.player-relation-empty { grid-column:1/-1; padding:10px; text-align:center; color:var(--text3); font-size:12px; background:var(--surface2); border-radius:8px; border:1px dashed var(--border); }
+.player-relation-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
 .player-risk-reasons { display:flex; flex-direction:column; gap:6px; margin-top:10px; }
 .player-risk-reason { padding:7px 9px; border-left:3px solid var(--border2); background:var(--surface2); color:var(--text2); font-size:12px; }
 .player-risk-reason.warning { border-left-color:var(--warning-text); }
 .player-risk-reason.block { border-left-color:var(--danger-text); }
-@media(max-width:768px){.player-relation-graph{grid-template-columns:1fr}.player-relation-center{position:static}.player-relation-ip{grid-template-columns:1fr}}
+@media(max-width:768px){.player-relation-graph{grid-template-columns:1fr}.player-relation-center{position:static}.player-relation-accounts{grid-template-columns:1fr}.player-relation-ip-count{margin-left:0}}
 .player-event-timeline { position: relative; display: flex; flex-direction: column; gap: 12px; }
 .player-event-item { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; }
 .player-event-marker { position: relative; display: flex; justify-content: center; }

@@ -446,19 +446,49 @@ function NetworkTab({detail, token}) {
   return <>
     <div className="card"><div className="card-header"><div><div className="card-title">账号 / IP 关系图</div><div className="card-sub">节点表示账号，连线标签表示共享 IP。勾选关联账号后可批量标记。</div></div></div>
       <div className="player-relation-graph">
-        <div className="player-relation-center"><strong>{detail.profile.display_name || '当前玩家'}</strong><code>{detail.profile.steamid64}</code><div className="player-table-sub">中心账号</div></div>
-        <div>{ipHistory.length === 0 ? <Empty>暂无可绘制的 IP 关系。</Empty> : ipHistory.map(entry => <div className="player-relation-ip" key={entry.ip}>
-          <code>{entry.ip}</code><div className="player-relation-accounts">
-            {(entry.linked_accounts || []).map(account => <label className="player-relation-account" key={entry.ip + '-' + account.steam_id64}>
-              <span><input type="checkbox" checked={selected.includes(account.steam_id64)} onChange={() => toggle(account.steam_id64)} />{account.player_name || '未知玩家'}</span>
-              <code>{account.steam_id64}</code>
-              <span className="player-table-sub">共享 IP · {account.access_count || 0} 次访问</span>
-            </label>)}
-            {(!entry.linked_accounts || entry.linked_accounts.length === 0) && <span className="player-table-sub">暂无其他账号</span>}
+        <div className="player-relation-center">
+          <div className="player-relation-center-avatar">{(detail.profile.display_name || detail.profile.steamid64 || '?').slice(0, 2).toUpperCase()}</div>
+          <strong>{detail.profile.display_name || '当前玩家'}</strong>
+          <code>{detail.profile.steamid64}</code>
+          <div className="player-relation-center-tags">
+            {riskLabel(detail?.risk_profile?.action) && <StatusPill kind={riskTone(detail?.risk_profile?.action)}>{riskLabel(detail?.risk_profile?.action)}</StatusPill>}
           </div>
-        </div>)}</div>
+          <div className="player-table-sub">中心账号 · {ipHistory.length} 个关联 IP</div>
+        </div>
+        <div className="player-relation-list">
+          {ipHistory.length === 0 ? <Empty>暂无可绘制的 IP 关系。</Empty> : ipHistory.map(entry => {
+            const lb = (entry.linked_accounts || []).filter(a => a.has_local_ban).length;
+            const gb = (entry.linked_accounts || []).filter(a => a.has_global_ban).length;
+            const banned = lb + gb;
+            return <div className="player-relation-ip" key={entry.ip}>
+              <div className="player-relation-ip-head">
+                <span className="player-relation-ip-badge"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="9" width="20" height="6" rx="2"/><path d="M6 9V6a3 3 0 0 1 3-3h6a3 3 0 0 1 3 3v3"/></svg><code>{entry.ip}</code></span>
+                <span className="player-table-sub">{entry.servers?.map(s => `${s.server_name}${s.server_port ? `:${s.server_port}` : ''}`).slice(0, 2).join(' · ') || '服务器未知'}</span>
+                {(entry.linked_accounts?.length > 0) && <span className={`player-relation-ip-count ${banned > 0 ? 'danger' : ''}`}>{entry.linked_accounts.length} 个关联{banned > 0 ? ` · ${lb} 本地 / ${gb} 全球` : ''}</span>}
+              </div>
+              <div className="player-relation-accounts">
+                {(entry.linked_accounts || []).map(account => {
+                  const isSelected = selected.includes(account.steam_id64);
+                  return <label className={`player-relation-account ${isSelected ? 'selected' : ''} ${account.has_local_ban || account.has_global_ban ? 'flagged' : ''}`} key={entry.ip + '-' + account.steam_id64}>
+                    <span className="player-relation-account-check"><input type="checkbox" checked={isSelected} onChange={() => toggle(account.steam_id64)} /></span>
+                    <span className="player-relation-account-avatar">{(account.player_name || '?').slice(0, 1).toUpperCase()}</span>
+                    <span className="player-relation-account-body">
+                      <span className="player-relation-account-name">{account.player_name || '未知玩家'}</span>
+                      <code className="player-relation-account-id">{account.steam_id64}</code>
+                      <span className="player-relation-account-meta">
+                        <span>访问 {account.access_count || 0} 次</span>
+                        {(account.has_local_ban || account.has_global_ban) && <span className="player-relation-account-ban">⚑ 封禁</span>}
+                      </span>
+                    </span>
+                  </label>;
+                })}
+                {(!entry.linked_accounts || entry.linked_accounts.length === 0) && <div className="player-relation-empty">该 IP 暂无其他关联账号</div>}
+              </div>
+            </div>;
+          })}
+        </div>
       </div>
-      {selected.length > 0 && <div className="card-body" style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}><strong>已选 {selected.length} 个账号</strong><input className="form-control" style={{maxWidth:220}} value={tag} onChange={e=>setTag(e.target.value)} placeholder="标签名称"/><button className="btn btn-primary btn-sm" disabled={acting||!tag.trim()} onClick={()=>batch('add_tag')}>批量添加标签</button><button className="btn btn-outline btn-sm" disabled={acting||!tag.trim()} onClick={()=>batch('remove_tag')}>批量移除标签</button></div>}
+      {selected.length > 0 && <div className="card-body player-relation-actions"><strong>已选 {selected.length} 个账号</strong><input className="form-control" style={{maxWidth:220}} value={tag} onChange={e=>setTag(e.target.value)} placeholder="标签名称"/><button className="btn btn-primary btn-sm" disabled={acting||!tag.trim()} onClick={()=>batch('add_tag')}>批量添加标签</button><button className="btn btn-outline btn-sm" disabled={acting||!tag.trim()} onClick={()=>batch('remove_tag')}>批量移除标签</button></div>}
     </div>
     <div className="card"><div className="card-header"><div><div className="card-title">深度 IP 交叉与设备追踪表</div><div className="card-sub"><strong style={{color:'var(--accent)'}}>逆向检索同 IP 的关联 Steam 账号</strong>，包含关联账号白名单和封禁状态。</div></div></div><div className="card-body p-0">
       {ipHistory.length===0?<Empty>暂无 IP 登录记录。</Empty>:<div className="table-responsive"><table className="data-table tree-table"><thead><tr><th>IP</th><th>首次/最后活跃</th><th>服务器</th><th>关联账号 / 白名单</th></tr></thead><tbody>

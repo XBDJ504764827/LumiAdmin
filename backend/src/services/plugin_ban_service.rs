@@ -177,6 +177,10 @@ pub async fn create_plugin_ban(db: &Database, input: PluginBanInput) -> anyhow::
     anyhow::ensure!(!operator_name.is_empty(), "操作人不能为空");
     if ban_type == "steam" {
         anyhow::ensure!(steam_id.is_some(), "SteamID 不能为空");
+        anyhow::ensure!(
+            super::steam_service::is_steamid64(steam_id.as_deref().unwrap_or_default()),
+            "SteamID 格式无效，无法封禁"
+        );
     }
     if ban_type == "ip" {
         anyhow::ensure!(ip_address.is_some(), "IP 地址不能为空");

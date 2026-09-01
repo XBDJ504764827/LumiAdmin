@@ -537,6 +537,16 @@ async fn apply_authoritative_global_bans(
     };
 
     for ban in all_bans {
+        // 跳过无效 SteamID64（如外部 API 返回的 "0" / "STEAM_ID_STOP_IGNORING_RETVALS" 等），
+        // 避免脏数据写入 global_bans / ban_records。
+        if !crate::services::steam_service::is_steamid64(ban.steamid64.trim()) {
+            tracing::warn!(
+                kzt_ban_id = ban.id,
+                steamid64 = %ban.steamid64,
+                "KZTimer 全球封禁包含无效 SteamID64，跳过本条同步"
+            );
+            continue;
+        }
         let (local_ban_id, manual_unbanned) = upsert_global_ban_metadata(db, ban).await?;
         if manual_unbanned {
             continue;

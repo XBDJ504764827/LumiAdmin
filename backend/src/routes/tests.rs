@@ -2893,3 +2893,77 @@ async fn insert_audit_log_with_operator(db: &Database, operator_id: &str) -> any
     .await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn player_detail_ip_links_filter_invalid_steamid64() {
+    with_test_app(async |db, config| {
+        let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
+        let (community_id, server_id) = insert_community_with_server(&db, "IP 关联过滤").await;
+
+        let main_player = "76561198000000001";
+        let linked_valid = "76561198000000002";
+        let linked_invalid = "STEAM_ID_STOP_IGNORING_RETVALS";
+        let ip = "203.0.113.10";
+
+        // 主玩家使用该 IP
+        for (steam_id, name) in [
+            (main_player, "主玩家"),
+            (linked_valid, "关联有效账号"),
+            (linked_invalid, "关联无效账号"),
+        ] {
+            sqlx::query(
+                r#"
+                INSERT INTO player_access_logs (
+                    id, steam_id64, player_name, ip_address, server_id, server_name,
+                    server_port, community_id, community_name, allowed, access_method, created_at
+                )
+                VALUES ($1, $2, $3, $4, $5, '一号服', 25575, $6, '测试社区', true, 'whitelist', now())
+                "#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(steam_id)
+            .bind(name)
+            .bind(ip)
+            .bind(server_id)
+            .bind(community_id)
+            .execute(&db.pool)
+            .await?;
+        }
+
+        let app = test_app(config, db.clone());
+        let request = Request::builder()
+            .method("GET")
+            .uri(format!("/api/player-detail?steam_input={main_player}"))
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        // 找到 IP 关联条目，确认只包含有效账号，不含 STEAM_ID_STOP_IGNORING_RETVALS
+        let ip_history = payload["data"]["ip_history"].as_array().unwrap();
+        let entry = ip_history
+            .iter()
+            .find(|e| e["ip"] == ip)
+            .expect("应包含测试 IP 的关联条目");
+        let accounts = entry["linked_accounts"].as_array().unwrap();
+        let account_ids: Vec<&str> = accounts
+            .iter()
+            .filter_map(|a| a["steam_id64"].as_str())
+            .collect();
+        assert!(
+            account_ids.contains(&linked_valid),
+            "应包含有效关联账号 {linked_valid}，实际: {account_ids:?}"
+        );
+        assert!(
+            !account_ids.contains(&linked_invalid),
+            "不应包含无效 SteamID64（STEAM_ID_STOP_IGNORING_RETVALS）"
+        );
+        Ok(())
+    })
+    .await;
+}

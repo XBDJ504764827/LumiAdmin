@@ -75,7 +75,7 @@ export function BanDetailModal({ open, item: initialItem, onClose, canManageAll 
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>封禁详细</h2>
-          <span style={{ cursor: 'pointer', color: 'var(--text3)', fontSize: 18 }} onClick={onClose}>&#10005;</span>
+          <button type="button" className="modal-close-btn" onClick={onClose} aria-label="关闭">&#10005;</button>
         </div>
         <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div className="form-group">

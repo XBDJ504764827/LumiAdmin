@@ -63,18 +63,18 @@ function AuditLogTable({ logs }) {
   }
   return (
     <div className="table-responsive">
-      <table className="data-table">
+      <table className="data-table mobile-card-table">
         <thead>
           <tr><th>时间</th><th>结果</th><th>操作</th><th>操作人（openid）</th><th>说明</th></tr>
         </thead>
         <tbody>
           {logs.map((item) => (
             <tr key={item.id}>
-              <td className="text-muted-light">{formatChinaDateTime(item.created_at)}</td>
-              <td><StatusPill kind={auditKind(item)}>{auditStatusText(item)}</StatusPill></td>
-              <td>{auditOperationLabel(item)}</td>
-              <td className="steam-id">{item.operator_name || '-'}</td>
-              <td className="lumi-bot-audit-msg">{item.message || item.reason || '-'}</td>
+              <td className="text-muted-light mobile-card-primary" data-label="时间">{formatChinaDateTime(item.created_at)}</td>
+              <td data-label="结果"><StatusPill kind={auditKind(item)}>{auditStatusText(item)}</StatusPill></td>
+              <td data-label="操作">{auditOperationLabel(item)}</td>
+              <td className="steam-id" data-label="操作人（openid）">{item.operator_name || '-'}</td>
+              <td className="lumi-bot-audit-msg" data-label="说明">{item.message || item.reason || '-'}</td>
             </tr>
           ))}
         </tbody>

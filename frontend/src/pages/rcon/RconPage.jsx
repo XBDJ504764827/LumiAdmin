@@ -157,7 +157,7 @@ export function RconPage() {
           </div>
           <div className="card-body p-0">
             <div className="table-responsive">
-              <table className="data-table">
+              <table className="data-table mobile-card-table">
                 <thead>
                   <tr>
                     <th>命令名称</th>
@@ -169,13 +169,13 @@ export function RconPage() {
                 <tbody>
                   {cat.commands.map((cmd) => (
                     <tr key={cmd.command}>
-                      <td className="fw-600">
+                      <td className="fw-600 mobile-card-primary" data-label="命令名称">
                         {cmd.name}
                         {cmd.danger ? <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--danger-text)' }}>⚠ 高影响</span> : null}
                       </td>
-                      <td style={{ color: 'var(--text2)', fontSize: 13 }}>{cmd.desc}</td>
-                      <td><code style={{ fontSize: 12, background: 'var(--surface2)', padding: '2px 6px', borderRadius: 4 }}>{cmd.command}</code></td>
-                      <td className="text-right">
+                      <td data-label="说明" style={{ color: 'var(--text2)', fontSize: 13 }}>{cmd.desc}</td>
+                      <td data-label="RCON 指令"><code style={{ fontSize: 12, background: 'var(--surface2)', padding: '2px 6px', borderRadius: 4 }}>{cmd.command}</code></td>
+                      <td className="text-right mobile-card-actions" data-label="操作">
                         <button
                           className="action-btn action-btn-accent"
                           disabled={!selectedServerId || !!executing}

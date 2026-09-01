@@ -1245,7 +1245,7 @@ export function CommunityPage() {
               {controlWizard.installCommand ? (
                 <div style={{marginTop:8}}>
                   <div className="form-hint" style={{marginBottom:4}}>15分钟内有效，过期后重新生成。过期时间：{controlWizard.expiresAt}</div>
-                  <div style={{display:'flex', gap:8}}><input className="form-control" readOnly value={controlWizard.installCommand} style={{flex:1}} /><button className="btn btn-primary" onClick={copyInstallCommand}>{controlWizard.copied?'已复制':'复制'}</button></div>
+                  <div style={{display:'flex', gap:8, flexWrap:'wrap'}}><input className="form-control" readOnly value={controlWizard.installCommand} style={{flex:1, minWidth:200}} /><button className="btn btn-primary" onClick={copyInstallCommand}>{controlWizard.copied?'已复制':'复制'}</button></div>
                   <div style={{marginTop:4, fontSize:12, opacity:0.7}}><code>{controlWizard.installCommand}</code></div>
                 </div>
               ) : null}

@@ -4,7 +4,7 @@ import { buildAccessSummary } from './communityAccess.js';
 export function CommunityServerTable({ group, renderTokenCell, renderServerActions }) {
   return (
     <div className="table-responsive">
-      <table className="data-table">
+      <table className="data-table mobile-card-table">
         <thead>
           <tr>
             <th>服务器名称</th>
@@ -26,19 +26,19 @@ export function CommunityServerTable({ group, renderTokenCell, renderServerActio
               const maxPlayers = server.max_players ?? 0;
               return (
                 <tr key={server.id}>
-                  <td className="fw-600">{server.name}</td>
-                  <td className="steam-id">{server.ip}:{server.port}</td>
-                  <td>{renderTokenCell(server)}</td>
-                  <td>
+                  <td className="fw-600 mobile-card-primary" data-label="服务器名称">{server.name}</td>
+                  <td className="steam-id" data-label="地址 / 端口">{server.ip}:{server.port}</td>
+                  <td data-label="Token 令牌">{renderTokenCell(server)}</td>
+                  <td data-label="状态">
                     <span className={`status-pill ${status.className}`}>
                       {status.label}
                     </span>
                   </td>
-                  <td style={{ fontSize: 12, color: 'var(--text3)' }}>{buildAccessSummary(server, group)}</td>
-                  <td>
+                  <td data-label="访问限制" style={{ fontSize: 12, color: 'var(--text3)' }}>{buildAccessSummary(server, group)}</td>
+                  <td data-label="当前人数">
                     {status.online ? `${playerCount} / ${maxPlayers}` : <span className="text-muted-light">0 / {maxPlayers}</span>}
                   </td>
-                  <td className="text-right">{renderServerActions(server)}</td>
+                  <td className="text-right mobile-card-actions" data-label="操作">{renderServerActions(server)}</td>
                 </tr>
               );
             })

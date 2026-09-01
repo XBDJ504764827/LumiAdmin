@@ -272,6 +272,7 @@ pub async fn evaluate_ip_ban_for_access(
                FROM ban_records
                WHERE ip_address = $1 AND steam_id <> $2
              ) AS raw
+             WHERE steam_id ~ '^[0-9]{17}$'
              GROUP BY steam_id
            ) linked
            WHERE EXISTS (
@@ -402,6 +403,7 @@ async fn load_linked_accounts_by_ips(
              FROM ban_records
              WHERE ip_address = ANY($1) AND steam_id <> $2
            ) AS raw
+           WHERE steam_id ~ '^[0-9]{17}$'
            GROUP BY ip, steam_id, player_name
            ORDER BY max(last_seen_at) DESC NULLS LAST
            LIMIT 500"#,

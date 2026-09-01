@@ -611,7 +611,9 @@ async fn lookup_steamid_by_ip(db: &Database, ip: &str) -> anyhow::Result<Option<
             SELECT steam_id64 FROM player_server_sessions WHERE ip = $1
             UNION
             SELECT steam_id AS steam_id64 FROM ban_records WHERE ip_address = $1
-        ) AS ids LIMIT 1"#,
+        ) AS ids
+        WHERE steam_id64 ~ '^[0-9]{17}$'
+        LIMIT 1"#,
     )
     .bind(ip)
     .fetch_optional(&db.pool)
@@ -632,7 +634,9 @@ async fn lookup_steamid_by_name(db: &Database, name: &str) -> anyhow::Result<Opt
             SELECT steam_id64 FROM server_online_players WHERE name ILIKE $1
             UNION
             SELECT steam_id64 FROM player_server_sessions WHERE player_name ILIKE $1
-        ) AS ids LIMIT 1"#,
+        ) AS ids
+        WHERE steam_id64 ~ '^[0-9]{17}$'
+        LIMIT 1"#,
     )
     .bind(&pattern)
     .fetch_optional(&db.pool)
@@ -759,6 +763,7 @@ async fn fetch_player_candidate_rows(
             FROM whitelist_requests wr
             WHERE wr.steamid64 IS NOT NULL
               AND btrim(wr.steamid64) <> ''
+              AND wr.steamid64 ~ '^[0-9]{17}$'
               AND (
                 wr.steamid64 = NULLIF($2, '')
                 OR wr.steamid64 ILIKE $1 ESCAPE '\'
@@ -781,6 +786,7 @@ async fn fetch_player_candidate_rows(
             FROM ban_records br
             WHERE br.steam_id IS NOT NULL
               AND btrim(br.steam_id) <> ''
+              AND br.steam_id ~ '^[0-9]{17}$'
               AND (
                 br.steam_id = NULLIF($2, '')
                 OR br.steam_id ILIKE $1 ESCAPE '\'
@@ -800,6 +806,7 @@ async fn fetch_player_candidate_rows(
             FROM server_online_players sop
             WHERE sop.steam_id64 IS NOT NULL
               AND btrim(sop.steam_id64) <> ''
+              AND sop.steam_id64 ~ '^[0-9]{17}$'
               AND (
                 sop.steam_id64 = NULLIF($2, '')
                 OR sop.steam_id64 ILIKE $1 ESCAPE '\'
@@ -819,6 +826,7 @@ async fn fetch_player_candidate_rows(
             FROM player_server_sessions pss
             WHERE pss.steam_id64 IS NOT NULL
               AND btrim(pss.steam_id64) <> ''
+              AND pss.steam_id64 ~ '^[0-9]{17}$'
               AND (
                 pss.steam_id64 = NULLIF($2, '')
                 OR pss.steam_id64 ILIKE $1 ESCAPE '\'
@@ -838,6 +846,7 @@ async fn fetch_player_candidate_rows(
             FROM player_access_logs pal
             WHERE pal.steam_id64 IS NOT NULL
               AND btrim(pal.steam_id64) <> ''
+              AND pal.steam_id64 ~ '^[0-9]{17}$'
               AND (
                 pal.steam_id64 = NULLIF($2, '')
                 OR pal.steam_id64 ILIKE $1 ESCAPE '\'
@@ -857,6 +866,7 @@ async fn fetch_player_candidate_rows(
             FROM abnormal_records ar
             WHERE ar.steam_id64 IS NOT NULL
               AND btrim(ar.steam_id64) <> ''
+              AND ar.steam_id64 ~ '^[0-9]{17}$'
               AND (
                 ar.steam_id64 = NULLIF($2, '')
                 OR ar.steam_id64 ILIKE $1 ESCAPE '\'
@@ -875,6 +885,7 @@ async fn fetch_player_candidate_rows(
             FROM global_bans gb
             WHERE gb.steam_id64 IS NOT NULL
               AND btrim(gb.steam_id64) <> ''
+              AND gb.steam_id64 ~ '^[0-9]{17}$'
               AND (
                 gb.steam_id64 = NULLIF($2, '')
                 OR gb.steam_id64 ILIKE $1 ESCAPE '\'
@@ -1692,6 +1703,7 @@ async fn fetch_ip_linked_rows(
                 SELECT ip_address AS ip, steam_id AS steam_id FROM ban_records
                 WHERE steam_id <> $1 AND ip_address = ANY($2)
             ) AS ids
+            WHERE steam_id ~ '^[0-9]{17}$'
         ) AS ranked
         WHERE rn <= 30"#,
     )

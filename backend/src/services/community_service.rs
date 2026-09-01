@@ -690,7 +690,13 @@ pub async fn report_online_players(
 
     let mut normalized_players = Vec::with_capacity(input.players.len());
     for player in input.players {
-        normalized_players.push(normalize_online_player(player, input.port, report_time)?);
+        match normalize_online_player(player, input.port, report_time) {
+            Ok(normalized) => normalized_players.push(normalized),
+            Err(error) => {
+                // 无效玩家（如 STEAM_ID_STOP_IGNORING_RETVALS 占位符）跳过不阻塞整批上报
+                tracing::warn!(%error, "在线玩家上报：跳过无效玩家记录");
+            }
+        }
     }
 
     let player_names = normalized_players
@@ -1003,6 +1009,11 @@ fn normalize_online_player(
             super::steam_service::steam2_to_steamid64(steam_id)?
         }
     };
+    anyhow::ensure!(
+        super::steam_service::is_steamid64(&steam_id64),
+        "玩家 SteamID64 格式无效：{}",
+        steam_id64
+    );
 
     let server_port = player.server_port.unwrap_or(report_port);
     anyhow::ensure!(
@@ -1061,13 +1072,20 @@ pub(crate) fn stale_report_interval_sql() -> String {
 }
 
 fn normalize_disconnect_steam_id(input: &PlayerDisconnectReportInput) -> anyhow::Result<String> {
-    if let Some(value) = super::normalize_optional_text(input.steam_id64.as_deref()) {
-        return Ok(value);
-    }
-    if let Some(value) = super::normalize_optional_text(input.steam_id.as_deref()) {
-        return super::steam_service::steam2_to_steamid64(&value);
-    }
-    anyhow::bail!("玩家 SteamID64 不能为空")
+    let steam_id64 =
+        if let Some(value) = super::normalize_optional_text(input.steam_id64.as_deref()) {
+            value
+        } else if let Some(value) = super::normalize_optional_text(input.steam_id.as_deref()) {
+            super::steam_service::steam2_to_steamid64(&value)?
+        } else {
+            anyhow::bail!("玩家 SteamID64 不能为空")
+        };
+    anyhow::ensure!(
+        super::steam_service::is_steamid64(&steam_id64),
+        "玩家 SteamID64 格式无效：{}",
+        steam_id64
+    );
+    Ok(steam_id64)
 }
 
 async fn mark_stale_servers_offline(db: &Database) -> anyhow::Result<()> {
@@ -1172,7 +1190,7 @@ pub async fn find_server_info(db: &Database, server_id: Uuid) -> Option<String> 
 
 #[cfg(test)]
 mod tests {
-    use super::ServerInput;
+    use super::{OnlinePlayerInput, ServerInput};
     use crate::services::community_rcon::test_server_input;
     use std::io::ErrorKind;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1332,5 +1350,57 @@ mod tests {
         packet.extend_from_slice(body.as_bytes());
         packet.extend_from_slice(&[0, 0]);
         stream.write_all(&packet).await
+    }
+
+    fn test_online_player(steam_id64: Option<&str>, steam_id: Option<&str>) -> OnlinePlayerInput {
+        OnlinePlayerInput {
+            name: "玩家".to_string(),
+            steam_id64: steam_id64.map(str::to_string),
+            steam_id: steam_id.map(str::to_string),
+            ip: Some("1.2.3.4".to_string()),
+            ping: 40,
+            server_port: Some(27015),
+            connected_seconds: Some(120),
+        }
+    }
+
+    #[test]
+    fn normalize_online_player_rejects_invalid_steamid64() {
+        // 占位符 / 无效值应被拒绝，防止写入脏数据
+        for value in [
+            "STEAM_ID_STOP_IGNORING_RETVALS",
+            "0",
+            "STEAM_0:1:12345",
+            "7656119800000000",
+        ] {
+            let result = super::normalize_online_player(
+                test_online_player(Some(value), None),
+                27015,
+                chrono::Utc::now(),
+            );
+            assert!(result.is_err(), "应拒绝无效 SteamID64: {value}");
+        }
+    }
+
+    #[test]
+    fn normalize_online_player_accepts_valid_steamid64() {
+        let result = super::normalize_online_player(
+            test_online_player(Some("76561198000000001"), None),
+            27015,
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(result.steam_id64, "76561198000000001");
+    }
+
+    #[test]
+    fn normalize_online_player_converts_steam2_to_steamid64() {
+        let result = super::normalize_online_player(
+            test_online_player(None, Some("STEAM_0:1:12345")),
+            27015,
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(result.steam_id64, "76561197960290419");
     }
 }

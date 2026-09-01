@@ -608,8 +608,11 @@ struct PlayerSummary {
     personaname: String,
 }
 
-fn is_steamid64(value: &str) -> bool {
-    value.len() == 17 && value.chars().all(|char| char.is_ascii_digit())
+/// 判断字符串是否为合法 SteamID64（17 位数字，以 7656119 开头）。
+pub fn is_steamid64(value: &str) -> bool {
+    value.len() == 17
+        && value.starts_with("7656119")
+        && value.chars().all(|char| char.is_ascii_digit())
 }
 
 fn build_identity(
@@ -713,5 +716,33 @@ mod tests {
         assert_eq!(parsed.steamid64, "76561197960290419");
         assert_eq!(parsed.steamid.as_deref(), Some("STEAM_0:1:12345"));
         assert_eq!(parsed.steamid3.as_deref(), Some("[U:1:24691]"));
+    }
+
+    #[test]
+    fn is_steamid64_accepts_valid_and_rejects_invalid() {
+        // 合法 SteamID64
+        for value in [
+            "76561197960265728",
+            "76561197960290419",
+            "76561198000000001",
+            "76561199999999999",
+        ] {
+            assert!(super::is_steamid64(value), "应为合法 SteamID64: {value}");
+        }
+        // 无效值（占位符 / Steam2 / Steam3 / 空 / 非数字 / 非 17 位）
+        for value in [
+            "STEAM_ID_STOP_IGNORING_RETVALS",
+            "0",
+            "7656119",
+            "7656119800000000",
+            "76561198000000001x",
+            "765611980000000012",
+            "STEAM_0:1:12345",
+            "[U:1:12345]",
+            "",
+            "invalid",
+        ] {
+            assert!(!super::is_steamid64(value), "应为无效 SteamID64: {value}");
+        }
     }
 }

@@ -243,7 +243,7 @@ export function ExternalBanApiPage() {
       <div className="card">
         <div className="card-body p-0">
           <div className="table-responsive">
-            <table className="data-table">
+            <table className="data-table mobile-card-table">
               <thead>
                 <tr>
                   <th>名称</th>
@@ -262,15 +262,15 @@ export function ExternalBanApiPage() {
                 ) : null}
                 {targets.map((target) => (
                   <tr key={target.id}>
-                    <td>
+                    <td className="mobile-card-primary" data-label="名称">
                       <div className="fw-600">{target.name}</div>
                       {!target.enabled ? <div style={{ color: 'var(--text3)', fontSize: 12 }}>已禁用</div> : null}
                     </td>
-                    <td className="steam-id">{target.base_url}</td>
-                    <td>{banTypeOptions.find((item) => item.value === target.default_ban_type)?.label ?? target.default_ban_type}</td>
-                    <td>{target.auto_sync ? <span className="status-pill pill-online">开启</span> : <span className="text-muted-light">关闭</span>}</td>
-                    <td>{target.has_token ? <span className="status-pill pill-online">已保存</span> : <span style={{ color: 'var(--danger)' }}>未配置</span>}</td>
-                    <td className="text-right">
+                    <td className="steam-id" data-label="API 地址">{target.base_url}</td>
+                    <td data-label="封禁类型">{banTypeOptions.find((item) => item.value === target.default_ban_type)?.label ?? target.default_ban_type}</td>
+                    <td data-label="自动同步">{target.auto_sync ? <span className="status-pill pill-online">开启</span> : <span className="text-muted-light">关闭</span>}</td>
+                    <td data-label="Token">{target.has_token ? <span className="status-pill pill-online">已保存</span> : <span style={{ color: 'var(--danger)' }}>未配置</span>}</td>
+                    <td className="text-right mobile-card-actions" data-label="操作">
                       <div className="action-btn-group">
                         <button className="action-btn" onClick={() => handleTest(target)} disabled={testingId === target.id}>
                           {testingId === target.id ? '测试中' : '测试'}
@@ -303,7 +303,7 @@ export function ExternalBanApiPage() {
 
         <div className="filter-bar">
           <SearchBar value={syncSearch} onChange={handleSyncSearch} placeholder="搜索 SteamID / 玩家名" />
-          <select className="form-control" style={{ width: 140 }} value={syncStatus} onChange={handleSyncStatusChange}>
+          <select className="form-control filter-select" value={syncStatus} onChange={handleSyncStatusChange}>
             <option value="">全部状态</option>
             <option value="synced">已同步</option>
             <option value="failed">失败</option>
@@ -315,7 +315,7 @@ export function ExternalBanApiPage() {
         <div className="card">
           <div className="card-body p-0">
             <div className="table-responsive">
-              <table className="data-table">
+              <table className="data-table mobile-card-table">
                 <thead>
                   <tr>
                     <th>玩家</th>
@@ -337,15 +337,15 @@ export function ExternalBanApiPage() {
                     const statusInfo = syncStatusMap[item.status] || { label: item.status, className: 'pill-idle' };
                     return (
                       <tr key={`${item.local_ban_id}-${item.target_id}`}>
-                        <td>{item.ban_player || '-'}</td>
-                        <td className="steam-id">{item.ban_steam_id || '-'}</td>
-                        <td>{item.target_name}</td>
-                        <td><span className={`status-pill ${statusInfo.className}`}>{statusInfo.label}</span></td>
-                        <td className="steam-id">{item.external_uuid || '-'}</td>
-                        <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.last_error || ''}>
+                        <td data-label="玩家">{item.ban_player || '-'}</td>
+                        <td className="steam-id" data-label="SteamID">{item.ban_steam_id || '-'}</td>
+                        <td data-label="目标">{item.target_name}</td>
+                        <td data-label="状态"><span className={`status-pill ${statusInfo.className}`}>{statusInfo.label}</span></td>
+                        <td className="steam-id" data-label="外部 UUID">{item.external_uuid || '-'}</td>
+                        <td data-label="错误信息" style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.last_error || ''}>
                           {item.last_error ? <span style={{ color: 'var(--danger)' }}>{item.last_error}</span> : '-'}
                         </td>
-                        <td style={{ whiteSpace: 'nowrap' }}>{item.synced_at || item.updated_at}</td>
+                        <td data-label="同步时间" style={{ whiteSpace: 'nowrap' }}>{item.synced_at || item.updated_at}</td>
                       </tr>
                     );
                   })}
@@ -372,7 +372,7 @@ export function ExternalBanApiPage() {
                 <input className="form-control" value={form.name} onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))} placeholder="GOKZ.TOP" />
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 220px', gap: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
                 <div className="form-group">
                   <label>API 地址</label>
                   <input className="form-control" value={form.baseUrl} onChange={(e) => setForm((prev) => ({ ...prev, baseUrl: e.target.value }))} placeholder="https://api.kzcharm.com" />

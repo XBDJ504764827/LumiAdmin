@@ -664,6 +664,9 @@
   .login-container { padding: 16px; }
   .login-card-header { padding: 24px 20px 0; }
   .login-card-body { padding: 20px 20px 24px; }
+  /* Toast：窄屏全宽贴边，确保不溢出且可读 */
+  .toast-container { top: 12px; right: 12px; left: 12px; }
+  .toast-item { min-width: 0; max-width: none; width: 100%; padding: 12px 14px; }
 }
 
 @media (max-width: 768px) {
@@ -910,6 +913,7 @@
   justify-content: space-between;
   margin-bottom: 6px;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .notification-page-item-tags {
@@ -1367,6 +1371,7 @@
   box-shadow: var(--shadow-md);
   padding: 14px;
   width: 290px;
+  max-width: min(290px, calc(100vw - 64px));
   animation: datepicker-in 0.15s ease-out;
 }
 

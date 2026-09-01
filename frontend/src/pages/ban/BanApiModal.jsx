@@ -81,7 +81,7 @@ export function BanApiModal({ open, onClose }) {
       <div className="modal" style={{ maxWidth: 780 }} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>封禁 API 接入</h2>
-          <span style={{ cursor: 'pointer', color: 'var(--text3)', fontSize: 18 }} onClick={onClose}>&#10005;</span>
+          <button type="button" className="modal-close-btn" onClick={onClose} aria-label="关闭">&#10005;</button>
         </div>
         <div className="modal-body" style={{ display: 'grid', gap: 16 }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 10 }}>
@@ -113,7 +113,7 @@ export function BanApiModal({ open, onClose }) {
           </div>
 
           <div className="table-responsive">
-            <table className="data-table">
+            <table className="data-table mobile-card-table">
               <thead>
                 <tr><th>名称</th><th>Key 前缀</th><th>最近使用</th><th>创建时间</th><th className="text-right">操作</th></tr>
               </thead>
@@ -122,11 +122,11 @@ export function BanApiModal({ open, onClose }) {
                 {!apiKeysLoading && apiKeys.length === 0 ? <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text2)' }}>暂无 API Key</td></tr> : null}
                 {apiKeys.map((item) => (
                   <tr key={item.id}>
-                    <td className="fw-600">{item.name}</td>
-                    <td className="steam-id">{item.token_prefix}...</td>
-                    <td className="text-muted-light">{formatChinaDateTime(item.last_used_at)}</td>
-                    <td className="text-muted-light">{formatChinaDateTime(item.created_at)}</td>
-                    <td className="text-right">
+                    <td className="fw-600 mobile-card-primary" data-label="名称">{item.name}</td>
+                    <td className="steam-id" data-label="Key 前缀">{item.token_prefix}...</td>
+                    <td className="text-muted-light" data-label="最近使用">{formatChinaDateTime(item.last_used_at)}</td>
+                    <td className="text-muted-light" data-label="创建时间">{formatChinaDateTime(item.created_at)}</td>
+                    <td className="text-right mobile-card-actions" data-label="操作">
                       <button className="action-btn action-btn-danger" onClick={() => handleDeleteApiKey(item)}>删除</button>
                     </td>
                   </tr>

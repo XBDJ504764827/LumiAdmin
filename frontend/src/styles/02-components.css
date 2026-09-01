@@ -1821,6 +1821,7 @@
   font-size: 12px;
   font-weight: 500;
   padding: 2px 4px;
+  min-height: 28px;
   transition: color var(--transition);
 }
 .token-btn:hover { color: var(--accent); }

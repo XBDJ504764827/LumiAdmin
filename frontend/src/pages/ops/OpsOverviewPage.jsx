@@ -119,7 +119,7 @@ export function OpsOverviewPage() {
               </div>
               <div className="card-body p-0">
                 <div className="table-responsive">
-                  <table className="data-table">
+                  <table className="data-table mobile-card-table">
                     <thead>
                       <tr>
                         <th>任务</th>
@@ -139,15 +139,15 @@ export function OpsOverviewPage() {
                         const status = taskStatus(task);
                         return (
                           <tr key={task.key}>
-                            <td className="fw-500">{task.name}</td>
-                            <td><span className="status-pill pill-default">{task.category}</span></td>
-                            <td><span className={`status-pill ${status.className}`}>{status.label}</span></td>
-                            <td className="text-muted-light">{task.interval_secs ? `${task.interval_secs}s` : '动态'}</td>
-                            <td className="text-muted-light">{task.last_finished_at ? formatChinaDateTime(task.last_finished_at) : '-'}</td>
-                            <td className="text-muted-light">{task.running ? formatChinaDateTime(task.current_started_at) : task.next_run_at ? formatChinaDateTime(task.next_run_at) : '-'}</td>
-                            <td className="text-muted-light">{task.last_duration_ms != null ? `${task.last_duration_ms} ms` : '-'}</td>
-                            <td className="text-muted-light">{task.runs} / {task.failures}</td>
-                            <td className="ops-task-message">{task.last_error ?? task.last_message ?? '-'}</td>
+                            <td className="fw-500 mobile-card-primary" data-label="任务">{task.name}</td>
+                            <td data-label="分类"><span className="status-pill pill-default">{task.category}</span></td>
+                            <td data-label="状态"><span className={`status-pill ${status.className}`}>{status.label}</span></td>
+                            <td className="text-muted-light" data-label="周期">{task.interval_secs ? `${task.interval_secs}s` : '动态'}</td>
+                            <td className="text-muted-light" data-label="最近完成">{task.last_finished_at ? formatChinaDateTime(task.last_finished_at) : '-'}</td>
+                            <td className="text-muted-light" data-label="下次 / 开始">{task.running ? formatChinaDateTime(task.current_started_at) : task.next_run_at ? formatChinaDateTime(task.next_run_at) : '-'}</td>
+                            <td className="text-muted-light" data-label="耗时">{task.last_duration_ms != null ? `${task.last_duration_ms} ms` : '-'}</td>
+                            <td className="text-muted-light" data-label="运行 / 失败">{task.runs} / {task.failures}</td>
+                            <td className="ops-task-message" data-label="说明">{task.last_error ?? task.last_message ?? '-'}</td>
                           </tr>
                         );
                       })}

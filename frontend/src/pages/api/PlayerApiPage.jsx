@@ -246,7 +246,7 @@ export function PlayerApiPage() {
             <div className="table-state-cell"><div className="table-state-inner table-state-inner--error">{playersState.error.message}</div></div>
           ) : (
             <div className="table-responsive">
-              <table className="data-table">
+              <table className="data-table mobile-card-table">
                 <thead>
                   <tr>
                     <th>玩家名称</th>
@@ -264,11 +264,11 @@ export function PlayerApiPage() {
                   ) : (
                     rows.map((row, idx) => (
                       <tr key={`${row.serverName}-${row.steamId}-${idx}`}>
-                        <td className="fw-600">{row.player}</td>
-                        <td className="steam-id">{row.steamId}</td>
-                        <td className="steam-id">{row.ipAddress}</td>
-                        <td className="text-muted">{row.serverName}</td>
-                        <td><span className="status-pill pill-online">{row.syncedText}</span></td>
+                        <td className="fw-600 mobile-card-primary" data-label="玩家名称">{row.player}</td>
+                        <td className="steam-id" data-label="SteamID">{row.steamId}</td>
+                        <td className="steam-id" data-label="IP 地址">{row.ipAddress}</td>
+                        <td className="text-muted" data-label="所在服务器">{row.serverName}</td>
+                        <td data-label="同步时间"><span className="status-pill pill-online">{row.syncedText}</span></td>
                       </tr>
                     ))
                   )}

@@ -472,6 +472,8 @@
   .topbar-actions .icon-btn:not(.notif-btn) { display: none; }
   .public-nav-inner { padding: 0 14px; gap: 8px; }
   .public-nav-link span { display: none; }
+  .public-nav-link { padding: 7px 10px; }
+  .public-nav-links { gap: 2px; overflow-x: auto; justify-content: flex-start; }
   .public-main { padding: 20px 14px 36px; }
   .public-hero h1 { font-size: 18px; }
   .public-stats { gap: 8px; }
@@ -486,6 +488,15 @@
   }
   .app-search-result-key { display: none; }
   .topbar-profile-menu { width: min(236px, calc(100vw - 92px)); }
+  .notification-panel {
+    position: fixed;
+    top: 70px;
+    right: 12px;
+    left: 12px;
+    width: auto;
+    max-width: none;
+    max-height: min(70vh, 480px);
+  }
   .filter-bar { flex-direction: column; gap: 8px; }
   .filter-bar .searchbar, .filter-bar .search-box, .filter-bar .search-bar { max-width: 100%; width: 100%; }
   .filter-select { width: 100%; }
@@ -518,9 +529,20 @@
 }
 
 @media (max-width: 720px) {
-  .data-table.mobile-card-table {
+  .data-table.mobile-card-table,
+  .public-table.mobile-card-table {
     min-width: 0;
     border-spacing: 0 10px;
+  }
+  /* 移动卡片模式下允许长文本完整换行展示，避免截断（如封禁玩家名/理由） */
+  .text-ellipsis-160,
+  .text-ellipsis-200,
+  .text-ellipsis-260,
+  .text-ellipsis-280,
+  .text-ellipsis-320 {
+    max-width: none;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   .mobile-card-table thead {
     display: none;
@@ -654,12 +676,13 @@
 
   .dash-wl-grid { grid-template-columns: 1fr; }
 
+  .player-detail-tabs { top: 52px; }
   .pagination { gap: 2px; }
   .pagination-btn { min-width: 30px; height: 30px; font-size: 11px; padding: 0 6px; }
   .pagination-info { display: none; }
 
   .public-nav-inner { height: 48px; padding: 0 10px; }
-  .public-brand-text { font-size: 13px; }
+  .public-brand-text { display: none; }
   .public-main { padding: 16px 10px 28px; }
   .public-card-body { padding: 16px; }
   .whitelist-stats-grid { grid-template-columns: 1fr; }
@@ -682,10 +705,23 @@
   .tab { padding: 6px 12px; font-size: 12px; }
 
   .btn { padding: 7px 14px; font-size: 12.5px; }
-  .btn-sm { padding: 5px 10px; font-size: 11.5px; }
+  .btn-sm { padding: 5px 10px; font-size: 11.5px; min-height: 32px; }
 
   .action-btn-group { gap: 3px; }
-  .action-btn { padding: 5px 10px; font-size: 11px; }
+  .action-btn { padding: 7px 12px; font-size: 11.5px; min-height: 34px; }
+
+  /* 触摸目标最小化：小徽章按钮在移动端也给足点击区域 */
+  .global-ban-btn,
+  .whitelist-risk-badge {
+    min-height: 32px;
+    padding: 4px 10px;
+  }
+  .action-btn[title="刷新Steam名称"] {
+    padding: 2px 8px !important;
+    min-height: 32px;
+    min-width: 32px;
+    justify-content: center;
+  }
 }
 
 /* ── 统一表格状态（加载 / 错误 / 空数据） ── */

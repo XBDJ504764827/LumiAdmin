@@ -15,6 +15,7 @@ pub mod ops;
 pub mod player_detail;
 pub mod plugin;
 pub mod public;
+pub mod qq_bind;
 pub mod steam_auth;
 #[cfg(test)]
 pub mod tests;
@@ -555,6 +556,13 @@ pub fn router(
             "/api/public/steam/auth/session",
             get(steam_auth::steam_auth_session),
         )
+        // -- QQ 群绑定 --
+        .route(
+            "/api/public/steam/auth/bind/code",
+            post(qq_bind::create_bind_code),
+        )
+        .route("/api/public/qq/bind/status", get(qq_bind::bind_status))
+        .route("/api/qq/bind", post(qq_bind::bind_by_bot))
         .route(
             "/api/public/global-bans/:steamid64",
             get(public::get_global_bans),

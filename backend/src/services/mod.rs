@@ -32,6 +32,7 @@ pub mod player_detail_service;
 pub mod player_risk_service;
 pub mod plugin_ban_service;
 pub mod public_service;
+pub mod qq_bind_service;
 pub mod r2_storage;
 pub mod rate_limit_service;
 pub mod rcon_poll_service;

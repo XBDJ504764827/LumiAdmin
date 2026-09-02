@@ -30,6 +30,9 @@ pub struct WhitelistItem {
     pub rejected_at: Option<String>,
     pub rejected_by: Option<String>,
     pub rejection_reason: Option<String>,
+    /// QQ 绑定 openid（来自 player_qq_bindings，用于审核页展示）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qq_openid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub risk_profile: Option<PlayerRiskProfile>,
 }
@@ -211,6 +214,7 @@ pub async fn list_whitelist(
         })
         .collect();
     attach_risk_profiles(db, &mut items).await?;
+    attach_qq_bindings(db, &mut items).await?;
 
     Ok(crate::routes::PaginatedResponse {
         items,
@@ -791,6 +795,34 @@ async fn attach_risk_profiles(db: &Database, items: &mut [WhitelistItem]) -> any
     Ok(())
 }
 
+/// 批量填充 QQ 绑定 openid（用于审核页展示）
+async fn attach_qq_bindings(db: &Database, items: &mut [WhitelistItem]) -> anyhow::Result<()> {
+    let steamids: Vec<String> = items
+        .iter()
+        .map(|item| item.steamid64.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    if steamids.is_empty() {
+        return Ok(());
+    }
+
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        r#"SELECT steamid64, qq_openid FROM player_qq_bindings
+           WHERE steamid64 = ANY($1) AND unbound_at IS NULL"#,
+    )
+    .bind(&steamids)
+    .fetch_all(&db.pool)
+    .await?;
+    let openid_map: HashMap<String, String> = rows.into_iter().collect();
+
+    for item in items {
+        item.qq_openid = openid_map.get(&item.steamid64).cloned();
+    }
+
+    Ok(())
+}
+
 fn ensure_can_approve_with_risk(
     risk_profile: &PlayerRiskProfile,
     force: bool,
@@ -936,6 +968,7 @@ fn map_whitelist_row(row: WhitelistRow) -> WhitelistItem {
         rejected_at: row.rejected_at.map(|value| value.to_rfc3339()),
         rejected_by: row.rejected_by,
         rejection_reason: row.rejection_reason,
+        qq_openid: None,
         risk_profile: None,
     }
 }

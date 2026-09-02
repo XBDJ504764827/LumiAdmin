@@ -1174,6 +1174,10 @@
 .row-access-denied { opacity: 0.72; }
 .row-access-denied:hover { opacity: 1; }
 .nickname-cell { line-height: 1.4; }
+.qq-bind-badge { position: relative; display: inline-flex; align-items: center; margin-left: 6px; vertical-align: middle; cursor: default; }
+.qq-bind-icon { font-size: 13px; filter: grayscale(0.1); }
+.qq-bind-tooltip { position: absolute; top: calc(100% + 4px); left: 0; z-index: 30; padding: 5px 9px; border-radius: 6px; background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-md); font-size: 11px; color: var(--text2); white-space: nowrap; font-family: var(--mono); }
+
 .global-ban-btn { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; padding: 2px 8px; font-size: 11px; font-weight: 600; border-radius: 12px; background: var(--accent); color: #fff; border: none; cursor: pointer; transition: all 0.2s; box-shadow: 0 1px 3px rgba(232,115,90,0.3); }
 .global-ban-btn:hover { transform: scale(1.05); box-shadow: 0 2px 6px rgba(232,115,90,0.4); }
 .global-ban-icon { font-size: 12px; }

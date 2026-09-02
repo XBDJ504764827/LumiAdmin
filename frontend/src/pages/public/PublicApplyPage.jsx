@@ -43,6 +43,14 @@ export function PublicApplyPage() {
   const [gokzStats, setGokzStats] = useState(null);
   const [statsLoading, setStatsLoading] = useState(false);
 
+  // QQ 群绑定状态
+  const [qqBindState, setQqBindState] = useState('idle'); // idle | loading | bound | unbound
+  const [bindCodeText, setBindCodeText] = useState('');
+  const [bindGenerating, setBindGenerating] = useState(false);
+  const [bindError, setBindError] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [qqBindMasked, setQqBindMasked] = useState('');
+
   // 手动输入模式（当没有 Steam 认证时）
   const [manualMode, setManualMode] = useState(false);
   const [steamInput, setSteamInput] = useState('');
@@ -161,6 +169,71 @@ export function PublicApplyPage() {
   }
 
   // ——————————————————————————————————————————————————————————————
+  // QQ 群绑定：生成绑定码 / 查询状态 / 复制
+  // ——————————————————————————————————————————————————————————————
+  const loadBindStatus = useCallback(async () => {
+    if (!steamToken) return;
+    setQqBindState('loading');
+    try {
+      const data = await publicApi.qqBindStatus(steamToken);
+      if (data.bound) {
+        setQqBindState('bound');
+        setQqBindMasked(data.qq_openid_masked || '');
+        setBindCodeText('');
+      } else {
+        setQqBindState('unbound');
+        if (data.pending_code) {
+          setBindCodeText(data.pending_code);
+        } else {
+          setBindCodeText('');
+        }
+      }
+      setBindError('');
+    } catch (err) {
+      setQqBindState('unbound');
+      setBindError(err.message || '查询绑定状态失败');
+    }
+  }, [steamToken]);
+
+  async function generateBindCode() {
+    if (!steamToken || bindGenerating) return;
+    setBindGenerating(true);
+    setBindError('');
+    try {
+      const data = await publicApi.createQqBindCode(steamToken);
+      setBindCodeText(data.code);
+      setCopied(false);
+    } catch (err) {
+      setBindError(err.message || '生成绑定码失败');
+    } finally {
+      setBindGenerating(false);
+    }
+  }
+
+  async function copyBindCode() {
+    if (!bindCodeText) return;
+    try {
+      await navigator.clipboard.writeText(bindCodeText);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setBindError('复制失败，请手动长按复制。');
+    }
+  }
+
+  function refreshBindStatus() {
+    loadBindStatus();
+  }
+
+  // Steam 会话获取成功后加载绑定状态（异步触发，避免 effect 内同步 setState）
+  useEffect(() => {
+    if (steamVerified && steamToken) {
+      const timer = setTimeout(() => loadBindStatus(), 0);
+      return () => clearTimeout(timer);
+    }
+  }, [steamVerified, steamToken, loadBindStatus]);
+
+  // ——————————————————————————————————————————————————————————————
   // 提交白名单
   // ——————————————————————————————————————————————————————————————
   const submit = async (options = {}) => {
@@ -168,7 +241,8 @@ export function PublicApplyPage() {
 
     if (steamVerified) {
       // 通过 Steam OpenID 认证的提交
-      if (!contactValue.trim() && !options.allowEmptyContact) {
+      // 已绑定 QQ 时无需强制填写联系方式（后端自动记录 qq:<openid>）
+      if (!contactValue.trim() && !options.allowEmptyContact && qqBindState !== 'bound') {
         setContactPromptValue(contact);
         setContactPromptOpen(true);
         return;
@@ -428,6 +502,84 @@ export function PublicApplyPage() {
                         </div>
                       </div>
                     </div>
+                  </div>
+
+                  {/* QQ 绑定区块：显示一次性绑定码，用户复制到 QQ 群 @机器人 */}
+                  <div className="qq-bind-card" style={{
+                    background: 'var(--surface2)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 10,
+                    padding: 16,
+                    marginBottom: 16,
+                  }}>
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      marginBottom: 12, paddingBottom: 10,
+                      borderBottom: '1px solid var(--border)',
+                    }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-color)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/>
+                      </svg>
+                      <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--text1)' }}>QQ 群绑定（可选，推荐）</span>
+                    </div>
+
+                    {qqBindState === 'bound' ? (
+                      <div className="alert alert-success" style={{ marginBottom: 0 }}>
+                        <span className="alert-icon">✓</span>
+                        <div className="alert-content">
+                          <div className="alert-title">已绑定 QQ（{qqBindMasked || '已完成'}）</div>
+                          <div className="alert-text" style={{ fontSize: 12.5 }}>提交申请时系统将自动记录您的 QQ 联系方式，管理员可据此追溯。</div>
+                        </div>
+                      </div>
+                    ) : qqBindState === 'loading' ? (
+                      <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>正在查询绑定状态...</div>
+                    ) : (
+                      <>
+                        <div style={{ color: 'var(--text2)', fontSize: 12.5, marginBottom: 10, lineHeight: 1.6 }}>
+                          复制下方绑定码，发送到 QQ 群并 <strong>@机器人</strong>（如：@机器人 {bindCodeText || '绑定码'}），
+                          机器人会自动完成 QQ 与 Steam 账号的绑定。
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <code style={{
+                            fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700,
+                            background: 'var(--surface1)', padding: '8px 12px',
+                            borderRadius: 8, border: '1px solid var(--border)',
+                            letterSpacing: 0.5,
+                          }}>{bindCodeText || '—— 点击生成 ——'}</code>
+                          {bindCodeText ? (
+                            <button
+                              className="btn btn-primary btn-sm"
+                              type="button"
+                              onClick={copyBindCode}
+                            >
+                              {copied ? '已复制 ✓' : '复制'}
+                            </button>
+                          ) : (
+                            <button
+                              className="btn btn-outline btn-sm"
+                              type="button"
+                              onClick={generateBindCode}
+                              disabled={bindGenerating}
+                            >
+                              {bindGenerating ? '生成中...' : '生成绑定码'}
+                            </button>
+                          )}
+                          {!bindCodeText && !bindGenerating && (
+                            <button
+                              className="btn btn-outline btn-sm"
+                              type="button"
+                              onClick={refreshBindStatus}
+                            >
+                              刷新状态
+                            </button>
+                          )}
+                        </div>
+                        {bindError && <div style={{ color: 'var(--danger-text)', fontSize: 12, marginTop: 8 }}>{bindError}</div>}
+                        <div style={{ color: 'var(--text3)', fontSize: 11.5, marginTop: 10 }}>
+                          绑定码 10 分钟内有效；一个 Steam 账号仅有一个有效绑定码，重复绑定会替换旧码。
+                        </div>
+                      </>
+                    )}
                   </div>
 
                   {/* Steam 等级 + KZ 统计面板 */}

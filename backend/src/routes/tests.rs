@@ -2967,3 +2967,121 @@ async fn player_detail_ip_links_filter_invalid_steamid64() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn qq_bind_code_flow_binds_steam_to_openid() {
+    with_test_app(async |db, mut config| {
+        let admin_token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
+
+        // 构造一个公开 Steam 认证会话（模拟玩家 Steam 登录完成）
+        let steam_session_id = Uuid::new_v4();
+        let player_steamid64 = "76561198000000001";
+        sqlx::query(
+            r#"INSERT INTO public_steam_auth_sessions (id, steamid64, steamid, steamid3, profile_url, persona_name, expires_at)
+               VALUES ($1, $2, 'STEAM_1:0:1', '[U:1:1]', 'https://steamcommunity.com/profiles/76561198000000001', '测试玩家', now() + interval '1 hour')"#,
+        )
+        .bind(steam_session_id)
+        .bind(player_steamid64)
+        .execute(&db.pool)
+        .await?;
+
+        // 先配置集成令牌，再构建 app（router 创建时读取 config）
+        config.qq_integration_token = Some("test-integration-token".to_string());
+        let app = test_app(config, db.clone());
+
+        // 1. 玩家生成绑定码
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/public/steam/auth/bind/code")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({
+                "steam_token": steam_session_id.to_string(),
+            }).to_string()))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let code = payload["code"].as_str().expect("应返回绑定码").to_string();
+
+        // 2. 模拟 LumiBot 调用绑定 API（群消息发送者 openid）
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/qq/bind")
+            .header("content-type", "application/json")
+            .header("x-qq-token", "test-integration-token")
+            .body(Body::from(serde_json::json!({
+                "code": code,
+                "qq_openid": "openid-12345",
+            }).to_string()))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["success"], true);
+
+        // 3. 查询绑定状态（via steam session）
+        let request = Request::builder()
+            .method("GET")
+            .uri(format!("/api/public/qq/bind/status?steam_token={steam_session_id}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["bound"], true);
+        assert_eq!(payload["qq_openid"], "openid-12345");
+
+        // 4. 绑定码不能重复使用
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/qq/bind")
+            .header("content-type", "application/json")
+            .header("x-qq-token", "test-integration-token")
+            .body(Body::from(serde_json::json!({
+                "code": code,
+                "qq_openid": "openid-99999",
+            }).to_string()))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["success"], false);
+        assert_eq!(payload["error"], "code_used");
+
+        // 5. 白名单提交自动写入 qq:<openid> 联系方式
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/public/whitelist")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({
+                "steam_token": steam_session_id.to_string(),
+                "nickname": "测试玩家",
+                "contact": "",
+            }).to_string()))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["item"]["contact"], "qq:openid-12345");
+
+        // 6. 管理端白名单列表返回 qq_openid
+        let request = Request::builder()
+            .method("GET")
+            .uri(format!("/api/whitelist?steamid64={player_steamid64}"))
+            .header("authorization", format!("Bearer {admin_token}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["items"][0]["qq_openid"], "openid-12345");
+
+        Ok(())
+    })
+    .await;
+}

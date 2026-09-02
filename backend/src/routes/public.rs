@@ -200,12 +200,30 @@ pub(crate) async fn submit_whitelist(
         .ok_or_else(|| invalid_request(anyhow::anyhow!("请提供 Steam 标识符或 Steam 认证令牌")))?;
     let nn = nickname.ok_or_else(|| invalid_request(anyhow::anyhow!("请提供游戏昵称")))?;
 
+    // 联系方式的优先级：
+    // 1. 玩家手动填写的 contact（保留）
+    // 2. 已绑定 QQ 则自动使用 qq:<openid>（兜底防留空/填错）
+    // 3. 都无则 None
+    let contact = match body.contact.clone() {
+        Some(c) if !c.trim().is_empty() => Some(c),
+        _ => match crate::services::qq_bind_service::get_binding(&ctx.db, &si).await {
+            Ok(Some(binding)) => Some(crate::services::qq_bind_service::format_qq_contact(
+                &binding.qq_openid,
+            )),
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!(%e, "查询 QQ 绑定失败，使用空联系方式");
+                None
+            }
+        },
+    };
+
     let item = whitelist_service::create_public_whitelist_request(
         &ctx.db,
         whitelist_service::PublicWhitelistRequestInput {
             nickname: nn,
             steam_input: si,
-            contact: body.contact,
+            contact,
         },
         resolver,
     )

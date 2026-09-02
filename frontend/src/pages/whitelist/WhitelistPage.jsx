@@ -80,7 +80,10 @@ function renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail, aut
   const hasGlobalBan = Array.isArray(itemBans) && itemBans.length > 0;
   return (
     <td className="fw-600 mobile-card-primary" data-player-info="true" data-label="游戏昵称">
-      <div className="nickname-cell">{item.nickname}</div>
+      <div className="nickname-cell">
+        {item.nickname}
+        {item.qq_openid ? <QqBindBadge openid={item.qq_openid} /> : null}
+      </div>
       {hasGlobalBan && (
         <button className="global-ban-btn" onClick={() => openBanDetail(item.steamid64)}>
           <span className="global-ban-icon">⚠</span>
@@ -94,6 +97,26 @@ function renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail, aut
       ) : null}
       <InternalNoteInline steamid64={item.steamid64} />
     </td>
+  );
+}
+
+// QQ 绑定徽章：玩家已绑定 QQ 时显示，悬停展示完整 openid
+function QqBindBadge({ openid }) {
+  const [show, setShow] = useState(false);
+  return (
+    <span
+      className="qq-bind-badge"
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+      tabIndex={0}
+      onFocus={() => setShow(true)}
+      onBlur={() => setShow(false)}
+      role="button"
+      aria-label={`QQ 已绑定：${openid}`}
+    >
+      <span className="qq-bind-icon" title="QQ 已绑定">💬</span>
+      {show && <span className="qq-bind-tooltip">QQ: {openid}</span>}
+    </span>
   );
 }
 

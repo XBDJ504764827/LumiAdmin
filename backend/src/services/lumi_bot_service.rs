@@ -1131,6 +1131,7 @@ mod tests {
                 rejected_at: None,
                 rejected_by: None,
                 rejection_reason: None,
+                qq_openid: None,
                 risk_profile: None,
             };
 
@@ -1235,6 +1236,7 @@ mod tests {
             rejected_at: None,
             rejected_by: None,
             rejection_reason: None,
+            qq_openid: None,
             risk_profile: None,
         }
     }
@@ -1280,6 +1282,7 @@ mod tests {
                 rejected_at: None,
                 rejected_by: None,
                 rejection_reason: None,
+                qq_openid: None,
                 risk_profile: None,
             };
 

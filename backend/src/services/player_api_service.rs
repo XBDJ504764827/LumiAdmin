@@ -2,7 +2,54 @@ use crate::{db::Database, services::observability_service};
 use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
+
+/// Webhook 配置缓存：配置变更极少（管理后台保存时主动失效），
+/// 而公网 /webhook 与分发循环每轮都会读配置，是 player_api 表全表扫描的来源。
+/// 缓存避免每次请求都打库。
+const CONFIG_CACHE_TTL: Duration = Duration::from_secs(30);
+
+struct WebhookConfigCache {
+    inner: Mutex<Option<(Instant, PlayerApiConfigResponse)>>,
+}
+
+impl WebhookConfigCache {
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new(None),
+        }
+    }
+
+    fn get(&self) -> Option<PlayerApiConfigResponse> {
+        let guard = self.inner.lock().ok()?;
+        let (at, config) = guard.as_ref()?;
+        if at.elapsed() >= CONFIG_CACHE_TTL {
+            None
+        } else {
+            Some(config.clone())
+        }
+    }
+
+    fn set(&self, config: PlayerApiConfigResponse) {
+        if let Ok(mut guard) = self.inner.lock() {
+            *guard = Some((Instant::now(), config));
+        }
+    }
+
+    fn invalidate(&self) {
+        if let Ok(mut guard) = self.inner.lock() {
+            *guard = None;
+        }
+    }
+}
+
+static WEBHOOK_CONFIG_CACHE: OnceLock<WebhookConfigCache> = OnceLock::new();
+
+fn webhook_config_cache() -> &'static WebhookConfigCache {
+    WEBHOOK_CONFIG_CACHE.get_or_init(WebhookConfigCache::new)
+}
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct PlayerApiPlayer {
@@ -151,6 +198,10 @@ pub async fn list_players(db: &Database) -> anyhow::Result<Vec<PlayerApiPlayer>>
 }
 
 pub async fn get_config(db: &Database) -> anyhow::Result<PlayerApiConfigResponse> {
+    if let Some(config) = webhook_config_cache().get() {
+        return Ok(config);
+    }
+
     let row = sqlx::query_as::<_, PlayerApiConfigRow>(
         r#"SELECT max_api_count, interval_seconds FROM player_api_config WHERE id = true"#,
     )
@@ -166,11 +217,13 @@ pub async fn get_config(db: &Database) -> anyhow::Result<PlayerApiConfigResponse
     .fetch_all(&db.pool)
     .await?;
 
-    Ok(PlayerApiConfigResponse {
+    let config = PlayerApiConfigResponse {
         max_api_count: row.max_api_count,
         interval_seconds: row.interval_seconds,
         items,
-    })
+    };
+    webhook_config_cache().set(config.clone());
+    Ok(config)
 }
 
 pub async fn save_config(
@@ -275,6 +328,7 @@ pub async fn save_config(
     }
 
     tx.commit().await?;
+    webhook_config_cache().invalidate();
     get_config(db).await
 }
 
@@ -616,6 +670,10 @@ pub async fn fetch_webhook_payload_by_path(
 }
 
 pub async fn dispatch_interval_seconds(db: &Database) -> anyhow::Result<u64> {
+    // 优先从进程内缓存读取，避免分配循环每轮打库。
+    if let Some(config) = webhook_config_cache().get() {
+        return Ok(config.interval_seconds.max(1) as u64);
+    }
     let row = sqlx::query_as::<_, (i32,)>(
         r#"SELECT interval_seconds FROM player_api_config WHERE id = true"#,
     )

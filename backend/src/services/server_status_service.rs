@@ -102,17 +102,25 @@ pub async fn report_server_status(
     .execute(&db.pool)
     .await?;
 
+    // last_reported_at 每次心跳都要刷新（离线判定依赖它），
+    // 但 players 聚合子查询（ARRAY_AGG 全服扫描）只在状态翻转为 online
+    // 或上次心跳超时后才执行，避免每个心跳都跑昂贵子查询。
     sqlx::query(
         r#"
         UPDATE servers
         SET status = 'online',
             last_reported_at = now(),
             max_players = GREATEST(max_players, $2),
-            players = COALESCE((
-                SELECT ARRAY_AGG(name ORDER BY name)
-                FROM server_online_players
-                WHERE server_id = $1
-            ), ARRAY[]::TEXT[])
+            players = CASE
+                WHEN status <> 'online' OR last_reported_at IS NULL
+                  OR last_reported_at < now() - interval '10 minutes'
+                THEN COALESCE((
+                    SELECT ARRAY_AGG(name ORDER BY name)
+                    FROM server_online_players
+                    WHERE server_id = $1
+                ), ARRAY[]::TEXT[])
+                ELSE players
+            END
         WHERE id = $1
         "#,
     )

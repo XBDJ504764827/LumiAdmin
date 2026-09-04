@@ -442,16 +442,55 @@ async fn active_ban(
     steam_id64: &str,
     ip_address: Option<&str>,
 ) -> anyhow::Result<Option<ActiveBanInfo>> {
+    // 拆成 steam 与 ip 两段独立查询：每段可各自命中部分索引，
+    // 避免 OR 组合条件导致全表扫描（进服检查的热点路径）。
+    if let Some(row) = query_active_ban_by_steam(db, steam_id64).await? {
+        return Ok(Some(row));
+    }
+    if let Some(ip) = ip_address {
+        if let Some(row) = query_active_ban_by_ip(db, ip).await? {
+            return Ok(Some(row));
+        }
+    }
+    Ok(None)
+}
+
+async fn query_active_ban_by_steam(
+    db: &Database,
+    steam_id64: &str,
+) -> anyhow::Result<Option<ActiveBanInfo>> {
     let row: Option<(uuid::Uuid, String, Option<DateTime<Utc>>)> = sqlx::query_as(
         r#"SELECT id, reason, expires_at
            FROM ban_records
            WHERE status = 'active'
+             AND steam_id = $1
              AND (expires_at IS NULL OR expires_at > now())
-             AND (($1::TEXT IS NOT NULL AND steam_id = $1) OR ($2::TEXT IS NOT NULL AND ip_address = $2))
            ORDER BY created_at DESC
            LIMIT 1"#,
     )
     .bind(steam_id64)
+    .fetch_optional(&db.pool)
+    .await?;
+    Ok(row.map(|(id, reason, expires_at)| ActiveBanInfo {
+        id,
+        reason,
+        expires_at,
+    }))
+}
+
+async fn query_active_ban_by_ip(
+    db: &Database,
+    ip_address: &str,
+) -> anyhow::Result<Option<ActiveBanInfo>> {
+    let row: Option<(uuid::Uuid, String, Option<DateTime<Utc>>)> = sqlx::query_as(
+        r#"SELECT id, reason, expires_at
+           FROM ban_records
+           WHERE status = 'active'
+             AND ip_address = $1
+             AND (expires_at IS NULL OR expires_at > now())
+           ORDER BY created_at DESC
+           LIMIT 1"#,
+    )
     .bind(ip_address)
     .fetch_optional(&db.pool)
     .await?;

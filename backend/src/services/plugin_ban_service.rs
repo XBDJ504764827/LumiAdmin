@@ -691,18 +691,17 @@ async fn check_plugin_ban_live(
         });
     }
 
-    let row = sqlx::query_as::<_, (Uuid, String, Option<chrono::DateTime<chrono::Utc>>)>(
-        r#"SELECT id, reason, expires_at FROM ban_records
-           WHERE status = 'active'
-             AND (expires_at IS NULL OR expires_at > now())
-             AND (($1::TEXT IS NOT NULL AND steam_id = $1) OR ($2::TEXT IS NOT NULL AND ip_address = $2))
-           ORDER BY created_at DESC
-           LIMIT 1"#,
-    )
-    .bind(steam_id.as_deref())
-    .bind(ip_address.as_deref())
-    .fetch_optional(&db.pool)
-    .await?;
+    // 拆成 steam 与 ip 两段独立查询,避免 OR 组合条件导致全表扫描。
+    // 每段都可命中对应的部分索引,配合 ActiveBanCache 兜底查询极少发生。
+    let row = match (&steam_id, &ip_address) {
+        (Some(sid), Some(ip)) => match query_active_ban_for_plugin(db, sid).await? {
+            Some(ban) => Some(ban),
+            None => query_active_ban_for_plugin_ip(db, ip).await?,
+        },
+        (Some(sid), None) => query_active_ban_for_plugin(db, sid).await?,
+        (None, Some(ip)) => query_active_ban_for_plugin_ip(db, ip).await?,
+        (None, None) => None,
+    };
 
     if let Some((ban_id, reason, expires_at)) = row {
         complete_missing_ban_details(
@@ -731,6 +730,42 @@ async fn check_plugin_ban_live(
     })
 }
 
+async fn query_active_ban_for_plugin(
+    db: &Database,
+    steam_id: &str,
+) -> anyhow::Result<Option<(Uuid, String, Option<chrono::DateTime<chrono::Utc>>)>> {
+    sqlx::query_as::<_, (Uuid, String, Option<chrono::DateTime<chrono::Utc>>)>(
+        r#"SELECT id, reason, expires_at FROM ban_records
+           WHERE status = 'active'
+             AND steam_id = $1
+             AND (expires_at IS NULL OR expires_at > now())
+           ORDER BY created_at DESC
+           LIMIT 1"#,
+    )
+    .bind(steam_id)
+    .fetch_optional(&db.pool)
+    .await
+    .map_err(Into::into)
+}
+
+async fn query_active_ban_for_plugin_ip(
+    db: &Database,
+    ip_address: &str,
+) -> anyhow::Result<Option<(Uuid, String, Option<chrono::DateTime<chrono::Utc>>)>> {
+    sqlx::query_as::<_, (Uuid, String, Option<chrono::DateTime<chrono::Utc>>)>(
+        r#"SELECT id, reason, expires_at FROM ban_records
+           WHERE status = 'active'
+             AND ip_address = $1
+             AND (expires_at IS NULL OR expires_at > now())
+           ORDER BY created_at DESC
+           LIMIT 1"#,
+    )
+    .bind(ip_address)
+    .fetch_optional(&db.pool)
+    .await
+    .map_err(Into::into)
+}
+
 pub async fn complete_missing_ban_details(
     db: &Database,
     ban_id: Uuid,
@@ -739,6 +774,7 @@ pub async fn complete_missing_ban_details(
     server: &ServerAuth,
     server_port: i32,
 ) -> anyhow::Result<()> {
+    // 仅当信息确实缺失/不同时才 Update，避免对象被重复封禁检查时每次都写库。
     sqlx::query(
         r#"UPDATE ban_records
            SET player = COALESCE(player, $2),
@@ -746,7 +782,14 @@ pub async fn complete_missing_ban_details(
                server_name = COALESCE(server_name, $4),
                server_id = COALESCE(server_id, $5),
                server_port = COALESCE(server_port, $6)
-           WHERE id = $1"#,
+           WHERE id = $1
+             AND (
+                 (player IS NULL AND $2 IS NOT NULL)
+                 OR (ip_address IS NULL AND $3 IS NOT NULL)
+                 OR (server_name IS NULL AND $4 IS NOT NULL)
+                 OR (server_id IS NULL AND $5 IS NOT NULL)
+                 OR (server_port IS NULL AND $6 IS NOT NULL)
+             )"#,
     )
     .bind(ban_id)
     .bind(player)

@@ -247,16 +247,15 @@ pub async fn evaluate_ip_ban_for_access(
         return Ok(None);
     };
     let steamid64 = steamid64.trim();
+    // 三路 UNION 先按 IP 精确命中（各自命中 ip 索引），聚合出同 IP 候选账号，
+    // 再 JOIN ban_records 过滤出存在本地有效封禁的账号，按最近关联时间取一条。
+    // 与原查询语义一致（原查询外层 WHERE EXISTS 与 SELECT 中的 EXISTS 条件相同，
+    // 因此返回行必然有 has_local_ban = true，排序中的 has_local_ban 为常量）。
     let row: Option<AccessRiskLinkedRow> = sqlx::query_as(
-        r#"SELECT linked.steam_id,
-                  linked.player_name,
-                  EXISTS (
-                    SELECT 1 FROM ban_records br
-                    WHERE br.steam_id = linked.steam_id
-                      AND br.status = 'active'
-                      AND (br.expires_at IS NULL OR br.expires_at > now())
-                  ) AS has_local_ban,
-                  linked.last_seen_at
+        r#"SELECT l.steam_id,
+                  l.player_name,
+                  true AS has_local_ban,
+                  l.last_seen_at
            FROM (
              SELECT steam_id, max(player_name) AS player_name, max(last_seen_at) AS last_seen_at
              FROM (
@@ -274,14 +273,12 @@ pub async fn evaluate_ip_ban_for_access(
              ) AS raw
              WHERE steam_id ~ '^[0-9]{17}$'
              GROUP BY steam_id
-           ) linked
-           WHERE EXISTS (
-             SELECT 1 FROM ban_records br
-             WHERE br.steam_id = linked.steam_id
-               AND br.status = 'active'
-               AND (br.expires_at IS NULL OR br.expires_at > now())
-           )
-           ORDER BY has_local_ban DESC, linked.last_seen_at DESC NULLS LAST
+           ) l
+           JOIN ban_records br
+             ON br.steam_id = l.steam_id
+            AND br.status = 'active'
+            AND (br.expires_at IS NULL OR br.expires_at > now())
+           ORDER BY l.last_seen_at DESC NULLS LAST
            LIMIT 1"#,
     )
     .bind(ip_address)

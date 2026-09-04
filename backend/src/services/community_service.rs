@@ -921,15 +921,29 @@ async fn sync_player_sessions(
     .execute(&mut **tx)
     .await?;
 
-    for player in players {
-        let first_seen_at = player.first_seen_at.unwrap_or(report_time);
+    // 批量 UPSERT：一次 INSERT ... SELECT ... FROM UNNEST(...) 完成全部玩家，
+    // 与 server_online_players 的批量写法保持一致，避免逐玩家单条 SQL。
+    if !players.is_empty() {
+        let steam_ids: Vec<&str> = players.iter().map(|p| p.steam_id64.as_str()).collect();
+        let player_names: Vec<&str> = players.iter().map(|p| p.name.as_str()).collect();
+        let ips: Vec<&str> = players.iter().map(|p| p.ip.as_str()).collect();
+        let pings: Vec<i32> = players.iter().map(|p| p.ping).collect();
+        let first_seen: Vec<DateTime<Utc>> = players
+            .iter()
+            .map(|p| p.first_seen_at.unwrap_or(report_time))
+            .collect();
+
         sqlx::query(
             r#"INSERT INTO player_server_sessions (
                  server_id, server_name, server_port, community_id, community_name,
                  steam_id64, player_name, ip, first_seen_at, last_seen_at,
                  last_ping, last_map, created_at, updated_at
                )
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $10, $10)
+               SELECT $1, $2, $3, $4, $5,
+                      u.steam_id64, u.player_name, u.ip, u.first_seen_at, $9,
+                      u.last_ping, $10, $9, $9
+               FROM UNNEST($6::TEXT[], $7::TEXT[], $8::TEXT[], $11::INTEGER[], $12::TIMESTAMPTZ[])
+                    AS u(steam_id64, player_name, ip, last_ping, first_seen_at)
                ON CONFLICT (server_id, steam_id64) WHERE left_at IS NULL DO UPDATE SET
                  server_name = EXCLUDED.server_name,
                  server_port = EXCLUDED.server_port,
@@ -949,13 +963,13 @@ async fn sync_player_sessions(
         .bind(server.port)
         .bind(server.community_id)
         .bind(&server.community_name)
-        .bind(&player.steam_id64)
-        .bind(&player.name)
-        .bind(&player.ip)
-        .bind(first_seen_at)
+        .bind(&steam_ids)
+        .bind(&player_names)
+        .bind(&ips)
         .bind(report_time)
-        .bind(player.ping)
         .bind(current_map)
+        .bind(&pings)
+        .bind(&first_seen)
         .execute(&mut **tx)
         .await?;
     }

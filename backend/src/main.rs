@@ -88,6 +88,8 @@ async fn main() -> anyhow::Result<()> {
         config.access_log_cleanup_interval_secs,
         config.access_log_retention_days,
     );
+    // 启动审计/操作日志/会话历史保留清理（默认每天一次）
+    services::log_retention_service::start_log_retention_loop(db.clone(), 86400);
     // 启动全球封禁同步（从 KZTimer GlobalAPI）— 在 active_ban_cache 创建后调用
     // （移到 active_ban_cache 初始化之后）
 
@@ -133,15 +135,6 @@ async fn main() -> anyhow::Result<()> {
         whitelist_cache.clone(),
         config.clone(),
         60,
-    );
-
-    // 使用 PostgreSQL LISTEN/NOTIFY 立即刷新访问相关缓存；固定周期刷新作为兜底。
-    services::access_cache::start_cache_invalidation_listener(
-        db.clone(),
-        access_snapshot.clone(),
-        server_config_cache.clone(),
-        active_ban_cache.clone(),
-        whitelist_cache.clone(),
     );
 
     // 使用 PostgreSQL LISTEN/NOTIFY 立即刷新访问相关缓存；固定周期刷新作为兜底。

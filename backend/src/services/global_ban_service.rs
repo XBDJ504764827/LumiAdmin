@@ -451,7 +451,14 @@ pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
 
 async fn sync_global_bans_locked(db: &Database) -> anyhow::Result<SyncResult> {
     let all_bans = fetch_all_active_kzt_bans().await?;
-    apply_authoritative_global_bans(db, &all_bans).await
+
+    // 一轮同步集中在单个事务内提交：KZTimer 本轮推回全量活跃封禁
+    // （通常数万条），逐条自动提交会产生数万次 WAL fsync。
+    // 事务化后每轮仅一次 fsync，且中途失败整体回滚，不会留下半同步状态。
+    let mut tx = db.pool.begin().await?;
+    let result = apply_authoritative_global_bans(&mut tx, &all_bans).await?;
+    tx.commit().await?;
+    Ok(result)
 }
 
 async fn fetch_all_active_kzt_bans() -> anyhow::Result<Vec<KZTBan>> {
@@ -528,7 +535,7 @@ where
 }
 
 async fn apply_authoritative_global_bans(
-    db: &Database,
+    tx: &mut sqlx::Transaction<'_, Postgres>,
     all_bans: &[KZTBan],
 ) -> anyhow::Result<SyncResult> {
     let mut result = SyncResult {
@@ -547,12 +554,12 @@ async fn apply_authoritative_global_bans(
             );
             continue;
         }
-        let (local_ban_id, manual_unbanned) = upsert_global_ban_metadata(db, ban).await?;
+        let (local_ban_id, manual_unbanned) = upsert_global_ban_metadata(&mut *tx, ban).await?;
         if manual_unbanned {
             continue;
         }
 
-        let outcome = sync_local_ban_for_global(db, ban, local_ban_id).await?;
+        let outcome = sync_local_ban_for_global(&mut *tx, ban, local_ban_id).await?;
         if outcome.created {
             result.new_bans += 1;
         }
@@ -567,7 +574,7 @@ async fn apply_authoritative_global_bans(
             )
             .bind(ban.id)
             .bind(outcome.local_id)
-            .execute(&db.pool)
+            .execute(&mut **tx)
             .await?;
         }
     }
@@ -576,14 +583,14 @@ async fn apply_authoritative_global_bans(
         tracing::warn!("KZTimer 全球封禁本轮返回 0 条，跳过自动解除缺失记录以避免误解封");
     } else {
         let active_ids: Vec<i64> = all_bans.iter().map(|ban| ban.id).collect();
-        result.expired = expire_missing_global_bans(db, &active_ids).await?;
+        result.expired = expire_missing_global_bans(&mut *tx, &active_ids).await?;
     }
 
     Ok(result)
 }
 
 async fn upsert_global_ban_metadata(
-    db: &Database,
+    tx: &mut sqlx::Transaction<'_, Postgres>,
     ban: &KZTBan,
 ) -> anyhow::Result<(Option<Uuid>, bool)> {
     let (local_ban_id, manual_unbanned): (Option<Uuid>, bool) = sqlx::query_as(
@@ -621,7 +628,7 @@ async fn upsert_global_ban_metadata(
     .bind(&ban.expires_on)
     .bind(&ban.created_on)
     .bind(&ban.updated_on)
-    .fetch_one(&db.pool)
+    .fetch_one(&mut **tx)
     .await?;
 
     Ok((local_ban_id, manual_unbanned))
@@ -635,7 +642,7 @@ struct LocalBanSyncOutcome {
 }
 
 async fn sync_local_ban_for_global(
-    db: &Database,
+    tx: &mut sqlx::Transaction<'_, Postgres>,
     ban: &KZTBan,
     local_ban_id: Option<Uuid>,
 ) -> anyhow::Result<LocalBanSyncOutcome> {
@@ -644,10 +651,10 @@ async fn sync_local_ban_for_global(
             "SELECT status FROM ban_records WHERE id = $1 AND source = 'global_ban'",
         )
         .bind(local_id)
-        .fetch_optional(&db.pool)
+        .fetch_optional(&mut **tx)
         .await?;
         if let Some((status,)) = existing {
-            update_local_ban_from_global(db, local_id, ban).await?;
+            update_local_ban_from_global(&mut *tx, local_id, ban).await?;
             return Ok(LocalBanSyncOutcome {
                 local_id,
                 created: false,
@@ -657,7 +664,7 @@ async fn sync_local_ban_for_global(
     }
 
     let local_id = create_local_ban(
-        db,
+        &mut *tx,
         &ban.steamid64,
         &ban.player_name,
         &ban.ban_type,
@@ -674,7 +681,7 @@ async fn sync_local_ban_for_global(
 }
 
 async fn update_local_ban_from_global(
-    db: &Database,
+    tx: &mut sqlx::Transaction<'_, Postgres>,
     local_id: Uuid,
     ban: &KZTBan,
 ) -> anyhow::Result<()> {
@@ -709,13 +716,16 @@ async fn update_local_ban_from_global(
     .bind(reason)
     .bind(created_at)
     .bind(expires_at)
-    .execute(&db.pool)
+    .execute(&mut **tx)
     .await?;
 
     Ok(())
 }
 
-async fn expire_missing_global_bans(db: &Database, active_ids: &[i64]) -> anyhow::Result<i64> {
+async fn expire_missing_global_bans(
+    tx: &mut sqlx::Transaction<'_, Postgres>,
+    active_ids: &[i64],
+) -> anyhow::Result<i64> {
     if active_ids.is_empty() {
         return Ok(0);
     }
@@ -739,7 +749,7 @@ async fn expire_missing_global_bans(db: &Database, active_ids: &[i64]) -> anyhow
              AND br.source = 'global_ban'"#,
     )
     .bind(active_ids)
-    .execute(&db.pool)
+    .execute(&mut **tx)
     .await?;
 
     Ok(result.rows_affected() as i64)
@@ -748,7 +758,7 @@ async fn expire_missing_global_bans(db: &Database, active_ids: &[i64]) -> anyhow
 /// 在 ban_records 中创建本地封禁（source = "global_ban"）
 /// 封禁时间使用 KZTimer 的 created_on，到期时间使用 KZTimer 的 expires_on
 async fn create_local_ban(
-    db: &Database,
+    tx: &mut sqlx::Transaction<'_, Postgres>,
     steam_id64: &str,
     player_name: &Option<String>,
     ban_type: &str,
@@ -775,7 +785,7 @@ async fn create_local_ban(
     .bind(reason)
     .bind(created_at)
     .bind(expires_at)
-    .execute(&db.pool)
+    .execute(&mut **tx)
     .await?;
 
     Ok(id)
@@ -1128,6 +1138,14 @@ mod tests {
         }
     }
 
+    /// 测试辅助：开一个事务执行同步，模拟与生产一致的单事务提交。
+    async fn apply_bans_in_tx(db: &Database, bans: &[KZTBan]) -> anyhow::Result<SyncResult> {
+        let mut tx = db.pool.begin().await?;
+        let result = apply_authoritative_global_bans(&mut tx, bans).await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+
     #[tokio::test]
     async fn active_ban_fetch_can_continue_past_legacy_100_page_limit() {
         let limit = 2;
@@ -1196,16 +1214,21 @@ mod tests {
             .execute(&db.pool)
             .await?;
 
-            let new_local_id = create_local_ban(
-                &db,
-                steam_id,
-                &Some("Player A".to_string()),
-                "cheat",
-                &Some("new global ban".to_string()),
-                Some("2099-06-30T00:00:00Z"),
-                None,
-            )
-            .await?;
+            let new_local_id = {
+                let mut tx = db.pool.begin().await?;
+                let id = create_local_ban(
+                    &mut tx,
+                    steam_id,
+                    &Some("Player A".to_string()),
+                    "cheat",
+                    &Some("new global ban".to_string()),
+                    Some("2099-06-30T00:00:00Z"),
+                    None,
+                )
+                .await?;
+                tx.commit().await?;
+                id
+            };
 
             let row: (String, String) =
                 sqlx::query_as("SELECT status, source FROM ban_records WHERE id = $1")
@@ -1233,7 +1256,7 @@ mod tests {
                 test_kzt_ban(1002, steam_id, "2099-06-30T00:00:03Z", None),
             ];
 
-            let result = apply_authoritative_global_bans(&db, &bans).await?;
+            let result = apply_bans_in_tx(&db, &bans).await?;
             assert_eq!(result.total_fetched, 2);
             assert_eq!(result.new_bans, 2);
 
@@ -1272,7 +1295,7 @@ mod tests {
                 "2099-06-01T00:00:00Z",
                 Some("2099-07-01T00:00:00Z"),
             );
-            apply_authoritative_global_bans(&db, &[global_ban]).await?;
+            apply_bans_in_tx(&db, &[global_ban]).await?;
 
             let (global_local_id,): (Option<Uuid>,) =
                 sqlx::query_as("SELECT local_ban_id FROM global_bans WHERE kzt_ban_id = $1")
@@ -1298,7 +1321,7 @@ mod tests {
 
             let other_active =
                 test_kzt_ban(2002, "76561198000000004", "2099-06-02T00:00:00Z", None);
-            let result = apply_authoritative_global_bans(&db, &[other_active]).await?;
+            let result = apply_bans_in_tx(&db, &[other_active]).await?;
             assert_eq!(result.expired, 1);
 
             let (global_status, global_removed_by): (String, Option<String>) =

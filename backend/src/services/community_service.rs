@@ -1007,21 +1007,24 @@ async fn sync_player_sessions(
     Ok(())
 }
 
+/// server_online_players 行的原始查询元组（OnlinePlayerItem 含填充字段，无法直接 FromRow）
+type OnlinePlayerRow = (
+    String,                // name
+    String,                // steam_id64
+    String,                // ip
+    i32,                   // ping
+    i32,                   // server_port
+    Option<String>,        // current_map
+    Option<DateTime<Utc>>, // reported_at
+);
+
 pub async fn list_online_players(
     db: &Database,
     server_id: Uuid,
 ) -> anyhow::Result<OnlinePlayersResponse> {
     // OnlinePlayerItem 含批量填充字段（非 SELECT 列），不能用 query_as 直映射，
     // 改为查询元组后手工组装。
-    let rows: Vec<(
-        String,
-        String,
-        String,
-        i32,
-        i32,
-        Option<String>,
-        Option<DateTime<Utc>>,
-    )> = sqlx::query_as(
+    let rows: Vec<OnlinePlayerRow> = sqlx::query_as(
         r#"
         SELECT name, steam_id64, ip, ping, server_port, current_map, reported_at
         FROM server_online_players

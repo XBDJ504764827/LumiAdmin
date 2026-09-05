@@ -294,6 +294,23 @@ pub(crate) async fn get_online_players(
     ))
 }
 
+/// 单玩家风险摘要（在线玩家卡片懒加载）。
+/// 复用玩家详情页同一套风险画像，列表页不做逐玩家查询。
+pub(crate) async fn online_player_risk(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Path((server_id, steamid64)): Path<(Uuid, String)>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let _actor = current_operator(&ctx, &headers).await?;
+    let _ = server_id; // 权限与 players 接口保持一致（登录管理员）
+
+    let profile =
+        crate::services::player_risk_service::build_player_risk_profile(&ctx.db, &steamid64)
+            .await
+            .map_err(invalid_request)?;
+    Ok(Json(serde_json::json!({ "risk_profile": profile })))
+}
+
 pub(crate) async fn get_server_report_token(
     State(ctx): State<AppCtx>,
     headers: HeaderMap,

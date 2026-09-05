@@ -37,7 +37,7 @@ export function ApiListPage() {
       <div className="card">
         <div className="card-body p-0">
           <div className="table-responsive">
-            <table className="data-table">
+            <table className="data-table mobile-card-table">
               <thead>
                 <tr>
                   <th>所属模块</th>
@@ -53,11 +53,11 @@ export function ApiListPage() {
                 {!loading && !error && endpointRows.length === 0 && <tr><td colSpan="5" style={{ textAlign: 'center', color: 'var(--text2)' }}>暂无 API 接口数据</td></tr>}
                 {!loading && !error && endpointRows.map((row) => (
                   <tr key={`${row.method}-${row.endpoint}`}>
-                    <td><span className={`status-pill ${toneClass[row.tone] || 'pill-info'}`}>{row.module}</span></td>
-                    <td className="fw-500">{row.name}</td>
-                    <td><span className={`method-badge ${methodClass[row.method]}`}>{row.method}</span></td>
-                    <td className="steam-id">{row.endpoint}</td>
-                    <td className="text-muted">{row.description}</td>
+                    <td data-label="所属模块"><span className={`status-pill ${toneClass[row.tone] || 'pill-info'}`}>{row.module}</span></td>
+                    <td data-label="接口名称" className="fw-500 mobile-card-primary">{row.name}</td>
+                    <td data-label="请求方式"><span className={`method-badge ${methodClass[row.method]}`}>{row.method}</span></td>
+                    <td data-label="路由地址" className="steam-id mobile-card-full">{row.endpoint}</td>
+                    <td data-label="描述说明" className="text-muted">{row.description}</td>
                   </tr>
                 ))}
               </tbody>

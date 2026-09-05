@@ -187,6 +187,10 @@ pub fn router(
             get(community::get_online_players),
         )
         .route(
+            "/api/community/servers/:server_id/players/:steamid64/risk",
+            get(community::online_player_risk),
+        )
+        .route(
             "/api/community/servers/:server_id/report-token",
             get(community::get_server_report_token),
         )

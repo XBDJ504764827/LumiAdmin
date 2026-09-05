@@ -18,6 +18,11 @@ pub struct PlayerDetail {
     pub risk_profile: PlayerRiskProfile,
     pub whitelist: Vec<WhitelistRecord>,
     pub bans: Vec<PlayerBanRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gokz: Option<crate::services::gokz_cache::GokzStats>,
+    /// 进服行为统计（会话聚合：时长/时段/服务器/地图分布）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activity_stats: Option<PlayerActivityStats>,
     pub online_records: Vec<OnlineRecord>,
     pub player_sessions: Vec<PlayerServerSession>,
     pub access_logs: Vec<PlayerAccessRecord>,
@@ -69,6 +74,25 @@ pub struct PlayerSummary {
     pub evidence_file_count: usize,
     pub admin_action_count: usize,
     pub last_seen_at: Option<DateTime<Utc>>,
+}
+
+/// 进服行为统计：基于会话表聚合，用于识别代练/挂机/工作室等异常行为模式。
+#[derive(Debug, Serialize)]
+pub struct PlayerActivityStats {
+    /// 有时长数据的会话数（left_at 非空的已结束会话）
+    pub finished_sessions: i64,
+    /// 累计游戏时长（分钟，按 first_seen→left_seen 之和）
+    pub total_play_minutes: i64,
+    /// 平均单次时长（分钟，无数据为 0）
+    pub avg_play_minutes: i64,
+    /// 最长单次时长（分钟）
+    pub max_play_minutes: i64,
+    /// 活跃时段分布（UTC 小时 0-23 → 会话开始次数），用于识别深夜异常活跃
+    pub hourly_distribution: [i64; 24],
+    /// 最常出没服务器 Top（server_name, 次数）
+    pub top_servers: Vec<(String, i64)>,
+    /// 最常玩地图 Top（last_map, 次数）
+    pub top_maps: Vec<(String, i64)>,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -371,6 +395,7 @@ pub async fn get_player_detail(
         internal_profile,
         internal_note_history,
         risk_profile,
+        gokz,
     ) = tokio::try_join!(
         fetch_whitelist_records(db, &steamid64),
         fetch_ban_records(db, &steamid64),
@@ -381,9 +406,11 @@ pub async fn get_player_detail(
         fetch_internal_profile(db, &steamid64),
         fetch_internal_note_history(db, &steamid64),
         player_risk_service::build_player_risk_profile(db, &steamid64),
+        async { Ok(fetch_gokz_stats(db, &steamid64).await) },
     )?;
     // evidence_files 依赖 bans，需在第一批完成后执行
     let evidence_files = fetch_evidence_files(db, &bans).await?;
+    let activity_stats = build_activity_stats(&player_sessions);
 
     let search_terms = build_search_terms(SearchTermSources {
         identity: &identity,
@@ -478,6 +505,8 @@ pub async fn get_player_detail(
         profile,
         summary,
         risk_profile,
+        gokz,
+        activity_stats: Some(activity_stats),
         whitelist: whitelists,
         bans,
         online_records,
@@ -491,6 +520,70 @@ pub async fn get_player_detail(
         internal_note_history,
         timeline,
     })
+}
+
+/// 从 GOKZ 缓存读取战绩（PostgreSQL + 内存二级缓存，无则返回 None）。
+async fn fetch_gokz_stats(
+    db: &Database,
+    steamid64: &str,
+) -> Option<crate::services::gokz_cache::GokzStats> {
+    let manager = crate::services::gokz_cache::GokzCacheManager::new(db.clone());
+    manager.get(steamid64).await
+}
+
+/// 基于会话列表聚合进服行为统计（纯内存计算，数据已在 player_sessions 中）。
+fn build_activity_stats(sessions: &[PlayerServerSession]) -> PlayerActivityStats {
+    use std::collections::HashMap as FoldHashMap;
+
+    let mut finished_sessions = 0i64;
+    let mut total_play_minutes = 0i64;
+    let mut max_play_minutes = 0i64;
+    let mut hourly_distribution = [0i64; 24];
+    let mut server_counts: FoldHashMap<String, i64> = FoldHashMap::new();
+    let mut map_counts: FoldHashMap<String, i64> = FoldHashMap::new();
+
+    for session in sessions {
+        // 时段分布：按会话开始时间的小时（UTC，前端转换为本地时区展示）
+        use chrono::Timelike;
+        hourly_distribution[session.first_seen_at.with_timezone(&chrono::Utc).hour() as usize] += 1;
+        *server_counts
+            .entry(session.server_name.clone())
+            .or_insert(0) += 1;
+        let map = session.last_map.trim();
+        if !map.is_empty() {
+            *map_counts.entry(map.to_string()).or_insert(0) += 1;
+        }
+        if let Some(left_at) = session.left_at {
+            let minutes = (left_at - session.first_seen_at).num_minutes().max(0);
+            finished_sessions += 1;
+            total_play_minutes += minutes;
+            max_play_minutes = max_play_minutes.max(minutes);
+        }
+    }
+
+    let avg_play_minutes = if finished_sessions > 0 {
+        total_play_minutes / finished_sessions
+    } else {
+        0
+    };
+
+    let mut top_servers: Vec<(String, i64)> = server_counts.into_iter().collect();
+    top_servers.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    top_servers.truncate(3);
+
+    let mut top_maps: Vec<(String, i64)> = map_counts.into_iter().collect();
+    top_maps.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    top_maps.truncate(5);
+
+    PlayerActivityStats {
+        finished_sessions,
+        total_play_minutes,
+        avg_play_minutes,
+        max_play_minutes,
+        hourly_distribution,
+        top_servers,
+        top_maps,
+    }
 }
 
 pub async fn search_player_candidates(

@@ -634,6 +634,31 @@
 .player-record-table .col-time { width: 120px; white-space: nowrap; }
 .player-record-table .text-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
 
+/* ── GOKZ 战绩面板 ── */
+.player-gokz-panel { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; margin-top: 12px; }
+.player-gokz-mode { background: var(--surface2); border: 1px solid var(--border); border-top-width: 3px; border-radius: 8px; padding: 10px 10px 8px; text-align: center; }
+.player-gokz-mode-label { font-size: 12px; font-weight: 700; margin-bottom: 4px; }
+.player-gokz-rating { font-size: 17px; font-weight: 700; color: var(--text); }
+.player-gokz-sub { font-size: 11px; color: var(--text3); margin-top: 2px; }
+.player-gokz-empty { margin-top: 12px; font-size: 12px; color: var(--text3); background: var(--surface2); border-radius: 8px; padding: 10px 12px; }
+
+/* ── 进服行为统计 ── */
+.player-activity-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+.player-activity-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; text-align: center; }
+.player-activity-card.warn { border-color: var(--warning-border, #fcd34d); background: var(--warning-bg, #fef3c7); }
+.player-activity-value { font-size: 17px; font-weight: 700; color: var(--text); }
+.player-activity-card.warn .player-activity-value { color: var(--warning-text, #b45309); }
+.player-activity-label { font-size: 11.5px; color: var(--text3); margin-top: 4px; }
+.player-activity-section { margin-top: 14px; }
+.player-activity-title { font-size: 12.5px; font-weight: 600; color: var(--text2); margin-bottom: 8px; }
+.player-activity-hours { display: flex; align-items: flex-end; gap: 3px; height: 72px; }
+.player-activity-hour { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+.player-activity-hour span { font-size: 9px; color: var(--text3); margin-top: 3px; }
+.player-activity-bar { width: 100%; min-width: 4px; max-width: 18px; background: var(--accent); border-radius: 3px 3px 0 0; opacity: 0.75; }
+.player-activity-topgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 14px; }
+.player-activity-row { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 5px 0; border-bottom: 1px dashed var(--border); }
+.player-activity-row strong { flex-shrink: 0; color: var(--text2); }
+
 /* ── Empty / Welcome ── */
 .player-detail-empty { padding: 20px 16px; border-radius: var(--r-md); background: var(--surface2); color: var(--text3); font-size: 12.5px; text-align: center; border: 1px dashed var(--border); }
 .player-welcome-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow); overflow: hidden; }
@@ -1127,10 +1152,31 @@
   flex-shrink: 0;
 }
 .online-player-detail { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
-.online-player-name { font-size: 14px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.online-player-name { font-size: 14px; font-weight: 600; color: var(--text); }
 .online-player-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .online-player-tag { font-size: 11px; font-family: var(--mono); color: var(--text3); background: var(--surface2); padding: 1px 7px; border-radius: 6px; white-space: nowrap; }
 .online-player-tag-tag-ping { color: var(--teal); background: #e1f5ee; }
+/* 关联信息标签 */
+.online-player-tag-warn { color: var(--warning-text, #b45309); background: var(--warning-bg, #fef3c7); }
+.online-player-wl-approved { color: var(--success-text, #15803d); background: var(--success-bg, #dcfce7); font-family: inherit; }
+.online-player-wl-pending { color: var(--warning-text, #b45309); background: var(--warning-bg, #fef3c7); font-family: inherit; }
+.online-player-wl-rejected { color: var(--danger-text, #b91c1c); background: var(--danger-bg, #fee2e2); font-family: inherit; }
+.online-player-wl-none { font-family: inherit; opacity: 0.85; }
+.online-player-name { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; flex-wrap: wrap; }
+.online-player-badge { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 8px; white-space: nowrap; flex-shrink: 0; font-family: inherit; }
+.online-player-badge-ban { color: #fff; background: var(--danger, #ef4444); }
+.online-player-badge-global { color: var(--warning-text, #b45309); background: var(--warning-bg, #fef3c7); border: 1px solid var(--warning-border, #fcd34d); }
+.online-player-avatar-banned { box-shadow: 0 0 0 2px var(--danger, #ef4444); }
+/* 风险摘要懒加载面板 */
+.online-player-risk-panel { margin: 0; padding: 12px 16px; background: var(--surface2); border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+.online-player-risk-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.online-player-risk-pill { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 8px; white-space: nowrap; }
+.online-player-risk-block { color: #fff; background: var(--danger, #ef4444); }
+.online-player-risk-warning { color: var(--warning-text, #b45309); background: var(--warning-bg, #fef3c7); }
+.online-player-risk-info { color: var(--success-text, #15803d); background: var(--success-bg, #dcfce7); }
+.online-player-risk-summary { font-size: 12.5px; color: var(--text2); min-width: 0; overflow-wrap: anywhere; }
+.online-player-risk-recommendation { font-size: 12.5px; color: var(--text2); overflow-wrap: anywhere; }
+.online-player-risk-reasons { margin: 0; padding-left: 18px; font-size: 12px; color: var(--text3); display: flex; flex-direction: column; gap: 2px; }
 .online-player-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .online-player-actions .btn-sm { padding: 5px 12px; font-size: 12px; border-radius: var(--r-sm); }
 .online-player-ban-form { margin: 0; padding: 14px 16px; background: var(--surface2); border-top: 1px solid var(--border); }
@@ -1140,8 +1186,8 @@
 .ban-form-field select { padding: 6px 10px; font-size: 13px; border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--surface); color: var(--text); min-width: 100px; }
 .ban-form-field select:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 2px var(--focus-ring); }
 .online-player-action-form { margin: 0; padding: 10px 16px; background: var(--surface2); border-top: 1px solid var(--border); }
-.action-form-input-row { display: flex; gap: 8px; align-items: center; }
-.action-form-input { flex: 1; padding: 7px 12px; font-size: 13px; border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--surface); color: var(--text); outline: none; transition: border-color 0.15s, box-shadow 0.15s; }
+.action-form-input-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.action-form-input { flex: 1; min-width: 140px; padding: 7px 12px; font-size: 13px; border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--surface); color: var(--text); outline: none; transition: border-color 0.15s, box-shadow 0.15s; }
 .action-form-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--focus-ring); }
 .action-form-input::placeholder { color: var(--text3); }
 .btn-sm { padding: 6px 12px; font-size: 13px; }

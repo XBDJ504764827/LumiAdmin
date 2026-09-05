@@ -743,8 +743,8 @@ export function CommunityPage() {
           </div>
           <div className="form-group">
             <label>RCON 密码</label>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input type="password" className="form-control" placeholder={editingServerId ? '留空则不修改密码' : 'RCON 密码'} value={serverForm.rcon_password} onChange={(e) => handleServerFieldChange('rcon_password', e.target.value)} />
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <input type="password" className="form-control" style={{ flex: 1, minWidth: 160 }} placeholder={editingServerId ? '留空则不修改密码' : 'RCON 密码'} value={serverForm.rcon_password} onChange={(e) => handleServerFieldChange('rcon_password', e.target.value)} />
               {canMutate ? (
                 <button className="btn btn-outline" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} onClick={handleTestRcon} disabled={serverFeedback.testing}>
                   {serverFeedback.testing ? '测试中...' : '测试连接'}
@@ -1144,6 +1144,7 @@ export function CommunityPage() {
                 <OnlinePlayerCard
                   key={onlinePlayerKey(player)}
                   player={player}
+                  serverId={playersModal.serverId}
                   canOperate={canMutate}
                   onKick={(reason) => handleKickPlayer(player, reason)}
                   onBan={(duration, reason) => handleBanPlayer(player, duration, reason)}
@@ -1204,10 +1205,11 @@ export function CommunityPage() {
             </span>
             <span className="fw-600 fs-14">自定义命令</span>
           </div>
-          <div className="flex gap-8">
+          <div className="flex gap-8 flex-wrap">
             <input
               type="text"
               className="form-control w-full"
+              style={{ flex: 1, minWidth: 160 }}
               value={rconModal.customCommand}
               onChange={(e) => setRconModal((prev) => ({ ...prev, customCommand: e.target.value }))}
               placeholder={'输入 RCON 命令，如 sm_kick "玩家名"'}

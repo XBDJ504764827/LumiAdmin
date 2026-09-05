@@ -25,6 +25,7 @@ export const api = {
   deleteCommunityServer: (token, serverId) => request(`/api/community/servers/${serverId}`, { method: 'DELETE', headers: withAuth(token) }),
   testCommunityServerRcon: (token, body) => request('/api/community/servers/test-rcon', { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   communityServerPlayers: (token, serverId) => request(`/api/community/servers/${serverId}/players`, { headers: withAuth(token) }),
+  communityPlayerRisk: (token, serverId, steamid64) => request(`/api/community/servers/${serverId}/players/${encodeURIComponent(steamid64)}/risk`, { headers: withAuth(token) }),
   playerApiPlayers: (token) => request('/api/player-api/players', { headers: withAuth(token) }),
   playerApiConfig: (token) => request('/api/player-api/config', { headers: withAuth(token) }),
   updatePlayerApiConfig: (token, body) => request('/api/player-api/config', { method: 'PUT', headers: withAuth(token), body: JSON.stringify(body) }),

@@ -210,16 +210,16 @@ export function DashboardPage() {
           </div>
           <div className="card-body p-0">
             <div className="table-responsive">
-              <table className="data-table">
+              <table className="data-table mobile-card-table">
                 <thead>
                   <tr><th>管理员</th><th>权限组</th><th>状态</th></tr>
                 </thead>
                 <tbody>
                   {adminPreviewRows.map((admin) => (
                     <tr key={`${admin.role}-${admin.displayName}`}>
-                      <td><div className="user-cell"><div className="avatar avatar-info">{admin.initials}</div>{admin.displayName}</div></td>
-                      <td><span className={`role-badge ${admin.role}`}>{admin.roleLabel}</span></td>
-                      <td><span className="status-pill pill-online">{admin.status}</span></td>
+                      <td data-label="管理员" className="mobile-card-primary"><div className="user-cell"><div className="avatar avatar-info">{admin.initials}</div>{admin.displayName}</div></td>
+                      <td data-label="权限组"><span className={`role-badge ${admin.role}`}>{admin.roleLabel}</span></td>
+                      <td data-label="状态"><span className="status-pill pill-online">{admin.status}</span></td>
                     </tr>
                   ))}
                   {adminPreviewRows.length === 0 && <tr><td colSpan="3" style={{ textAlign: 'center', color: 'var(--text2)', padding: 24 }}>暂无管理员数据</td></tr>}
@@ -267,17 +267,17 @@ export function DashboardPage() {
         </div>
         <div className="card-body p-0">
           <div className="table-responsive">
-            <table className="data-table">
+            <table className="data-table mobile-card-table">
               <thead>
                 <tr><th>游戏昵称</th><th>SteamID64</th><th>状态</th><th>通过时间</th></tr>
               </thead>
               <tbody>
                 {(publicWhitelist.data?.items ?? []).map((x) => (
                   <tr key={`${x.nickname}-${x.steam_id64}`}>
-                    <td className="fw-600">{x.nickname}</td>
-                    <td className="steam-id">{x.steam_id64}</td>
-                    <td><span className="status-pill pill-online">已通过</span></td>
-                    <td className="text-muted-light">{x.submitted_at}</td>
+                    <td data-label="游戏昵称" className="fw-600 mobile-card-primary">{x.nickname}</td>
+                    <td data-label="SteamID64" className="steam-id mobile-card-full">{x.steam_id64}</td>
+                    <td data-label="状态"><span className="status-pill pill-online">已通过</span></td>
+                    <td data-label="通过时间" className="text-muted-light">{x.submitted_at}</td>
                   </tr>
                 ))}
               </tbody>

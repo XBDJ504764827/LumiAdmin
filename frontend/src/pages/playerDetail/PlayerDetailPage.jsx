@@ -4,6 +4,7 @@ import { api } from '../../lib/api.js';
 import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
+import { BanFormModal } from '../ban/BanFormModal.jsx';
 import { StatusPill } from '../../shared/StatusPill.jsx';
 import { Modal } from '../../shared/Modal.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
@@ -117,16 +118,45 @@ function GlobalBanPopup({items, onClose}) {
   function isPerma(e){return e&&e.startsWith('9999')}
   function expLabel(e){if(!e)return'永久';if(isPerma(e))return'永久';return formatChinaDateTime(e,{seconds:false})}
   return (<Modal open={true} title={`全球封禁详情 (${items.length} 条)`} onClose={onClose} wide footer={<button className="btn btn-outline" onClick={onClose}>关闭</button>}>
-    <div className="table-responsive"><table className="data-table"><thead><tr><th>类型</th><th>到期</th><th>备注</th><th>封禁时间</th><th>本地状态</th></tr></thead><tbody>
-      {items.map(item=>{const ban=item.ban;return(<tr key={ban.id}>
-        <td><StatusPill kind="danger">{banTypeLabel(ban.ban_type)}</StatusPill></td>
-        <td style={{whiteSpace:'nowrap'}}>{isPerma(ban.expires_on)?<span className="permanent-ban">永久</span>:expLabel(ban.expires_on)}</td>
-        <td className="text-ellipsis" style={{maxWidth:200}} title={ban.notes||''}>{ban.notes||'-'}</td>
-        <td style={{whiteSpace:'nowrap'}}>{formatChinaDateTime(ban.created_on,{seconds:false})}</td>
-        <td>{item.manual_unbanned?<StatusPill kind="default">已解封</StatusPill>:item.local_ban_id?<StatusPill kind="danger">已封禁</StatusPill>:<StatusPill kind="success">未封禁</StatusPill>}</td>
-      </tr>)})}
-    </tbody></table></div>
+    {/* 堆叠卡片而非表格：弹窗宽度有限，表格在移动端会严重溢出 */}
+    <div className="global-ban-list">
+      {items.map(item=>{const ban=item.ban;return(<div key={ban.id} className="global-ban-item">
+        <div className="global-ban-item-header">
+          <span className="global-ban-type">{banTypeLabel(ban.ban_type)}</span>
+          {isPerma(ban.expires_on)?<span className="global-ban-permanent">永久</span>:<span className="global-ban-temporary">{expLabel(ban.expires_on)}</span>}
+        </div>
+        <div className="global-ban-item-body">
+          <div className="global-ban-field"><span className="global-ban-label">封禁时间</span><span className="global-ban-value">{formatChinaDateTime(ban.created_on,{seconds:false})}</span></div>
+          {ban.notes&&<div className="global-ban-field"><span className="global-ban-label">备注</span><span className="global-ban-value">{ban.notes}</span></div>}
+          <div className="global-ban-field"><span className="global-ban-label">本地状态</span><span className="global-ban-value">{item.manual_unbanned?'已解封':item.local_ban_id?'已封禁':'未封禁'}</span></div>
+        </div>
+      </div>)})}
+    </div>
   </Modal>);
+}
+
+const GOKZ_MODES = [
+  { key: 'kzt', label: 'KZT', color: '#f59e0b' },
+  { key: 'skz', label: 'SKZ', color: '#3b82f6' },
+  { key: 'vnl', label: 'VNL', color: '#10b981' },
+  { key: 'ovr', label: 'OVR', color: '#ec4899' },
+];
+
+/// GOKZ 战绩面板：有缓存数据才渲染，无数据时显示灰色提示行。
+function GokzPanel({ gokz }) {
+  if (!gokz) return <div className="player-gokz-empty">暂无 GOKZ 战绩缓存（玩家未在 KZ 服务器出没或缓存过期）。</div>;
+  const modes = GOKZ_MODES.map(m => ({ ...m, data: gokz[m.key] })).filter(m => m.data);
+  if (modes.length === 0) return <div className="player-gokz-empty">GOKZ 缓存存在但无各模式数据。</div>;
+  return <div className="player-gokz-panel">
+    {modes.map(({ key, label, color, data }) => <div className="player-gokz-mode" key={key} style={{ borderTopColor: color }}>
+      <div className="player-gokz-mode-label" style={{ color }}>{label}</div>
+      {data.rating != null ? <>
+        <div className="player-gokz-rating">{Number(data.rating).toFixed(1)}</div>
+        <div className="player-gokz-sub">{data.rank != null ? `排名 #${data.rank}` : '无排名'}{data.points != null ? ` · ${Number(data.points).toFixed(0)} 分` : ''}</div>
+        {data.unique_map_finishes != null && <div className="player-gokz-sub">完图 {data.unique_map_finishes} 张</div>}
+      </> : <div className="player-gokz-sub">暂无 Rating</div>}
+    </div>)}
+  </div>;
 }
 
 function OverviewTab({detail, globalBans}) {
@@ -167,6 +197,7 @@ function OverviewTab({detail, globalBans}) {
               <div><strong>内部标记</strong><p>{internalTags.length>0?internalTags.map(t=>`#${t}`).join(' '):(detail.internal_profile?.note||'暂无内部备注或标签。')}</p></div>
             </div>
           </div>
+          <GokzPanel gokz={detail.gokz}/>
         </div>
       </div>
 
@@ -256,19 +287,71 @@ function TimelineTab({detail}) {
 }
 
 function SessionTable({sessions=[], emptyText='暂无服务器会话记录。'}) {
-  return sessions.length===0?<Empty>{emptyText}</Empty>:<div className="table-responsive"><table className="data-table player-record-table"><thead><tr><th>服务器</th><th>进入时间</th><th>退出时间</th><th>退出原因</th><th>时长</th><th>IP</th><th>Ping</th><th>地图</th><th>玩家名</th></tr></thead><tbody>
+  return sessions.length===0?<Empty>{emptyText}</Empty>:<div className="table-responsive"><table className="data-table player-record-table mobile-card-table"><thead><tr><th>服务器</th><th>进入时间</th><th>退出时间</th><th>退出原因</th><th>时长</th><th>IP</th><th>Ping</th><th>地图</th><th>玩家名</th></tr></thead><tbody>
     {sessions.map(item=><tr key={item.id}>
-      <td className="fw-600">{item.server_name}:{item.server_port}<br/><span style={{color:'var(--text3)',fontSize:'11.5px'}}>{item.community_name||'-'}</span></td>
-      <td style={{fontFamily:'var(--mono)',fontSize:'12px',whiteSpace:'nowrap'}}>{formatChinaDateTime(item.first_seen_at,{seconds:false})}</td>
-      <td style={{fontFamily:'var(--mono)',fontSize:'12px',whiteSpace:'nowrap'}}><StatusPill kind={item.left_at?'offline':'success'}>{item.left_at?'已退出':'在线'}</StatusPill><div className="player-table-sub">{sessionEndLabel(item)}</div></td>
-      <td><StatusPill kind={sessionReasonKind(item.end_reason)}>{item.left_at?sessionReasonLabel(item.end_reason):'仍在线'}</StatusPill>{item.end_detail?<div className="player-table-sub text-break">{item.end_detail}</div>:null}</td>
-      <td>{sessionDurationLabel(item.duration_seconds)}</td>
-      <td className="steam-id">{item.ip||'-'}</td>
-      <td>{item.last_ping??'-'}</td>
-      <td>{item.last_map||'-'}</td>
-      <td>{item.player_name||'-'}</td>
+      <td className="fw-600 mobile-card-primary" data-label="服务器">{item.server_name}:{item.server_port}<br/><span style={{color:'var(--text3)',fontSize:'11.5px'}}>{item.community_name||'-'}</span></td>
+      <td data-label="进入时间" style={{fontFamily:'var(--mono)',fontSize:'12px'}}>{formatChinaDateTime(item.first_seen_at,{seconds:false})}</td>
+      <td data-label="退出状态"><StatusPill kind={item.left_at?'offline':'success'}>{item.left_at?'已退出':'在线'}</StatusPill><div className="player-table-sub">{sessionEndLabel(item)}</div></td>
+      <td data-label="退出原因"><StatusPill kind={sessionReasonKind(item.end_reason)}>{item.left_at?sessionReasonLabel(item.end_reason):'仍在线'}</StatusPill>{item.end_detail?<div className="player-table-sub text-break">{item.end_detail}</div>:null}</td>
+      <td data-label="时长">{sessionDurationLabel(item.duration_seconds)}</td>
+      <td data-label="IP" className="steam-id">{item.ip||'-'}</td>
+      <td data-label="Ping">{item.last_ping??'-'}</td>
+      <td data-label="地图">{item.last_map||'-'}</td>
+      <td data-label="玩家名">{item.player_name||'-'}</td>
     </tr>)}
   </tbody></table></div>
+}
+
+/// 进服行为统计条：时长聚合 + 活跃时段分布 + Top 服务器/地图。
+/// 数据来自后端 activity_stats（会话表聚合）。
+function ActivityStatsBar({ stats }) {
+  if (!stats) return null;
+  const fmtMinutes = (m) => m >= 1440 ? `${Math.floor(m / 1440)} 天 ${(m % 1440 / 60).toFixed(0)} 小时` : m >= 60 ? `${(m / 60).toFixed(1)} 小时` : `${m} 分钟`;
+  // 深夜时段（本地 0-6 点，按 UTC+8 转换即 UTC 16-23 桶）会话占比
+  const nightBuckets = [16, 17, 18, 19, 20, 21, 22, 23]; // UTC 16-23 ≈ 本地 0-7 点
+  const nightCount = nightBuckets.reduce((sum, h) => sum + (stats.hourly_distribution?.[h] || 0), 0);
+  const totalCount = (stats.hourly_distribution || []).reduce((a, b) => a + b, 0);
+  const nightRatio = totalCount > 0 ? nightCount / totalCount : 0;
+  const maxHour = Math.max(...(stats.hourly_distribution || [0]));
+  const cards = [
+    { label: '累计时长', value: fmtMinutes(stats.total_play_minutes || 0) },
+    { label: '平均单次', value: fmtMinutes(stats.avg_play_minutes || 0) },
+    { label: '最长单次', value: fmtMinutes(stats.max_play_minutes || 0) },
+    { label: '深夜活跃占比', value: `${(nightRatio * 100).toFixed(0)}%`, warn: nightRatio > 0.4 },
+  ];
+  return <div className="card"><div className="card-header"><div><div className="card-title">行为统计</div><div className="card-sub">基于会话记录聚合。深夜时段（本地 0-7 点）高占比是代练/工作室的常见特征。</div></div></div><div className="card-body">
+    <div className="player-activity-cards">
+      {cards.map(c => <div className={`player-activity-card ${c.warn ? 'warn' : ''}`} key={c.label}>
+        <div className="player-activity-value">{c.value}</div>
+        <div className="player-activity-label">{c.label}</div>
+      </div>)}
+    </div>
+    <div className="player-activity-section">
+      <div className="player-activity-title">活跃时段（本地时间，共 {totalCount} 次会话）</div>
+      <div className="player-activity-hours">
+        {Array.from({ length: 24 }, (_, h) => {
+          // 桶为 UTC 小时，展示为本地（UTC+8）小时
+          const localH = (h + 8) % 24;
+          const v = stats.hourly_distribution?.[h] || 0;
+          const pct = maxHour > 0 ? (v / maxHour) * 100 : 0;
+          return <div className="player-activity-hour" key={h} title={`${localH}:00-${localH + 1}:00 · ${v} 次`}>
+            <div className="player-activity-bar" style={{ height: `${Math.max(pct, v > 0 ? 8 : 2)}%` }} />
+            <span>{localH}</span>
+          </div>;
+        })}
+      </div>
+    </div>
+    {(stats.top_servers?.length > 0 || stats.top_maps?.length > 0) && <div className="player-activity-topgrid">
+      {stats.top_servers?.length > 0 && <div>
+        <div className="player-activity-title">最常出没服务器</div>
+        {stats.top_servers.map(([name, n]) => <div className="player-activity-row" key={name}><span className="text-ellipsis" style={{ maxWidth: 180 }}>{name}</span><strong>{n} 次</strong></div>)}
+      </div>}
+      {stats.top_maps?.length > 0 && <div>
+        <div className="player-activity-title">最常玩地图</div>
+        {stats.top_maps.map(([name, n]) => <div className="player-activity-row" key={name}><span className="mono" style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span><strong>{n} 次</strong></div>)}
+      </div>}
+    </div>}
+  </div></div>;
 }
 
 function AccessTab({detail}) {
@@ -276,17 +359,18 @@ function AccessTab({detail}) {
   const currentOnline = detail.online_records || [];
   const sessions = detail.player_sessions || [];
   return <>
+    <ActivityStatsBar stats={detail.activity_stats}/>
     <div className="card"><div className="card-header"><div><div className="card-title">进服成功 / 失败明细</div><div className="card-sub">展示进入服务器的判定方式、失败原因、IP、Rating 和 Steam 等级。</div></div></div><div className="card-body p-0">
-      {accessLogs.length===0?<Empty>暂无进服尝试日志。</Empty>:<div className="table-responsive"><table className="data-table player-record-table"><thead><tr><th>时间</th><th>结果</th><th>服务器</th><th>IP</th><th>方式 / 原因</th><th>Rating</th><th>Steam等级</th><th>玩家名</th></tr></thead><tbody>
+      {accessLogs.length===0?<Empty>暂无进服尝试日志。</Empty>:<div className="table-responsive"><table className="data-table player-record-table mobile-card-table"><thead><tr><th>时间</th><th>结果</th><th>服务器</th><th>IP</th><th>方式 / 原因</th><th>Rating</th><th>Steam等级</th><th>玩家名</th></tr></thead><tbody>
         {accessLogs.map(item=><tr key={item.id} className={!item.allowed?'row-access-denied':undefined}>
-          <td style={{fontFamily:'var(--mono)',fontSize:'12px',whiteSpace:'nowrap'}}>{formatChinaDateTime(item.created_at,{seconds:false})}</td>
-          <td><StatusPill kind={item.allowed?'success':'danger'}>{item.allowed?'成功':'失败'}</StatusPill></td>
-          <td className="fw-600">{item.server_name}:{item.server_port}<br/><span style={{color:'var(--text3)',fontSize:'11.5px'}}>{item.community_name||'-'}</span></td>
-          <td className="steam-id">{item.ip_address||'-'}</td>
-          <td><StatusPill kind={item.allowed?'success':'danger'}>{methodLabel(item.access_method)}</StatusPill><div className="player-table-sub">{item.allowed?'允许原因':failureLabel(item)}</div></td>
-          <td>{item.rating??'-'}</td>
-          <td>{item.steam_level??'-'}</td>
-          <td>{item.player_name||'-'}</td>
+          <td data-label="时间" style={{fontFamily:'var(--mono)',fontSize:'12px'}}>{formatChinaDateTime(item.created_at,{seconds:false})}</td>
+          <td data-label="结果"><StatusPill kind={item.allowed?'success':'danger'}>{item.allowed?'成功':'失败'}</StatusPill></td>
+          <td data-label="服务器" className="fw-600 mobile-card-primary">{item.server_name}:{item.server_port}<br/><span style={{color:'var(--text3)',fontSize:'11.5px'}}>{item.community_name||'-'}</span></td>
+          <td data-label="IP" className="steam-id">{item.ip_address||'-'}</td>
+          <td data-label="方式 / 原因"><StatusPill kind={item.allowed?'success':'danger'}>{methodLabel(item.access_method)}</StatusPill><div className="player-table-sub">{item.allowed?'允许原因':failureLabel(item)}</div></td>
+          <td data-label="Rating">{item.rating??'-'}</td>
+          <td data-label="Steam等级">{item.steam_level??'-'}</td>
+          <td data-label="玩家名">{item.player_name||'-'}</td>
         </tr>)}
       </tbody></table></div>}
     </div></div>
@@ -296,14 +380,14 @@ function AccessTab({detail}) {
     </div></div>
 
     <div className="card"><div className="card-header"><div><div className="card-title">当前在线服务器</div><div className="card-sub">来自服务器实时上报快照。</div></div></div><div className="card-body p-0">
-      {currentOnline.length===0?<Empty>当前没有在已上报服务器中。</Empty>:<div className="table-responsive"><table className="data-table player-record-table"><thead><tr><th>服务器</th><th>社区</th><th>上报时间</th><th>IP</th><th>Ping</th><th>地图</th></tr></thead><tbody>
+      {currentOnline.length===0?<Empty>当前没有在已上报服务器中。</Empty>:<div className="table-responsive"><table className="data-table player-record-table mobile-card-table"><thead><tr><th>服务器</th><th>社区</th><th>上报时间</th><th>IP</th><th>Ping</th><th>地图</th></tr></thead><tbody>
         {currentOnline.map((item,i)=><tr key={`${item.server_id}-${item.reported_at}-${i}`}>
-          <td className="fw-600">{item.server_name}:{item.server_port}</td>
-          <td>{item.community_name||'-'}</td>
-          <td style={{fontFamily:'var(--mono)',fontSize:'12px',whiteSpace:'nowrap'}}>{formatChinaDateTime(item.reported_at,{seconds:false})}</td>
-          <td className="steam-id">{item.ip}</td>
-          <td>{item.ping}</td>
-          <td>{item.current_map||'-'}</td>
+          <td data-label="服务器" className="fw-600 mobile-card-primary">{item.server_name}:{item.server_port}</td>
+          <td data-label="社区">{item.community_name||'-'}</td>
+          <td data-label="上报时间" style={{fontFamily:'var(--mono)',fontSize:'12px'}}>{formatChinaDateTime(item.reported_at,{seconds:false})}</td>
+          <td data-label="IP" className="steam-id">{item.ip}</td>
+          <td data-label="Ping">{item.ping}</td>
+          <td data-label="地图">{item.current_map||'-'}</td>
         </tr>)}
       </tbody></table></div>}
     </div></div>
@@ -315,25 +399,25 @@ function StatusTab({detail, token, onRefresh}) {
   const [popup, setPopup] = useState(null);
   return <>
     <div className="card"><div className="card-header"><div><div className="card-title">历史封禁履历表</div><div className="card-sub">点击行查看详情并操作。</div></div></div><div className="card-body p-0">
-      {detail.bans.length===0?<Empty>暂无封禁记录。</Empty>:<div className="table-responsive"><table className="data-table player-record-table"><thead><tr><th>执行时间</th><th>封禁维度</th><th>时长</th><th>封禁理由</th><th>操作人</th><th>状态</th></tr></thead><tbody>
+      {detail.bans.length===0?<Empty>暂无封禁记录。</Empty>:<div className="table-responsive"><table className="data-table player-record-table mobile-card-table"><thead><tr><th>执行时间</th><th>封禁维度</th><th>时长</th><th>封禁理由</th><th>操作人</th><th>状态</th></tr></thead><tbody>
         {detail.bans.map(item=><tr key={item.id} style={{cursor:'pointer'}} onClick={()=>setPopup({type:'ban',item})}>
-          <td style={{fontFamily:'var(--mono)',fontSize:'12px',whiteSpace:'nowrap'}}>{formatChinaDateTime(item.created_at,{seconds:false})}</td>
-          <td>{item.ban_type==='ip'?'账号+IP':'账号'}</td>
-          <td style={{color:item.status==='active'?'var(--danger-text)':'var(--text2)'}}>{durLabel(item.duration_minutes)}</td>
-          <td className="text-ellipsis" style={{maxWidth:240}} title={item.reason}>{item.reason}</td>
-          <td>{item.operator_name||'-'}</td>
-          <td><StatusPill kind={stKind(item.status,'ban')}>{stLabel(item.status)}</StatusPill></td>
+          <td data-label="执行时间" style={{fontFamily:'var(--mono)',fontSize:'12px'}}>{formatChinaDateTime(item.created_at,{seconds:false})}</td>
+          <td data-label="封禁维度">{item.ban_type==='ip'?'账号+IP':'账号'}</td>
+          <td data-label="时长" style={{color:item.status==='active'?'var(--danger-text)':'var(--text2)'}}>{durLabel(item.duration_minutes)}</td>
+          <td data-label="封禁理由" className="mobile-card-full" title={item.reason}>{item.reason}</td>
+          <td data-label="操作人">{item.operator_name||'-'}</td>
+          <td data-label="状态"><StatusPill kind={stKind(item.status,'ban')}>{stLabel(item.status)}</StatusPill></td>
         </tr>)}
       </tbody></table></div>}
     </div></div>
     <div className="card"><div className="card-header"><div><div className="card-title">社区白名单记录</div><div className="card-sub">点击行查看详情并审核。</div></div></div><div className="card-body p-0">
-      {detail.whitelist.length===0?<Empty>暂无白名单记录。</Empty>:<div className="table-responsive"><table className="data-table player-record-table"><thead><tr><th>提交时间</th><th>昵称</th><th>审核人</th><th>审核意见</th><th>状态</th></tr></thead><tbody>
+      {detail.whitelist.length===0?<Empty>暂无白名单记录。</Empty>:<div className="table-responsive"><table className="data-table player-record-table mobile-card-table"><thead><tr><th>提交时间</th><th>昵称</th><th>审核人</th><th>审核意见</th><th>状态</th></tr></thead><tbody>
         {detail.whitelist.map(item=><tr key={item.id} style={{cursor:'pointer'}} onClick={()=>setPopup({type:'whitelist',item})}>
-          <td style={{fontFamily:'var(--mono)',fontSize:'12px',whiteSpace:'nowrap'}}>{formatChinaDateTime(item.applied_at,{seconds:false})}</td>
-          <td className="fw-600">{item.nickname}</td>
-          <td>{item.approved_by||item.rejected_by||item.revoked_by||'-'}</td>
-          <td className="text-ellipsis" style={{maxWidth:160}}>{item.approval_reason||item.rejection_reason||'-'}</td>
-          <td><StatusPill kind={stKind(item.status,'whitelist')}>{stLabel(item.status)}</StatusPill></td>
+          <td data-label="提交时间" style={{fontFamily:'var(--mono)',fontSize:'12px'}}>{formatChinaDateTime(item.applied_at,{seconds:false})}</td>
+          <td data-label="昵称" className="fw-600 mobile-card-primary">{item.nickname}</td>
+          <td data-label="审核人">{item.approved_by||item.rejected_by||item.revoked_by||'-'}</td>
+          <td data-label="审核意见" className="mobile-card-full">{item.approval_reason||item.rejection_reason||'-'}</td>
+          <td data-label="状态"><StatusPill kind={stKind(item.status,'whitelist')}>{stLabel(item.status)}</StatusPill></td>
         </tr>)}
       </tbody></table></div>}
     </div></div>
@@ -488,17 +572,17 @@ function NetworkTab({detail, token}) {
           })}
         </div>
       </div>
-      {selected.length > 0 && <div className="card-body player-relation-actions"><strong>已选 {selected.length} 个账号</strong><input className="form-control" style={{maxWidth:220}} value={tag} onChange={e=>setTag(e.target.value)} placeholder="标签名称"/><button className="btn btn-primary btn-sm" disabled={acting||!tag.trim()} onClick={()=>batch('add_tag')}>批量添加标签</button><button className="btn btn-outline btn-sm" disabled={acting||!tag.trim()} onClick={()=>batch('remove_tag')}>批量移除标签</button></div>}
+      {selected.length > 0 && <div className="card-body player-relation-actions"><strong>已选 {selected.length} 个账号</strong><input className="form-control" style={{maxWidth:220, flex:1, minWidth:140}} value={tag} onChange={e=>setTag(e.target.value)} placeholder="标签名称"/><button className="btn btn-primary btn-sm" disabled={acting||!tag.trim()} onClick={()=>batch('add_tag')}>批量添加标签</button><button className="btn btn-outline btn-sm" disabled={acting||!tag.trim()} onClick={()=>batch('remove_tag')}>批量移除标签</button></div>}
     </div>
     <div className="card"><div className="card-header"><div><div className="card-title">深度 IP 交叉与设备追踪表</div><div className="card-sub"><strong style={{color:'var(--accent)'}}>逆向检索同 IP 的关联 Steam 账号</strong>，包含关联账号白名单和封禁状态。</div></div></div><div className="card-body p-0">
-      {ipHistory.length===0?<Empty>暂无 IP 登录记录。</Empty>:<div className="table-responsive"><table className="data-table tree-table"><thead><tr><th>IP</th><th>首次/最后活跃</th><th>服务器</th><th>关联账号 / 白名单</th></tr></thead><tbody>
+      {ipHistory.length===0?<Empty>暂无 IP 登录记录。</Empty>:<div className="table-responsive"><table className="data-table tree-table mobile-card-table"><thead><tr><th>IP</th><th>首次/最后活跃</th><th>服务器</th><th>关联账号 / 白名单</th></tr></thead><tbody>
         {ipHistory.map(entry=>{const lb=entry.linked_accounts?.filter(a=>a.has_local_ban).length||0;const gb=entry.linked_accounts?.filter(a=>a.has_global_ban).length||0;const banned=lb+gb;return <React.Fragment key={entry.ip}>
-          <tr><td><code className="steam-id" style={{fontWeight:700,fontSize:'13px'}}>{entry.ip}</code></td>
-          <td style={{fontFamily:'var(--mono)',color:'var(--text2)',fontSize:'12px'}}>首:{entry.first_seen?formatChinaDateTime(entry.first_seen,{seconds:false}):'-'}<br/>末:{entry.last_seen?formatChinaDateTime(entry.last_seen,{seconds:false}):'-'}</td>
-          <td style={{color:'var(--text2)'}}>{entry.servers?.map(s=>`${s.server_name}${s.server_port?`:${s.server_port}`:''}`).join(', ')||'-'}</td>
-          <td>{entry.linked_accounts?.length>0?<span style={{color:banned>0?'var(--danger-text)':'var(--text2)',fontWeight:600}}>⚠ {entry.linked_accounts.length}个关联{banned>0?`（本地 ${lb} · 全球 ${gb}）`:''}</span>:<span style={{color:'var(--text3)'}}>无</span>}</td></tr>
-          {entry.linked_accounts?.map(acc=><tr key={acc.steam_id64}><td className="nested">└─关联</td><td style={{fontSize:'11px',color:'var(--text3)'}}>访问 {acc.access_count||0}次</td><td>{acc.servers?.join(', ')||'-'}</td>
-          <td>
+          <tr><td data-label="IP"><code className="steam-id" style={{fontWeight:700,fontSize:'13px'}}>{entry.ip}</code></td>
+          <td data-label="首次/最后活跃" className="mobile-card-full" style={{fontFamily:'var(--mono)',color:'var(--text2)',fontSize:'12px'}}>首:{entry.first_seen?formatChinaDateTime(entry.first_seen,{seconds:false}):'-'}<br/>末:{entry.last_seen?formatChinaDateTime(entry.last_seen,{seconds:false}):'-'}</td>
+          <td data-label="服务器" style={{color:'var(--text2)'}}>{entry.servers?.map(s=>`${s.server_name}${s.server_port?`:${s.server_port}`:''}`).join(', ')||'-'}</td>
+          <td data-label="关联账号" className="mobile-card-primary">{entry.linked_accounts?.length>0?<span style={{color:banned>0?'var(--danger-text)':'var(--text2)',fontWeight:600}}>⚠ {entry.linked_accounts.length}个关联{banned>0?`（本地 ${lb} · 全球 ${gb}）`:''}</span>:<span style={{color:'var(--text3)'}}>无</span>}</td></tr>
+          {entry.linked_accounts?.map(acc=><tr key={acc.steam_id64}><td data-label="关联账号" className="nested mobile-card-primary">└─关联</td><td data-label="访问次数" style={{fontSize:'11px',color:'var(--text3)'}}>访问 {acc.access_count||0}次</td><td data-label="服务器">{acc.servers?.join(', ')||'-'}</td>
+          <td data-label="状态" className="mobile-card-full">
             <div className="linked-account-cell">
               <span style={{fontWeight:600}}>{acc.player_name||'(未知)'}</span> <code className="steam-id" style={{fontSize:'11px'}}>{acc.steam_id64}</code>
               <div className="linked-account-pills">
@@ -522,12 +606,12 @@ function BehaviorTab({detail, token}) {
   const { toast } = useToast();
   return <>
     <div className="card"><div className="card-header"><div><div className="card-title">物理证据文件与媒体库</div></div></div><div className="card-body">
-      {detail.evidence_files.length===0?<Empty>暂无附件证据。</Empty>:<div className="table-responsive"><table className="data-table"><thead><tr><th>文件名称</th><th>归属</th><th>尺寸</th><th>上传时间</th><th>操作</th></tr></thead><tbody>
+      {detail.evidence_files.length===0?<Empty>暂无附件证据。</Empty>:<div className="table-responsive"><table className="data-table mobile-card-table"><thead><tr><th>文件名称</th><th>归属</th><th>尺寸</th><th>上传时间</th><th>操作</th></tr></thead><tbody>
         {detail.evidence_files.map(file=><tr key={`${file.source_type}-${file.id}`}>
-          <td style={{fontFamily:'var(--mono)',fontWeight:600,fontSize:'12px'}}>{file.file_name}</td><td>{file.source_label}</td>
-          <td style={{fontFamily:'var(--mono)'}}>{(file.file_size/1024/1024).toFixed(1)} MB</td>
-          <td style={{fontFamily:'var(--mono)',fontSize:'12px'}}>{formatChinaDateTime(file.uploaded_at,{seconds:false})}</td>
-          <td><button type="button" className="action-btn" onClick={async()=>{try{const result=await api.downloadPlayerEvidence(token,detail.profile.steamid64,file.source_type,file.id);if(result.url)window.open(result.url,'_blank','noopener,noreferrer');}catch(error){toast({title:'下载失败',message:error.message,tone:'danger'});}}}>下载</button></td>
+          <td data-label="文件名称" className="mobile-card-primary" style={{fontFamily:'var(--mono)',fontWeight:600,fontSize:'12px',overflowWrap:'anywhere'}}>{file.file_name}</td><td data-label="归属">{file.source_label}</td>
+          <td data-label="尺寸" style={{fontFamily:'var(--mono)'}}>{(file.file_size/1024/1024).toFixed(1)} MB</td>
+          <td data-label="上传时间" style={{fontFamily:'var(--mono)',fontSize:'12px'}}>{formatChinaDateTime(file.uploaded_at,{seconds:false})}</td>
+          <td data-label="操作"><button type="button" className="action-btn" onClick={async()=>{try{const result=await api.downloadPlayerEvidence(token,detail.profile.steamid64,file.source_type,file.id);if(result.url)window.open(result.url,'_blank','noopener,noreferrer');}catch(error){toast({title:'下载失败',message:error.message,tone:'danger'});}}}>下载</button></td>
         </tr>)}
       </tbody></table></div>}
     </div></div>
@@ -579,12 +663,23 @@ export function PlayerDetailPage() {
   const [candidatesLoading, setCandidatesLoading] = useState(false);
   const [candidateError, setCandidateError] = useState('');
   const [activeCandidateIndex, setActiveCandidateIndex] = useState(-1);
+  const [banFormOpen, setBanFormOpen] = useState(false);
   const searchWrapRef = useRef(null);
   const suppressCandidateSearchRef = useRef(false);
+  // 与封禁管理页一致：ban.create 权限或 developer/admin 角色可发起封禁
+  const canCreateBan = session?.permissions?.includes('ban.create') || session?.permissions?.includes('ban.manage') || session?.role === 'developer' || session?.role === 'admin';
 
   useEffect(() => {
     if (!token) return;
     api.playerTags(token).then(result => setTagCatalog(result.items || [])).catch(() => setTagCatalog([]));
+  }, [token]);
+
+  // 支持 /player-detail?steamid=xxx 直接查询（如从在线玩家卡片跳转）
+  useEffect(() => {
+    if (!token) return;
+    const urlSteamid = new URLSearchParams(window.location.search).get('steamid');
+    if (urlSteamid && urlSteamid.trim()) loadDetail(urlSteamid.trim());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   // 加载玩家详情
@@ -676,7 +771,10 @@ export function PlayerDetailPage() {
 
   return (<div id="player-detail" className="content-section active">
     <div className="breadcrumb"><span>核心管理</span><span className="sep">›</span><span className="current">玩家全息档案</span></div>
-    <div className="page-header"><div><div className="page-title">玩家详情</div><div className="page-sub">集中查看身份、风险、封禁、进服和工单记录。</div></div>{detail&&<button type="button" className="btn btn-outline" onClick={exportReport}>导出调查报告</button>}</div>
+    <div className="page-header"><div><div className="page-title">玩家详情</div><div className="page-sub">集中查看身份、风险、封禁、进服和工单记录。</div></div><div style={{ display: 'flex', gap: 8 }}>
+      {detail && canCreateBan && <button type="button" className="btn btn-danger" onClick={() => setBanFormOpen(true)}>发起封禁</button>}
+      {detail && <button type="button" className="btn btn-outline" onClick={exportReport}>导出调查报告</button>}
+    </div></div>
 
     <div className="card player-search-card">
       <form className="player-detail-search" onSubmit={e=>{e.preventDefault();submitSearch();}}>
@@ -769,6 +867,19 @@ export function PlayerDetailPage() {
     </>:null}
 
     {showGlobalBans&&<GlobalBanPopup items={globalBans||[]} onClose={()=>setShowGlobalBans(false)}/>}
+
+    {/* 快捷封禁：预填当前玩家信息，成功后刷新详情 */}
+    {detail && <BanFormModal
+      open={banFormOpen}
+      mode="create"
+      prefillForm={{
+        player: detail.profile?.display_name || '',
+        steam_id: detail.profile?.steamid64 || '',
+      }}
+      onClose={() => setBanFormOpen(false)}
+      onSuccess={() => { setBanFormOpen(false); refreshDetail(); }}
+      token={token}
+    />}
   </div>);
 }
 

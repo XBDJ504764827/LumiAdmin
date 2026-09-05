@@ -519,6 +519,7 @@
   .filter-toolbar-actions {
     justify-content: flex-start;
   }
+  .modal-overlay { padding: 12px; }
   .modal { max-width: 95vw; max-height: 90vh; }
   .tabs { width: 100%; overflow-x: auto; }
   .action-btn-group { flex-wrap: wrap; }

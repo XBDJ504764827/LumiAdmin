@@ -21,40 +21,43 @@ pub fn start_rcon_poll_loop(db: Database, base_interval_secs: u64) {
         Some(base_interval_secs),
         true,
     );
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(base_interval_secs));
-        let mut cached_servers: Vec<ExternalServer> = Vec::new();
-        let mut last_cache_refresh =
-            std::time::Instant::now() - Duration::from_secs(CACHE_TTL_SECS + 1); // 首次立即加载
+    super::task_runtime::spawn_persistent("external_server_rcon_poll", move || {
+        let db = db.clone();
+        async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(base_interval_secs));
+            let mut cached_servers: Vec<ExternalServer> = Vec::new();
+            let mut last_cache_refresh =
+                std::time::Instant::now() - Duration::from_secs(CACHE_TTL_SECS + 1); // 首次立即加载
 
-        loop {
-            interval.tick().await;
+            loop {
+                interval.tick().await;
 
-            // 缓存过期或为空时刷新
-            if last_cache_refresh.elapsed().as_secs() >= CACHE_TTL_SECS {
-                match external_server_service::list_enabled_servers(&db).await {
-                    Ok(servers) => {
-                        cached_servers = servers;
-                        last_cache_refresh = std::time::Instant::now();
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "刷新服务器缓存失败");
+                // 缓存过期或为空时刷新
+                if last_cache_refresh.elapsed().as_secs() >= CACHE_TTL_SECS {
+                    match external_server_service::list_enabled_servers(&db).await {
+                        Ok(servers) => {
+                            cached_servers = servers;
+                            last_cache_refresh = std::time::Instant::now();
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "刷新服务器缓存失败");
+                        }
                     }
                 }
-            }
 
-            if cached_servers.is_empty() {
-                continue;
-            }
+                if cached_servers.is_empty() {
+                    continue;
+                }
 
-            if let Err(error) = observability_service::observe_task(
-                "external_server_rcon_poll",
-                poll_once(&db, &cached_servers),
-                |_| format!("轮询 {} 台外部服务器", cached_servers.len()),
-            )
-            .await
-            {
-                tracing::warn!(%error, "RCON poll cycle failed");
+                if let Err(error) = observability_service::observe_task(
+                    "external_server_rcon_poll",
+                    poll_once(&db, &cached_servers),
+                    |_| format!("轮询 {} 台外部服务器", cached_servers.len()),
+                )
+                .await
+                {
+                    tracing::warn!(%error, "RCON poll cycle failed");
+                }
             }
         }
     });

@@ -20,28 +20,31 @@ pub fn start_log_retention_loop(db: Database, interval_secs: u64) {
         Some(interval_secs),
         true,
     );
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
-        loop {
-            interval.tick().await;
-            let result = cleanup_expired_logs(&db).await;
-            match observability_service::observe_task(
-                "log_retention_cleanup",
-                async { result },
-                |counts| {
-                    format!(
-                        "清理完成：audit {audit} 条、操作日志 {logs} 条、LumiBot 事件 {queue} 条、会话历史 {sessions} 条",
-                        audit = counts.0,
-                        logs = counts.1,
-                        queue = counts.2,
-                        sessions = counts.3,
-                    )
-                },
-            )
-            .await
-            {
-                Ok(_) => {}
-                Err(e) => tracing::warn!(%e, "审计/操作日志保留清理失败"),
+    super::task_runtime::spawn_persistent("log_retention_cleanup", move || {
+        let db = db.clone();
+        async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+            loop {
+                interval.tick().await;
+                let result = cleanup_expired_logs(&db).await;
+                match observability_service::observe_task(
+                    "log_retention_cleanup",
+                    async { result },
+                    |counts| {
+                        format!(
+                            "清理完成：audit {audit} 条、操作日志 {logs} 条、LumiBot 事件 {queue} 条、会话历史 {sessions} 条",
+                            audit = counts.0,
+                            logs = counts.1,
+                            queue = counts.2,
+                            sessions = counts.3,
+                        )
+                    },
+                )
+                .await
+                {
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(%e, "审计/操作日志保留清理失败"),
+                }
             }
         }
     });

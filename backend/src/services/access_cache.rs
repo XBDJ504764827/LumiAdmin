@@ -141,27 +141,31 @@ pub fn start_ban_cache_refresh_loop(db: Database, cache: Arc<ActiveBanCache>, in
         Some(interval_secs),
         true,
     );
-    tokio::spawn(async move {
-        if let Err(error) = observability_service::observe_task(
-            "active_ban_cache_refresh",
-            cache.refresh(&db),
-            |_| "初始封禁缓存刷新完成".to_string(),
-        )
-        .await
-        {
-            tracing::warn!(%error, "首次刷新活跃封禁缓存失败");
-        }
-        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
-        loop {
-            interval.tick().await;
+    super::task_runtime::spawn_persistent("active_ban_cache_refresh", move || {
+        let db = db.clone();
+        let cache = cache.clone();
+        async move {
             if let Err(error) = observability_service::observe_task(
                 "active_ban_cache_refresh",
                 cache.refresh(&db),
-                |_| "封禁缓存刷新完成".to_string(),
+                |_| "初始封禁缓存刷新完成".to_string(),
             )
             .await
             {
-                tracing::warn!(%error, "刷新活跃封禁缓存失败");
+                tracing::warn!(%error, "首次刷新活跃封禁缓存失败");
+            }
+            let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+            loop {
+                interval.tick().await;
+                if let Err(error) = observability_service::observe_task(
+                    "active_ban_cache_refresh",
+                    cache.refresh(&db),
+                    |_| "封禁缓存刷新完成".to_string(),
+                )
+                .await
+                {
+                    tracing::warn!(%error, "刷新活跃封禁缓存失败");
+                }
             }
         }
     });
@@ -186,7 +190,13 @@ pub fn start_cache_invalidation_listener(
         None,
         true,
     );
-    tokio::spawn(async move {
+    super::task_runtime::spawn_persistent("cache_invalidation_listener", move || {
+        let db = db.clone();
+        let snapshot = snapshot.clone();
+        let server_cache = server_cache.clone();
+        let ban_cache = ban_cache.clone();
+        let whitelist_cache = whitelist_cache.clone();
+        async move {
         loop {
             let mut listener = loop {
                 match sqlx::postgres::PgListener::connect_with(&db.pool).await {
@@ -256,6 +266,7 @@ pub fn start_cache_invalidation_listener(
                 }
             }
         }
+        }
     });
 }
 
@@ -271,27 +282,31 @@ pub fn start_whitelist_cache_refresh_loop(
         Some(interval_secs),
         true,
     );
-    tokio::spawn(async move {
-        if let Err(error) = observability_service::observe_task(
-            "whitelist_cache_refresh",
-            cache.refresh(&db),
-            |_| "初始白名单缓存刷新完成".to_string(),
-        )
-        .await
-        {
-            tracing::warn!(%error, "首次刷新白名单缓存失败");
-        }
-        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
-        loop {
-            interval.tick().await;
+    super::task_runtime::spawn_persistent("whitelist_cache_refresh", move || {
+        let db = db.clone();
+        let cache = cache.clone();
+        async move {
             if let Err(error) = observability_service::observe_task(
                 "whitelist_cache_refresh",
                 cache.refresh(&db),
-                |_| "白名单缓存刷新完成".to_string(),
+                |_| "初始白名单缓存刷新完成".to_string(),
             )
             .await
             {
-                tracing::warn!(%error, "刷新白名单缓存失败");
+                tracing::warn!(%error, "首次刷新白名单缓存失败");
+            }
+            let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+            loop {
+                interval.tick().await;
+                if let Err(error) = observability_service::observe_task(
+                    "whitelist_cache_refresh",
+                    cache.refresh(&db),
+                    |_| "白名单缓存刷新完成".to_string(),
+                )
+                .await
+                {
+                    tracing::warn!(%error, "刷新白名单缓存失败");
+                }
             }
         }
     });

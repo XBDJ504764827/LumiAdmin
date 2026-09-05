@@ -10,6 +10,7 @@ mod rate_limit_middleware;
 mod rcon;
 mod request_log_middleware;
 mod routes;
+mod security_headers_middleware;
 mod services;
 mod sql_fragments;
 #[cfg(test)]
@@ -157,6 +158,7 @@ async fn main() -> anyhow::Result<()> {
     let max_body = config.max_request_body_bytes;
     let request_timeout = Duration::from_secs(config.request_timeout_secs);
     let cors_origins = config.cors_origins();
+    let is_production = config.is_production;
     if cors_origins.is_empty() {
         tracing::warn!(
             "CORS_ORIGIN 未配置：管理后台仅允许同源访问，公开 /webhook/* 端点放行所有来源"
@@ -170,9 +172,9 @@ async fn main() -> anyhow::Result<()> {
         .start_cleanup_task(config.session_cleanup_interval_secs);
 
     let app = routes::router(
-        config,
-        db,
-        access_snapshot,
+        config.clone(),
+        db.clone(),
+        access_snapshot.clone(),
         server_config_cache,
         active_ban_cache,
         whitelist_cache,
@@ -192,6 +194,12 @@ async fn main() -> anyhow::Result<()> {
         },
         cors_middleware::cors_middleware,
     ))
+    .layer(axum::middleware::from_fn_with_state(
+        security_headers_middleware::SecurityHeadersState {
+            hsts_enabled: is_production,
+        },
+        security_headers_middleware::security_headers_middleware,
+    ))
     .layer(
         ServiceBuilder::new()
             .layer(CompressionLayer::new().gzip(true))
@@ -206,6 +214,33 @@ async fn main() -> anyhow::Result<()> {
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
+    .with_graceful_shutdown(shutdown_signal())
     .await?;
+    tracing::info!("HTTP 服务已停止，刷写最终访问快照后退出");
+    services::access_snapshot_service::shutdown_flush(&db, &access_snapshot).await;
     Ok(())
+}
+
+/// 阻塞直到收到 Ctrl+C 或 SIGTERM
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+    tracing::info!("收到退出信号，开始优雅关闭");
 }

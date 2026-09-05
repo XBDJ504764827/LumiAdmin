@@ -407,18 +407,21 @@ pub fn start_sync_loop(db: Database) {
         Some(5),
         true,
     );
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(5));
-        loop {
-            interval.tick().await;
-            if let Err(error) = observability_service::observe_task(
-                "external_ban_sync_outbox",
-                process_outbox_batch(&db),
-                |count| format!("处理外部封禁同步队列 {} 条", count),
-            )
-            .await
-            {
-                tracing::warn!(%error, "外部封禁同步队列处理失败");
+    super::task_runtime::spawn_persistent("external_ban_sync_outbox", move || {
+        let db = db.clone();
+        async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(5));
+            loop {
+                interval.tick().await;
+                if let Err(error) = observability_service::observe_task(
+                    "external_ban_sync_outbox",
+                    process_outbox_batch(&db),
+                    |count| format!("处理外部封禁同步队列 {} 条", count),
+                )
+                .await
+                {
+                    tracing::warn!(%error, "外部封禁同步队列处理失败");
+                }
             }
         }
     });

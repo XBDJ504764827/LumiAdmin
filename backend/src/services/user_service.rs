@@ -139,6 +139,9 @@ pub async fn create_user(db: &Database, input: CreateUserInput) -> anyhow::Resul
 
     anyhow::ensure!(!username.is_empty(), "用户名不能为空");
     anyhow::ensure!(!password.is_empty(), "密码不能为空");
+    if let Some(reason) = crate::password::validate_password_strength(password) {
+        anyhow::bail!(reason);
+    }
     anyhow::ensure!(matches!(role, "admin" | "normal"), "权限等级不合法");
 
     let password_hash = hash_password(password)?;
@@ -221,6 +224,9 @@ pub async fn update_user(
 pub async fn update_password(db: &Database, id: Uuid, password: &str) -> anyhow::Result<()> {
     let password = password.trim();
     anyhow::ensure!(!password.is_empty(), "密码不能为空");
+    if let Some(reason) = crate::password::validate_password_strength(password) {
+        anyhow::bail!(reason);
+    }
 
     let password_hash = hash_password(password)?;
     let mut tx = db.pool.begin().await?;

@@ -1025,7 +1025,10 @@ pub fn start_global_ban_sync_loop(
         None,
         true,
     );
-    tokio::spawn(async move {
+    super::task_runtime::spawn_persistent("global_ban_stale_cleanup", move || {
+        let db = db.clone();
+        let ban_cache = ban_cache.clone();
+        async move {
         // 启动时清理可能的误封禁数据
         match observability_service::observe_task(
             "global_ban_stale_cleanup",
@@ -1089,6 +1092,7 @@ pub fn start_global_ban_sync_loop(
                 }
                 Err(e) => tracing::warn!(%e, "全球封禁同步失败"),
             }
+        }
         }
     });
 }

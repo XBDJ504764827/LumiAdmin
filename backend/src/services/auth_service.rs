@@ -13,6 +13,11 @@ pub async fn login(
     password: &str,
     ttl_hours: i64,
 ) -> anyhow::Result<SessionResponse> {
+    // 账号维度爆破防护：与 IP 限流互补，攻击者换 IP 也无法慢速爆破同一账号。
+    // 15 分钟窗口内失败 5 次即锁定 15 分钟；登录成功后清零。
+    const FAILURE_WINDOW_MINS: i32 = 15;
+    const MAX_FAILURES: i64 = 5;
+
     let user = sqlx::query_as::<_, User>(
         r#"SELECT id, username, display_name, password_hash, role, steam_id, remark, openid, whitelist_notification_enabled, enabled, created_at FROM users WHERE username = $1"#,
     )
@@ -26,8 +31,33 @@ pub async fn login(
     }
 
     if !verify_password(password, &user.password_hash) {
+        let failures: (i64,) = sqlx::query_as(
+            r#"SELECT COUNT(*) FROM login_failures
+               WHERE username = $1 AND failed_at > now() - make_interval(mins => $2)"#,
+        )
+        .bind(username)
+        .bind(FAILURE_WINDOW_MINS)
+        .fetch_one(&db.pool)
+        .await?;
+        sqlx::query("INSERT INTO login_failures (username, failed_at) VALUES ($1, now())")
+            .bind(username)
+            .execute(&db.pool)
+            .await?;
+        if failures.0 + 1 >= MAX_FAILURES {
+            tracing::warn!(username, "登录失败次数达到阈值，账号临时锁定");
+        }
+        anyhow::ensure!(
+            failures.0 < MAX_FAILURES,
+            "登录失败次数过多，账号已临时锁定，请 15 分钟后再试"
+        );
         anyhow::bail!("invalid credentials");
     }
+
+    // 登录成功，清除该账号的失败记录
+    sqlx::query("DELETE FROM login_failures WHERE username = $1")
+        .bind(username)
+        .execute(&db.pool)
+        .await?;
 
     let session = build_session(&user, ttl_hours);
     sqlx::query(
@@ -103,6 +133,10 @@ pub async fn cleanup_expired_sessions(db: &Database) -> anyhow::Result<u64> {
     let result = sqlx::query("DELETE FROM sessions WHERE expires_at < NOW()")
         .execute(&db.pool)
         .await?;
+    // 顺带清理 1 天前的登录失败记录（锁定窗口仅 15 分钟，保留 1 天供审计排查）
+    sqlx::query("DELETE FROM login_failures WHERE failed_at < NOW() - interval '1 day'")
+        .execute(&db.pool)
+        .await?;
     Ok(result.rows_affected())
 }
 
@@ -115,20 +149,23 @@ pub fn start_session_cleanup_loop(db: Database, interval_secs: u64) {
         Some(interval_secs),
         true,
     );
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
-        loop {
-            interval.tick().await;
-            match observability_service::observe_task(
-                "session_cleanup",
-                cleanup_expired_sessions(&db),
-                |count| format!("清理 {} 个过期会话", count),
-            )
-            .await
-            {
-                Ok(0) => {}
-                Ok(count) => tracing::info!(count, "cleaned up expired sessions"),
-                Err(e) => tracing::warn!(%e, "failed to cleanup expired sessions"),
+    super::task_runtime::spawn_persistent("session_cleanup", move || {
+        let db = db.clone();
+        async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+            loop {
+                interval.tick().await;
+                match observability_service::observe_task(
+                    "session_cleanup",
+                    cleanup_expired_sessions(&db),
+                    |count| format!("清理 {} 个过期会话", count),
+                )
+                .await
+                {
+                    Ok(0) => {}
+                    Ok(count) => tracing::info!(count, "cleaned up expired sessions"),
+                    Err(e) => tracing::warn!(%e, "failed to cleanup expired sessions"),
+                }
             }
         }
     });

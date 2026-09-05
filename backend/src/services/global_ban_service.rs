@@ -1029,47 +1029,25 @@ pub fn start_global_ban_sync_loop(
         let db = db.clone();
         let ban_cache = ban_cache.clone();
         async move {
-        // 启动时清理可能的误封禁数据
-        match observability_service::observe_task(
-            "global_ban_stale_cleanup",
-            cleanup_stale_global_bans(&db),
-            |count| format!("清理 {} 条误封记录", count),
-        )
-        .await
-        {
-            Ok(0) => {}
-            Ok(n) => {
-                tracing::info!(count = n, "清理了因全球封禁过期但本地仍活跃的误封禁记录");
-                if let Err(e) = ban_cache.refresh(&db).await {
-                    tracing::warn!(%e, "清理后刷新封禁缓存失败");
-                }
-            }
-            Err(e) => tracing::warn!(%e, "清理误封禁数据失败"),
-        }
-
-        // 启动时执行一次全量同步
-        match observability_service::observe_task("global_ban_sync", sync_global_bans(&db), |r| {
-            format!(
-                "拉取 {} 条，新增 {}，过期 {}，重封 {}",
-                r.total_fetched, r.new_bans, r.expired, r.re_banned
+            // 启动时清理可能的误封禁数据
+            match observability_service::observe_task(
+                "global_ban_stale_cleanup",
+                cleanup_stale_global_bans(&db),
+                |count| format!("清理 {} 条误封记录", count),
             )
-        })
-        .await
-        {
-            Ok(r) => {
-                tracing::info!(?r, "全球封禁初始同步完成");
-                if r.new_bans > 0 || r.expired > 0 || r.re_banned > 0 {
+            .await
+            {
+                Ok(0) => {}
+                Ok(n) => {
+                    tracing::info!(count = n, "清理了因全球封禁过期但本地仍活跃的误封禁记录");
                     if let Err(e) = ban_cache.refresh(&db).await {
-                        tracing::warn!(%e, "同步后刷新封禁缓存失败");
+                        tracing::warn!(%e, "清理后刷新封禁缓存失败");
                     }
                 }
+                Err(e) => tracing::warn!(%e, "清理误封禁数据失败"),
             }
-            Err(e) => tracing::warn!(%e, "全球封禁初始同步失败"),
-        }
 
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
-        loop {
-            interval.tick().await;
+            // 启动时执行一次全量同步
             match observability_service::observe_task(
                 "global_ban_sync",
                 sync_global_bans(&db),
@@ -1083,16 +1061,42 @@ pub fn start_global_ban_sync_loop(
             .await
             {
                 Ok(r) => {
+                    tracing::info!(?r, "全球封禁初始同步完成");
                     if r.new_bans > 0 || r.expired > 0 || r.re_banned > 0 {
-                        tracing::info!(?r, "全球封禁同步完成");
                         if let Err(e) = ban_cache.refresh(&db).await {
                             tracing::warn!(%e, "同步后刷新封禁缓存失败");
                         }
                     }
                 }
-                Err(e) => tracing::warn!(%e, "全球封禁同步失败"),
+                Err(e) => tracing::warn!(%e, "全球封禁初始同步失败"),
             }
-        }
+
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+            loop {
+                interval.tick().await;
+                match observability_service::observe_task(
+                    "global_ban_sync",
+                    sync_global_bans(&db),
+                    |r| {
+                        format!(
+                            "拉取 {} 条，新增 {}，过期 {}，重封 {}",
+                            r.total_fetched, r.new_bans, r.expired, r.re_banned
+                        )
+                    },
+                )
+                .await
+                {
+                    Ok(r) => {
+                        if r.new_bans > 0 || r.expired > 0 || r.re_banned > 0 {
+                            tracing::info!(?r, "全球封禁同步完成");
+                            if let Err(e) = ban_cache.refresh(&db).await {
+                                tracing::warn!(%e, "同步后刷新封禁缓存失败");
+                            }
+                        }
+                    }
+                    Err(e) => tracing::warn!(%e, "全球封禁同步失败"),
+                }
+            }
         }
     });
 }

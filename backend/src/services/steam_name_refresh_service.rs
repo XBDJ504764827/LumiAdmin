@@ -19,7 +19,8 @@ pub fn start_steam_name_refresh_loop(db: Database, config: Config, interval_seco
             // 首次启动延迟30秒，避免与其他初始化任务冲突
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
 
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_seconds));
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(interval_seconds));
             loop {
                 interval.tick().await;
                 let resolver = SteamResolver::new(&config);

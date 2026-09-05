@@ -279,7 +279,8 @@ impl GokzCacheManager {
         super::task_runtime::spawn_persistent("gokz_cache_cleanup", move || {
             let manager = self.clone();
             async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+                let mut interval =
+                    tokio::time::interval(std::time::Duration::from_secs(interval_secs));
                 loop {
                     interval.tick().await;
                     if let Err(e) = observability_service::observe_task(

@@ -197,75 +197,75 @@ pub fn start_cache_invalidation_listener(
         let ban_cache = ban_cache.clone();
         let whitelist_cache = whitelist_cache.clone();
         async move {
-        loop {
-            let mut listener = loop {
-                match sqlx::postgres::PgListener::connect_with(&db.pool).await {
-                    Ok(mut listener) => {
-                        if let Err(error) = listener.listen("lumiadmin_cache").await {
-                            tracing::warn!(%error, "监听缓存变更频道失败");
-                            tokio::time::sleep(Duration::from_secs(5)).await;
-                            continue;
-                        }
-                        break listener;
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "连接缓存变更监听失败");
-                        tokio::time::sleep(Duration::from_secs(5)).await;
-                    }
-                }
-            };
-
             loop {
-                match listener.recv().await {
-                    Ok(notification) => {
-                        // 同一事务可能修改多张表，短暂合并已缓冲的通知，避免重复刷新。
-                        let mut kinds = vec![notification.payload().to_string()];
-                        while let Some(buffered) = listener.next_buffered() {
-                            kinds.push(buffered.payload().to_string());
-                        }
-                        let refresh_all = kinds.iter().any(|kind| kind == "all");
-                        let refresh_ban = refresh_all || kinds.iter().any(|kind| kind == "ban");
-                        let refresh_whitelist =
-                            refresh_all || kinds.iter().any(|kind| kind == "whitelist");
-                        let refresh_server =
-                            refresh_all || kinds.iter().any(|kind| kind == "server");
-                        let refresh_snapshot = refresh_all
-                            || refresh_ban
-                            || refresh_whitelist
-                            || refresh_server
-                            || kinds.iter().any(|kind| kind == "snapshot");
-
-                        if refresh_ban {
-                            if let Err(error) = ban_cache.refresh(&db).await {
-                                tracing::warn!(%error, "数据库通知触发封禁缓存刷新失败");
+                let mut listener = loop {
+                    match sqlx::postgres::PgListener::connect_with(&db.pool).await {
+                        Ok(mut listener) => {
+                            if let Err(error) = listener.listen("lumiadmin_cache").await {
+                                tracing::warn!(%error, "监听缓存变更频道失败");
+                                tokio::time::sleep(Duration::from_secs(5)).await;
+                                continue;
                             }
+                            break listener;
                         }
-                        if refresh_whitelist {
-                            if let Err(error) = whitelist_cache.refresh(&db).await {
-                                tracing::warn!(%error, "数据库通知触发白名单缓存刷新失败");
-                            }
-                        }
-                        if refresh_server {
-                            if let Err(error) = server_cache.refresh(&db).await {
-                                tracing::warn!(%error, "数据库通知触发服务器配置缓存刷新失败");
-                            }
-                        }
-                        if refresh_snapshot {
-                            if let Err(error) =
-                                access_snapshot_service::refresh_snapshot(&db, &snapshot).await
-                            {
-                                tracing::warn!(%error, "数据库通知触发访问控制快照刷新失败");
-                            }
+                        Err(error) => {
+                            tracing::warn!(%error, "连接缓存变更监听失败");
+                            tokio::time::sleep(Duration::from_secs(5)).await;
                         }
                     }
-                    Err(error) => {
-                        tracing::warn!(%error, "缓存变更监听断开，等待重新连接");
-                        tokio::time::sleep(Duration::from_secs(5)).await;
-                        break;
+                };
+
+                loop {
+                    match listener.recv().await {
+                        Ok(notification) => {
+                            // 同一事务可能修改多张表，短暂合并已缓冲的通知，避免重复刷新。
+                            let mut kinds = vec![notification.payload().to_string()];
+                            while let Some(buffered) = listener.next_buffered() {
+                                kinds.push(buffered.payload().to_string());
+                            }
+                            let refresh_all = kinds.iter().any(|kind| kind == "all");
+                            let refresh_ban = refresh_all || kinds.iter().any(|kind| kind == "ban");
+                            let refresh_whitelist =
+                                refresh_all || kinds.iter().any(|kind| kind == "whitelist");
+                            let refresh_server =
+                                refresh_all || kinds.iter().any(|kind| kind == "server");
+                            let refresh_snapshot = refresh_all
+                                || refresh_ban
+                                || refresh_whitelist
+                                || refresh_server
+                                || kinds.iter().any(|kind| kind == "snapshot");
+
+                            if refresh_ban {
+                                if let Err(error) = ban_cache.refresh(&db).await {
+                                    tracing::warn!(%error, "数据库通知触发封禁缓存刷新失败");
+                                }
+                            }
+                            if refresh_whitelist {
+                                if let Err(error) = whitelist_cache.refresh(&db).await {
+                                    tracing::warn!(%error, "数据库通知触发白名单缓存刷新失败");
+                                }
+                            }
+                            if refresh_server {
+                                if let Err(error) = server_cache.refresh(&db).await {
+                                    tracing::warn!(%error, "数据库通知触发服务器配置缓存刷新失败");
+                                }
+                            }
+                            if refresh_snapshot {
+                                if let Err(error) =
+                                    access_snapshot_service::refresh_snapshot(&db, &snapshot).await
+                                {
+                                    tracing::warn!(%error, "数据库通知触发访问控制快照刷新失败");
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "缓存变更监听断开，等待重新连接");
+                            tokio::time::sleep(Duration::from_secs(5)).await;
+                            break;
+                        }
                     }
                 }
             }
-        }
         }
     });
 }

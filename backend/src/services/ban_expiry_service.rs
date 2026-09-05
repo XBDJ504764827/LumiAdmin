@@ -13,7 +13,8 @@ pub fn start_expiry_loop(db: Database, interval_seconds: u64) {
     super::task_runtime::spawn_persistent("ban_expiry", move || {
         let db = db.clone();
         async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_seconds));
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(interval_seconds));
             loop {
                 interval.tick().await;
                 match observability_service::observe_task(

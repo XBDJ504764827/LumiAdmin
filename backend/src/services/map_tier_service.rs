@@ -98,7 +98,8 @@ impl MapTierSync {
                     Err(e) => tracing::warn!(%e, "map_tiers 初始同步失败"),
                 }
 
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+                let mut interval =
+                    tokio::time::interval(std::time::Duration::from_secs(interval_secs));
                 loop {
                     interval.tick().await;
                     match observability_service::observe_task(

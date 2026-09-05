@@ -39,19 +39,24 @@ const SESSION_TTL_HOURS: i64 = 1;
 
 const LOGIN_STATE_TTL_SECS: i64 = 600;
 
-async fn issue_login_state(db: &crate::db::Database, frontend_base: &str) -> anyhow::Result<String> {
+async fn issue_login_state(
+    db: &crate::db::Database,
+    frontend_base: &str,
+) -> anyhow::Result<String> {
     let state = Uuid::new_v4().simple().to_string();
     let expires_at = Utc::now() + chrono::Duration::seconds(LOGIN_STATE_TTL_SECS);
     // 顺带清理过期行，避免表无限增长（登录频率低，代价可忽略）
     sqlx::query("DELETE FROM steam_login_states WHERE expires_at < now()")
         .execute(&db.pool)
         .await?;
-    sqlx::query("INSERT INTO steam_login_states (state, frontend_base, expires_at) VALUES ($1, $2, $3)")
-        .bind(&state)
-        .bind(frontend_base)
-        .bind(expires_at)
-        .execute(&db.pool)
-        .await?;
+    sqlx::query(
+        "INSERT INTO steam_login_states (state, frontend_base, expires_at) VALUES ($1, $2, $3)",
+    )
+    .bind(&state)
+    .bind(frontend_base)
+    .bind(expires_at)
+    .execute(&db.pool)
+    .await?;
     Ok(state)
 }
 

@@ -62,7 +62,8 @@ pub fn start_hibernation_poll_loop(db: Database, config: HibernationPollConfig) 
         let config = config.clone();
         async move {
             let mut poller = HibernationPoller::new(db, config.clone());
-            let mut interval = tokio::time::interval(Duration::from_secs(config.scan_interval_secs));
+            let mut interval =
+                tokio::time::interval(Duration::from_secs(config.scan_interval_secs));
             // 首个周期先等待，给插件正常上报留出机会
             interval.tick().await;
             loop {

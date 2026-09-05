@@ -197,19 +197,26 @@ async fn dashboard_overview_stats_count_whitelist_and_active_players() {
         .execute(&db.pool)
         .await?;
 
-        // 今日活跃 2 人（1 个进行中 + 1 个已结束）、昨日活跃 1 人
-        for (steam, first_seen_offset, left) in [
-            ("p1", "1 hour", None),
-            ("p2", "2 hours", Some("1 hour")),
-            ("p3", "1 day + 2 hours", Some("1 day + 1 hour")),
-            ("p4", "3 days", Some("2 days")),
+        // 今日活跃 2 人（1 个进行中 + 1 个已结束）、昨日活跃 1 人。
+        // 时间一律以 today_start（北京当日零点）为锚构造：
+        // - p1 零点整开始且未退出（first < now 恒成立），p2 零点后 1-2 分钟内已结束；
+        // - p3 昨天活跃、p4 三天前活跃。
+        // 避免 now() 相对偏移在北京 0 点前后运行时"今日/昨日"判定漂移。
+        // left_at 为 Option：None 即进行中（NULL），有值则绑定具体退出时间。
+        for (steam, first_seen_offset, left_offset) in [
+            ("p1", "0 seconds", None),
+            ("p2", "1 minute", Some("2 minutes")),
+            ("p3", "-2 hours", Some("-1 hour")),
+            ("p4", "-3 days", Some("-2 days")),
         ] {
+            let left_at: Option<chrono::DateTime<chrono::Utc>> = left_offset
+                .map(|offset| today_start + interval_to_duration(offset));
             sqlx::query(
                 r#"INSERT INTO player_server_sessions
                    (id, server_id, server_name, server_port, community_id, steam_id64, player_name, ip,
                     first_seen_at, last_seen_at, left_at)
                    VALUES ($1, $2, $3, 27015, $4, $5, $6, '127.0.0.1',
-                           now() - $7::INTERVAL, now() - $7::INTERVAL, now() - $8::INTERVAL)"#,
+                           $7::TIMESTAMPTZ + $8::INTERVAL, $7::TIMESTAMPTZ + $8::INTERVAL, $9::TIMESTAMPTZ)"#,
             )
             .bind(Uuid::new_v4())
             .bind(server_id)
@@ -217,8 +224,9 @@ async fn dashboard_overview_stats_count_whitelist_and_active_players() {
             .bind(community_id)
             .bind(steam)
             .bind(steam)
+            .bind(today_start)
             .bind(first_seen_offset)
-            .bind(left.unwrap_or("0 seconds"))
+            .bind(left_at)
             .execute(&db.pool)
             .await?;
         }
@@ -1417,4 +1425,29 @@ async fn migrate_adds_server_access_control_fields_and_cache_table() {
 
     drop_schema(&base_url, &schema).await;
     result.unwrap();
+}
+
+/// 解析测试用的简单 PG interval 文本（"2 minutes" / "-3 days" 等，单单位）为 Duration。
+fn interval_to_duration(text: &str) -> chrono::Duration {
+    let text = text.trim();
+    let (sign, text) = if let Some(rest) = text.strip_prefix('-') {
+        (-1i64, rest.trim())
+    } else {
+        (1i64, text)
+    };
+    let mut parts = text.split_whitespace();
+    let value: i64 = parts.next().unwrap_or("0").parse().unwrap_or(0);
+    let unit = parts.next().unwrap_or("seconds");
+    let duration = match unit.trim_end_matches('s') {
+        "second" | "sec" => chrono::Duration::seconds(value),
+        "minute" => chrono::Duration::minutes(value),
+        "hour" => chrono::Duration::hours(value),
+        "day" => chrono::Duration::days(value),
+        _ => chrono::Duration::zero(),
+    };
+    if sign < 0 {
+        -duration
+    } else {
+        duration
+    }
 }

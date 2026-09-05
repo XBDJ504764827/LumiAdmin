@@ -727,36 +727,40 @@ pub fn start_sync_loop(db: Database, config: Config) {
         return;
     }
 
-    tokio::spawn(async move {
-        // 间隔至少 60 秒，避免误配置导致高频请求
-        let interval_secs = config.lumi_bot_sync_interval_secs.max(60);
-        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
-        loop {
-            interval.tick().await;
-            match observability_service::observe_task(
-                "lumi_bot_sync",
-                sync_pending_events(&db, &config),
-                |summary| {
-                    format!(
-                        "本轮上报 {} 条（成功 {}，失败 {}）",
-                        summary.total, summary.sent, summary.failed
-                    )
-                },
-            )
-            .await
-            {
-                Ok(summary) => {
-                    if summary.total > 0 {
-                        tracing::info!(
-                            total = summary.total,
-                            sent = summary.sent,
-                            failed = summary.failed,
-                            "LumiBot 事件上报完成"
-                        );
+    super::task_runtime::spawn_persistent("lumi_bot_sync", move || {
+        let db = db.clone();
+        let config = config.clone();
+        async move {
+            // 间隔至少 60 秒，避免误配置导致高频请求
+            let interval_secs = config.lumi_bot_sync_interval_secs.max(60);
+            let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+            loop {
+                interval.tick().await;
+                match observability_service::observe_task(
+                    "lumi_bot_sync",
+                    sync_pending_events(&db, &config),
+                    |summary| {
+                        format!(
+                            "本轮上报 {} 条（成功 {}，失败 {}）",
+                            summary.total, summary.sent, summary.failed
+                        )
+                    },
+                )
+                .await
+                {
+                    Ok(summary) => {
+                        if summary.total > 0 {
+                            tracing::info!(
+                                total = summary.total,
+                                sent = summary.sent,
+                                failed = summary.failed,
+                                "LumiBot 事件上报完成"
+                            );
+                        }
                     }
-                }
-                Err(error) => {
-                    tracing::warn!(%error, "LumiBot 事件上报失败");
+                    Err(error) => {
+                        tracing::warn!(%error, "LumiBot 事件上报失败");
+                    }
                 }
             }
         }

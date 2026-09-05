@@ -50,6 +50,7 @@ type GokzBatchRow = (
 
 /// 统一 GOKZ 缓存管理器
 /// 使用 PostgreSQL 作为持久化缓存，同时维护内存缓存加速读取
+#[derive(Clone)]
 pub struct GokzCacheManager {
     /// 内存缓存：用于加速热点数据读取
     memory_cache: Arc<RwLock<GokzMemoryCache>>,
@@ -275,18 +276,22 @@ impl GokzCacheManager {
             Some(interval_secs),
             true,
         );
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
-            loop {
-                interval.tick().await;
-                if let Err(e) = observability_service::observe_task(
-                    "gokz_cache_cleanup",
-                    self.cleanup(),
-                    |count| format!("清理 {} 条 GOKZ 缓存", count),
-                )
-                .await
-                {
-                    warn!(error = %e, "GOKZ 缓存清理失败");
+        super::task_runtime::spawn_persistent("gokz_cache_cleanup", move || {
+            let manager = self.clone();
+            async move {
+                let mut interval =
+                    tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+                loop {
+                    interval.tick().await;
+                    if let Err(e) = observability_service::observe_task(
+                        "gokz_cache_cleanup",
+                        manager.cleanup(),
+                        |count| format!("清理 {} 条 GOKZ 缓存", count),
+                    )
+                    .await
+                    {
+                        warn!(error = %e, "GOKZ 缓存清理失败");
+                    }
                 }
             }
         });

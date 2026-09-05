@@ -22,9 +22,6 @@ use axum::{
 };
 use chrono::Utc;
 use serde::Deserialize;
-use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
-use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use super::AppCtx;
@@ -35,38 +32,49 @@ const SESSION_TTL_HOURS: i64 = 1;
 // ---------------------------------------------------------------------------
 // 登录 state 管理（防登录 CSRF，10 分钟过期）
 // state 同时记录发起登录时的前端地址，回调时用其回跳，
-// 避免依赖 X-Forwarded-Host / CORS_ORIGIN 等外部配置推导
+// 避免依赖 X-Forwarded-Host / CORS_ORIGIN 等外部配置推导。
+// 持久化到数据库：进程重启不影响进行中的登录，多副本部署也可用；
+// 消费通过 DELETE ... RETURNING 原子完成（用后即焚），过期行由登录时顺带清理。
 // ---------------------------------------------------------------------------
 
-const LOGIN_STATE_TTL_SECS: u64 = 600;
+const LOGIN_STATE_TTL_SECS: i64 = 600;
 
-struct LoginState {
-    expires_at: Instant,
-    frontend_base: String,
-}
-
-static PENDING_LOGIN_STATES: LazyLock<Mutex<HashMap<String, LoginState>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-fn issue_login_state(frontend_base: &str) -> String {
+async fn issue_login_state(
+    db: &crate::db::Database,
+    frontend_base: &str,
+) -> anyhow::Result<String> {
     let state = Uuid::new_v4().simple().to_string();
-    let mut map = PENDING_LOGIN_STATES.lock().expect("state map poisoned");
-    map.retain(|_, entry| entry.expires_at > Instant::now());
-    map.insert(
-        state.clone(),
-        LoginState {
-            expires_at: Instant::now() + Duration::from_secs(LOGIN_STATE_TTL_SECS),
-            frontend_base: frontend_base.to_string(),
-        },
-    );
-    state
+    let expires_at = Utc::now() + chrono::Duration::seconds(LOGIN_STATE_TTL_SECS);
+    // 顺带清理过期行，避免表无限增长（登录频率低，代价可忽略）
+    sqlx::query("DELETE FROM steam_login_states WHERE expires_at < now()")
+        .execute(&db.pool)
+        .await?;
+    sqlx::query(
+        "INSERT INTO steam_login_states (state, frontend_base, expires_at) VALUES ($1, $2, $3)",
+    )
+    .bind(&state)
+    .bind(frontend_base)
+    .bind(expires_at)
+    .execute(&db.pool)
+    .await?;
+    Ok(state)
 }
 
 /// 校验并消费登录 state，返回其关联的前端地址（消费后即失效）
-fn consume_login_state(state: &str) -> Option<String> {
-    let mut map = PENDING_LOGIN_STATES.lock().expect("state map poisoned");
-    map.retain(|_, entry| entry.expires_at > Instant::now());
-    map.remove(state).map(|entry| entry.frontend_base)
+async fn consume_login_state(
+    db: &crate::db::Database,
+    state: &str,
+) -> anyhow::Result<Option<String>> {
+    if state.is_empty() || state.len() > 64 {
+        return Ok(None);
+    }
+    let row: Option<(String,)> = sqlx::query_as(
+        "DELETE FROM steam_login_states WHERE state = $1 AND expires_at > now() RETURNING frontend_base",
+    )
+    .bind(state)
+    .fetch_optional(&db.pool)
+    .await?;
+    Ok(row.map(|(base,)| base))
 }
 
 // ---------------------------------------------------------------------------
@@ -165,7 +173,13 @@ pub(crate) async fn steam_auth_login(
     //   后回跳 callback_url?token=&state=），state 由本服务签发用于防 CSRF
     // - 未配置：直接跳 Steam OpenID（服务器可直连 Steam 时）
     let login_url = if let Some(ref relay) = ctx.config.steam_relay_url {
-        let state = issue_login_state(&realm);
+        let state = issue_login_state(&ctx.db, &realm).await.map_err(|e| {
+            tracing::error!(error = %e, "签发 Steam 登录 state 失败");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "登录初始化失败" })),
+            )
+        })?;
         format!(
             "{relay}/login?mode=login&state={state}&return_to={}",
             percent_encode_query(&callback_url)
@@ -302,10 +316,14 @@ pub(crate) async fn steam_auth_callback(
     // ── 中转模式（配置了 STEAM_RELAY_URL）：回调参数为 ?token=&state= ──
     if ctx.config.steam_relay_url.is_some() {
         let state = params.state.as_deref().unwrap_or("");
-        let state_frontend_base = match consume_login_state(state) {
-            Some(base) => base,
-            None => {
+        let state_frontend_base = match consume_login_state(&ctx.db, state).await {
+            Ok(Some(base)) => base,
+            Ok(None) => {
                 tracing::warn!(state = %state, "Steam 登录 state 校验失败");
+                return Ok(error_redirect("invalid_state"));
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Steam 登录 state 消费失败");
                 return Ok(error_redirect("invalid_state"));
             }
         };
@@ -321,7 +339,10 @@ pub(crate) async fn steam_auth_callback(
         };
 
         // 向中转 Worker 换取 SteamID 与资料（一次性 token，用后即焚，防伪造）
-        let relay = ctx.config.steam_relay_url.as_deref().unwrap();
+        let relay = ctx.config.steam_relay_url.as_deref().ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "验证服务未配置" })),
+        ))?;
         let response = http_client::http_client()
             .get(format!("{relay}/verify"))
             .query(&[("token", token)])

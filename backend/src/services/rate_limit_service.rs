@@ -213,15 +213,18 @@ impl RateLimiters {
 
     /// 启动定期清理任务
     pub fn start_cleanup_task(self: Arc<Self>) {
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(60));
-            loop {
-                interval.tick().await;
-                self.public_read_api.cleanup().await;
-                self.public_api.cleanup().await;
-                self.auth_api.cleanup().await;
-                self.plugin_api.cleanup().await;
-                self.admin_api.cleanup().await;
+        super::task_runtime::spawn_persistent("rate_limit_cleanup", move || {
+            let limiters = self.clone();
+            async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(60));
+                loop {
+                    interval.tick().await;
+                    limiters.public_read_api.cleanup().await;
+                    limiters.public_api.cleanup().await;
+                    limiters.auth_api.cleanup().await;
+                    limiters.plugin_api.cleanup().await;
+                    limiters.admin_api.cleanup().await;
+                }
             }
         });
     }

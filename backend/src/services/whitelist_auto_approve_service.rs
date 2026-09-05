@@ -115,39 +115,44 @@ pub fn start_auto_approve_loop(
         Some(interval_secs),
         true,
     );
-    tokio::spawn(async move {
-        let mut interval =
-            tokio::time::interval(std::time::Duration::from_secs(interval_secs.max(30)));
-        loop {
-            interval.tick().await;
-            match observability_service::observe_task(
-                "whitelist_auto_approve",
-                process_auto_approve(&db, &whitelist_cache, &config),
-                |summary| {
-                    format!(
-                        "扫描 {} 条（自动通过 {}，高风险跳过 {}，已处理 {}）",
-                        summary.scanned,
-                        summary.approved,
-                        summary.skipped_high_risk,
-                        summary.already_processed
-                    )
-                },
-            )
-            .await
-            {
-                Ok(summary) => {
-                    if summary.approved > 0 {
-                        tracing::info!(
-                            scanned = summary.scanned,
-                            approved = summary.approved,
-                            skipped_high_risk = summary.skipped_high_risk,
-                            already_processed = summary.already_processed,
-                            "白名单低风险自动通过完成"
-                        );
+    super::task_runtime::spawn_persistent("whitelist_auto_approve", move || {
+        let db = db.clone();
+        let whitelist_cache = whitelist_cache.clone();
+        let config = config.clone();
+        async move {
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(interval_secs.max(30)));
+            loop {
+                interval.tick().await;
+                match observability_service::observe_task(
+                    "whitelist_auto_approve",
+                    process_auto_approve(&db, &whitelist_cache, &config),
+                    |summary| {
+                        format!(
+                            "扫描 {} 条（自动通过 {}，高风险跳过 {}，已处理 {}）",
+                            summary.scanned,
+                            summary.approved,
+                            summary.skipped_high_risk,
+                            summary.already_processed
+                        )
+                    },
+                )
+                .await
+                {
+                    Ok(summary) => {
+                        if summary.approved > 0 {
+                            tracing::info!(
+                                scanned = summary.scanned,
+                                approved = summary.approved,
+                                skipped_high_risk = summary.skipped_high_risk,
+                                already_processed = summary.already_processed,
+                                "白名单低风险自动通过完成"
+                            );
+                        }
                     }
-                }
-                Err(error) => {
-                    tracing::warn!(%error, "白名单低风险自动通过执行失败");
+                    Err(error) => {
+                        tracing::warn!(%error, "白名单低风险自动通过执行失败");
+                    }
                 }
             }
         }

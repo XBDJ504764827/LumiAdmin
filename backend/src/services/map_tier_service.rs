@@ -83,30 +83,35 @@ impl MapTierSync {
             Some(interval_secs),
             true,
         );
-        tokio::spawn(async move {
-            match observability_service::observe_task(
-                "map_tier_sync",
-                self.sync_map_tiers(&db),
-                |count| format!("同步 {} 条地图等级", count),
-            )
-            .await
-            {
-                Ok(count) => tracing::info!(count, "map_tiers 初始同步完成"),
-                Err(e) => tracing::warn!(%e, "map_tiers 初始同步失败"),
-            }
-
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
-            loop {
-                interval.tick().await;
+        super::task_runtime::spawn_persistent("map_tier_sync", move || {
+            let db = db.clone();
+            let sync = self.clone();
+            async move {
                 match observability_service::observe_task(
                     "map_tier_sync",
-                    self.sync_map_tiers(&db),
+                    sync.sync_map_tiers(&db),
                     |count| format!("同步 {} 条地图等级", count),
                 )
                 .await
                 {
-                    Ok(count) => tracing::info!(count, "map_tiers 定时同步完成"),
-                    Err(e) => tracing::warn!(%e, "map_tiers 定时同步失败"),
+                    Ok(count) => tracing::info!(count, "map_tiers 初始同步完成"),
+                    Err(e) => tracing::warn!(%e, "map_tiers 初始同步失败"),
+                }
+
+                let mut interval =
+                    tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+                loop {
+                    interval.tick().await;
+                    match observability_service::observe_task(
+                        "map_tier_sync",
+                        sync.sync_map_tiers(&db),
+                        |count| format!("同步 {} 条地图等级", count),
+                    )
+                    .await
+                    {
+                        Ok(count) => tracing::info!(count, "map_tiers 定时同步完成"),
+                        Err(e) => tracing::warn!(%e, "map_tiers 定时同步失败"),
+                    }
                 }
             }
         });

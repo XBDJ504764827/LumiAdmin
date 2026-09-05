@@ -1161,20 +1161,23 @@ pub fn start_stale_cleanup_loop(db: Database) {
         Some(STALE_CLEANUP_INTERVAL_SECONDS),
         true,
     );
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(
-            STALE_CLEANUP_INTERVAL_SECONDS,
-        ));
-        loop {
-            interval.tick().await;
-            if let Err(error) = observability_service::observe_task(
-                "stale_server_cleanup",
-                mark_stale_servers_offline(&db),
-                |_| "服务器状态清理完成".to_string(),
-            )
-            .await
-            {
-                tracing::warn!(%error, "清理过期服务器状态失败");
+    super::task_runtime::spawn_persistent("stale_server_cleanup", move || {
+        let db = db.clone();
+        async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(
+                STALE_CLEANUP_INTERVAL_SECONDS,
+            ));
+            loop {
+                interval.tick().await;
+                if let Err(error) = observability_service::observe_task(
+                    "stale_server_cleanup",
+                    mark_stale_servers_offline(&db),
+                    |_| "服务器状态清理完成".to_string(),
+                )
+                .await
+                {
+                    tracing::warn!(%error, "清理过期服务器状态失败");
+                }
             }
         }
     });

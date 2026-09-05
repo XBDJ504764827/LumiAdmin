@@ -690,19 +690,22 @@ pub fn start_dispatch_loop(db: Database) {
         None,
         true,
     );
-    let _handle = tokio::spawn(async move {
-        let client = Client::new();
-        loop {
-            let seconds = dispatch_interval_seconds(&db).await.unwrap_or(30);
-            tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
-            if let Err(error) = observability_service::observe_task(
-                "player_api_dispatch",
-                dispatch_once(&db, &client),
-                |_| "分发完成".to_string(),
-            )
-            .await
-            {
-                tracing::warn!(%error, "player api webhook dispatch failed");
+    super::task_runtime::spawn_persistent("player_api_dispatch", move || {
+        let db = db.clone();
+        async move {
+            let client = Client::new();
+            loop {
+                let seconds = dispatch_interval_seconds(&db).await.unwrap_or(30);
+                tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
+                if let Err(error) = observability_service::observe_task(
+                    "player_api_dispatch",
+                    dispatch_once(&db, &client),
+                    |_| "分发完成".to_string(),
+                )
+                .await
+                {
+                    tracing::warn!(%error, "player api webhook dispatch failed");
+                }
             }
         }
     });

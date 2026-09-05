@@ -105,20 +105,6 @@ export function CommunityPage() {
     countdown: 0,
   });
   const isDeveloper = session?.role === 'developer';
-  const [controlWizard, setControlWizard] = useState({
-    open: false,
-    group: null,
-    installCommand: '',
-    expiresAt: '',
-    generating: false,
-    error: '',
-    discoveries: [],
-    agents: [],
-    selectedIds: new Set(),
-    loading: false,
-    confirming: false,
-    copied: false,
-  });
   const [serverControlJobs, setServerControlJobs] = useState([]);
 
   const loadGroups = useCallback(async () => {
@@ -582,65 +568,6 @@ export function CommunityPage() {
     if (!cmd) return;
     await handleRconExecute(cmd);
     setRconModal((prev) => ({ ...prev, customCommand: '' }));
-  }
-
-  function openControlWizard(group) {
-    if (!isDeveloper) return;
-    setControlWizard({
-      open: true,
-      group,
-      installCommand: '',
-      expiresAt: '',
-      generating: false,
-      error: '',
-      discoveries: [],
-      agents: [],
-      selectedIds: new Set(),
-      loading: true,
-      confirming: false,
-      copied: false,
-    });
-    (async () => {
-      try {
-        const [d, a] = await Promise.all([
-          api.controlDiscoveries(token, group.id).catch(()=>({discoveries:[]})),
-          api.controlAgents(token, group.id).catch(()=>({agents:[]})),
-        ]);
-        setControlWizard((prev)=>({ ...prev, discoveries: d.discoveries ?? [], agents: a.agents ?? [], loading:false }));
-      } catch(e){ setControlWizard((prev)=>({ ...prev, loading:false, error:e.message }));}
-    })();
-  }
-  async function generateInstallCommand() {
-    if (!controlWizard.group || !isDeveloper) return;
-    setControlWizard((p)=>({ ...p, generating:true, error:'' }));
-    try {
-      const baseUrl = window.location.origin;
-      const resp = await api.createControlInstallToken(token, controlWizard.group.id, { base_url: baseUrl });
-      setControlWizard((p)=>({ ...p, installCommand: resp.install_command, expiresAt: resp.expires_at, generating:false }));
-    } catch(e){ setControlWizard((p)=>({ ...p, generating:false, error:e.message }));}
-  }
-  async function copyInstallCommand() {
-    if (!controlWizard.installCommand) return;
-    try { await navigator.clipboard.writeText(controlWizard.installCommand); setControlWizard((p)=>({ ...p, copied:true })); toast({ title:'已复制', message:'安装命令已复制到剪贴板'}); setTimeout(()=>setControlWizard((p)=>({ ...p, copied:false })),2000);} catch{ toast({ title:'复制失败', message:'请手动复制', tone:'danger'});}
-  }
-  function toggleDiscovery(id){
-    setControlWizard((p)=>{ const s=new Set(p.selectedIds); if(s.has(id)) s.delete(id); else s.add(id); return { ...p, selectedIds:s }; });
-  }
-  async function confirmSelectedDiscoveries(){
-    if (!controlWizard.group || controlWizard.selectedIds.size===0) return;
-    setControlWizard((p)=>({ ...p, confirming:true, error:''}));
-    try{
-      await api.confirmControlDiscoveries(token, controlWizard.group.id, { ids: [...controlWizard.selectedIds]});
-      toast({ title:'已确认', message:`已添加 ${controlWizard.selectedIds.size} 台服务器`});
-      await loadGroups();
-      const d = await api.controlDiscoveries(token, controlWizard.group.id);
-      setControlWizard((p)=>({ ...p, discoveries: d.discoveries ?? [], selectedIds: new Set(), confirming:false}));
-    }catch(e){ setControlWizard((p)=>({ ...p, confirming:false, error:e.message }));}
-  }
-  async function refreshDiscoveries(){
-    if (!controlWizard.group) return;
-    setControlWizard((p)=>({ ...p, loading:true }));
-    try{ const d=await api.controlDiscoveries(token, controlWizard.group.id); setControlWizard((p)=>({ ...p, discoveries:d.discoveries??[], loading:false })); }catch(e){ setControlWizard((p)=>({ ...p, loading:false, error:e.message }));}
   }
 
   async function _handleResetReportToken(server) {
@@ -1135,7 +1062,6 @@ export function CommunityPage() {
             </div>
             {canMutate ? (
               <div className="action-btn-group">
-                {isDeveloper ? <button className="action-btn" onClick={() => openControlWizard(group)}>控制脚本</button> : null}
                 <button className="action-btn" onClick={() => openReloadPluginsModal(group)}>重启插件</button>
                 <button className="action-btn" onClick={() => openCommunityAccessModal(group)}>访问限制</button>
                 <button className="action-btn" onClick={() => openCreateServerModal(group.id)}>+ 添加服务器</button>
@@ -1226,54 +1152,6 @@ export function CommunityPage() {
             </div>
           </>
         ) : null}
-      </Modal>
-
-      {/* 控制脚本安装向导 */}
-      <Modal
-        open={controlWizard.open}
-        title={`控制脚本 — ${controlWizard.group?.name ?? ''}`}
-        onClose={()=>setControlWizard(p=>({ ...p, open:false }))}
-        wide
-        footer={<><button className="btn btn-outline" onClick={refreshDiscoveries}>刷新待确认</button><button className="btn btn-primary" onClick={()=>setControlWizard(p=>({ ...p, open:false }))}>关闭</button></>}
-      >
-        {isDeveloper ? (
-          <>
-            <div className="form-section-card" style={{marginBottom:12}}>
-              <div className="form-section-header"><span>一键安装</span></div>
-              <div className="form-hint" style={{marginBottom:8}}>在游戏服务器上以 <code>csgoserver</code> 用户执行以下命令，Agent将自动扫描 <code>~/csgoserver*</code> 并上报候选列表。</div>
-              <button className="btn btn-outline" disabled={controlWizard.generating} onClick={generateInstallCommand}>{controlWizard.generating?'生成中...':'生成安装命令'}</button>
-              {controlWizard.installCommand ? (
-                <div style={{marginTop:8}}>
-                  <div className="form-hint" style={{marginBottom:4}}>15分钟内有效，过期后重新生成。过期时间：{controlWizard.expiresAt}</div>
-                  <div style={{display:'flex', gap:8, flexWrap:'wrap'}}><input className="form-control" readOnly value={controlWizard.installCommand} style={{flex:1, minWidth:200}} /><button className="btn btn-primary" onClick={copyInstallCommand}>{controlWizard.copied?'已复制':'复制'}</button></div>
-                  <div style={{marginTop:4, fontSize:12, opacity:0.7}}><code>{controlWizard.installCommand}</code></div>
-                </div>
-              ) : null}
-              {controlWizard.error ? <div className="text-accent" style={{marginTop:6}}>{controlWizard.error}</div>:null}
-            </div>
-            <div className="form-section-card">
-              <div className="form-section-header"><span>待确认服务器</span><span style={{marginLeft:8, fontSize:12, opacity:0.7}}>{controlWizard.discoveries.filter(d=>d.status==='pending').length} 个待确认</span></div>
-              {controlWizard.loading ? <div className="text-muted">加载中...</div> : (
-                <>
-                  {controlWizard.discoveries.filter(d=>d.status==='pending').length===0 ? <div className="text-muted">暂无待确认，安装后重新扫描会在此展示。</div> : null}
-                  {controlWizard.discoveries.filter(d=>d.status==='pending').map(d=>(
-                    <label key={d.id} style={{display:'flex', gap:8, alignItems:'center', padding:'6px 0', borderBottom:'1px solid var(--border)'}}>
-                      <input type="checkbox" checked={controlWizard.selectedIds.has(d.id)} onChange={()=>toggleDiscovery(d.id)} />
-                      <span style={{flex:1}}>
-                        <span style={{fontWeight:600}}>{d.instance_name}</span> <span style={{opacity:0.7}}>{d.ip}:{d.port??'-'} {d.server_name?`· ${d.server_name}`:''} {d.rcon_password?'' :'· 未配置RCON'}</span>
-                      </span>
-                    </label>
-                  ))}
-                  <div style={{marginTop:8, display:'flex', gap:8}}>
-                    <button className="btn btn-primary" disabled={controlWizard.selectedIds.size===0 || controlWizard.confirming} onClick={confirmSelectedDiscoveries}>{controlWizard.confirming?'确认中...':`确认添加 (${controlWizard.selectedIds.size})`}</button>
-                    <span className="form-hint" style={{alignSelf:'center'}}>未配置RCON的可在确认后手动补密码</span>
-                  </div>
-                  {controlWizard.agents.length>0 ? <div className="form-hint" style={{marginTop:8}}>在线Agent: {controlWizard.agents.filter(a=>a.online).length}/{controlWizard.agents.length}</div>:null}
-                </>
-              )}
-            </div>
-          </>
-        ): <div className="text-accent">仅开发管理员可操作</div>}
       </Modal>
 
       {/* 服务器控制弹窗（RCON + 电源） */}

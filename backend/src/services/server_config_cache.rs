@@ -138,7 +138,12 @@ const STALE_CACHE_GRACE: Duration = Duration::from_secs(60);
 ///
 /// 用于缓存服务器配置，减少数据库查询次数。
 /// 缓存会在后台定期刷新，同时支持手动失效。
+#[derive(Clone)]
 pub struct ServerConfigCache {
+    inner: Arc<ServerConfigCacheInner>,
+}
+
+struct ServerConfigCacheInner {
     /// 按 (report_token, port) 索引的缓存
     by_token_port: RwLock<HashMap<(String, i32), CachedServerConfig>>,
     /// 按 server_id 索引的缓存
@@ -153,10 +158,12 @@ impl ServerConfigCache {
     /// 创建新的服务器配置缓存
     pub fn new(cache_ttl_secs: u64) -> Self {
         Self {
-            by_token_port: RwLock::new(HashMap::new()),
-            by_id: RwLock::new(HashMap::new()),
-            last_refresh: RwLock::new(Instant::now() - Duration::from_secs(86400)), // 初始化为过期状态
-            cache_ttl: Duration::from_secs(cache_ttl_secs),
+            inner: Arc::new(ServerConfigCacheInner {
+                by_token_port: RwLock::new(HashMap::new()),
+                by_id: RwLock::new(HashMap::new()),
+                last_refresh: RwLock::new(Instant::now() - Duration::from_secs(86400)), // 初始化为过期状态
+                cache_ttl: Duration::from_secs(cache_ttl_secs),
+            }),
         }
     }
 
@@ -179,7 +186,7 @@ impl ServerConfigCache {
 
         // 尝试从缓存获取
         {
-            let cache = self.by_token_port.read().await;
+            let cache = self.inner.by_token_port.read().await;
             if let Some(config) = cache.get(&key) {
                 if self.is_within_stale_grace().await {
                     return Ok(Some(config.clone()));
@@ -190,8 +197,8 @@ impl ServerConfigCache {
         // 缓存未命中或旧缓存已超过宽限期，从数据库加载
         let config = self.load_server_config(db, report_token, port).await?;
         if let Some(ref cfg) = config {
-            let mut cache_by_token = self.by_token_port.write().await;
-            let mut cache_by_id = self.by_id.write().await;
+            let mut cache_by_token = self.inner.by_token_port.write().await;
+            let mut cache_by_id = self.inner.by_id.write().await;
             cache_by_token.insert(key, cfg.clone());
             cache_by_id.insert(cfg.id, cfg.clone());
         }
@@ -200,7 +207,7 @@ impl ServerConfigCache {
     }
 
     async fn is_within_stale_grace(&self) -> bool {
-        self.last_refresh.read().await.elapsed() <= self.cache_ttl + STALE_CACHE_GRACE
+        self.inner.last_refresh.read().await.elapsed() <= self.inner.cache_ttl + STALE_CACHE_GRACE
     }
 
     /// 根据 server_id 获取服务器配置
@@ -217,7 +224,7 @@ impl ServerConfigCache {
         }
 
         {
-            let cache = self.by_id.read().await;
+            let cache = self.inner.by_id.read().await;
             if let Some(config) = cache.get(&server_id) {
                 if self.is_within_stale_grace().await {
                     return Ok(Some(config.clone()));
@@ -227,8 +234,8 @@ impl ServerConfigCache {
 
         let config = self.load_server_config_by_id(db, server_id).await?;
         if let Some(ref cfg) = config {
-            let mut cache_by_token = self.by_token_port.write().await;
-            let mut cache_by_id = self.by_id.write().await;
+            let mut cache_by_token = self.inner.by_token_port.write().await;
+            let mut cache_by_id = self.inner.by_id.write().await;
             cache_by_token.insert((cfg.report_token.clone(), cfg.port), cfg.clone());
             cache_by_id.insert(cfg.id, cfg.clone());
         }
@@ -239,8 +246,8 @@ impl ServerConfigCache {
     pub async fn refresh(&self, db: &Database) -> anyhow::Result<()> {
         let configs = self.load_all_server_configs(db).await?;
 
-        let mut cache_by_token = self.by_token_port.write().await;
-        let mut cache_by_id = self.by_id.write().await;
+        let mut cache_by_token = self.inner.by_token_port.write().await;
+        let mut cache_by_id = self.inner.by_id.write().await;
 
         cache_by_token.clear();
         cache_by_id.clear();
@@ -250,7 +257,7 @@ impl ServerConfigCache {
             cache_by_id.insert(config.id, config.clone());
         }
 
-        let mut last_refresh = self.last_refresh.write().await;
+        let mut last_refresh = self.inner.last_refresh.write().await;
         *last_refresh = Instant::now();
 
         info!(count = cache_by_id.len(), "服务器配置缓存已刷新");
@@ -260,8 +267,8 @@ impl ServerConfigCache {
     /// 使指定服务器的缓存失效
     #[allow(dead_code)]
     pub async fn invalidate(&self, server_id: Uuid) {
-        let mut cache_by_token = self.by_token_port.write().await;
-        let mut cache_by_id = self.by_id.write().await;
+        let mut cache_by_token = self.inner.by_token_port.write().await;
+        let mut cache_by_id = self.inner.by_id.write().await;
 
         if let Some(config) = cache_by_id.remove(&server_id) {
             cache_by_token.remove(&(config.report_token, config.port));
@@ -271,8 +278,8 @@ impl ServerConfigCache {
     /// 使所有缓存失效
     #[allow(dead_code)]
     pub async fn invalidate_all(&self) {
-        let mut cache_by_token = self.by_token_port.write().await;
-        let mut cache_by_id = self.by_id.write().await;
+        let mut cache_by_token = self.inner.by_token_port.write().await;
+        let mut cache_by_id = self.inner.by_id.write().await;
 
         cache_by_token.clear();
         cache_by_id.clear();
@@ -281,8 +288,8 @@ impl ServerConfigCache {
     /// 检查缓存是否需要刷新
     #[allow(dead_code)]
     pub async fn needs_refresh(&self) -> bool {
-        let last_refresh = self.last_refresh.read().await;
-        last_refresh.elapsed() > self.cache_ttl
+        let last_refresh = self.inner.last_refresh.read().await;
+        last_refresh.elapsed() > self.inner.cache_ttl
     }
 
     /// 从数据库加载单个服务器配置
@@ -343,29 +350,33 @@ pub fn start_refresh_loop(db: Database, cache: Arc<ServerConfigCache>, interval_
         Some(interval_secs),
         true,
     );
-    tokio::spawn(async move {
-        // 首次启动立即刷新
-        if let Err(error) = observability_service::observe_task(
-            "server_config_cache_refresh",
-            cache.refresh(&db),
-            |_| "初始服务器配置缓存刷新完成".to_string(),
-        )
-        .await
-        {
-            tracing::warn!(%error, "首次刷新服务器配置缓存失败");
-        }
-
-        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
-        loop {
-            interval.tick().await;
+    super::task_runtime::spawn_persistent("server_config_cache_refresh", move || {
+        let db = db.clone();
+        let cache = cache.clone();
+        async move {
+            // 首次启动立即刷新
             if let Err(error) = observability_service::observe_task(
                 "server_config_cache_refresh",
                 cache.refresh(&db),
-                |_| "服务器配置缓存刷新完成".to_string(),
+                |_| "初始服务器配置缓存刷新完成".to_string(),
             )
             .await
             {
-                tracing::warn!(%error, "刷新服务器配置缓存失败");
+                tracing::warn!(%error, "首次刷新服务器配置缓存失败");
+            }
+
+            let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+            loop {
+                interval.tick().await;
+                if let Err(error) = observability_service::observe_task(
+                    "server_config_cache_refresh",
+                    cache.refresh(&db),
+                    |_| "服务器配置缓存刷新完成".to_string(),
+                )
+                .await
+                {
+                    tracing::warn!(%error, "刷新服务器配置缓存失败");
+                }
             }
         }
     });

@@ -699,6 +699,11 @@ pub(crate) fn invalid_request(error: anyhow::Error) -> (StatusCode, Json<serde_j
 }
 
 /// 使用 sqlx::DatabaseError trait 进行类型安全的错误匹配
+///
+/// 返回给客户端的文案规则：
+/// - 业务校验错误（`ensure!`/`bail!` 产生的中文提示）原样保留；
+/// - 可识别的数据库约束错误翻译为友好文案；
+/// - 其余一律返回模糊文案，避免泄漏 SQL/路径等内部细节。
 pub(crate) fn translate_db_error(error: &anyhow::Error) -> String {
     // 尝试提取 sqlx::Error
     if let Some(sqlx_err) = error.downcast_ref::<sqlx::Error>() {
@@ -742,13 +747,31 @@ pub(crate) fn translate_db_error(error: &anyhow::Error) -> String {
         }
     }
 
-    // 回退到字符串匹配（兼容非 sqlx 错误）
+    // 回退到字符串匹配（兼容非 sqlx 错误）。
+    // 业务代码中的 `ensure!`/`bail!` 校验提示（中文）原样透传给用户，
+    // 其余未识别错误（可能含 SQL、路径等内部细节）返回模糊文案，原文仅进日志。
     let msg = error.to_string();
     if msg.contains("not found") || msg.contains("不存在") {
         return "记录不存在".to_string();
     }
+    if contains_cjk(&msg) {
+        return msg;
+    }
 
-    msg
+    tracing::debug!(error = %msg, "未识别的请求错误，返回模糊文案");
+    "请求处理失败，请稍后重试或联系管理员".to_string()
+}
+
+/// 判断字符串是否包含中日韩文字（用于区分业务校验提示与内部错误细节）
+fn contains_cjk(s: &str) -> bool {
+    s.chars().any(|c| {
+        matches!(u32::from(c),
+            0x4E00..=0x9FFF   // CJK 统一表意文字
+            | 0x3400..=0x4DBF // CJK 扩展 A
+            | 0x3000..=0x303F // CJK 符号与标点
+            | 0xFF00..=0xFFEF // 全角字符
+        )
+    })
 }
 
 pub(crate) fn invalid_request_status(error: anyhow::Error) -> StatusCode {

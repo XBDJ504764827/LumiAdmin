@@ -10,24 +10,28 @@ pub fn start_expiry_loop(db: Database, interval_seconds: u64) {
         Some(interval_seconds),
         true,
     );
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_seconds));
-        loop {
-            interval.tick().await;
-            match observability_service::observe_task(
-                "ban_expiry",
-                process_expired_bans(&db),
-                |count| format!("本轮自动解封 {} 条", count),
-            )
-            .await
-            {
-                Ok(count) => {
-                    if count > 0 {
-                        tracing::info!(count, "自动解封过期封禁记录");
+    super::task_runtime::spawn_persistent("ban_expiry", move || {
+        let db = db.clone();
+        async move {
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(interval_seconds));
+            loop {
+                interval.tick().await;
+                match observability_service::observe_task(
+                    "ban_expiry",
+                    process_expired_bans(&db),
+                    |count| format!("本轮自动解封 {} 条", count),
+                )
+                .await
+                {
+                    Ok(count) => {
+                        if count > 0 {
+                            tracing::info!(count, "自动解封过期封禁记录");
+                        }
                     }
-                }
-                Err(error) => {
-                    tracing::warn!(%error, "处理过期封禁记录失败");
+                    Err(error) => {
+                        tracing::warn!(%error, "处理过期封禁记录失败");
+                    }
                 }
             }
         }

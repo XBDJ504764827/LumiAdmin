@@ -53,8 +53,6 @@ export const api = {
   updateEvidenceMetadata: (token, sourceType, fileId, body) => request(`/api/player-detail/evidence/${encodeURIComponent(sourceType)}/${fileId}`, { method: 'PUT', headers: withAuth(token), body: JSON.stringify(body) }),
   serverReportToken: (token, serverId) => request(`/api/community/servers/${serverId}/report-token`, { headers: withAuth(token) }),
   resetServerReportToken: (token, serverId) => request(`/api/community/servers/${serverId}/report-token/reset`, { method: 'POST', headers: withAuth(token), body: JSON.stringify({}) }),
-  powerServer: (token, serverId, body) => request(`/api/community/servers/${serverId}/control/power`, { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
-  controlJobs: (token, serverId) => request(`/api/community/servers/${serverId}/control/jobs`, { headers: withAuth(token) }),
   executeRcon: (token, serverId, body) => request(`/api/community/servers/${serverId}/rcon`, { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   whitelist: (token, params = {}) => request(`/api/whitelist${buildQueryString(params)}`, { headers: withAuth(token) }),
   createManualWhitelist: (token, body) => request('/api/whitelist/manual', { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),

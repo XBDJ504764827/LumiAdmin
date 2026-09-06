@@ -104,9 +104,6 @@ export function CommunityPage() {
     serverCount: 0,
     countdown: 0,
   });
-  const isDeveloper = session?.role === 'developer';
-  const [serverControlJobs, setServerControlJobs] = useState([]);
-
   const loadGroups = useCallback(async () => {
     try {
       setLoading(true);
@@ -514,34 +511,9 @@ export function CommunityPage() {
     }
   }
 
-  async function openServerControlModal(server) {
+  function openServerControlModal(server) {
     if (!canMutate) return;
     setRconModal({ open: true, serverId: server.id, serverName: server.name, executing: '', customCommand: '' });
-    try {
-      const r = await api.controlJobs(token, server.id);
-      setServerControlJobs(r.jobs ?? []);
-    } catch { setServerControlJobs([]); }
-  }
-  async function handlePower(action) {
-    if (!rconModal.serverId) return;
-    const label = action==='restart'?'强制重启': action==='start'?'强制启动':'强制关机';
-    if (action==='stop' || action==='start') {
-      const ok = await confirm({ title: label, message: `确定对「${rconModal.serverName}」执行 ${label} 吗？`, confirmText: label });
-      if (!ok) return;
-    } else {
-      const ok = await confirm({ title: label, message: `确定对「${rconModal.serverName}」执行 ${label} 吗？将执行 ./<实例名> restart`, confirmText: label });
-      if (!ok) return;
-    }
-    setRconModal((p)=>({ ...p, executing: action }));
-    try {
-      await api.powerServer(token, rconModal.serverId, { action });
-      toast({ title:'已下发', message:`${label} 指令已下发，Agent将在5秒内执行`});
-      const r = await api.controlJobs(token, rconModal.serverId);
-      setServerControlJobs(r.jobs ?? []);
-    } catch(e){ toast({ title:'下发失败', message:e.message, tone:'danger'}); } finally { setRconModal((p)=>({ ...p, executing:''})); }
-  }
-  function _openRconModal(server) {
-    return openServerControlModal(server);
   }
 
   async function handleRconExecute(cmd) {
@@ -1163,14 +1135,6 @@ export function CommunityPage() {
         extraWide
         footer={<button className="btn btn-primary" onClick={() => setRconModal({ open: false, serverId: null, serverName: '', executing: '', customCommand: '' })}>关闭</button>}
       >
-        <div className="border-top" style={{paddingBottom:12, marginBottom:12}}>
-          <div className="flex items-center gap-8 mb-12"><span className="fw-600 fs-14">电源控制</span><span className="form-hint">通过常驻Agent执行 ~/csgoserver restart/start/stop，返回回显</span></div>
-          <div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
-            <button className="btn btn-primary" disabled={!!rconModal.executing} onClick={()=>handlePower('restart')}>{rconModal.executing==='restart'?'执行中...':'强制重启'}</button>
-            {isDeveloper ? <><button className="btn btn-outline" disabled={!!rconModal.executing} onClick={()=>handlePower('start')}>{rconModal.executing==='start'?'执行中...':'强制启动'}</button><button className="btn btn-danger" disabled={!!rconModal.executing} onClick={()=>handlePower('stop')}>{rconModal.executing==='stop'?'执行中...':'强制关机'}</button></>: null}
-          </div>
-          {serverControlJobs.length>0 ? <div style={{marginTop:8, fontSize:12, maxHeight:140, overflow:'auto', background:'var(--surface2)', padding:8, borderRadius:6}}>{serverControlJobs.map(j=><div key={j.id} style={{borderBottom:'1px solid var(--border)', padding:'4px 0'}}><span style={{fontWeight:600}}>{j.action}</span> <span style={{opacity:0.7}}>{j.status}</span> {j.output? <pre style={{whiteSpace:'pre-wrap', margin:'4px 0 0'}}>{String(j.output).slice(0,1000)}</pre>:null}</div>)}</div>: <div className="form-hint">暂无任务记录，下发后Agent 5秒内轮询执行。</div>}
-        </div>
         {COMMAND_CATEGORIES.map((cat) => (
           <div key={cat.name} className="mb-20">
             <div className="flex items-center gap-8 mb-12">

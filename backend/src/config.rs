@@ -174,11 +174,11 @@ impl Config {
             db_min_connections: env_u32_clamped("DB_MIN_CONNECTIONS", 2, 0, 50),
             db_acquire_timeout_secs: env_u64("DB_ACQUIRE_TIMEOUT_SECS", 10),
             db_idle_timeout_secs: env_u64("DB_IDLE_TIMEOUT_SECS", 600),
-            // HTTP 客户端配置
-            http_timeout_secs: env_u64("HTTP_TIMEOUT_SECS", 300),
+            // HTTP 客户端配置（全局兜底超时，Steam/外部 API 调用点多有更短的单独超时）
+            http_timeout_secs: env_u64("HTTP_TIMEOUT_SECS", 60),
             http_connect_timeout_secs: env_u64("HTTP_CONNECT_TIMEOUT_SECS", 5),
             // 请求超时
-            request_timeout_secs: env_u64("REQUEST_TIMEOUT_SECS", 300),
+            request_timeout_secs: env_u64("REQUEST_TIMEOUT_SECS", 60),
             // RCON 连接/读写超时
             rcon_connect_timeout_secs: env_u64("RCON_CONNECT_TIMEOUT_SECS", 10),
             rcon_io_timeout_secs: env_u64("RCON_IO_TIMEOUT_SECS", 10),
@@ -281,8 +281,8 @@ impl Config {
         }
 
         if config.request_timeout_secs == 0 {
-            tracing::warn!("REQUEST_TIMEOUT_SECS 为 0，已自动修正为 300");
-            config.request_timeout_secs = 300;
+            tracing::warn!("REQUEST_TIMEOUT_SECS 为 0，已自动修正为 60");
+            config.request_timeout_secs = 60;
         }
 
         if config.rcon_connect_timeout_secs == 0 {
@@ -314,8 +314,8 @@ impl Config {
         }
 
         if config.http_timeout_secs == 0 {
-            tracing::warn!("HTTP_TIMEOUT_SECS 为 0，已自动修正为 300");
-            config.http_timeout_secs = 300;
+            tracing::warn!("HTTP_TIMEOUT_SECS 为 0，已自动修正为 60");
+            config.http_timeout_secs = 60;
         }
 
         if config.max_request_body_bytes <= config.appeal_file_max_size_bytes {

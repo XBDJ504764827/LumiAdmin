@@ -16,9 +16,6 @@ impl Database {
             r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS whitelist_mode_enabled BOOLEAN NOT NULL DEFAULT false"#,
             r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS cs_prime_enabled BOOLEAN NOT NULL DEFAULT false"#,
             r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS max_players INTEGER NOT NULL DEFAULT 0"#,
-            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS lgsm_instance TEXT"#,
-            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS control_agent_id UUID"#,
-            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS control_last_seen_at TIMESTAMPTZ"#,
         ];
         for sql in alters {
             sqlx::query(sql).execute(&self.pool).await?;

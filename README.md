@@ -233,9 +233,9 @@ cargo build --release   # 生产构建 → target/release/manger-backend
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `HTTP_TIMEOUT_SECS` | `300` | 请求超时 |
+| `HTTP_TIMEOUT_SECS` | `60` | 请求超时（全局 HTTP 客户端兜底） |
 | `HTTP_CONNECT_TIMEOUT_SECS` | `5` | 连接超时 |
-| `REQUEST_TIMEOUT_SECS` | `300` | 全局请求超时 |
+| `REQUEST_TIMEOUT_SECS` | `60` | 全局请求超时 |
 | `MAX_REQUEST_BODY_BYTES` | `APPEAL_FILE_MAX_SIZE_MB + 10MB` | 请求体大小限制，需高于申诉文件大小上限 |
 
 ### R2 文件存储

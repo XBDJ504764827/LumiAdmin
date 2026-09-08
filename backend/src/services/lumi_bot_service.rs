@@ -9,8 +9,11 @@
 //! - 成功响应：HTTP 202 `{"success": true, "event_id": "..."}`
 //! - 失败响应：HTTP 400/401/429/500 `{"success": false, "error": "..."}`
 //!
-//! 队列中上报失败的事件保留为 pending，下轮重试；超过最大重试次数后标记为
-//! failed（死信），不再自动重试，便于人工排查。
+//! 队列中上报失败的事件保留为 pending 并按指数退避重试（最长 1 小时间隔）；
+//! 超过最大重试次数后标记为 failed（死信），但死信并非终态：超过
+//! `LUMI_BOT_FAILED_RETRY_SECS`（默认 24 小时）后自动复活为 pending 再试，
+//! 保证 LumiBot 短暂不可用不会导致事件永久丢失；死信超过
+//! `LUMI_BOT_FAILED_MAX_AGE_SECS`（默认 7 天）后标记为 expired，不再重试。
 
 use crate::{
     config::Config,
@@ -83,7 +86,7 @@ pub struct EventLogQuery {
 
 /// 获取 LumiBot 事件日志（按入队时间倒序）。
 ///
-/// status 仅允许 `pending` / `sent` / `failed`，非法值按未过滤处理。
+/// status 仅允许 `pending` / `sent` / `failed` / `expired`，非法值按未过滤处理。
 pub async fn list_queue_events(
     db: &Database,
     query: &EventLogQuery,
@@ -91,7 +94,7 @@ pub async fn list_queue_events(
     let status = query
         .status
         .as_deref()
-        .filter(|value| matches!(*value, "pending" | "sent" | "failed"));
+        .filter(|value| matches!(*value, "pending" | "sent" | "failed" | "expired"));
 
     let count_sql = match status {
         Some(value) => {
@@ -131,6 +134,10 @@ pub struct SyncSummary {
     pub total: usize,
     pub sent: usize,
     pub failed: usize,
+    /// 本轮从死信复活为 pending 的事件数
+    pub resurrected: usize,
+    /// 本轮标记为 expired（不再重试）的旧死信数
+    pub expired: usize,
 }
 
 /// LumiBot 事件队列概况。
@@ -139,6 +146,7 @@ pub struct QueueOverview {
     pub pending: i64,
     pub sent: i64,
     pub failed: i64,
+    pub expired: i64,
     pub last_sent_at: Option<DateTime<Utc>>,
     pub last_failure_at: Option<DateTime<Utc>>,
 }
@@ -201,7 +209,8 @@ pub async fn status(db: &Database, config: &Config) -> anyhow::Result<StatusOver
         )
     };
 
-    let (pending, sent, failed, last_sent_at, last_failure_at): (
+    let (pending, sent, failed, expired, last_sent_at, last_failure_at): (
+        i64,
         i64,
         i64,
         i64,
@@ -213,6 +222,7 @@ pub async fn status(db: &Database, config: &Config) -> anyhow::Result<StatusOver
             COUNT(*) FILTER (WHERE status = 'pending'),
             COUNT(*) FILTER (WHERE status = 'sent'),
             COUNT(*) FILTER (WHERE status = 'failed'),
+            COUNT(*) FILTER (WHERE status = 'expired'),
             MAX(sent_at),
             MAX(updated_at) FILTER (WHERE status = 'failed')
         FROM lumi_bot_event_queue
@@ -236,6 +246,7 @@ pub async fn status(db: &Database, config: &Config) -> anyhow::Result<StatusOver
             pending,
             sent,
             failed,
+            expired,
             last_sent_at,
             last_failure_at,
         },
@@ -875,19 +886,25 @@ pub fn start_sync_loop(db: Database, config: Config) {
                     sync_pending_events(&db, &config),
                     |summary| {
                         format!(
-                            "本轮上报 {} 条（成功 {}，失败 {}）",
-                            summary.total, summary.sent, summary.failed
+                            "本轮上报 {} 条（成功 {}，失败 {}），复活死信 {} 条，过期 {} 条",
+                            summary.total,
+                            summary.sent,
+                            summary.failed,
+                            summary.resurrected,
+                            summary.expired
                         )
                     },
                 )
                 .await
                 {
                     Ok(summary) => {
-                        if summary.total > 0 {
+                        if summary.total > 0 || summary.resurrected > 0 || summary.expired > 0 {
                             tracing::info!(
                                 total = summary.total,
                                 sent = summary.sent,
                                 failed = summary.failed,
+                                resurrected = summary.resurrected,
+                                expired = summary.expired,
                                 "LumiBot 事件上报完成"
                             );
                         }
@@ -918,6 +935,47 @@ pub async fn sync_pending_events(db: &Database, config: &Config) -> anyhow::Resu
     .execute(&db.pool)
     .await?;
 
+    // 死信过期：failed 超过最大保留时长的事件标记为 expired，不再重试
+    let expired = sqlx::query(
+        r#"
+        UPDATE lumi_bot_event_queue
+        SET status = 'expired', locked_at = NULL, locked_by = NULL, updated_at = now()
+        WHERE status = 'failed' AND updated_at <= now() - make_interval(secs => $1)
+        "#,
+    )
+    .bind(config.lumi_bot_failed_max_age_secs as i64)
+    .execute(&db.pool)
+    .await
+    .context("清理 LumiBot 过期死信失败")?
+    .rows_affected() as usize;
+
+    // 死信复活：LumiBot 停机是暂时性的，failed 事件退避满
+    // LUMI_BOT_FAILED_RETRY_SECS 后重置为 pending，重新计入尝试预算再试，
+    // 保证短暂不可用期间产生的事件不会永久丢失。
+    let resurrected = sqlx::query(
+        r#"
+        UPDATE lumi_bot_event_queue
+        SET status = 'pending',
+            attempts = 0,
+            next_attempt_at = now(),
+            locked_at = NULL,
+            locked_by = NULL
+        WHERE status = 'failed' AND updated_at <= now() - make_interval(secs => $1)
+        "#,
+    )
+    .bind(config.lumi_bot_failed_retry_secs as i64)
+    .execute(&db.pool)
+    .await
+    .context("复活 LumiBot 死信事件失败")?
+    .rows_affected() as usize;
+    if resurrected > 0 || expired > 0 {
+        tracing::info!(
+            resurrected,
+            expired,
+            "LumiBot 死信队列维护完成（复活/过期）"
+        );
+    }
+
     let rows: Vec<QueuedEventRow> = sqlx::query_as(
         r#"WITH claimed AS (
              SELECT id
@@ -941,6 +999,8 @@ pub async fn sync_pending_events(db: &Database, config: &Config) -> anyhow::Resu
 
     let mut summary = SyncSummary {
         total: rows.len(),
+        resurrected,
+        expired,
         ..SyncSummary::default()
     };
 
@@ -980,8 +1040,9 @@ pub async fn sync_pending_events(db: &Database, config: &Config) -> anyhow::Resu
                         event_id = %row.id,
                         attempts,
                         max_attempts = config.lumi_bot_max_attempts,
+                        retry_after_secs = config.lumi_bot_failed_retry_secs,
                         %error,
-                        "LumiBot 事件重试次数耗尽，标记为 failed（不再自动重试）"
+                        "LumiBot 事件重试次数耗尽，进入死信，退避周期后自动复活重试"
                     );
                 } else {
                     tracing::warn!(
@@ -998,7 +1059,8 @@ pub async fn sync_pending_events(db: &Database, config: &Config) -> anyhow::Resu
     Ok(summary)
 }
 
-/// 上报失败：累计尝试次数；达到上限标记为 failed（死信），否则保留 pending 等待下轮重试。
+/// 上报失败：累计尝试次数；达到上限标记为 failed（死信）。死信会在退避周期后
+/// 自动复活重试（见 sync_pending_events），避免 LumiBot 短暂不可用导致事件永久丢失。
 async fn record_failure(
     db: &Database,
     id: Uuid,
@@ -1540,6 +1602,8 @@ mod tests {
             config.lumi_bot_api_key = Some("key-admin".to_string());
             config.lumi_bot_max_attempts = 2;
             config.lumi_bot_batch_size = 100;
+            config.lumi_bot_failed_retry_secs = 60;
+            config.lumi_bot_failed_max_age_secs = 86_400;
 
             let id = enqueue_event(
                 &db,
@@ -1583,9 +1647,74 @@ mod tests {
             assert_eq!(attempts, 2);
             assert!(last_error.is_some());
 
-            // 第三轮：failed 不再被取出
+            // 第三轮：failed 处于退避期内，不再被取出
             let summary = sync_pending_events(&db, &config).await?;
             assert_eq!(summary.total, 0);
+            assert_eq!(summary.resurrected, 0);
+
+            // 第四轮：死信已超过退避周期，自动复活为 pending 并重新计入尝试预算
+            sqlx::query(
+                "UPDATE lumi_bot_event_queue SET updated_at = now() - interval '120 seconds' WHERE id = $1",
+            )
+            .bind(id)
+            .execute(&db.pool)
+            .await?;
+            let summary = sync_pending_events(&db, &config).await?;
+            assert_eq!(summary.resurrected, 1);
+            assert_eq!(summary.total, 1);
+            assert_eq!(summary.failed, 1); // 目标地址不可达，再次上报失败
+            let (status, attempts): (String, i32) =
+                sqlx::query_as("SELECT status, attempts FROM lumi_bot_event_queue WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&db.pool)
+                    .await?;
+            assert_eq!(status, "pending");
+            assert_eq!(attempts, 1); // 复活后尝试预算重置
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn stale_dead_letter_is_expired_and_no_longer_retried() {
+        with_test_db(async |db| {
+            let mut config = Config::from_env();
+            config.lumi_bot_api_url = Some("http://127.0.0.1:9".to_string());
+            config.lumi_bot_api_key = Some("key-admin".to_string());
+            config.lumi_bot_max_attempts = 2;
+            config.lumi_bot_batch_size = 100;
+            config.lumi_bot_failed_retry_secs = 3600;
+            config.lumi_bot_failed_max_age_secs = 60;
+
+            let id = enqueue_event(
+                &db,
+                EventInput {
+                    event_type: EVENT_WHITELIST_REQUEST_CREATED.to_string(),
+                    level: "warning".to_string(),
+                    title: "新白名单申请".to_string(),
+                    message: "测试".to_string(),
+                    data: serde_json::json!({}),
+                },
+            )
+            .await?;
+            // 直接构造已死 2 分钟的死信（超过最大保留时长）
+            sqlx::query(
+                "UPDATE lumi_bot_event_queue SET status = 'failed', attempts = 2, updated_at = now() - interval '120 seconds' WHERE id = $1",
+            )
+            .bind(id)
+            .execute(&db.pool)
+            .await?;
+
+            let summary = sync_pending_events(&db, &config).await?;
+            assert_eq!(summary.expired, 1);
+            assert_eq!(summary.total, 0);
+            assert_eq!(summary.resurrected, 0);
+            let (status,): (String,) =
+                sqlx::query_as("SELECT status FROM lumi_bot_event_queue WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&db.pool)
+                    .await?;
+            assert_eq!(status, "expired");
             Ok(())
         })
         .await;

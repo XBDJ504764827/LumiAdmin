@@ -269,13 +269,20 @@ R2 信息时，业务记录本身仍可提交，只有证据文件上传不可�
 | `LUMI_BOT_API_URL` | 空（禁用） | LumiBot 事件接收中心地址，如 `http://127.0.0.1:8080`；与 `LUMI_BOT_API_KEY` 同时配置后启用 |
 | `LUMI_BOT_API_KEY` | 空（禁用） | LumiBot 分配的 API Key（`X-API-Key` 请求头，建议向 LumiBot 申请专属 `key-admin`） |
 | `LUMI_BOT_SYNC_INTERVAL_SECS` | `1800` | 队列集中上报周期（秒），即每 30 分钟批量上报一次 |
-| `LUMI_BOT_MAX_ATTEMPTS` | `5` | 单条事件最大重试次数，超过后标记 `failed` 不再自动重试 |
+| `LUMI_BOT_MAX_ATTEMPTS` | `5` | 单条事件最大重试次数，超过后标记 `failed`（死信），退避周期后自动复活重试 |
 | `LUMI_BOT_BATCH_SIZE` | `100` | 每轮最多上报的事件条数 |
+| `LUMI_BOT_FAILED_RETRY_SECS` | `86400` | 死信复活退避（秒）：`failed` 超过该时长后自动重置为 `pending` 再试 |
+| `LUMI_BOT_FAILED_MAX_AGE_SECS` | `604800` | 死信最长保留（秒）：超过 7 天仍无法送达的标记为 `expired`，不再重试 |
 
 启用后，玩家在公开页面提交的白名单申请会写入 `lumi_bot_event_queue` 队列，
 后台任务按周期集中调用 `POST {LUMI_BOT_API_URL}/api/v1/events`
 （`source: LumiAdmin`，`event_type: WHITELIST_REQUEST_CREATED`）上报，
 由 LumiBot 再通知 QQ 管理员/用户。
+
+**事件不会因 LumiBot 短暂停机而丢失**：上报失败按指数退避重试
+（间隔最长 1 小时）；重试耗尽后进入死信，仍会在 24 小时后自动复活重试，
+直到送达或超过 7 天标记为 `expired`。死信/过期数量可在
+`GET /api/ops/lumi-bot` 的 `queue` 字段中监控。
 
 LumiBot 点击审批调用 `POST /api/integration/qq/whitelist/:id/review`，请求体包含
 `action`、审批人 `openid`、QQ `interaction_id`、可选 `reason` 和 `force`。

@@ -70,6 +70,10 @@ pub struct Config {
     pub lumi_bot_sync_interval_secs: u64,
     pub lumi_bot_max_attempts: u32,
     pub lumi_bot_batch_size: usize,
+    /// 死信复活退避：failed 事件超过该秒数后自动重置为 pending 再试
+    pub lumi_bot_failed_retry_secs: u64,
+    /// 死信最长保留：failed 超过该秒数标记为 expired，不再重试
+    pub lumi_bot_failed_max_age_secs: u64,
     // 管理后台地址（用于 QQ 通知中的“点击查看详情”链接）
     pub admin_web_url: Option<String>,
 }
@@ -250,6 +254,8 @@ impl Config {
             lumi_bot_sync_interval_secs: env_u64("LUMI_BOT_SYNC_INTERVAL_SECS", 1800),
             lumi_bot_max_attempts: env_u64("LUMI_BOT_MAX_ATTEMPTS", 5) as u32,
             lumi_bot_batch_size: env_u64("LUMI_BOT_BATCH_SIZE", 100) as usize,
+            lumi_bot_failed_retry_secs: env_u64("LUMI_BOT_FAILED_RETRY_SECS", 86_400),
+            lumi_bot_failed_max_age_secs: env_u64("LUMI_BOT_FAILED_MAX_AGE_SECS", 604_800),
             admin_web_url: std::env::var("ADMIN_WEB_URL")
                 .ok()
                 .map(|v| v.trim().trim_end_matches('/').to_string())

@@ -8,7 +8,12 @@
 //! 自动通过规则：
 //! - 仅 `RiskAction::Allow`（低风险）参与自动通过；
 //! - `Warn`（历史风险）/ `RequireForce` / `Deny`（中高风险，含自身全球封禁）
-//!   保持 `pending`，继续等待管理员审核；
+//!   保持 `pending`，继续等待管理员审核，并通过 QQ 发送提醒（`warning`
+//!   级事件，见 `lumi_bot_service::report_whitelist_pending_review`），
+//!   绝不自动通过；
+//! - 自动通过前还有最后一道闸：直接以最新封禁数据复核，任何存在未解封
+//!   本地封禁或未过期全球封禁的玩家都绝不自动通过（防风险数据滞后误判）
+//!   ——命中时同样转为人工审核提醒；
 //! - 若管理员在等待窗口内已审批（status 不再是 pending），自动通过会因
 //!   `WHERE status='pending'` 原子条件更新命中 0 行而跳过，不会覆盖人工结果；
 //! - 自动通过后主动刷新白名单缓存（`WhitelistCache`），玩家可立即进服，
@@ -21,7 +26,7 @@ use crate::{
     db::Database,
     services::{
         access_cache::WhitelistCache,
-        audit_service, observability_service,
+        audit_service, lumi_bot_service, observability_service,
         player_risk_service::{self, RiskAction},
         whitelist_service::{self, ApproveWhitelistInput},
     },
@@ -48,6 +53,8 @@ pub struct AutoApproveSummary {
     pub approved: usize,
     pub skipped_high_risk: usize,
     pub already_processed: usize,
+    /// 本轮为中/高风险申请补发的 QQ 人工审核提醒条数（幂等去重后）
+    pub reminded: usize,
 }
 
 /// 读取自动通过配置（表为空时使用默认值：开启 + 3 小时）
@@ -140,12 +147,13 @@ pub fn start_auto_approve_loop(
                 .await
                 {
                     Ok(summary) => {
-                        if summary.approved > 0 {
+                        if summary.approved > 0 || summary.reminded > 0 {
                             tracing::info!(
                                 scanned = summary.scanned,
                                 approved = summary.approved,
                                 skipped_high_risk = summary.skipped_high_risk,
                                 already_processed = summary.already_processed,
+                                reminded = summary.reminded,
                                 "白名单低风险自动通过完成"
                             );
                         }
@@ -215,7 +223,84 @@ pub async fn process_auto_approve(
 
         if risk_profile.action != RiskAction::Allow {
             summary.skipped_high_risk += 1;
+            // 中/高风险绝不自动通过：确保管理员通过 QQ 收到人工审核提醒
+            //（幂等去重：提交时已以 warning 级推送过的不重复提醒）
+            summary.reminded += {
+                let risk_label = risk_action_label(risk_profile.action.clone());
+                let reasons_text = risk_profile
+                    .reasons
+                    .iter()
+                    .take(3)
+                    .map(|reason| reason.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("；");
+                let risk_reason = if reasons_text.is_empty() {
+                    None
+                } else {
+                    Some(reasons_text.as_str())
+                };
+                remind_manual_review(
+                    db,
+                    app_config,
+                    &candidate,
+                    auto_config.hours,
+                    risk_label,
+                    risk_reason,
+                )
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::warn!(
+                        %error,
+                        whitelist_id = %candidate.id,
+                        "白名单中/高风险人工审核提醒入队失败"
+                    );
+                    0
+                })
+            };
             continue;
+        }
+
+        // 最后一道闸：真正自动通过前，直接以最新封禁数据复核，彻底堵死
+        // 「风险评分时数据尚未同步 → 判为低风险 → 自动通过」的窗口。
+        // fail-closed：复核失败时不自动通过，等待下一轮。
+        match detect_unresolved_ban(db, &candidate.steamid64).await {
+            Ok(Some(ban_reason)) => {
+                tracing::warn!(
+                    whitelist_id = %candidate.id,
+                    steamid64 = %candidate.steamid64,
+                    %ban_reason,
+                    "白名单自动通过终检发现未解封封禁，拒绝自动通过并转人工审核"
+                );
+                summary.skipped_high_risk += 1;
+                summary.reminded += remind_manual_review(
+                    db,
+                    app_config,
+                    &candidate,
+                    auto_config.hours,
+                    "高风险",
+                    Some(ban_reason.as_str()),
+                )
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::warn!(
+                        %error,
+                        whitelist_id = %candidate.id,
+                        "白名单中/高风险人工审核提醒入队失败"
+                    );
+                    0
+                });
+                continue;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    whitelist_id = %candidate.id,
+                    "白名单自动通过终检失败，本轮跳过（fail-closed）"
+                );
+                summary.skipped_high_risk += 1;
+                continue;
+            }
         }
 
         match auto_approve_one(db, &candidate, auto_config.hours).await {
@@ -250,6 +335,175 @@ pub async fn process_auto_approve(
     }
 
     Ok(summary)
+}
+
+/// 风险动作的中文标签（与 QQ 通知文案保持一致）
+fn risk_action_label(action: RiskAction) -> &'static str {
+    match action {
+        RiskAction::Allow => "低风险",
+        RiskAction::Warn => "历史风险",
+        RiskAction::RequireForce | RiskAction::Deny => "高风险",
+    }
+}
+
+/// 为超时未审核的中/高风险申请发送 QQ 人工审核提醒（幂等）。
+///
+/// 去重规则（命中任一即跳过）：
+/// 1. `review_notified_at` 已标记（提交时 warning 级提醒过，或此前已补发过提醒）；
+/// 2. 队列中已存在该申请的 warning 级 `WHITELIST_REQUEST_CREATED` 事件
+///    （历史数据：提交时已提醒过但未回填标记）。
+///
+/// 返回本轮实际发送的提醒条数（0 或 1）。
+async fn remind_manual_review(
+    db: &Database,
+    config: &crate::config::Config,
+    candidate: &PendingCandidate,
+    hours: i32,
+    risk_label: &str,
+    risk_reason: Option<&str>,
+) -> anyhow::Result<usize> {
+    // 1) 已提醒过 → 幂等跳过
+    let notified: (bool,) = sqlx::query_as(
+        "SELECT review_notified_at IS NOT NULL FROM whitelist_requests WHERE id = $1",
+    )
+    .bind(candidate.id)
+    .fetch_one(&db.pool)
+    .await
+    .context("读取白名单审核提醒标记失败")?;
+    if notified.0 {
+        return Ok(0);
+    }
+
+    // 2) 队列里已有 warning 级申请事件（提交时已提醒过）→ 跳过
+    let already: (bool,) = sqlx::query_as(
+        r#"SELECT EXISTS(
+               SELECT 1 FROM lumi_bot_event_queue
+               WHERE event_type = 'WHITELIST_REQUEST_CREATED'
+                 AND level = 'warning'
+                 AND data->>'whitelist_id' = $1
+                 AND status IN ('pending', 'sent')
+           )"#,
+    )
+    .bind(candidate.id.to_string())
+    .fetch_one(&db.pool)
+    .await
+    .context("查询白名单申请事件队列失败")?;
+    if already.0 {
+        return Ok(0);
+    }
+
+    // 读取申请基础信息，构造提醒事件
+    #[derive(sqlx::FromRow)]
+    struct ReminderRow {
+        id: Uuid,
+        steamid64: String,
+        steamid: Option<String>,
+        steamid3: Option<String>,
+        profile_url: Option<String>,
+        nickname: String,
+        steam_persona_name: Option<String>,
+        contact: Option<String>,
+        applied_at: chrono::DateTime<Utc>,
+    }
+    let row: ReminderRow = sqlx::query_as(
+        r#"SELECT id, steamid64, steamid, steamid3, profile_url, nickname,
+                  steam_persona_name, contact, applied_at
+           FROM whitelist_requests WHERE id = $1"#,
+    )
+    .bind(candidate.id)
+    .fetch_one(&db.pool)
+    .await
+    .context("读取白名单申请信息失败")?;
+
+    let item = whitelist_service::WhitelistItem {
+        id: row.id,
+        steamid64: row.steamid64,
+        steamid: row.steamid,
+        steamid3: row.steamid3,
+        profile_url: row.profile_url,
+        nickname: row.nickname,
+        steam_persona_name: row.steam_persona_name,
+        contact: row.contact,
+        status: "pending".to_string(),
+        applied_at: row.applied_at.to_rfc3339(),
+        approved_at: None,
+        approved_by: None,
+        approval_reason: None,
+        rejected_at: None,
+        rejected_by: None,
+        rejection_reason: None,
+        risk_profile: None,
+    };
+
+    lumi_bot_service::report_whitelist_pending_review(
+        db,
+        config,
+        &item,
+        hours as i64,
+        risk_label,
+        risk_reason,
+    )
+    .await?;
+    Ok(1)
+}
+
+/// 最后一道闸：自动通过前直接以最新封禁数据复核。
+///
+/// 与 `build_player_risk_profile` 相互独立：即使风险评分时数据尚未同步
+/// （全球封禁同步滞后 / 封禁缓存未刷新）导致误判为低风险，只要玩家存在
+/// 未解封本地封禁或未过期全球封禁，这里都会拦截，绝不自动通过。
+/// 返回 `Some(原因描述)` 表示存在未解封封禁，应转人工审核。
+async fn detect_unresolved_ban(
+    db: &Database,
+    steamid64: &str,
+) -> anyhow::Result<Option<String>> {
+    let local_active: (bool, Option<String>) = sqlx::query_as(
+        r#"SELECT EXISTS(
+                 SELECT 1 FROM ban_records
+                 WHERE steam_id = $1
+                   AND status = 'active'
+                   AND (expires_at IS NULL OR expires_at > now())
+                 LIMIT 1
+               ),
+               (SELECT reason FROM ban_records
+                WHERE steam_id = $1
+                  AND status = 'active'
+                  AND (expires_at IS NULL OR expires_at > now())
+                ORDER BY created_at DESC LIMIT 1)"#,
+    )
+    .bind(steamid64)
+    .fetch_one(&db.pool)
+    .await?;
+    if local_active.0 {
+        let reason = local_active
+            .1
+            .filter(|reason| !reason.trim().is_empty())
+            .unwrap_or_else(|| "未填写".to_string());
+        return Ok(Some(format!("存在未解封本地封禁（原因：{reason}）")));
+    }
+
+    let global_active: (bool, Option<String>) = sqlx::query_as(
+        r#"SELECT EXISTS(
+                 SELECT 1 FROM global_bans
+                 WHERE steam_id64 = $1 AND is_expired = false AND manual_unbanned = false
+                 LIMIT 1
+               ),
+               (SELECT ban_type FROM global_bans
+                WHERE steam_id64 = $1 AND is_expired = false AND manual_unbanned = false
+                ORDER BY COALESCE(created_on, updated_on) DESC, synced_at DESC LIMIT 1)"#,
+    )
+    .bind(steamid64)
+    .fetch_one(&db.pool)
+    .await?;
+    if global_active.0 {
+        let ban_type = global_active
+            .1
+            .filter(|ban_type| !ban_type.trim().is_empty())
+            .unwrap_or_else(|| "未知类型".to_string());
+        return Ok(Some(format!("存在未过期全球封禁（类型：{ban_type}）")));
+    }
+
+    Ok(None)
 }
 
 /// 单条申请自动通过：事务内原子更新 + 审计日志。
@@ -563,6 +817,244 @@ mod tests {
             let loaded = load_config(&db).await?;
             assert_eq!(loaded.hours, 72);
             assert!(loaded.enabled);
+            Ok(())
+        })
+        .await;
+    }
+
+    // ===== 中/高风险不自动通过 + QQ 人工审核提醒 =====
+
+    async fn insert_global_ban(db: &Database, steamid64: &str, ban_type: &str) {
+        sqlx::query(
+            r#"INSERT INTO global_bans (id, kzt_ban_id, steam_id64, player_name, ban_type,
+                                        is_expired, manual_unbanned)
+               VALUES ($1, $2, $3, '被封禁玩家', $4, false, false)"#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(Uuid::new_v4().as_u128() as i32)
+        .bind(steamid64)
+        .bind(ban_type)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    async fn queue_event_count(db: &Database, whitelist_id: &Uuid, level: &str) -> i64 {
+        let (count,): (i64,) = sqlx::query_as(
+            r#"SELECT COUNT(*) FROM lumi_bot_event_queue
+               WHERE event_type = 'WHITELIST_REQUEST_CREATED'
+                 AND level = $1
+                 AND data->>'whitelist_id' = $2"#,
+        )
+        .bind(level)
+        .bind(whitelist_id.to_string())
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        count
+    }
+
+    #[tokio::test]
+    async fn high_risk_pending_is_not_auto_approved_and_gets_qq_reminder() {
+        with_test_db(async |db| {
+            let steamid64 = "76561198000000010";
+            let id = insert_pending(
+                &db,
+                steamid64,
+                "高风险玩家",
+                Utc::now() - Duration::hours(4),
+            )
+            .await;
+            insert_global_ban(&db, steamid64, "bhop_hack").await;
+
+            let config = Config::from_env();
+            let cache = std::sync::Arc::new(WhitelistCache::new());
+            let summary = process_auto_approve(&db, &cache, &config).await?;
+
+            // 高风险：绝不自动通过，且发送人工审核提醒
+            assert_eq!(summary.approved, 0);
+            assert_eq!(summary.skipped_high_risk, 1);
+            assert_eq!(summary.reminded, 1);
+
+            let (status, approved_via): (String, Option<String>) =
+                sqlx::query_as("SELECT status, approved_via FROM whitelist_requests WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&db.pool)
+                    .await?;
+            assert_eq!(status, "pending", "高风险玩家不应被自动通过");
+            assert_eq!(approved_via, None);
+
+            // QQ 提醒：warning 级事件入队 + review_notified_at 标记
+            assert_eq!(queue_event_count(&db, &id, "warning").await, 1);
+            let notified: (bool,) = sqlx::query_as(
+                "SELECT review_notified_at IS NOT NULL FROM whitelist_requests WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(&db.pool)
+            .await?;
+            assert!(notified.0, "应标记已完成人工审核提醒");
+
+            // 幂等：下一轮不重复提醒
+            let summary = process_auto_approve(&db, &cache, &config).await?;
+            assert_eq!(summary.reminded, 0);
+            assert_eq!(queue_event_count(&db, &id, "warning").await, 1);
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn medium_risk_pending_is_not_auto_approved_and_gets_qq_reminder() {
+        with_test_db(async |db| {
+            let steamid64 = "76561198000000020";
+            let linked = "76561198000000099";
+            let id = insert_pending(
+                &db,
+                steamid64,
+                "中风险玩家",
+                Utc::now() - Duration::hours(4),
+            )
+            .await;
+
+            // 中风险场景：同 IP 关联账号有旧的历史负面记录（白名单申请被拒）
+            // → linked_ip_negative_history（历史关联，Warning 级）→ Warn
+            let community_id = Uuid::new_v4();
+            let server_id = Uuid::new_v4();
+            sqlx::query(r#"INSERT INTO communities (id, name) VALUES ($1, '测试社区')"#)
+                .bind(community_id)
+                .execute(&db.pool)
+                .await?;
+            sqlx::query(
+                r#"INSERT INTO servers (id, community_id, name, ip, port, rcon_password,
+                                        report_token, status, players)
+                   VALUES ($1, $2, '测试服', '127.0.0.1', 25575, 'secret', 'token', 'online', $3)"#,
+            )
+            .bind(server_id)
+            .bind(community_id)
+            .bind(Vec::<String>::new())
+            .execute(&db.pool)
+            .await?;
+            let old_seen = Utc::now() - Duration::days(120);
+            for (sid, name) in [(steamid64, "中风险玩家"), (linked, "关联账号")] {
+                sqlx::query(
+                    r#"INSERT INTO server_online_players (server_id, name, steam_id64, ip,
+                                                          ping, server_port, reported_at)
+                       VALUES ($1, $2, $3, '203.0.113.50', 30, 25575, $4)"#,
+                )
+                .bind(server_id)
+                .bind(name)
+                .bind(sid)
+                .bind(old_seen)
+                .execute(&db.pool)
+                .await?;
+            }
+            sqlx::query(
+                r#"INSERT INTO whitelist_requests (id, steam_id, steamid64, steamid, steamid3,
+                                                   profile_url, nickname, status,
+                                                   rejected_at, rejected_by, rejection_reason,
+                                                   applied_at, source, updated_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, '关联账号', 'rejected', now(), '管理员A',
+                           '风险玩家', $7, 'public', now())"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(linked)
+            .bind(linked)
+            .bind(format!("STEAM_0:0:{}", &linked[6..8]))
+            .bind(format!("[U:1:{}]", &linked[6..8]))
+            .bind(format!("https://steamcommunity.com/profiles/{linked}"))
+            .bind(Utc::now())
+            .execute(&db.pool)
+            .await?;
+
+            let config = Config::from_env();
+            let cache = std::sync::Arc::new(WhitelistCache::new());
+            let summary = process_auto_approve(&db, &cache, &config).await?;
+
+            assert_eq!(summary.approved, 0, "中风险玩家不应被自动通过");
+            assert_eq!(summary.skipped_high_risk, 1);
+            assert_eq!(summary.reminded, 1, "应为中风险玩家发送 QQ 人工审核提醒");
+
+            let (status,): (String,) =
+                sqlx::query_as("SELECT status FROM whitelist_requests WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&db.pool)
+                    .await?;
+            assert_eq!(status, "pending");
+            assert_eq!(queue_event_count(&db, &id, "warning").await, 1);
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn reminder_skipped_when_submit_already_notified_as_warning() {
+        with_test_db(async |db| {
+            let steamid64 = "76561198000000030";
+            let id = insert_pending(
+                &db,
+                steamid64,
+                "高风险玩家",
+                Utc::now() - Duration::hours(4),
+            )
+            .await;
+            insert_global_ban(&db, steamid64, "rage_hack").await;
+
+            // 模拟提交时已以 warning 级推送过申请事件（历史数据、未回填标记）
+            sqlx::query(
+                r#"INSERT INTO lumi_bot_event_queue (id, event_type, level, title, message, data)
+                   VALUES ($1, 'WHITELIST_REQUEST_CREATED', 'warning', '新白名单申请',
+                           '测试', jsonb_build_object('whitelist_id', $2::text))"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(id.to_string())
+            .execute(&db.pool)
+            .await?;
+
+            let config = Config::from_env();
+            let cache = std::sync::Arc::new(WhitelistCache::new());
+            let summary = process_auto_approve(&db, &cache, &config).await?;
+
+            assert_eq!(summary.approved, 0);
+            assert_eq!(summary.reminded, 0, "提交时已提醒过的不重复提醒");
+            assert_eq!(queue_event_count(&db, &id, "warning").await, 1);
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn detect_unresolved_ban_blocks_active_and_expired_bans() {
+        with_test_db(async |db| {
+            let steamid64 = "76561198000000040";
+
+            // 无封禁 → None
+            assert_eq!(detect_unresolved_ban(&db, steamid64).await?, None);
+
+            // 未解封本地封禁 → Some（含原因）
+            sqlx::query(
+                r#"INSERT INTO ban_records (id, steam_id, reason, status, operator_name)
+                   VALUES ($1, $2, '作弊', 'active', '管理员A')"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(steamid64)
+            .execute(&db.pool)
+            .await?;
+            let reason = detect_unresolved_ban(&db, steamid64).await?.unwrap();
+            assert!(reason.contains("未解封本地封禁"), "实际：{reason}");
+
+            // 封禁已过期（expires_at 过去）→ 视为无未解封封禁
+            sqlx::query(
+                "UPDATE ban_records SET expires_at = now() - interval '1 day' WHERE steam_id = $1",
+            )
+            .bind(steamid64)
+            .execute(&db.pool)
+            .await?;
+            assert_eq!(detect_unresolved_ban(&db, steamid64).await?, None);
+
+            // 未过期全球封禁 → Some
+            insert_global_ban(&db, steamid64, "bhop_hack").await;
+            let reason = detect_unresolved_ban(&db, steamid64).await?.unwrap();
+            assert!(reason.contains("未过期全球封禁"), "实际：{reason}");
             Ok(())
         })
         .await;

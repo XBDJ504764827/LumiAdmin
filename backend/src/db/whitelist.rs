@@ -23,6 +23,9 @@ impl Database {
             r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS approval_reason TEXT"#,
             r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS approved_via TEXT"#,
             r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS rejected_via TEXT"#,
+            // 中/高风险人工审核提醒时间：自动通过循环为超时未审核的中/高风险
+            // 申请发送 QQ 提醒后写入，用于幂等去重（每条申请最多提醒一次）
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS review_notified_at TIMESTAMPTZ"#,
         ];
         for sql in alters {
             sqlx::query(sql).execute(&self.pool).await?;

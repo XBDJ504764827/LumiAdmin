@@ -403,11 +403,12 @@ async fn remind_manual_review(
         nickname: String,
         steam_persona_name: Option<String>,
         contact: Option<String>,
+        reason: Option<String>,
         applied_at: chrono::DateTime<Utc>,
     }
     let row: ReminderRow = sqlx::query_as(
         r#"SELECT id, steamid64, steamid, steamid3, profile_url, nickname,
-                  steam_persona_name, contact, applied_at
+                  steam_persona_name, contact, reason, applied_at
            FROM whitelist_requests WHERE id = $1"#,
     )
     .bind(candidate.id)
@@ -424,11 +425,15 @@ async fn remind_manual_review(
         nickname: row.nickname,
         steam_persona_name: row.steam_persona_name,
         contact: row.contact,
+        reason: row.reason,
         status: "pending".to_string(),
         applied_at: row.applied_at.to_rfc3339(),
         approved_at: None,
         approved_by: None,
         approval_reason: None,
+        expires_at: None,
+        duration_days: None,
+        expired_at: None,
         rejected_at: None,
         rejected_by: None,
         rejection_reason: None,
@@ -503,6 +508,9 @@ async fn detect_unresolved_ban(db: &Database, steamid64: &str) -> anyhow::Result
     Ok(None)
 }
 
+/// 低风险自动通过的白名单期限（天）
+const AUTO_APPROVE_DURATION_DAYS: i32 = 7;
+
 /// 单条申请自动通过：事务内原子更新 + 审计日志。
 /// 返回 Some(item) = 自动通过成功；None = 已被管理员处理（无可执行更新）。
 async fn auto_approve_one(
@@ -520,6 +528,7 @@ async fn auto_approve_one(
             reason: Some(&format!("低风险玩家，申请满 {hours} 小时无人审核自动通过")),
             force: true,
             via: "auto",
+            duration_days: Some(AUTO_APPROVE_DURATION_DAYS),
         },
     )
     .await;
@@ -567,6 +576,8 @@ async fn auto_approve_one(
             "approved_by": item.approved_by,
             "approval_reason": item.approval_reason,
             "auto_approve_hours": hours,
+            "duration_days": item.duration_days,
+            "expires_at": item.expires_at,
         })),
     )
     .await?;
@@ -662,6 +673,19 @@ mod tests {
             assert_eq!(approved_by.as_deref(), Some("系统"));
             assert!(approval_reason.as_deref().unwrap_or("").contains("自动通过"));
             assert!(cache.contains("76561198000000001").await);
+
+            // 低风险自动通过的期限应为 7 天
+            let (duration_days, expires_at): (Option<i32>, Option<chrono::DateTime<Utc>>) =
+                sqlx::query_as(
+                    "SELECT duration_days, expires_at FROM whitelist_requests WHERE id = $1",
+                )
+                .bind(id)
+                .fetch_one(&db.pool)
+                .await?;
+            assert_eq!(duration_days, Some(7));
+            let expires_at = expires_at.expect("自动通过应写入 7 天期限");
+            assert!(expires_at > Utc::now() + Duration::days(6));
+            assert!(expires_at < Utc::now() + Duration::days(8));
 
             // 审计日志应存在
             let audit_count: i64 = sqlx::query_scalar(

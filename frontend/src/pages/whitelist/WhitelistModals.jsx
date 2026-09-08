@@ -258,6 +258,32 @@ function RiskProfilePanel({ profile, mainName }) {
 }
 
 // ---------------------------------------------------------------------------
+// 白名单期限选项（与后端 WHITELIST_DURATION_CHOICES 保持一致）
+// ---------------------------------------------------------------------------
+
+export const WHITELIST_DURATION_OPTIONS = [
+  { value: 0, label: '永久' },
+  { value: 7, label: '7 天' },
+  { value: 30, label: '30 天' },
+  { value: 120, label: '120 天' },
+];
+
+function DurationSelect({ value, onChange, disabled }) {
+  return (
+    <select
+      className="form-control"
+      value={value ?? 0}
+      onChange={(event) => onChange(Number(event.target.value))}
+      disabled={disabled}
+    >
+      {WHITELIST_DURATION_OPTIONS.map((option) => (
+        <option key={option.value} value={option.value}>{option.label}</option>
+      ))}
+    </select>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // 手动添加白名单 Modal
 // ---------------------------------------------------------------------------
 
@@ -293,6 +319,15 @@ export function ManualCreateModal({ open, onClose, form, setForm, error, onSubmi
           onChange={(event) => setForm((prev) => ({ ...prev, steam_input: event.target.value }))}
           placeholder="SteamID64 / SteamID / Steam 个人主页链接"
         />
+      </div>
+      <div className="form-group">
+        <label>白名单期限</label>
+        <DurationSelect
+          value={form.duration_days ?? 0}
+          onChange={(value) => setForm((prev) => ({ ...prev, duration_days: value }))}
+          disabled={submitting}
+        />
+        <div className="form-hint">期限到期后白名单自动失效，玩家需重新申请。</div>
       </div>
       <label className="checkbox-line mb-12">
         <input
@@ -355,7 +390,7 @@ export function RejectModal({ open, onClose, reason, setReason, error, onSubmit,
 // 通过白名单申请（含风险检查）Modal
 // ---------------------------------------------------------------------------
 
-export function ApproveModal({ open, onClose, mode = 'approve', item, bans = [], risk, riskProfile, reason, setReason, error, secondsRemaining, onSubmit, submitting }) {
+export function ApproveModal({ open, onClose, mode = 'approve', item, bans = [], risk, riskProfile, reason, setReason, durationDays, setDurationDays, error, secondsRemaining, onSubmit, submitting }) {
   const forceRequired = ['deny', 'require_force'].includes(riskProfile?.action) || bans.length > 0;
   const titleText = mode === 'restore'
     ? forceRequired ? '恢复白名单（强制通过）' : '恢复白名单（风险确认）'
@@ -423,6 +458,11 @@ export function ApproveModal({ open, onClose, mode = 'approve', item, bans = [],
           onChange={(event) => setReason(event.target.value)}
           placeholder={forceRequired ? '请说明为什么需要强制通过该玩家' : '请说明为什么在命中风险的情况下仍然通过'}
         />
+      </div>
+      <div className="form-group">
+        <label>白名单期限</label>
+        <DurationSelect value={durationDays} onChange={setDurationDays} disabled={submitting} />
+        <div className="form-hint">期限到期后白名单自动失效，玩家需重新申请。</div>
       </div>
       {error ? <div className="text-accent">{error}</div> : null}
     </Modal>
@@ -594,6 +634,12 @@ export function PlayerDetailModal({ open, onClose, item, canReview, submitting, 
             <div style={{ color: 'var(--text2)', fontSize: 13 }}>
               <div>联系方式：{item.contact || '-'}</div>
               <div>申请时间：{item.applied_at ? formatChinaDateTime(item.applied_at) : '-'}</div>
+              {item.reason ? (
+                <div style={{ marginTop: 6, whiteSpace: 'pre-wrap' }}>
+                  <span style={{ fontWeight: 600 }}>申请理由：</span>
+                  <span>{item.reason}</span>
+                </div>
+              ) : null}
             </div>
           </div>
 

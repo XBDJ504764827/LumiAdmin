@@ -22,11 +22,18 @@ pub struct WhitelistItem {
     pub nickname: String,
     pub steam_persona_name: Option<String>,
     pub contact: Option<String>,
+    /// 玩家填写的申请理由（公开申请必填）
+    pub reason: Option<String>,
     pub status: String,
     pub applied_at: String,
     pub approved_at: Option<String>,
     pub approved_by: Option<String>,
     pub approval_reason: Option<String>,
+    /// 白名单到期时间，None = 永久
+    pub expires_at: Option<String>,
+    /// 所选期限天数（7/30/120），None = 永久
+    pub duration_days: Option<i32>,
+    pub expired_at: Option<String>,
     pub rejected_at: Option<String>,
     pub rejected_by: Option<String>,
     pub rejection_reason: Option<String>,
@@ -39,6 +46,7 @@ pub struct PublicWhitelistRequestInput {
     pub nickname: String,
     pub steam_input: String,
     pub contact: Option<String>,
+    pub reason: Option<String>,
 }
 
 #[derive(Clone)]
@@ -47,6 +55,8 @@ pub struct ManualWhitelistInput {
     pub steam_input: String,
     pub force: bool,
     pub force_reason: Option<String>,
+    /// 白名单期限天数（7/30/120），None = 永久
+    pub duration_days: Option<i32>,
 }
 
 #[derive(Clone)]
@@ -56,6 +66,29 @@ pub struct ApproveWhitelistInput<'a> {
     pub force: bool,
     /// 审批渠道：'web'（后台网页）/ 'qq'（QQ 聊天）
     pub via: &'a str,
+    /// 白名单期限天数（7/30/120），None = 永久
+    pub duration_days: Option<i32>,
+}
+
+/// 手动添加 / 审核通过时允许选择的白名单期限（天）
+pub const WHITELIST_DURATION_CHOICES: [i32; 3] = [7, 30, 120];
+
+/// 校验并解析期限：None 或 0 = 永久（expires_at 为 NULL），否则仅接受 7/30/120。
+pub fn resolve_duration_days(duration_days: Option<i32>) -> anyhow::Result<Option<i32>> {
+    match duration_days {
+        None | Some(0) => Ok(None),
+        Some(days) if WHITELIST_DURATION_CHOICES.contains(&days) => Ok(Some(days)),
+        Some(other) => anyhow::bail!(
+            "不支持的白名单期限：{} 天（仅支持 {}）",
+            other,
+            WHITELIST_DURATION_CHOICES
+                .iter()
+                .map(|d| format!("{d}天"))
+                .collect::<Vec<_>>()
+                .join("、")
+                + "、永久"
+        ),
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -75,11 +108,15 @@ struct WhitelistRow {
     nickname: String,
     steam_persona_name: Option<String>,
     contact: Option<String>,
+    reason: Option<String>,
     status: String,
     applied_at: DateTime<Utc>,
     approved_at: Option<DateTime<Utc>>,
     approved_by: Option<String>,
     approval_reason: Option<String>,
+    expires_at: Option<DateTime<Utc>>,
+    duration_days: Option<i32>,
+    expired_at: Option<DateTime<Utc>>,
     rejected_at: Option<DateTime<Utc>>,
     rejected_by: Option<String>,
     rejection_reason: Option<String>,
@@ -93,6 +130,8 @@ pub struct WhitelistStatusItem {
     pub status: String,
     pub applied_at: String,
     pub approved_at: Option<String>,
+    pub expires_at: Option<String>,
+    pub duration_days: Option<i32>,
     pub rejected_at: Option<String>,
     pub revoked_at: Option<String>,
     pub rejection_reason: Option<String>,
@@ -109,11 +148,15 @@ struct WhitelistStatusRow {
     nickname: String,
     steam_persona_name: Option<String>,
     contact: Option<String>,
+    reason: Option<String>,
     status: String,
     applied_at: DateTime<Utc>,
     approved_at: Option<DateTime<Utc>>,
     approved_by: Option<String>,
     approval_reason: Option<String>,
+    expires_at: Option<DateTime<Utc>>,
+    duration_days: Option<i32>,
+    expired_at: Option<DateTime<Utc>>,
     rejected_at: Option<DateTime<Utc>>,
     rejected_by: Option<String>,
     rejection_reason: Option<String>,
@@ -154,8 +197,9 @@ pub async fn list_whitelist(
     // 详见 services::display_name::resolve_display_names。
     let order_clause = whitelist_order_clause(query.status.as_deref());
     let data_sql = format!(
-        r#"SELECT wr.id, wr.steamid64, wr.steamid, wr.steamid3, wr.profile_url, wr.nickname, wr.steam_persona_name, wr.contact, wr.status,
+        r#"SELECT wr.id, wr.steamid64, wr.steamid, wr.steamid3, wr.profile_url, wr.nickname, wr.steam_persona_name, wr.contact, wr.reason, wr.status,
                   wr.applied_at, wr.approved_at, wr.approved_by, wr.approval_reason,
+                  wr.expires_at, wr.duration_days, wr.expired_at,
                   wr.rejected_at, wr.rejected_by, wr.rejection_reason,
                   COUNT(*) OVER() as total_count
            FROM whitelist_requests wr
@@ -239,7 +283,13 @@ pub async fn create_public_whitelist_request(
 ) -> anyhow::Result<WhitelistItem> {
     let nickname = input.nickname.trim();
     anyhow::ensure!(!nickname.is_empty(), "请输入玩家名称");
-    let contact = super::normalize_optional_string(input.contact);
+    // 联系方式与申请理由均为必填（前端已强制，这里兜底防止绕过）
+    let contact =
+        super::normalize_optional_string(input.contact).filter(|value| !value.trim().is_empty());
+    anyhow::ensure!(contact.is_some(), "请填写联系方式");
+    let reason =
+        super::normalize_optional_string(input.reason).filter(|value| !value.trim().is_empty());
+    anyhow::ensure!(reason.is_some(), "请填写申请理由");
 
     let identity = resolver.resolve(&input.steam_input).await?;
     if let Some(existing) = find_by_steamid64(db, &identity.steamid64).await? {
@@ -252,12 +302,13 @@ pub async fn create_public_whitelist_request(
                     .rejection_reason
                     .unwrap_or_else(|| "未填写拒绝理由".to_string())
             ),
-            "revoked" => {
-                return reopen_revoked_whitelist(
+            "revoked" | "expired" => {
+                return reopen_inactive_whitelist(
                     db,
                     existing.id,
                     nickname,
                     contact.as_deref(),
+                    reason.as_deref(),
                     &identity,
                     resolver,
                 )
@@ -281,12 +332,13 @@ pub async fn create_public_whitelist_request(
     let row = sqlx::query_as::<_, WhitelistRow>(
         r#"
         INSERT INTO whitelist_requests (
-            id, steam_id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
-            applied_at, source, updated_at
+            id, steam_id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name,
+            contact, reason, status, applied_at, source, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', now(), 'public', now())
-        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', now(), 'public', now())
+        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
                   applied_at, approved_at, approved_by, approval_reason,
+                  expires_at, duration_days, expired_at,
                   rejected_at, rejected_by, rejection_reason
         "#,
     )
@@ -299,6 +351,7 @@ pub async fn create_public_whitelist_request(
     .bind(nickname)
     .bind(steam_persona_name.as_deref())
     .bind(contact.as_deref())
+    .bind(reason.as_deref())
     .fetch_one(&db.pool)
     .await?;
 
@@ -316,12 +369,14 @@ pub async fn create_manual_whitelist(
     anyhow::ensure!(!operator_name.trim().is_empty(), "缺少审核管理员信息");
 
     let identity = resolver.resolve(&input.steam_input).await?;
+    let duration_days = resolve_duration_days(input.duration_days)?;
+    let expires_at = duration_days.map(|days| Utc::now() + chrono::Duration::days(days as i64));
     let risk_profile =
         player_risk_service::build_player_risk_profile(db, &identity.steamid64).await?;
     ensure_can_approve_with_risk(&risk_profile, input.force, input.force_reason.as_deref())?;
     if let Some(existing) = find_by_steamid64(db, &identity.steamid64).await? {
         anyhow::ensure!(
-            existing.status == "revoked",
+            existing.status == "revoked" || existing.status == "expired",
             "该玩家已有白名单记录，无法重复手动添加"
         );
         return approve_existing_record(
@@ -330,6 +385,10 @@ pub async fn create_manual_whitelist(
             nickname,
             operator_name,
             input.force_reason.as_deref(),
+            ApproveExistingDuration {
+                duration_days,
+                expires_at,
+            },
             &identity,
             resolver,
         )
@@ -347,11 +406,13 @@ pub async fn create_manual_whitelist(
         r#"
         INSERT INTO whitelist_requests (
             id, steam_id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, status,
-            applied_at, approved_at, approved_by, approval_reason, source, updated_at
+            applied_at, approved_at, approved_by, approval_reason, source, updated_at,
+            expires_at, duration_days
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'approved', now(), now(), $9, $10, 'manual', now())
-        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'approved', now(), now(), $9, $10, 'manual', now(), $11, $12)
+        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
                   applied_at, approved_at, approved_by, approval_reason,
+                  expires_at, duration_days, expired_at,
                   rejected_at, rejected_by, rejection_reason
         "#,
     )
@@ -368,6 +429,8 @@ pub async fn create_manual_whitelist(
         let trimmed = r.trim();
         (!trimmed.is_empty()).then_some(trimmed)
     }))
+    .bind(expires_at)
+    .bind(duration_days)
     .fetch_one(&db.pool)
     .await?;
 
@@ -407,6 +470,8 @@ pub async fn approve_whitelist_tx(
     id: Uuid,
     input: ApproveWhitelistInput<'_>,
 ) -> anyhow::Result<WhitelistItem> {
+    let duration_days = resolve_duration_days(input.duration_days)?;
+    let expires_at = duration_days.map(|days| Utc::now() + chrono::Duration::days(days as i64));
     let row = sqlx::query_as::<_, WhitelistRow>(
         r#"
         UPDATE whitelist_requests
@@ -415,6 +480,9 @@ pub async fn approve_whitelist_tx(
             approved_by = $2,
             approval_reason = $3,
             approved_via = $4,
+            expires_at = $5,
+            duration_days = $6,
+            expired_at = NULL,
             rejected_at = NULL,
             rejected_by = NULL,
             rejection_reason = NULL,
@@ -423,8 +491,9 @@ pub async fn approve_whitelist_tx(
             revoked_by = NULL,
             updated_at = now()
         WHERE id = $1 AND status = 'pending'
-        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
+        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
                   applied_at, approved_at, approved_by, approval_reason, approved_via,
+                  expires_at, duration_days, expired_at,
                   rejected_at, rejected_by, rejection_reason, rejected_via
         "#,
     )
@@ -432,6 +501,8 @@ pub async fn approve_whitelist_tx(
     .bind(input.operator_name.trim())
     .bind(input.reason.and_then(|r| if r.trim().is_empty() { None } else { Some(r.trim()) }))
     .bind(input.via.trim())
+    .bind(expires_at)
+    .bind(duration_days)
     .fetch_optional(&mut **tx)
     .await?
     .ok_or_else(|| anyhow::anyhow!("该申请已被他人审批，无法重复操作"))?;
@@ -479,8 +550,9 @@ pub async fn reject_whitelist_tx(
             revoked_by = NULL,
             updated_at = now()
         WHERE id = $1 AND status = 'pending'
-        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
+        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
                   applied_at, approved_at, approved_by, approval_reason, approved_via,
+                  expires_at, duration_days, expired_at,
                   rejected_at, rejected_by, rejection_reason, rejected_via
         "#,
     )
@@ -501,9 +573,12 @@ pub async fn restore_whitelist(
     operator_name: &str,
     reason: Option<&str>,
     force: bool,
+    duration_days: Option<i32>,
 ) -> anyhow::Result<WhitelistItem> {
     let current = find_by_id(db, id).await?;
     anyhow::ensure!(current.status == "rejected", "只有未通过记录可以恢复通过");
+    let duration_days = resolve_duration_days(duration_days)?;
+    let expires_at = duration_days.map(|days| Utc::now() + chrono::Duration::days(days as i64));
     let risk_profile =
         player_risk_service::build_player_risk_profile(db, &current.steamid64).await?;
     ensure_can_approve_with_risk(&risk_profile, force, reason)?;
@@ -515,6 +590,9 @@ pub async fn restore_whitelist(
             approved_at = now(),
             approved_by = $2,
             approval_reason = $3,
+            expires_at = $4,
+            duration_days = $5,
+            expired_at = NULL,
             rejected_at = NULL,
             rejected_by = NULL,
             rejection_reason = NULL,
@@ -522,14 +600,17 @@ pub async fn restore_whitelist(
             revoked_by = NULL,
             updated_at = now()
         WHERE id = $1
-        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
+        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
                   applied_at, approved_at, approved_by, approval_reason,
+                  expires_at, duration_days, expired_at,
                   rejected_at, rejected_by, rejection_reason
         "#,
     )
     .bind(id)
     .bind(operator_name.trim())
     .bind(reason.and_then(|r| if r.trim().is_empty() { None } else { Some(r.trim()) }))
+    .bind(expires_at)
+    .bind(duration_days)
     .fetch_one(&db.pool)
     .await?;
 
@@ -552,8 +633,9 @@ pub async fn revoke_whitelist(
             revoked_by = $2,
             updated_at = now()
         WHERE id = $1
-        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
+        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
                   applied_at, approved_at, approved_by, approval_reason,
+                  expires_at, duration_days, expired_at,
                   rejected_at, rejected_by, rejection_reason
         "#,
     )
@@ -565,11 +647,13 @@ pub async fn revoke_whitelist(
     Ok(map_whitelist_row(row))
 }
 
-async fn reopen_revoked_whitelist(
+/// 将已撤销 / 已过期的白名单记录重开为待审核，写入最新的联系方式与申请理由。
+async fn reopen_inactive_whitelist(
     db: &Database,
     id: Uuid,
     nickname: &str,
     contact: Option<&str>,
+    reason: Option<&str>,
     identity: &ParsedSteamIdentity,
     resolver: &SteamResolver,
 ) -> anyhow::Result<WhitelistItem> {
@@ -589,11 +673,15 @@ async fn reopen_revoked_whitelist(
             profile_url = $5,
             steam_persona_name = $6,
             contact = $7,
+            reason = $8,
             status = 'pending',
             applied_at = now(),
             approved_at = NULL,
             approved_by = NULL,
             approval_reason = NULL,
+            expires_at = NULL,
+            duration_days = NULL,
+            expired_at = NULL,
             rejected_at = NULL,
             rejected_by = NULL,
             rejection_reason = NULL,
@@ -602,8 +690,9 @@ async fn reopen_revoked_whitelist(
             source = 'public',
             updated_at = now()
         WHERE id = $1
-        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
+        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
                   applied_at, approved_at, approved_by, approval_reason,
+                  expires_at, duration_days, expired_at,
                   rejected_at, rejected_by, rejection_reason
         "#,
     )
@@ -614,18 +703,27 @@ async fn reopen_revoked_whitelist(
     .bind(identity.profile_url.as_deref())
     .bind(steam_persona_name.as_deref())
     .bind(contact)
+    .bind(reason)
     .fetch_one(&db.pool)
     .await?;
 
     Ok(map_whitelist_row(row))
 }
 
+/// 手动添加复用 revoked/expired 记录时的期限参数
+struct ApproveExistingDuration {
+    duration_days: Option<i32>,
+    expires_at: Option<DateTime<Utc>>,
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn approve_existing_record(
     db: &Database,
     id: Uuid,
     nickname: &str,
     operator_name: &str,
     approval_reason: Option<&str>,
+    duration: ApproveExistingDuration,
     identity: &ParsedSteamIdentity,
     resolver: &SteamResolver,
 ) -> anyhow::Result<WhitelistItem> {
@@ -649,6 +747,9 @@ async fn approve_existing_record(
             approved_at = now(),
             approved_by = $7,
             approval_reason = $8,
+            expires_at = $9,
+            duration_days = $10,
+            expired_at = NULL,
             rejected_at = NULL,
             rejected_by = NULL,
             rejection_reason = NULL,
@@ -657,8 +758,9 @@ async fn approve_existing_record(
             source = 'manual',
             updated_at = now()
         WHERE id = $1
-        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
+        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
                   applied_at, approved_at, approved_by, approval_reason,
+                  expires_at, duration_days, expired_at,
                   rejected_at, rejected_by, rejection_reason
         "#,
     )
@@ -673,6 +775,8 @@ async fn approve_existing_record(
         let trimmed = r.trim();
         (!trimmed.is_empty()).then_some(trimmed)
     }))
+    .bind(duration.expires_at)
+    .bind(duration.duration_days)
     .fetch_one(&db.pool)
     .await?;
 
@@ -688,8 +792,9 @@ pub async fn list_status_by_steamid64(
 ) -> anyhow::Result<Vec<WhitelistStatusItem>> {
     let rows = sqlx::query_as::<_, WhitelistStatusRow>(
         r#"
-        SELECT id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
+        SELECT id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
                applied_at, approved_at, approved_by, approval_reason,
+               expires_at, duration_days, expired_at,
                rejected_at, rejected_by, rejection_reason,
                revoked_at, revoked_by, source
         FROM whitelist_requests
@@ -712,6 +817,8 @@ pub async fn list_status_by_steamid64(
             status: row.status,
             applied_at: row.applied_at.to_rfc3339(),
             approved_at: row.approved_at.map(|value| value.to_rfc3339()),
+            expires_at: row.expires_at.map(|value| value.to_rfc3339()),
+            duration_days: row.duration_days,
             rejected_at: row.rejected_at.map(|value| value.to_rfc3339()),
             revoked_at: row.revoked_at.map(|value| value.to_rfc3339()),
             rejection_reason: row.rejection_reason,
@@ -725,8 +832,9 @@ async fn find_by_steamid64(
 ) -> anyhow::Result<Option<WhitelistStatusRow>> {
     sqlx::query_as::<_, WhitelistStatusRow>(
         r#"
-        SELECT id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
+        SELECT id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
                applied_at, approved_at, approved_by, approval_reason,
+               expires_at, duration_days, expired_at,
                rejected_at, rejected_by, rejection_reason,
                revoked_at, revoked_by, source
         FROM whitelist_requests
@@ -746,8 +854,9 @@ async fn find_by_steamid64(
 async fn find_by_id(db: &Database, id: Uuid) -> anyhow::Result<WhitelistStatusRow> {
     sqlx::query_as::<_, WhitelistStatusRow>(
         r#"
-        SELECT id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, status,
+        SELECT id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
                applied_at, approved_at, approved_by, approval_reason,
+               expires_at, duration_days, expired_at,
                rejected_at, rejected_by, rejection_reason,
                revoked_at, revoked_by, source
         FROM whitelist_requests
@@ -928,11 +1037,15 @@ fn map_whitelist_row(row: WhitelistRow) -> WhitelistItem {
         nickname: row.nickname,
         steam_persona_name: row.steam_persona_name,
         contact: row.contact,
+        reason: row.reason,
         status: row.status,
         applied_at: row.applied_at.to_rfc3339(),
         approved_at: row.approved_at.map(|value| value.to_rfc3339()),
         approved_by: row.approved_by,
         approval_reason: row.approval_reason,
+        expires_at: row.expires_at.map(|value| value.to_rfc3339()),
+        duration_days: row.duration_days,
+        expired_at: row.expired_at.map(|value| value.to_rfc3339()),
         rejected_at: row.rejected_at.map(|value| value.to_rfc3339()),
         rejected_by: row.rejected_by,
         rejection_reason: row.rejection_reason,
@@ -940,12 +1053,32 @@ fn map_whitelist_row(row: WhitelistRow) -> WhitelistItem {
     }
 }
 
+/// 将已到期的白名单（status='approved' 且 expires_at <= now()）批量置为
+/// expired，供过期任务周期调用。由 PG 触发器自动 NOTIFY 刷新白名单缓存。
+/// 返回过期处理的记录数量。
+pub async fn process_expired_whitelist(db: &Database) -> anyhow::Result<usize> {
+    let result = sqlx::query(
+        r#"UPDATE whitelist_requests
+           SET status = 'expired',
+               expired_at = now(),
+               updated_at = now()
+           WHERE status = 'approved'
+             AND expires_at IS NOT NULL
+             AND expires_at <= now()"#,
+    )
+    .execute(&db.pool)
+    .await?;
+
+    Ok(result.rows_affected() as usize)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         approve_whitelist, create_manual_whitelist, create_public_whitelist_request,
-        find_by_steamid64, list_whitelist, reject_whitelist, restore_whitelist,
-        ApproveWhitelistInput, ManualWhitelistInput, PublicWhitelistRequestInput,
+        find_by_steamid64, list_whitelist, process_expired_whitelist, reject_whitelist,
+        restore_whitelist, ApproveWhitelistInput, ManualWhitelistInput,
+        PublicWhitelistRequestInput,
     };
     use crate::{config::Config, db::Database, services::steam_service::SteamResolver};
     use chrono::{Duration, Utc};
@@ -995,14 +1128,15 @@ mod tests {
             INSERT INTO whitelist_requests (
                 id, steam_id, steamid64, steamid, steamid3, profile_url, nickname, status,
                 applied_at, approved_at, approved_by, rejected_at, rejected_by,
-                rejection_reason, source, updated_at
+                rejection_reason, source, updated_at, contact, reason
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
                     CASE WHEN $8 = 'approved' THEN now() ELSE NULL END,
                     CASE WHEN $8 = 'approved' THEN '管理员A' ELSE NULL END,
                     CASE WHEN $8 = 'rejected' THEN now() ELSE NULL END,
                     CASE WHEN $8 = 'rejected' THEN '管理员B' ELSE NULL END,
-                    $10, 'public', now())
+                    $10, 'public', now(),
+                    'QQ 123456', '测试申请理由')
             "#,
         )
         .bind(id)
@@ -1042,7 +1176,8 @@ mod tests {
                 PublicWhitelistRequestInput {
                     nickname: "玩家甲".to_string(),
                     steam_input: "76561198000000001".to_string(),
-                    contact: None,
+                    contact: Some("QQ 111111".to_string()),
+                    reason: Some("测试申请理由".to_string()),
                 },
                 &SteamResolver::for_tests(),
             )
@@ -1073,7 +1208,8 @@ mod tests {
                 PublicWhitelistRequestInput {
                     nickname: "玩家乙".to_string(),
                     steam_input: "76561198000000002".to_string(),
-                    contact: None,
+                    contact: Some("QQ 111111".to_string()),
+                    reason: Some("测试申请理由".to_string()),
                 },
                 &SteamResolver::for_tests(),
             )
@@ -1104,7 +1240,8 @@ mod tests {
                 PublicWhitelistRequestInput {
                     nickname: "玩家丙".to_string(),
                     steam_input: "76561198000000003".to_string(),
-                    contact: None,
+                    contact: Some("QQ 111111".to_string()),
+                    reason: Some("测试申请理由".to_string()),
                 },
                 &SteamResolver::for_tests(),
             )
@@ -1138,7 +1275,8 @@ mod tests {
                 PublicWhitelistRequestInput {
                     nickname: "玩家丁".to_string(),
                     steam_input: "76561198000000004".to_string(),
-                    contact: None,
+                    contact: Some("QQ 111111".to_string()),
+                    reason: Some("测试申请理由".to_string()),
                 },
                 &SteamResolver::for_tests(),
             )
@@ -1161,6 +1299,7 @@ mod tests {
                     nickname: "玩家联系方式".to_string(),
                     steam_input: "76561198000000005".to_string(),
                     contact: Some("  QQ 123456  ".to_string()),
+                    reason: Some("测试申请理由".to_string()),
                 },
                 &SteamResolver::for_tests(),
             )
@@ -1198,6 +1337,7 @@ mod tests {
                     steam_input: "STEAM_0:1:12345".to_string(),
                     force: false,
                     force_reason: None,
+                    duration_days: None,
                 },
                 "Alex",
                 &SteamResolver::for_tests(),
@@ -1310,7 +1450,7 @@ mod tests {
             )
             .await;
 
-            let item = restore_whitelist(&db, id, "Alex", None, false)
+            let item = restore_whitelist(&db, id, "Alex", None, false, None)
                 .await
                 .unwrap();
 
@@ -1387,6 +1527,7 @@ mod tests {
                     reason: None,
                     force: false,
                     via: "web",
+                    duration_days: None,
                 },
             )
             .await
@@ -1403,6 +1544,7 @@ mod tests {
                     reason: None,
                     force: false,
                     via: "qq",
+                    duration_days: None,
                 },
             )
             .await
@@ -1417,6 +1559,292 @@ mod tests {
                     .await?;
             assert_eq!(status, "approved");
             assert_eq!(approved_by.as_deref(), Some("管理员A"));
+            Ok(())
+        })
+        .await;
+    }
+
+    // ===== 申请理由 / 联系方式必填 =====
+
+    #[tokio::test]
+    async fn create_whitelist_request_requires_contact() {
+        with_test_db(async |db| {
+            let error = create_public_whitelist_request(
+                &db,
+                PublicWhitelistRequestInput {
+                    nickname: "缺联系方式".to_string(),
+                    steam_input: "76561198000000006".to_string(),
+                    contact: None,
+                    reason: Some("测试申请理由".to_string()),
+                },
+                &SteamResolver::for_tests(),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.to_string(), "请填写联系方式");
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn create_whitelist_request_requires_reason() {
+        with_test_db(async |db| {
+            let error = create_public_whitelist_request(
+                &db,
+                PublicWhitelistRequestInput {
+                    nickname: "缺申请理由".to_string(),
+                    steam_input: "76561198000000007".to_string(),
+                    contact: Some("QQ 111111".to_string()),
+                    reason: None,
+                },
+                &SteamResolver::for_tests(),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.to_string(), "请填写申请理由");
+            Ok(())
+        })
+        .await;
+    }
+
+    // ===== 期限 =====
+
+    #[tokio::test]
+    async fn manual_whitelist_with_duration_sets_expires_at() {
+        with_test_db(async |db| {
+            let item = create_manual_whitelist(
+                &db,
+                ManualWhitelistInput {
+                    nickname: "限期玩家".to_string(),
+                    steam_input: "STEAM_0:1:22222".to_string(),
+                    force: false,
+                    force_reason: None,
+                    duration_days: Some(30),
+                },
+                "Alex",
+                &SteamResolver::for_tests(),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(item.duration_days, Some(30));
+            let expires_at =
+                chrono::DateTime::parse_from_rfc3339(item.expires_at.as_deref().unwrap())
+                    .unwrap()
+                    .with_timezone(&Utc);
+            let expected_min = Utc::now() + Duration::days(30) - Duration::minutes(1);
+            assert!(expires_at > expected_min, "expires_at 应约为 30 天后");
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn manual_whitelist_without_duration_is_permanent() {
+        with_test_db(async |db| {
+            let item = create_manual_whitelist(
+                &db,
+                ManualWhitelistInput {
+                    nickname: "永久玩家".to_string(),
+                    steam_input: "STEAM_0:1:33333".to_string(),
+                    force: false,
+                    force_reason: None,
+                    duration_days: None,
+                },
+                "Alex",
+                &SteamResolver::for_tests(),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(item.duration_days, None);
+            assert_eq!(item.expires_at, None);
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn approve_with_duration_sets_expires_at() {
+        with_test_db(async |db| {
+            let id = insert_whitelist_record(
+                &db,
+                "76561198000000041",
+                "pending",
+                "限期待审玩家",
+                None,
+                Utc::now(),
+            )
+            .await;
+
+            let item = approve_whitelist(
+                &db,
+                id,
+                ApproveWhitelistInput {
+                    operator_name: "管理员A",
+                    reason: None,
+                    force: false,
+                    via: "web",
+                    duration_days: Some(7),
+                },
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(item.status, "approved");
+            assert_eq!(item.duration_days, Some(7));
+            assert!(item.expires_at.is_some());
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn approve_with_invalid_duration_is_rejected() {
+        with_test_db(async |db| {
+            let id = insert_whitelist_record(
+                &db,
+                "76561198000000042",
+                "pending",
+                "非法期限玩家",
+                None,
+                Utc::now(),
+            )
+            .await;
+
+            let error = approve_whitelist(
+                &db,
+                id,
+                ApproveWhitelistInput {
+                    operator_name: "管理员A",
+                    reason: None,
+                    force: false,
+                    via: "web",
+                    duration_days: Some(45),
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(error.to_string().contains("不支持的白名单期限"));
+            Ok(())
+        })
+        .await;
+    }
+
+    // ===== 过期处理 =====
+
+    #[tokio::test]
+    async fn process_expired_whitelist_expires_only_due_records() {
+        with_test_db(async |db| {
+            // 已到期：should be expired
+            let expired_id = insert_whitelist_record(
+                &db,
+                "76561198000000051",
+                "approved",
+                "已到期玩家",
+                None,
+                Utc::now() - Duration::days(10),
+            )
+            .await;
+            sqlx::query(
+                "UPDATE whitelist_requests SET expires_at = now() - interval '1 day' WHERE id = $1",
+            )
+            .bind(expired_id)
+            .execute(&db.pool)
+            .await?;
+
+            // 未到期：keep approved
+            let active_id = insert_whitelist_record(
+                &db,
+                "76561198000000052",
+                "approved",
+                "未到期玩家",
+                None,
+                Utc::now(),
+            )
+            .await;
+            sqlx::query(
+                "UPDATE whitelist_requests SET expires_at = now() + interval '7 days' WHERE id = $1",
+            )
+            .bind(active_id)
+            .execute(&db.pool)
+            .await?;
+
+            // 永久（expires_at NULL）：keep approved
+            let permanent_id = insert_whitelist_record(
+                &db,
+                "76561198000000053",
+                "approved",
+                "永久玩家",
+                None,
+                Utc::now(),
+            )
+            .await;
+
+            let count = process_expired_whitelist(&db).await?;
+            assert_eq!(count, 1);
+
+            let (status, expired_at): (String, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
+                "SELECT status, expired_at FROM whitelist_requests WHERE id = $1",
+            )
+            .bind(expired_id)
+            .fetch_one(&db.pool)
+            .await?;
+            assert_eq!(status, "expired");
+            assert!(expired_at.is_some());
+
+            let status: String = sqlx::query_scalar("SELECT status FROM whitelist_requests WHERE id = $1")
+                .bind(active_id)
+                .fetch_one(&db.pool)
+                .await?;
+            assert_eq!(status, "approved");
+
+            let status: String = sqlx::query_scalar("SELECT status FROM whitelist_requests WHERE id = $1")
+                .bind(permanent_id)
+                .fetch_one(&db.pool)
+                .await?;
+            assert_eq!(status, "approved");
+            Ok(())
+        })
+        .await;
+    }
+
+    // ===== 过期后重新申请 =====
+
+    #[tokio::test]
+    async fn create_whitelist_request_reopens_expired_record_as_pending() {
+        with_test_db(async |db| {
+            let id = insert_whitelist_record(
+                &db,
+                "76561198000000061",
+                "expired",
+                "过期玩家",
+                None,
+                Utc::now() - Duration::days(10),
+            )
+            .await;
+
+            let item = create_public_whitelist_request(
+                &db,
+                PublicWhitelistRequestInput {
+                    nickname: "过期玩家".to_string(),
+                    steam_input: "76561198000000061".to_string(),
+                    contact: Some("QQ 222222".to_string()),
+                    reason: Some("重新申请理由".to_string()),
+                },
+                &SteamResolver::for_tests(),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(item.status, "pending");
+            // 重开后旧期限应清空，新申请理由覆盖旧值
+            assert_eq!(item.expires_at, None);
+            assert_eq!(item.duration_days, None);
+            assert_eq!(item.reason.as_deref(), Some("重新申请理由"));
+            // 重开复用同一条记录
+            assert_eq!(item.id, id);
             Ok(())
         })
         .await;

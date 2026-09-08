@@ -1467,7 +1467,9 @@ async fn submit_whitelist_returns_json_body() {
             .body(Body::from(
                 json!({
                     "steam_input": "76561197960290419",
-                    "nickname": "测试玩家"
+                    "nickname": "测试玩家",
+                    "contact": "QQ 123456",
+                    "reason": "测试申请理由"
                 })
                 .to_string(),
             ))

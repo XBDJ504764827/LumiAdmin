@@ -18,6 +18,8 @@ pub(crate) struct WhitelistBody {
     pub operator_name: Option<String>,
     pub force: Option<bool>,
     pub reason: Option<String>,
+    /// 白名单期限天数（7/30/120），不传或 0 表示永久
+    pub duration_days: Option<i32>,
 }
 
 #[derive(Deserialize)]
@@ -33,6 +35,8 @@ pub(crate) struct WhitelistActionBody {
     pub operator_name: Option<String>,
     pub reason: Option<String>,
     pub force: Option<bool>,
+    /// 白名单期限天数（7/30/120），不传或 0 表示永久
+    pub duration_days: Option<i32>,
 }
 
 #[derive(Deserialize)]
@@ -159,6 +163,7 @@ pub(crate) async fn create_whitelist(
             steam_input: body.steam_input,
             force,
             force_reason: body.reason.clone(),
+            duration_days: body.duration_days,
         },
         &operator_name,
         resolver,
@@ -196,6 +201,8 @@ pub(crate) async fn create_whitelist(
                 "status": item.status,
                 "approved_at": item.approved_at,
                 "approved_by": item.approved_by,
+                "duration_days": item.duration_days,
+                "expires_at": item.expires_at,
                 "force_approve": force,
                 "risk_profile": item.risk_profile,
                 "operator_username": actor.username,
@@ -230,6 +237,7 @@ pub(crate) async fn approve_whitelist_request(
             reason: body.reason.as_deref(),
             force,
             via: "web", // 后台网页审批
+            duration_days: body.duration_days,
         },
     )
     .await
@@ -264,6 +272,8 @@ pub(crate) async fn approve_whitelist_request(
                 "approval_reason": item.approval_reason,
                 "approved_at": item.approved_at,
                 "approved_by": item.approved_by,
+                "duration_days": item.duration_days,
+                "expires_at": item.expires_at,
                 "force_approve": force,
                 "risk_profile": item.risk_profile,
                 "operator_username": actor.username,
@@ -344,6 +354,7 @@ pub(crate) async fn restore_whitelist_request(
         &operator_name,
         body.reason.as_deref(),
         force,
+        body.duration_days,
     )
     .await
     .map_err(AppError::bad_request)?;

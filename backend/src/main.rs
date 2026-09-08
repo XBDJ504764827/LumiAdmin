@@ -137,6 +137,11 @@ async fn main() -> anyhow::Result<()> {
         config.clone(),
         60,
     );
+    // 启动白名单期限到期检查（到期后自动过期，玩家可重新申请）
+    services::whitelist_expiry_service::start_expiry_loop(
+        db.clone(),
+        config.ban_expiry_check_interval_secs,
+    );
 
     // 使用 PostgreSQL LISTEN/NOTIFY 立即刷新访问相关缓存；固定周期刷新作为兜底。
     services::access_cache::start_cache_invalidation_listener(

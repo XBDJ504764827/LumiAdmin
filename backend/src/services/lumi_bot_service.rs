@@ -209,15 +209,18 @@ pub async fn status(db: &Database, config: &Config) -> anyhow::Result<StatusOver
         )
     };
 
-    let (pending, sent, failed, expired, last_sent_at, last_failure_at): (
+    /// 队列概况聚合行：pending / sent / failed / expired 计数 + 最近成功/失败时间
+    type QueueCountRow = (
         i64,
         i64,
         i64,
         i64,
         Option<DateTime<Utc>>,
         Option<DateTime<Utc>>,
-    ) = sqlx::query_as(
-        r#"
+    );
+    let (pending, sent, failed, expired, last_sent_at, last_failure_at): QueueCountRow =
+        sqlx::query_as(
+            r#"
         SELECT
             COUNT(*) FILTER (WHERE status = 'pending'),
             COUNT(*) FILTER (WHERE status = 'sent'),
@@ -227,10 +230,10 @@ pub async fn status(db: &Database, config: &Config) -> anyhow::Result<StatusOver
             MAX(updated_at) FILTER (WHERE status = 'failed')
         FROM lumi_bot_event_queue
         "#,
-    )
-    .fetch_one(&db.pool)
-    .await
-    .context("读取 LumiBot 事件队列状态失败")?;
+        )
+        .fetch_one(&db.pool)
+        .await
+        .context("读取 LumiBot 事件队列状态失败")?;
 
     let sync_task = observability_service::task_metric("lumi_bot_sync");
     let last_error = sync_task.as_ref().and_then(|task| task.last_error.clone());

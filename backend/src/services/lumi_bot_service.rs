@@ -633,7 +633,141 @@ pub async fn report_whitelist_created(
 
     let queued_id = enqueue_event(db, input).await?;
     tracing::info!(queued_id = %queued_id, "白名单申请事件已写入 LumiBot 异步队列");
+    // 中/高风险申请（warning 级）在提交时即完成提醒，标记 review_notified_at，
+    // 供自动通过循环幂等去重，避免后续重复提醒同一申请
+    if notify_level == "warning" {
+        mark_review_notified(db, &item.id).await?;
+    }
     let _ = config; // 保留配置参数以兼容调用方；发送由后台任务决定是否启用。
+    Ok(())
+}
+
+/// 标记白名单申请已完成人工审核提醒（幂等：仅在未标记时写入）。
+async fn mark_review_notified(db: &Database, whitelist_id: &Uuid) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"UPDATE whitelist_requests SET review_notified_at = now()
+           WHERE id = $1 AND review_notified_at IS NULL"#,
+    )
+    .bind(whitelist_id)
+    .execute(&db.pool)
+    .await
+    .context("更新白名单审核提醒标记失败")?;
+    Ok(())
+}
+
+/// 白名单中/高风险人工审核提醒入队（warning 级别，会推送 QQ 提醒管理员）。
+///
+/// 调用场景：自动通过循环扫描到「等待时长已满」的 pending 申请时，若风险
+/// 评级为中/高风险（或复核发现存在未解封封禁），则绝不自动通过，改为发送
+/// 本提醒，确保管理员一定会通过 QQ 收到通知并手动审核。
+///
+/// 与提交时的 `report_whitelist_created` 互补：提交时若本地风险数据尚未
+/// 同步（如全球封禁尚未拉取），申请会被判为低风险（info 级、不推送 QQ），
+/// 由自动通过循环在超时时刻重新评级后补发本提醒。
+/// 事件类型沿用 WHITELIST_REQUEST_CREATED，warning 级别命中 LumiBot 既有
+/// 推送规则，消息文案明确「系统不会自动通过，等待管理员手动审核」。
+pub async fn report_whitelist_pending_review(
+    db: &Database,
+    config: &Config,
+    item: &WhitelistItem,
+    hours: i64,
+    risk_label: &str,
+    risk_reason: Option<&str>,
+) -> anyhow::Result<()> {
+    let display_name = item.steam_persona_name.as_deref().unwrap_or(&item.nickname);
+    let player_info = collect_whitelist_player_info(db, &item.steamid64).await;
+    let admin_openids: Vec<String> = sqlx::query_scalar(
+        r#"SELECT DISTINCT openid FROM users
+           WHERE role IN ('developer', 'admin', 'normal')
+             AND enabled = true
+             AND whitelist_notification_enabled = true
+             AND openid IS NOT NULL AND openid <> ''"#,
+    )
+    .fetch_all(&db.pool)
+    .await
+    .unwrap_or_default();
+    let risk_display = match risk_label {
+        "低风险" => "🟢 低风险".to_string(),
+        "历史风险" => "🟡 历史风险".to_string(),
+        "高风险" => "🔴 高风险".to_string(),
+        other => format!("⚠️ {other}"),
+    };
+    let mut ban_flags: Vec<&str> = Vec::new();
+    if player_info.has_global_ban {
+        ban_flags.push("❌ 全球封禁");
+    }
+    if player_info.has_local_ban {
+        ban_flags.push("本地封禁");
+    }
+    if player_info.has_active_ban {
+        ban_flags.push("未解封");
+    }
+    let ban_flags = if ban_flags.is_empty() {
+        "无".to_string()
+    } else {
+        ban_flags.join(" / ")
+    };
+    let ban_reason = player_info
+        .global_ban_reason
+        .clone()
+        .or_else(|| player_info.active_ban_reason.clone())
+        .or_else(|| player_info.local_ban_reason.clone());
+    let detail_url = config
+        .admin_web_url
+        .as_ref()
+        .map(|base| format!("{base}/whitelist"))
+        .or_else(|| item.profile_url.clone());
+    let input = EventInput {
+        event_type: EVENT_WHITELIST_REQUEST_CREATED.to_string(),
+        level: "warning".to_string(),
+        title: "白名单待人工审核提醒".to_string(),
+        message: format!(
+            "玩家 {}（{}）的白名单申请已等待 {} 小时无人审核，风险评级：{}。{}系统不会自动通过，请尽快人工审核",
+            display_name,
+            item.steamid64,
+            hours,
+            risk_display,
+            risk_reason
+                .map(|reason| format!("{}。", reason))
+                .unwrap_or_default()
+        ),
+        data: serde_json::json!({
+            "whitelist_id": item.id,
+            "steamid64": item.steamid64,
+            "steamid": item.steamid,
+            "steamid3": item.steamid3,
+            "nickname": item.nickname,
+            "steam_persona_name": item.steam_persona_name,
+            "nickname_show": display_name,
+            "contact": item.contact,
+            "profile_url": item.profile_url,
+            "applied_at": item.applied_at,
+            "has_local_ban": player_info.has_local_ban,
+            "local_ban_count": player_info.local_ban_count,
+            "local_ban_reason": player_info.local_ban_reason,
+            "has_global_ban": player_info.has_global_ban,
+            "global_ban_reason": player_info.global_ban_reason,
+            "global_ban_reasons": player_info.global_ban_reasons,
+            "has_active_ban": player_info.has_active_ban,
+            "active_ban_count": player_info.active_ban_count,
+            "active_ban_reason": player_info.active_ban_reason,
+            "risk_display": risk_display,
+            "ban_flags": ban_flags,
+            "ban_reason": ban_reason,
+            "detail_url": detail_url,
+            "auto_approve_text": "不自动通过，等待管理员手动审核",
+            "auto_approve_enabled": false,
+            "openids": admin_openids,
+        }),
+    };
+
+    let queued_id = enqueue_event(db, input).await?;
+    mark_review_notified(db, &item.id).await?;
+    tracing::info!(
+        queued_id = %queued_id,
+        whitelist_id = %item.id,
+        "白名单中/高风险人工审核提醒已写入 LumiBot 异步队列"
+    );
     Ok(())
 }
 
@@ -1452,6 +1586,93 @@ mod tests {
             // 第三轮：failed 不再被取出
             let summary = sync_pending_events(&db, &config).await?;
             assert_eq!(summary.total, 0);
+            Ok(())
+        })
+        .await;
+    }
+
+    async fn insert_whitelist_request_row(db: &Database, steamid64: &str) -> anyhow::Result<Uuid> {
+        let id = Uuid::new_v4();
+        sqlx::query(
+            r#"INSERT INTO whitelist_requests (
+                id, steam_id, steamid64, steamid, steamid3, profile_url, nickname, status,
+                applied_at, source, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, '高风险玩家', 'pending', now(), 'public', now())"#,
+        )
+        .bind(id)
+        .bind(steamid64)
+        .bind(steamid64)
+        .bind(format!("STEAM_0:0:{}", &steamid64[..6]))
+        .bind(format!("[U:1:{}]", &steamid64[..6]))
+        .bind(format!("https://steamcommunity.com/profiles/{steamid64}"))
+        .execute(&db.pool)
+        .await?;
+        Ok(id)
+    }
+
+    fn sample_whitelist_item(id: Uuid, steamid64: &str) -> WhitelistItem {
+        WhitelistItem {
+            id,
+            steamid64: steamid64.to_string(),
+            steamid: Some(format!("STEAM_0:0:{}", &steamid64[..6])),
+            steamid3: Some(format!("[U:1:{}]", &steamid64[..6])),
+            profile_url: Some(format!("https://steamcommunity.com/profiles/{steamid64}")),
+            nickname: "高风险玩家".to_string(),
+            steam_persona_name: None,
+            contact: None,
+            status: "pending".to_string(),
+            applied_at: Utc::now().to_rfc3339(),
+            approved_at: None,
+            approved_by: None,
+            approval_reason: None,
+            rejected_at: None,
+            rejected_by: None,
+            rejection_reason: None,
+            risk_profile: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn report_whitelist_pending_review_enqueues_warning_and_marks_notified() {
+        with_test_db(async |db| {
+            let steamid64 = "76561198000000050";
+            let id = insert_whitelist_request_row(&db, steamid64).await?;
+            let item = sample_whitelist_item(id, steamid64);
+            let mut config = Config::from_env();
+            config.lumi_bot_api_url = None;
+            config.lumi_bot_api_key = None;
+
+            report_whitelist_pending_review(
+                &db,
+                &config,
+                &item,
+                3,
+                "高风险",
+                Some("存在未过期全球封禁"),
+            )
+            .await?;
+
+            let (level, event_type, message): (String, String, String) = sqlx::query_as(
+                r#"SELECT level, event_type, message FROM lumi_bot_event_queue
+                   WHERE data->>'whitelist_id' = $1"#,
+            )
+            .bind(id.to_string())
+            .fetch_one(&db.pool)
+            .await?;
+            assert_eq!(
+                level, "warning",
+                "人工审核提醒必须是 warning 级（会推送 QQ）"
+            );
+            assert_eq!(event_type, EVENT_WHITELIST_REQUEST_CREATED);
+            assert!(message.contains("不会自动通过"), "实际：{message}");
+
+            let notified: (bool,) = sqlx::query_as(
+                "SELECT review_notified_at IS NOT NULL FROM whitelist_requests WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(&db.pool)
+            .await?;
+            assert!(notified.0, "提醒入队后应标记 review_notified_at");
             Ok(())
         })
         .await;

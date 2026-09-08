@@ -376,13 +376,33 @@ LumiAdmin 使用 `interaction_id` 生成唯一幂等键，在同一 PostgreSQL �
 
 ## 部署
 
-项目使用 GitHub Actions 自动化部署（`.github/workflows/deploy.yml`）：
-
-1. 推送到 `main` 分支自动触发
-2. 检测 `frontend/`、`backend/` 各模块变更
-3. 仅构建有变更的模块
 4. 通过 SSH + rsync 部署到目标服务器
 5. 自动重启后端服务（游戏插件部署见 [LumiAdmin-plugins](https://github.com/LumiAdmin/LumiAdmin-plugins)）
+
+### 后端 systemd 服务配置
+
+生产环境通过 systemd 管理后端进程（开机自启、崩溃自动拉起、优雅关闭）。
+仓库提供标准服务单元模板：[`deploy/manger-backend.service`](deploy/manger-backend.service)。
+
+目标服务器首次部署或检查配置时：
+
+1. 复制模板到 `/etc/systemd/system/manger-backend.service`，按实际部署路径
+   修改 `User` / `WorkingDirectory` / `ExecStart`（`WorkingDirectory` 必须指向
+   `.env` 所在目录，后端通过 dotenvy 从工作目录加载配置）；
+2. `systemctl daemon-reload && systemctl enable --now manger-backend` 启用
+   开机自启与崩溃自动拉起（`Restart=on-failure`）；
+3. 日志通过 `journalctl -u manger-backend` 查看（stdout 全部进 journald）。
+
+注意：
+
+- 后端已实现 SIGTERM 优雅关闭（停机时刷写最终访问快照），unit 中
+  `TimeoutStopSec=30` 预留了刷写时间，请勿改回默认之外的过短值；
+- `systemctl restart` 只重启当前进程，`enable` 才是开机自启；新服务器部署后
+  请确认 `systemctl is-enabled manger-backend` 为 enabled；
+- 应用内后台循环（缓存刷新、全球封禁同步、白名单自动通过等）由
+  `task_runtime::spawn_persistent` 提供 panic 隔离与自动重启，与 systemd 形成
+  任务级 + 进程级两层保障；若发现服务状态异常，可用
+  `GET /api/ops/overview`（含后台任务运行指标）与 `journalctl` 结合排查。
 
 ---
 

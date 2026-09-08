@@ -1,0 +1,61 @@
+# LumiAdmin 后端 systemd 服务单元模板
+#
+# 安装方式（在目标服务器上）：
+#   1. 将本文件复制到 /etc/systemd/system/manger-backend.service
+#   2. 按实际部署路径修改 User / WorkingDirectory / ExecStart
+#   3. systemctl daemon-reload
+#   4. systemctl enable --now manger-backend   # 开机自启 + 立即启动
+#
+# 常用运维命令：
+#   systemctl status manger-backend          # 查看状态
+#   journalctl -u manger-backend -f          # 跟踪日志（stdout 全部进 journald）
+#   journalctl -u manger-backend --since today
+
+[Unit]
+Description=LumiAdmin Backend (manger-backend)
+Documentation=https://github.com/XBDJ504764827/LumiAdmin
+# 数据库为远程部署时，仅依赖网络就绪即可（本服务对 DB 不可达具备重试容错）
+Wants=network-online.target
+After=network-online.target
+# 数据库与本机同机部署时取消注释，确保 PG 先于后端启动：
+# After=postgresql.service
+# Requires=postgresql.service
+
+[Service]
+Type=simple
+# 以非 root 专用账号运行（按实际部署账号修改；勿用 root）
+User=www-data
+Group=www-data
+# 必须指向 .env 所在目录：后端通过 dotenvy 从工作目录加载 .env
+# （.env 含中文注释，不能直接作为 systemd EnvironmentFile 使用）
+WorkingDirectory=/opt/lumiadmin/backend
+ExecStart=/opt/lumiadmin/backend/manger-backend
+
+# 崩溃/异常退出后自动拉起（进程级兜底；应用内后台任务由
+# task_runtime::spawn_persistent 提供任务级 panic 隔离与自动重启）
+Restart=on-failure
+RestartSec=5s
+
+# 优雅关闭：后端收到 SIGTERM 后会停止 HTTP 服务并刷写最终访问快照，
+# 预留足够时间避免快照刷写被 SIGKILL 截断
+KillSignal=SIGTERM
+TimeoutStopSec=30
+KillMode=mixed
+
+# 基础资源限制（按服务器规格调整）
+LimitNOFILE=65535
+MemoryMax=2G
+
+# 日志进 journald，由 systemd-journald 统一管理大小与轮转
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=manger-backend
+
+# 基础安全加固（可选；如遇权限问题逐项放宽）
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

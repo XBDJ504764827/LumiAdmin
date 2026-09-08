@@ -269,13 +269,20 @@ R2 信息时，业务记录本身仍可提交，只有证据文件上传不可�
 | `LUMI_BOT_API_URL` | 空（禁用） | LumiBot 事件接收中心地址，如 `http://127.0.0.1:8080`；与 `LUMI_BOT_API_KEY` 同时配置后启用 |
 | `LUMI_BOT_API_KEY` | 空（禁用） | LumiBot 分配的 API Key（`X-API-Key` 请求头，建议向 LumiBot 申请专属 `key-admin`） |
 | `LUMI_BOT_SYNC_INTERVAL_SECS` | `1800` | 队列集中上报周期（秒），即每 30 分钟批量上报一次 |
-| `LUMI_BOT_MAX_ATTEMPTS` | `5` | 单条事件最大重试次数，超过后标记 `failed` 不再自动重试 |
+| `LUMI_BOT_MAX_ATTEMPTS` | `5` | 单条事件最大重试次数，超过后标记 `failed`（死信），退避周期后自动复活重试 |
 | `LUMI_BOT_BATCH_SIZE` | `100` | 每轮最多上报的事件条数 |
+| `LUMI_BOT_FAILED_RETRY_SECS` | `86400` | 死信复活退避（秒）：`failed` 超过该时长后自动重置为 `pending` 再试 |
+| `LUMI_BOT_FAILED_MAX_AGE_SECS` | `604800` | 死信最长保留（秒）：超过 7 天仍无法送达的标记为 `expired`，不再重试 |
 
 启用后，玩家在公开页面提交的白名单申请会写入 `lumi_bot_event_queue` 队列，
 后台任务按周期集中调用 `POST {LUMI_BOT_API_URL}/api/v1/events`
 （`source: LumiAdmin`，`event_type: WHITELIST_REQUEST_CREATED`）上报，
 由 LumiBot 再通知 QQ 管理员/用户。
+
+**事件不会因 LumiBot 短暂停机而丢失**：上报失败按指数退避重试
+（间隔最长 1 小时）；重试耗尽后进入死信，仍会在 24 小时后自动复活重试，
+直到送达或超过 7 天标记为 `expired`。死信/过期数量可在
+`GET /api/ops/lumi-bot` 的 `queue` 字段中监控。
 
 LumiBot 点击审批调用 `POST /api/integration/qq/whitelist/:id/review`，请求体包含
 `action`、审批人 `openid`、QQ `interaction_id`、可选 `reason` 和 `force`。
@@ -376,13 +383,33 @@ LumiAdmin 使用 `interaction_id` 生成唯一幂等键，在同一 PostgreSQL �
 
 ## 部署
 
-项目使用 GitHub Actions 自动化部署（`.github/workflows/deploy.yml`）：
-
-1. 推送到 `main` 分支自动触发
-2. 检测 `frontend/`、`backend/` 各模块变更
-3. 仅构建有变更的模块
 4. 通过 SSH + rsync 部署到目标服务器
 5. 自动重启后端服务（游戏插件部署见 [LumiAdmin-plugins](https://github.com/LumiAdmin/LumiAdmin-plugins)）
+
+### 后端 systemd 服务配置
+
+生产环境通过 systemd 管理后端进程（开机自启、崩溃自动拉起、优雅关闭）。
+仓库提供标准服务单元模板：[`deploy/manger-backend.service`](deploy/manger-backend.service)。
+
+目标服务器首次部署或检查配置时：
+
+1. 复制模板到 `/etc/systemd/system/manger-backend.service`，按实际部署路径
+   修改 `User` / `WorkingDirectory` / `ExecStart`（`WorkingDirectory` 必须指向
+   `.env` 所在目录，后端通过 dotenvy 从工作目录加载配置）；
+2. `systemctl daemon-reload && systemctl enable --now manger-backend` 启用
+   开机自启与崩溃自动拉起（`Restart=on-failure`）；
+3. 日志通过 `journalctl -u manger-backend` 查看（stdout 全部进 journald）。
+
+注意：
+
+- 后端已实现 SIGTERM 优雅关闭（停机时刷写最终访问快照），unit 中
+  `TimeoutStopSec=30` 预留了刷写时间，请勿改回默认之外的过短值；
+- `systemctl restart` 只重启当前进程，`enable` 才是开机自启；新服务器部署后
+  请确认 `systemctl is-enabled manger-backend` 为 enabled；
+- 应用内后台循环（缓存刷新、全球封禁同步、白名单自动通过等）由
+  `task_runtime::spawn_persistent` 提供 panic 隔离与自动重启，与 systemd 形成
+  任务级 + 进程级两层保障；若发现服务状态异常，可用
+  `GET /api/ops/overview`（含后台任务运行指标）与 `journalctl` 结合排查。
 
 ---
 

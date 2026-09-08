@@ -1642,7 +1642,15 @@ mod tests {
             config.lumi_bot_api_url = None;
             config.lumi_bot_api_key = None;
 
-            report_whitelist_pending_review(&db, &config, &item, 3, "高风险", Some("存在未过期全球封禁")).await?;
+            report_whitelist_pending_review(
+                &db,
+                &config,
+                &item,
+                3,
+                "高风险",
+                Some("存在未过期全球封禁"),
+            )
+            .await?;
 
             let (level, event_type, message): (String, String, String) = sqlx::query_as(
                 r#"SELECT level, event_type, message FROM lumi_bot_event_queue
@@ -1651,7 +1659,10 @@ mod tests {
             .bind(id.to_string())
             .fetch_one(&db.pool)
             .await?;
-            assert_eq!(level, "warning", "人工审核提醒必须是 warning 级（会推送 QQ）");
+            assert_eq!(
+                level, "warning",
+                "人工审核提醒必须是 warning 级（会推送 QQ）"
+            );
             assert_eq!(event_type, EVENT_WHITELIST_REQUEST_CREATED);
             assert!(message.contains("不会自动通过"), "实际：{message}");
 

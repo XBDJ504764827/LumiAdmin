@@ -453,10 +453,7 @@ async fn remind_manual_review(
 /// （全球封禁同步滞后 / 封禁缓存未刷新）导致误判为低风险，只要玩家存在
 /// 未解封本地封禁或未过期全球封禁，这里都会拦截，绝不自动通过。
 /// 返回 `Some(原因描述)` 表示存在未解封封禁，应转人工审核。
-async fn detect_unresolved_ban(
-    db: &Database,
-    steamid64: &str,
-) -> anyhow::Result<Option<String>> {
+async fn detect_unresolved_ban(db: &Database, steamid64: &str) -> anyhow::Result<Option<String>> {
     let local_active: (bool, Option<String>) = sqlx::query_as(
         r#"SELECT EXISTS(
                  SELECT 1 FROM ban_records

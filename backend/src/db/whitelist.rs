@@ -26,6 +26,14 @@ impl Database {
             // 中/高风险人工审核提醒时间：自动通过循环为超时未审核的中/高风险
             // 申请发送 QQ 提醒后写入，用于幂等去重（每条申请最多提醒一次）
             r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS review_notified_at TIMESTAMPTZ"#,
+            // 玩家填写的申请理由（公开申请必填，管理员在详细弹窗中查看）
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS reason TEXT"#,
+            // 白名单期限：expires_at 为 NULL 表示永久；duration_days 记录所选期限
+            // （7/30/120 天），NULL 表示永久。历史已通过的记录视为永久。
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS duration_days INTEGER"#,
+            // 到期任务将 approved 记录置为 expired 后写入的过期时间
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS expired_at TIMESTAMPTZ"#,
         ];
         for sql in alters {
             sqlx::query(sql).execute(&self.pool).await?;

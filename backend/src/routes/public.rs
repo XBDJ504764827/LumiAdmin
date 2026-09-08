@@ -20,6 +20,8 @@ pub(crate) struct WhitelistBody {
     steam_input: Option<String>,
     nickname: Option<String>,
     contact: Option<String>,
+    /// 玩家填写的申请理由（必填）
+    reason: Option<String>,
     operator_name: Option<String>,
     steam_token: Option<String>,
 }
@@ -206,6 +208,7 @@ pub(crate) async fn submit_whitelist(
             nickname: nn,
             steam_input: si,
             contact: body.contact,
+            reason: body.reason,
         },
         resolver,
     )
@@ -1146,6 +1149,8 @@ pub(crate) async fn qq_whitelist_review(
                     reason,
                     force,
                     via: "qq",
+                    // QQ 消息交互无法选择期限，QQ 审批通过一律永久
+                    duration_days: None,
                 },
             )
             .await

@@ -85,7 +85,8 @@ pub fn resolve_duration_days(duration_days: Option<i32>) -> anyhow::Result<Optio
                 .iter()
                 .map(|d| format!("{d}天"))
                 .collect::<Vec<_>>()
-                .join("、") + "、永久"
+                .join("、")
+                + "、永久"
         ),
     }
 }
@@ -283,11 +284,11 @@ pub async fn create_public_whitelist_request(
     let nickname = input.nickname.trim();
     anyhow::ensure!(!nickname.is_empty(), "请输入玩家名称");
     // 联系方式与申请理由均为必填（前端已强制，这里兜底防止绕过）
-    let contact = super::normalize_optional_string(input.contact)
-        .filter(|value| !value.trim().is_empty());
+    let contact =
+        super::normalize_optional_string(input.contact).filter(|value| !value.trim().is_empty());
     anyhow::ensure!(contact.is_some(), "请填写联系方式");
-    let reason = super::normalize_optional_string(input.reason)
-        .filter(|value| !value.trim().is_empty());
+    let reason =
+        super::normalize_optional_string(input.reason).filter(|value| !value.trim().is_empty());
     anyhow::ensure!(reason.is_some(), "请填写申请理由");
 
     let identity = resolver.resolve(&input.steam_input).await?;
@@ -1628,9 +1629,10 @@ mod tests {
             .unwrap();
 
             assert_eq!(item.duration_days, Some(30));
-            let expires_at = chrono::DateTime::parse_from_rfc3339(item.expires_at.as_deref().unwrap())
-                .unwrap()
-                .with_timezone(&Utc);
+            let expires_at =
+                chrono::DateTime::parse_from_rfc3339(item.expires_at.as_deref().unwrap())
+                    .unwrap()
+                    .with_timezone(&Utc);
             let expected_min = Utc::now() + Duration::days(30) - Duration::minutes(1);
             assert!(expires_at > expected_min, "expires_at 应约为 30 天后");
             Ok(())

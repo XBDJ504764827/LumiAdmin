@@ -96,23 +96,32 @@ mod tests {
     #[tokio::test]
     async fn process_expired_whitelist_updates_expired_records() {
         with_test_db(async |db| {
-            let expired_id =
-                insert_approved_with_expiry(&db, "76561198000000071", Some(Utc::now() - Duration::minutes(5)))
-                    .await;
-            let active_id =
-                insert_approved_with_expiry(&db, "76561198000000072", Some(Utc::now() + Duration::days(7)))
-                    .await;
+            let expired_id = insert_approved_with_expiry(
+                &db,
+                "76561198000000071",
+                Some(Utc::now() - Duration::minutes(5)),
+            )
+            .await;
+            let active_id = insert_approved_with_expiry(
+                &db,
+                "76561198000000072",
+                Some(Utc::now() + Duration::days(7)),
+            )
+            .await;
             let permanent_id = insert_approved_with_expiry(&db, "76561198000000073", None).await;
 
             let count = process_expired_whitelist(&db).await?;
             assert_eq!(count, 1);
 
-            let row = sqlx::query("SELECT status, expired_at FROM whitelist_requests WHERE id = $1")
-                .bind(expired_id)
-                .fetch_one(&db.pool)
-                .await?;
+            let row =
+                sqlx::query("SELECT status, expired_at FROM whitelist_requests WHERE id = $1")
+                    .bind(expired_id)
+                    .fetch_one(&db.pool)
+                    .await?;
             assert_eq!(row.get::<String, _>("status"), "expired");
-            assert!(row.get::<Option<chrono::DateTime<Utc>>, _>("expired_at").is_some());
+            assert!(row
+                .get::<Option<chrono::DateTime<Utc>>, _>("expired_at")
+                .is_some());
 
             let row = sqlx::query("SELECT status FROM whitelist_requests WHERE id = $1")
                 .bind(active_id)

@@ -11,9 +11,10 @@
 //!   保持 `pending`，继续等待管理员审核，并通过 QQ 发送提醒（`warning`
 //!   级事件，见 `lumi_bot_service::report_whitelist_pending_review`），
 //!   绝不自动通过；
-//! - 自动通过前还有最后一道闸：直接以最新封禁数据复核，任何存在未解封
-//!   本地封禁或未过期全球封禁的玩家都绝不自动通过（防风险数据滞后误判）
-//!   ——命中时同样转为人工审核提醒；
+//! - 自动通过前还有最后一道闸：先直接以本地最新封禁数据复核，再向
+//!   KZTimer 权威 API 实时查询该玩家当前活跃全球封禁；本地镜像滞后或
+//!   查询失败时均 fail-closed，任何存在未解封封禁或无法确认低风险的玩家
+//!   都绝不自动通过（防风险数据滞后误判）——命中时同样转为人工审核提醒；
 //! - 若管理员在等待窗口内已审批（status 不再是 pending），自动通过会因
 //!   `WHERE status='pending'` 原子条件更新命中 0 行而跳过，不会覆盖人工结果；
 //! - 自动通过后主动刷新白名单缓存（`WhitelistCache`），玩家可立即进服，
@@ -26,7 +27,9 @@ use crate::{
     db::Database,
     services::{
         access_cache::WhitelistCache,
-        audit_service, lumi_bot_service, observability_service,
+        audit_service, global_ban_service,
+        global_ban_service::KZTBan,
+        lumi_bot_service, observability_service,
         player_risk_service::{self, RiskAction},
         whitelist_service::{self, ApproveWhitelistInput},
     },
@@ -34,7 +37,7 @@ use crate::{
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use std::sync::Arc;
+use std::{future::Future, pin::Pin, sync::Arc};
 use uuid::Uuid;
 
 /// 自动通过配置（单行表，由网站开关控制）
@@ -136,10 +139,11 @@ pub fn start_auto_approve_loop(
                     process_auto_approve(&db, &whitelist_cache, &config),
                     |summary| {
                         format!(
-                            "扫描 {} 条（自动通过 {}，高风险跳过 {}，已处理 {}）",
+                            "扫描 {} 条（自动通过 {}，高风险跳过 {}，人工审核提醒 {}，已处理 {}）",
                             summary.scanned,
                             summary.approved,
                             summary.skipped_high_risk,
+                            summary.reminded,
                             summary.already_processed
                         )
                     },
@@ -174,11 +178,47 @@ struct PendingCandidate {
     steamid64: String,
 }
 
-/// 执行一轮自动通过扫描。
+/// KZTimer 权威全球封禁查询结果（异步 stub 与生产实现共用）。
+type RemoteBanCheckResult = Pin<Box<dyn Future<Output = anyhow::Result<Vec<KZTBan>>> + Send>>;
+
+/// 全球封禁权威复核的数据源。
+///
+/// - `Live`：直接调用 KZTimer API（生产路径）；
+/// - `Stub`：测试注入，避免集成测试依赖外部网络。
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone)]
+enum RemoteBanSource {
+    Live,
+    Stub(Arc<dyn Fn(String) -> RemoteBanCheckResult + Send + Sync>),
+}
+
+impl RemoteBanSource {
+    async fn active_bans(&self, steamid64: &str) -> anyhow::Result<Vec<KZTBan>> {
+        match self {
+            RemoteBanSource::Live => {
+                global_ban_service::fetch_active_global_bans_by_steamid64(steamid64).await
+            }
+            RemoteBanSource::Stub(check) => check(steamid64.to_string()).await,
+        }
+    }
+}
+
+/// 执行一轮自动通过扫描（生产路径：使用 KZTimer 权威 API 复核）。
 pub async fn process_auto_approve(
     db: &Database,
     whitelist_cache: &WhitelistCache,
     app_config: &crate::config::Config,
+) -> anyhow::Result<AutoApproveSummary> {
+    process_auto_approve_with_remote_check(db, whitelist_cache, app_config, RemoteBanSource::Live)
+        .await
+}
+
+/// 执行一轮自动通过扫描（可注入全球封禁复核数据源，供测试使用）。
+async fn process_auto_approve_with_remote_check(
+    db: &Database,
+    whitelist_cache: &WhitelistCache,
+    app_config: &crate::config::Config,
+    remote_source: RemoteBanSource,
 ) -> anyhow::Result<AutoApproveSummary> {
     let auto_config = load_config(db).await?;
     let mut summary = AutoApproveSummary::default();
@@ -217,6 +257,26 @@ pub async fn process_auto_approve(
                         steamid64 = %candidate.steamid64,
                         "白名单自动通过：风险评分构建失败，跳过"
                     );
+                    summary.skipped_high_risk += 1;
+                    let reason =
+                        format!("风险评分构建失败（{error}），无法确认低风险，系统不会自动通过");
+                    summary.reminded += remind_manual_review(
+                        db,
+                        app_config,
+                        &candidate,
+                        auto_config.hours,
+                        "高风险",
+                        Some(reason.as_str()),
+                    )
+                    .await
+                    .unwrap_or_else(|error| {
+                        tracing::warn!(
+                            %error,
+                            whitelist_id = %candidate.id,
+                            "白名单中/高风险人工审核提醒入队失败"
+                        );
+                        0
+                    });
                     continue;
                 }
             };
@@ -299,6 +359,140 @@ pub async fn process_auto_approve(
                     "白名单自动通过终检失败，本轮跳过（fail-closed）"
                 );
                 summary.skipped_high_risk += 1;
+                let reason =
+                    format!("本地封禁复核失败（{error}），无法确认低风险，系统不会自动通过");
+                summary.reminded += remind_manual_review(
+                    db,
+                    app_config,
+                    &candidate,
+                    auto_config.hours,
+                    "高风险",
+                    Some(reason.as_str()),
+                )
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::warn!(
+                        %error,
+                        whitelist_id = %candidate.id,
+                        "白名单中/高风险人工审核提醒入队失败"
+                    );
+                    0
+                });
+                continue;
+            }
+        }
+
+        // 权威复核：本地 global_bans 是定时同步镜像，可能滞后于 KZTimer
+        // （同步任务失败/限流/进程异常时，镜像会停留在旧数据）。这里直接
+        // 向 KZTimer 权威 API 查询当前活跃全球封禁：命中则拒绝自动通过并
+        // 转人工审核；查询失败同样 fail-closed，绝不凭过期镜像放行。
+        match remote_source.active_bans(&candidate.steamid64).await {
+            Ok(bans) => {
+                // 与本地语义保持一致：管理员已在 LumiAdmin 中手动解封的
+                // 全球封禁（global_bans.manual_unbanned=true）不再视为风险，
+                // 即使 KZTimer 权威 API 仍返回该封禁。
+                let bans = match filter_out_manual_unbanned(db, &candidate.steamid64, bans).await {
+                    Ok(bans) => bans,
+                    Err(error) => {
+                        let reason = format!(
+                                "全球封禁权威数据与本地人工解封标记核对失败（{error}），无法确认低风险，系统不会自动通过"
+                            );
+                        tracing::warn!(
+                            %error,
+                            whitelist_id = %candidate.id,
+                            steamid64 = %candidate.steamid64,
+                            "白名单自动通过权威复核标记核对失败，拒绝自动通过并转人工审核（fail-closed）"
+                        );
+                        summary.skipped_high_risk += 1;
+                        summary.reminded += remind_manual_review(
+                            db,
+                            app_config,
+                            &candidate,
+                            auto_config.hours,
+                            "高风险",
+                            Some(reason.as_str()),
+                        )
+                        .await
+                        .unwrap_or_else(|error| {
+                            tracing::warn!(
+                                %error,
+                                whitelist_id = %candidate.id,
+                                "白名单中/高风险人工审核提醒入队失败"
+                            );
+                            0
+                        });
+                        continue;
+                    }
+                };
+
+                if !bans.is_empty() {
+                    let ban_types: Vec<String> = bans
+                        .iter()
+                        .take(3)
+                        .map(|ban| ban.ban_type.clone())
+                        .collect();
+                    let ban_types_text = if ban_types.is_empty() {
+                        "未知类型".to_string()
+                    } else {
+                        ban_types.join("、")
+                    };
+                    let reason = format!(
+                        "KZTimer 权威 API 查询到活跃全球封禁（{ban_types_text}），系统不会自动通过"
+                    );
+                    tracing::warn!(
+                        whitelist_id = %candidate.id,
+                        steamid64 = %candidate.steamid64,
+                        %reason,
+                        "白名单自动通过权威复核发现活跃全球封禁，拒绝自动通过并转人工审核"
+                    );
+                    summary.skipped_high_risk += 1;
+                    summary.reminded += remind_manual_review(
+                        db,
+                        app_config,
+                        &candidate,
+                        auto_config.hours,
+                        "高风险",
+                        Some(reason.as_str()),
+                    )
+                    .await
+                    .unwrap_or_else(|error| {
+                        tracing::warn!(
+                            %error,
+                            whitelist_id = %candidate.id,
+                            "白名单中/高风险人工审核提醒入队失败"
+                        );
+                        0
+                    });
+                    continue;
+                }
+            }
+            Err(error) => {
+                let reason =
+                    format!("全球封禁权威复核失败（{error}），无法确认低风险，系统不会自动通过");
+                tracing::warn!(
+                    %error,
+                    whitelist_id = %candidate.id,
+                    steamid64 = %candidate.steamid64,
+                    "白名单自动通过权威复核失败，拒绝自动通过并转人工审核（fail-closed）"
+                );
+                summary.skipped_high_risk += 1;
+                summary.reminded += remind_manual_review(
+                    db,
+                    app_config,
+                    &candidate,
+                    auto_config.hours,
+                    "高风险",
+                    Some(reason.as_str()),
+                )
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::warn!(
+                        %error,
+                        whitelist_id = %candidate.id,
+                        "白名单中/高风险人工审核提醒入队失败"
+                    );
+                    0
+                });
                 continue;
             }
         }
@@ -450,6 +644,32 @@ async fn remind_manual_review(
     )
     .await?;
     Ok(1)
+}
+
+/// 从 KZTimer 权威 API 返回的活跃全球封禁中，剔除管理员已在 LumiAdmin
+/// 手动解封的封禁（`global_bans.manual_unbanned = true`）。
+///
+/// 本地风险评分和终检都尊重新管理员解封决定，权威复核也必须保持一致，
+/// 否则会给已人工解封的玩家错误地拒绝自动通过。
+async fn filter_out_manual_unbanned(
+    db: &Database,
+    steamid64: &str,
+    bans: Vec<KZTBan>,
+) -> anyhow::Result<Vec<KZTBan>> {
+    let manual_unbanned_ids: Vec<i64> = sqlx::query_scalar(
+        r#"SELECT kzt_ban_id::BIGINT
+           FROM global_bans
+           WHERE steam_id64 = $1 AND manual_unbanned = true"#,
+    )
+    .bind(steamid64)
+    .fetch_all(&db.pool)
+    .await
+    .context("读取全球封禁人工解封标记失败")?;
+
+    Ok(bans
+        .into_iter()
+        .filter(|ban| !manual_unbanned_ids.contains(&ban.id))
+        .collect())
 }
 
 /// 最后一道闸：自动通过前直接以最新封禁数据复核。
@@ -656,7 +876,13 @@ mod tests {
             .await;
 
             let cache = WhitelistCache::new();
-            let summary = process_auto_approve(&db, &cache, &Config::from_env()).await?;
+            let summary = process_auto_approve_with_remote_check(
+                &db,
+                &cache,
+                &Config::from_env(),
+                clean_remote_source(),
+            )
+            .await?;
 
             assert_eq!(summary.scanned, 1);
             assert_eq!(summary.approved, 1);
@@ -711,7 +937,13 @@ mod tests {
             .await;
 
             let cache = WhitelistCache::new();
-            let summary = process_auto_approve(&db, &cache, &Config::from_env()).await?;
+            let summary = process_auto_approve_with_remote_check(
+                &db,
+                &cache,
+                &Config::from_env(),
+                clean_remote_source(),
+            )
+            .await?;
             assert_eq!(summary.scanned, 0);
             assert_eq!(summary.approved, 0);
             Ok(())
@@ -732,7 +964,13 @@ mod tests {
             update_config(&db, false, 3, "测试管理员").await?;
 
             let cache = WhitelistCache::new();
-            let summary = process_auto_approve(&db, &cache, &Config::from_env()).await?;
+            let summary = process_auto_approve_with_remote_check(
+                &db,
+                &cache,
+                &Config::from_env(),
+                clean_remote_source(),
+            )
+            .await?;
             assert_eq!(summary.scanned, 0);
             assert_eq!(summary.approved, 0);
 
@@ -768,7 +1006,13 @@ mod tests {
             .await?;
 
             let cache = WhitelistCache::new();
-            let summary = process_auto_approve(&db, &cache, &Config::from_env()).await?;
+            let summary = process_auto_approve_with_remote_check(
+                &db,
+                &cache,
+                &Config::from_env(),
+                clean_remote_source(),
+            )
+            .await?;
             // 已被管理员审批的记录状态不再为 pending，不会进入自动通过扫描
             assert_eq!(summary.scanned, 0);
             assert_eq!(summary.approved, 0);
@@ -875,6 +1119,29 @@ mod tests {
         count
     }
 
+    fn sample_kzt_ban(id: i64, steamid64: &str, ban_type: &str) -> KZTBan {
+        KZTBan {
+            id,
+            ban_type: ban_type.to_string(),
+            expires_on: Some("9999-12-31T23:59:59".to_string()),
+            steamid64: steamid64.to_string(),
+            player_name: Some("权威封禁玩家".to_string()),
+            steam_id: None,
+            notes: None,
+            stats: None,
+            server_id: None,
+            created_on: Some("2026-09-08T00:00:00Z".to_string()),
+            updated_on: None,
+        }
+    }
+
+    /// 测试用数据源：权威 API 确认该玩家无活跃全球封禁。
+    fn clean_remote_source() -> RemoteBanSource {
+        RemoteBanSource::Stub(Arc::new(|_steamid: String| {
+            Box::pin(async { Ok(Vec::new()) })
+        }))
+    }
+
     #[tokio::test]
     async fn high_risk_pending_is_not_auto_approved_and_gets_qq_reminder() {
         with_test_db(async |db| {
@@ -890,7 +1157,9 @@ mod tests {
 
             let config = Config::from_env();
             let cache = std::sync::Arc::new(WhitelistCache::new());
-            let summary = process_auto_approve(&db, &cache, &config).await?;
+            let summary =
+                process_auto_approve_with_remote_check(&db, &cache, &config, clean_remote_source())
+                    .await?;
 
             // 高风险：绝不自动通过，且发送人工审核提醒
             assert_eq!(summary.approved, 0);
@@ -916,7 +1185,9 @@ mod tests {
             assert!(notified.0, "应标记已完成人工审核提醒");
 
             // 幂等：下一轮不重复提醒
-            let summary = process_auto_approve(&db, &cache, &config).await?;
+            let summary =
+                process_auto_approve_with_remote_check(&db, &cache, &config, clean_remote_source())
+                    .await?;
             assert_eq!(summary.reminded, 0);
             assert_eq!(queue_event_count(&db, &id, "warning").await, 1);
             Ok(())
@@ -989,7 +1260,9 @@ mod tests {
 
             let config = Config::from_env();
             let cache = std::sync::Arc::new(WhitelistCache::new());
-            let summary = process_auto_approve(&db, &cache, &config).await?;
+            let summary =
+                process_auto_approve_with_remote_check(&db, &cache, &config, clean_remote_source())
+                    .await?;
 
             assert_eq!(summary.approved, 0, "中风险玩家不应被自动通过");
             assert_eq!(summary.skipped_high_risk, 1);
@@ -1002,6 +1275,163 @@ mod tests {
                     .await?;
             assert_eq!(status, "pending");
             assert_eq!(queue_event_count(&db, &id, "warning").await, 1);
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn remote_authoritative_global_ban_blocks_auto_approve_and_reminds() {
+        with_test_db(async |db| {
+            let steamid64 = "76561198000000060";
+            let id = insert_pending(
+                &db,
+                steamid64,
+                "权威封禁玩家",
+                Utc::now() - Duration::hours(4),
+            )
+            .await;
+
+            // 本地没有任何封禁数据（模拟同步镜像滞后），但 KZTimer 权威
+            // API 已存在该玩家的活跃全球封禁 —— 必须拒绝自动通过。
+            let sid_owned = steamid64.to_string();
+            let source = RemoteBanSource::Stub(Arc::new(move |_steamid: String| {
+                let sid = sid_owned.clone();
+                Box::pin(async move { Ok(vec![sample_kzt_ban(90001, &sid, "bhop_hack")]) })
+            }));
+
+            let config = Config::from_env();
+            let cache = std::sync::Arc::new(WhitelistCache::new());
+            let summary =
+                process_auto_approve_with_remote_check(&db, &cache, &config, source).await?;
+
+            assert_eq!(summary.approved, 0, "权威 API 命中全球封禁时不得自动通过");
+            assert_eq!(summary.skipped_high_risk, 1);
+            assert_eq!(summary.reminded, 1, "应补发 QQ 人工审核提醒");
+
+            let (status,): (String,) =
+                sqlx::query_as("SELECT status FROM whitelist_requests WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&db.pool)
+                    .await?;
+            assert_eq!(status, "pending");
+            assert_eq!(queue_event_count(&db, &id, "warning").await, 1);
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn remote_ban_already_manual_unbanned_locally_does_not_block() {
+        with_test_db(async |db| {
+            let steamid64 = "76561198000000063";
+            let id = insert_pending(
+                &db,
+                steamid64,
+                "已人工解封玩家",
+                Utc::now() - Duration::hours(4),
+            )
+            .await;
+
+            // 本地已记录该全球封禁为「管理员已手动解封」，权威 API 仍返回它；
+            // 应与本地语义一致：不视为活跃风险，允许自动通过。
+            sqlx::query(
+                r#"INSERT INTO global_bans
+                   (id, kzt_ban_id, steam_id64, player_name, ban_type, is_expired, manual_unbanned)
+                   VALUES ($1, $2, $3, '已解封玩家', 'bhop_hack', false, true)"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(90002_i64)
+            .bind(steamid64)
+            .execute(&db.pool)
+            .await?;
+
+            let sid_owned = steamid64.to_string();
+            let source = RemoteBanSource::Stub(Arc::new(move |_steamid: String| {
+                let sid = sid_owned.clone();
+                Box::pin(async move { Ok(vec![sample_kzt_ban(90002, &sid, "bhop_hack")]) })
+            }));
+
+            let config = Config::from_env();
+            let cache = std::sync::Arc::new(WhitelistCache::new());
+            let summary =
+                process_auto_approve_with_remote_check(&db, &cache, &config, source).await?;
+
+            assert_eq!(summary.approved, 1, "人工解封的全球封禁不应阻止自动通过");
+            assert_eq!(summary.reminded, 0);
+            let (status,): (String,) =
+                sqlx::query_as("SELECT status FROM whitelist_requests WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&db.pool)
+                    .await?;
+            assert_eq!(status, "approved");
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn remote_ban_check_failure_fails_closed_and_reminds() {
+        with_test_db(async |db| {
+            let steamid64 = "76561198000000061";
+            let id = insert_pending(
+                &db,
+                steamid64,
+                "权威复核失败玩家",
+                Utc::now() - Duration::hours(4),
+            )
+            .await;
+
+            let source = RemoteBanSource::Stub(Arc::new(|_steamid: String| {
+                Box::pin(async { Err(anyhow::anyhow!("KZTimer GlobalAPI 暂时不可用")) })
+            }));
+
+            let config = Config::from_env();
+            let cache = std::sync::Arc::new(WhitelistCache::new());
+            let summary =
+                process_auto_approve_with_remote_check(&db, &cache, &config, source).await?;
+
+            assert_eq!(summary.approved, 0, "权威复核失败必须 fail-closed");
+            assert_eq!(summary.skipped_high_risk, 1);
+            assert_eq!(summary.reminded, 1, "应提醒管理员人工审核");
+
+            let (status,): (String,) =
+                sqlx::query_as("SELECT status FROM whitelist_requests WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&db.pool)
+                    .await?;
+            assert_eq!(status, "pending");
+            assert_eq!(queue_event_count(&db, &id, "warning").await, 1);
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn remote_ban_check_clean_allows_auto_approve() {
+        with_test_db(async |db| {
+            let steamid64 = "76561198000000062";
+            let id = insert_pending(
+                &db,
+                steamid64,
+                "权威复核干净玩家",
+                Utc::now() - Duration::hours(4),
+            )
+            .await;
+
+            let config = Config::from_env();
+            let cache = std::sync::Arc::new(WhitelistCache::new());
+            let summary =
+                process_auto_approve_with_remote_check(&db, &cache, &config, clean_remote_source())
+                    .await?;
+
+            assert_eq!(summary.approved, 1, "权威 API 确认无封禁时应正常自动通过");
+            let (status,): (String,) =
+                sqlx::query_as("SELECT status FROM whitelist_requests WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&db.pool)
+                    .await?;
+            assert_eq!(status, "approved");
             Ok(())
         })
         .await;
@@ -1033,7 +1463,9 @@ mod tests {
 
             let config = Config::from_env();
             let cache = std::sync::Arc::new(WhitelistCache::new());
-            let summary = process_auto_approve(&db, &cache, &config).await?;
+            let summary =
+                process_auto_approve_with_remote_check(&db, &cache, &config, clean_remote_source())
+                    .await?;
 
             assert_eq!(summary.approved, 0);
             assert_eq!(summary.reminded, 0, "提交时已提醒过的不重复提醒");

@@ -31,6 +31,9 @@ const KZT_GLOBAL_BANS_API_NAME: &str = "KZTimer GlobalAPI";
 const KZT_GLOBAL_BAN_PAGE_LIMIT: i64 = 500;
 const DEFAULT_KZT_GLOBAL_BAN_MAX_PAGES: i64 = 1000;
 const GLOBAL_BAN_SYNC_MAX_PAGES_ENV: &str = "GLOBAL_BAN_SYNC_MAX_PAGES";
+/// KZTimer 单玩家实时查询时的最大分页数（正常玩家远小于一页，
+/// 此处仅防止 API 异常返回满页导致无限循环）。
+const KZT_GLOBAL_BAN_PER_PLAYER_MAX_PAGES: i64 = 10;
 
 /// KZTimer API 返回的封禁记录
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -197,6 +200,47 @@ async fn fetch_kzt_bans(
         Duration::from_secs(20),
     )
     .await
+}
+
+/// 直接向 KZTimer 权威 API 查询某玩家当前的活跃全球封禁。
+///
+/// 本地 `global_bans` / `ban_records` 是后台定时同步的镜像，若同步任务
+/// 失败、限流或进程异常，镜像会滞后于 KZTimer 权威数据。白名单自动通过
+/// 等安全性关键路径必须先向权威 API 实时复核，避免把「刚被封禁但本地
+/// 尚未同步」的玩家误判为低风险而自动通过。
+///
+/// 查询失败时由调用方按 fail-closed 处理（绝不自动通过）。
+pub async fn fetch_active_global_bans_by_steamid64(steamid64: &str) -> anyhow::Result<Vec<KZTBan>> {
+    let steamid64 = steamid64.trim();
+    anyhow::ensure!(
+        crate::services::steam_service::is_steamid64(steamid64),
+        "SteamID64 格式无效: {steamid64}"
+    );
+
+    let mut all_bans: Vec<KZTBan> = Vec::new();
+    for page in 0..KZT_GLOBAL_BAN_PER_PLAYER_MAX_PAGES {
+        let offset = page * KZT_GLOBAL_BAN_PAGE_LIMIT;
+        let url = format!(
+            "https://kztimerglobal.com/api/v2.0/bans?steamid64={}&isExpired=false&limit={}&offset={}",
+            steamid64, KZT_GLOBAL_BAN_PAGE_LIMIT, offset
+        );
+        let bans: Vec<KZTBan> = external_api_service::get_json(
+            KZT_GLOBAL_BANS_API_KEY,
+            KZT_GLOBAL_BANS_API_NAME,
+            &url,
+            Duration::from_secs(10),
+        )
+        .await?;
+        let len = bans.len() as i64;
+        all_bans.extend(bans);
+        if len < KZT_GLOBAL_BAN_PAGE_LIMIT {
+            return Ok(all_bans);
+        }
+    }
+
+    anyhow::bail!(
+        "KZTimer 单玩家活跃全球封禁超过 {KZT_GLOBAL_BAN_PER_PLAYER_MAX_PAGES} 页，拒绝按低风险处理"
+    );
 }
 
 // =====================================================

@@ -215,8 +215,8 @@ export function ExternalBanApiPage() {
     setSyncPage(1);
   }
 
-  function handleSyncStatusChange(e) {
-    setSyncStatus(e.target.value);
+  function handleSyncStatusChange(value) {
+    setSyncStatus(value ?? '');
     setSyncPage(1);
   }
 
@@ -301,16 +301,19 @@ export function ExternalBanApiPage() {
           )}
         </div>
 
-        <div className="filter-bar">
-          <SearchBar value={syncSearch} onChange={handleSyncSearch} placeholder="搜索 SteamID / 玩家名" />
-          <select className="form-control filter-select" value={syncStatus} onChange={handleSyncStatusChange}>
-            <option value="">全部状态</option>
-            <option value="synced">已同步</option>
-            <option value="failed">失败</option>
-            <option value="unsynced">已撤销</option>
-            <option value="pending">待同步</option>
-          </select>
-        </div>
+        <SearchBar
+          value={syncSearch}
+          onChange={handleSyncSearch}
+          placeholder="搜索 SteamID / 玩家名"
+          statusOptions={[
+            { value: 'synced', label: '已同步' },
+            { value: 'failed', label: '失败' },
+            { value: 'unsynced', label: '已撤销' },
+            { value: 'pending', label: '待同步' },
+          ]}
+          statusValue={syncStatus}
+          onStatusChange={handleSyncStatusChange}
+        />
 
         <div className="card">
           <div className="card-body p-0">

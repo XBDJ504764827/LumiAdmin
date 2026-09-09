@@ -233,55 +233,9 @@ export function PlayerApiPage() {
         )}
       </div>
 
-      {/* 在线玩家数据 */}
-      <div className="card">
-        <div className="card-header">
-          <div>
-            <div className="card-title">在线玩家数据</div>
-            <div className="card-sub">当前通过插件上报的实时在线玩家信息</div>
-          </div>
-        </div>
-        <div className="card-body p-0">
-          {playersState.error ? (
-            <div className="table-state-cell"><div className="table-state-inner table-state-inner--error">{playersState.error.message}</div></div>
-          ) : (
-            <div className="table-responsive">
-              <table className="data-table mobile-card-table">
-                <thead>
-                  <tr>
-                    <th>玩家名称</th>
-                    <th>SteamID</th>
-                    <th>IP 地址</th>
-                    <th>所在服务器</th>
-                    <th>同步时间</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {playersState.loading ? (
-                    <TableLoading colSpan={5} text="正在加载在线玩家..." />
-                  ) : rows.length === 0 ? (
-                    <TableEmpty colSpan={5} text="暂无在线玩家数据" />
-                  ) : (
-                    rows.map((row, idx) => (
-                      <tr key={`${row.serverName}-${row.steamId}-${idx}`}>
-                        <td className="fw-600 mobile-card-primary" data-label="玩家名称">{row.player}</td>
-                        <td className="steam-id" data-label="SteamID">{row.steamId}</td>
-                        <td className="steam-id" data-label="IP 地址">{row.ipAddress}</td>
-                        <td className="text-muted" data-label="所在服务器">{row.serverName}</td>
-                        <td data-label="同步时间"><span className="status-pill pill-online">{row.syncedText}</span></td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* 分发配置 */}
+      {/* API 端点配置（置顶，避免在线玩家较多时需滚动到底部才能修改调试） */}
       {canConfigure && (
-        <div className="card mt-16">
+        <div className="card">
           <div className="card-header">
             <div>
               <div className="card-title">API 端点配置</div>
@@ -371,6 +325,52 @@ export function PlayerApiPage() {
           </div>
         </div>
       )}
+
+      {/* 在线玩家数据 */}
+      <div className="card">
+        <div className="card-header">
+          <div>
+            <div className="card-title">在线玩家数据</div>
+            <div className="card-sub">当前通过插件上报的实时在线玩家信息</div>
+          </div>
+        </div>
+        <div className="card-body p-0">
+          {playersState.error ? (
+            <div className="table-state-cell"><div className="table-state-inner table-state-inner--error">{playersState.error.message}</div></div>
+          ) : (
+            <div className="table-responsive">
+              <table className="data-table mobile-card-table">
+                <thead>
+                  <tr>
+                    <th>玩家名称</th>
+                    <th>SteamID</th>
+                    <th>IP 地址</th>
+                    <th>所在服务器</th>
+                    <th>同步时间</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {playersState.loading ? (
+                    <TableLoading colSpan={5} text="正在加载在线玩家..." />
+                  ) : rows.length === 0 ? (
+                    <TableEmpty colSpan={5} text="暂无在线玩家数据" />
+                  ) : (
+                    rows.map((row, idx) => (
+                      <tr key={`${row.serverName}-${row.steamId}-${idx}`}>
+                        <td className="fw-600 mobile-card-primary" data-label="玩家名称">{row.player}</td>
+                        <td className="steam-id" data-label="SteamID">{row.steamId}</td>
+                        <td className="steam-id" data-label="IP 地址">{row.ipAddress}</td>
+                        <td className="text-muted" data-label="所在服务器">{row.serverName}</td>
+                        <td data-label="同步时间"><span className="status-pill pill-online">{row.syncedText}</span></td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* 编辑弹窗 */}
       {modalOpen && (

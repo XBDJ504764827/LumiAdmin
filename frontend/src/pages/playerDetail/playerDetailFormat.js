@@ -36,6 +36,7 @@ const ACCESS_METHOD_LABELS = {
   restriction_rejected: 'Rating/等级拒绝',
   cs_prime_rejected: '非CS优先账户拒绝',
   custom_rule_rejected: '自定义规则拒绝',
+  risk_blocked: '中高风险拦截',
   snapshot_fallback: '快照回退',
 };
 
@@ -46,6 +47,8 @@ const FAILURE_CODE_LABELS = {
   low_steam_level: 'Steam 等级不足',
   not_cs_prime: '非 CS 优先账户',
   custom_rule_rejected: '自定义规则拒绝',
+  risk_blocked: '中高风险账号拦截',
+  linked_ip_banned: '同 IP 关联封禁',
   profile_fetch_failed: '无法获取玩家资料',
   prime_verification_failed: '无法验证 CS 优先账户',
   snapshot_unavailable: '访问控制服务不可用',

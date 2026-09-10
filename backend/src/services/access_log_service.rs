@@ -32,6 +32,8 @@ pub enum AccessMethod {
     CsPrimeRejected,
     /// 自定义权限规则拒绝
     CustomRuleRejected,
+    /// 中高风险账号拦截（无白名单）
+    RiskBlocked,
     /// 快照回退（服务降级）
     SnapshotFallback,
 }
@@ -49,6 +51,7 @@ impl AccessMethod {
             AccessMethod::RestrictionRejected => "restriction_rejected",
             AccessMethod::CsPrimeRejected => "cs_prime_rejected",
             AccessMethod::CustomRuleRejected => "custom_rule_rejected",
+            AccessMethod::RiskBlocked => "risk_blocked",
             AccessMethod::SnapshotFallback => "snapshot_fallback",
         }
     }
@@ -65,6 +68,7 @@ impl AccessMethod {
             "restriction_rejected" => AccessMethod::RestrictionRejected,
             "cs_prime_rejected" => AccessMethod::CsPrimeRejected,
             "custom_rule_rejected" => AccessMethod::CustomRuleRejected,
+            "risk_blocked" => AccessMethod::RiskBlocked,
             "snapshot_fallback" => AccessMethod::SnapshotFallback,
             _ => AccessMethod::Unrestricted,
         }

@@ -28,6 +28,8 @@ pub struct ServerItem {
     pub min_steam_level: i32,
     pub whitelist_mode_enabled: bool,
     pub cs_prime_enabled: bool,
+    /// 中高风险账号拦截（需白名单才可进入）
+    pub risk_block_enabled: bool,
     pub use_custom_access: bool,
 }
 
@@ -66,10 +68,17 @@ pub struct ServerInput {
     pub whitelist_mode_enabled: bool,
     #[serde(default)]
     pub cs_prime_enabled: bool,
+    /// 中高风险账号拦截；缺省视为开启（与数据库默认值一致）
+    #[serde(default = "default_risk_block_enabled")]
+    pub risk_block_enabled: bool,
     #[serde(default)]
     pub max_players: i32,
     #[serde(default)]
     pub use_custom_access: bool,
+}
+
+fn default_risk_block_enabled() -> bool {
+    true
 }
 
 #[derive(Serialize)]
@@ -207,6 +216,7 @@ struct CommunityRow {
     min_steam_level: Option<i32>,
     whitelist_mode_enabled: Option<bool>,
     cs_prime_enabled: Option<bool>,
+    risk_block_enabled: Option<bool>,
     use_custom_access: Option<bool>,
 }
 
@@ -228,6 +238,7 @@ struct ServerDetailRow {
     min_steam_level: i32,
     whitelist_mode_enabled: bool,
     cs_prime_enabled: bool,
+    risk_block_enabled: bool,
     use_custom_access: bool,
 }
 
@@ -305,6 +316,7 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
             s.min_steam_level,
             s.whitelist_mode_enabled,
             s.cs_prime_enabled,
+            s.risk_block_enabled,
             s.use_custom_access
         FROM communities c
         LEFT JOIN servers s ON s.community_id = c.id
@@ -371,6 +383,7 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
                 min_steam_level: row.min_steam_level.unwrap_or(0),
                 whitelist_mode_enabled: row.whitelist_mode_enabled.unwrap_or(false),
                 cs_prime_enabled: row.cs_prime_enabled.unwrap_or(false),
+                risk_block_enabled: row.risk_block_enabled.unwrap_or(true),
                 use_custom_access: row.use_custom_access.unwrap_or(false),
             });
         }
@@ -433,9 +446,10 @@ pub async fn create_server(
         r#"
         INSERT INTO servers (
             id, community_id, name, ip, port, rcon_password, report_token, note, status, players, last_tested_at,
-            access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled, cs_prime_enabled, max_players, use_custom_access
+            access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled, cs_prime_enabled,
+            risk_block_enabled, max_players, use_custom_access
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'online', $9, now(), $10, $11, $12, $13, $14, $15, $16)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'online', $9, now(), $10, $11, $12, $13, $14, $15, $16, $17)
         "#,
     )
     .bind(id)
@@ -452,6 +466,7 @@ pub async fn create_server(
     .bind(input.min_steam_level)
     .bind(input.whitelist_mode_enabled)
     .bind(input.cs_prime_enabled)
+    .bind(input.risk_block_enabled)
     .bind(input.max_players)
     .bind(input.use_custom_access)
     .execute(&db.pool)
@@ -476,6 +491,7 @@ pub async fn create_server(
         min_steam_level: input.min_steam_level,
         whitelist_mode_enabled: input.whitelist_mode_enabled,
         cs_prime_enabled: input.cs_prime_enabled,
+        risk_block_enabled: input.risk_block_enabled,
         use_custom_access: input.use_custom_access,
     })
 }
@@ -516,10 +532,11 @@ pub async fn update_server(
                 report_token = COALESCE($6, report_token), note = $7,
                 status = 'online', players = $8, last_tested_at = now(),
                 access_restriction_enabled = $9, min_rating = $10, min_steam_level = $11, whitelist_mode_enabled = $12,
-                cs_prime_enabled = $13, max_players = $14, use_custom_access = $15
+                cs_prime_enabled = $13, risk_block_enabled = $14, max_players = $15, use_custom_access = $16
             WHERE id = $1
             RETURNING id, name, ip, port, report_token, note, status, players, max_players, last_tested_at, last_reported_at,
-                      access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled, cs_prime_enabled, use_custom_access
+                      access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled, cs_prime_enabled,
+                      risk_block_enabled, use_custom_access
             "#,
         )
         .bind(server_id)
@@ -535,6 +552,7 @@ pub async fn update_server(
         .bind(input.min_steam_level)
         .bind(input.whitelist_mode_enabled)
         .bind(input.cs_prime_enabled)
+        .bind(input.risk_block_enabled)
         .bind(input.max_players)
         .bind(input.use_custom_access)
         .fetch_one(&db.pool)
@@ -546,10 +564,11 @@ pub async fn update_server(
             SET name = $2, ip = $3, port = $4,
                 report_token = COALESCE($5, report_token), note = $6,
                 access_restriction_enabled = $7, min_rating = $8, min_steam_level = $9, whitelist_mode_enabled = $10,
-                cs_prime_enabled = $11, max_players = $12, use_custom_access = $13
+                cs_prime_enabled = $11, risk_block_enabled = $12, max_players = $13, use_custom_access = $14
             WHERE id = $1
             RETURNING id, name, ip, port, report_token, note, status, players, max_players, last_tested_at, last_reported_at,
-                      access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled, cs_prime_enabled, use_custom_access
+                      access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled, cs_prime_enabled,
+                      risk_block_enabled, use_custom_access
             "#,
         )
         .bind(server_id)
@@ -563,6 +582,7 @@ pub async fn update_server(
         .bind(input.min_steam_level)
         .bind(input.whitelist_mode_enabled)
         .bind(input.cs_prime_enabled)
+        .bind(input.risk_block_enabled)
         .bind(input.max_players)
         .bind(input.use_custom_access)
         .fetch_one(&db.pool)
@@ -589,6 +609,7 @@ pub async fn update_server(
         min_steam_level: row.min_steam_level,
         whitelist_mode_enabled: row.whitelist_mode_enabled,
         cs_prime_enabled: row.cs_prime_enabled,
+        risk_block_enabled: row.risk_block_enabled,
         use_custom_access: row.use_custom_access,
     })
 }
@@ -1417,6 +1438,7 @@ mod tests {
             min_steam_level: 0,
             whitelist_mode_enabled: false,
             cs_prime_enabled: false,
+            risk_block_enabled: true,
             use_custom_access: false,
             max_players: 0,
         })
@@ -1454,6 +1476,7 @@ mod tests {
             min_steam_level: 0,
             whitelist_mode_enabled: false,
             cs_prime_enabled: false,
+            risk_block_enabled: true,
             use_custom_access: false,
             max_players: 0,
         })

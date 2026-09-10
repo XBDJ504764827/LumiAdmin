@@ -15,6 +15,8 @@ impl Database {
             r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS min_steam_level INTEGER NOT NULL DEFAULT 0"#,
             r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS whitelist_mode_enabled BOOLEAN NOT NULL DEFAULT false"#,
             r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS cs_prime_enabled BOOLEAN NOT NULL DEFAULT false"#,
+            // 中高风险账号拦截：存在封禁类风险信号的账号需持有白名单才可进入（默认开启）
+            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS risk_block_enabled BOOLEAN NOT NULL DEFAULT true"#,
             r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS max_players INTEGER NOT NULL DEFAULT 0"#,
         ];
         for sql in alters {

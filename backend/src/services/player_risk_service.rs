@@ -7,7 +7,18 @@ const RECENT_IP_LINK_DAYS: i64 = 90;
 const OLD_IP_LINK_DAYS: i64 = 365;
 const MAX_LINKED_ACCOUNT_ITEMS: usize = 20;
 
-type AccessRiskLinkedRow = (String, Option<String>, bool, Option<DateTime<Utc>>);
+/// 封禁类风险信号：进服准入只认这些信号（自身有效封禁 / 同 IP 关联账号有效封禁）。
+pub const BAN_RISK_REASON_CODES: [&str; 5] = [
+    "self_active_local_ban",
+    "self_synced_global_local_ban",
+    "self_active_global_ban",
+    "linked_ip_local_ban",
+    "linked_ip_global_ban",
+];
+
+pub fn is_ban_risk_reason_code(code: &str) -> bool {
+    BAN_RISK_REASON_CODES.contains(&code)
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -24,6 +35,39 @@ pub enum RiskAction {
     Warn,
     RequireForce,
     Deny,
+}
+
+impl RiskAction {
+    /// 风险等级中文标签：allow=低风险、warn=中风险、require_force/deny=高风险。
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Allow => "低风险",
+            Self::Warn => "中风险",
+            Self::RequireForce | Self::Deny => "高风险",
+        }
+    }
+}
+
+/// 进服准入使用的封禁类风险评估结果。
+///
+/// 与后台「玩家风险档案」使用同一套信号与分级规则，但只统计封禁类信号，
+/// 不计算白名单拒绝次数、共享 IP 账号数等次要信号，避免在进服热点路径上
+/// 产生额外查询。
+#[derive(Debug, Clone)]
+pub struct AccessBanRisk {
+    /// 命中的封禁类信号代码（与风险档案的 code 一致）
+    pub codes: Vec<String>,
+    /// 综合风险动作（分级规则与风险档案一致）
+    pub action: RiskAction,
+    /// 命中信号的中文明细，用于后台审计/进服日志
+    pub detail: String,
+}
+
+impl AccessBanRisk {
+    /// 中高风险（warn / require_force / deny）账号需要白名单才可进入。
+    pub fn is_medium_or_high(&self) -> bool {
+        self.action != RiskAction::Allow
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -238,79 +282,136 @@ pub async fn build_player_risk_profile(
     })
 }
 
-pub async fn evaluate_ip_ban_for_access(
+/// 进服准入：评估账号的封禁类风险（中高风险需要白名单才可进入）。
+///
+/// 与后台风险档案保持同一套信号与分级规则：
+/// - 自身有效本地封禁 / 由全球封禁同步生成的本地封禁 / 自身有效全球封禁；
+/// - 同 IP 关联账号（含本次上报的当前 IP 与历史 IP）存在有效本地/全球封禁。
+///
+/// 只统计封禁类信号，命中封禁类信号时直接返回（自身封禁必然为高风险，
+/// 无需再查询关联账号）。
+pub async fn evaluate_ban_risk_for_access(
     db: &Database,
     steamid64: &str,
     ip_address: Option<&str>,
-) -> anyhow::Result<Option<RiskReason>> {
-    let Some(ip_address) = ip_address.map(str::trim).filter(|ip| !ip.is_empty()) else {
-        return Ok(None);
-    };
+) -> anyhow::Result<Option<AccessBanRisk>> {
     let steamid64 = steamid64.trim();
-    // 三路 UNION 先按 IP 精确命中（各自命中 ip 索引），聚合出同 IP 候选账号，
-    // 再 JOIN ban_records 过滤出存在本地有效封禁的账号，按最近关联时间取一条。
-    // 与原查询语义一致（原查询外层 WHERE EXISTS 与 SELECT 中的 EXISTS 条件相同，
-    // 因此返回行必然有 has_local_ban = true，排序中的 has_local_ban 为常量）。
-    let row: Option<AccessRiskLinkedRow> = sqlx::query_as(
-        r#"SELECT l.steam_id,
-                  l.player_name,
-                  true AS has_local_ban,
-                  l.last_seen_at
-           FROM (
-             SELECT steam_id, max(player_name) AS player_name, max(last_seen_at) AS last_seen_at
-             FROM (
-               SELECT steam_id64 AS steam_id, player_name, created_at AS last_seen_at
-               FROM player_access_logs
-               WHERE ip_address = $1 AND steam_id64 <> $2
-               UNION ALL
-               SELECT steam_id64 AS steam_id, name AS player_name, reported_at AS last_seen_at
-               FROM server_online_players
-               WHERE ip = $1 AND steam_id64 <> $2
-               UNION ALL
-               SELECT steam_id AS steam_id, player AS player_name, created_at AS last_seen_at
-               FROM ban_records
-               WHERE ip_address = $1 AND steam_id <> $2
-             ) AS raw
-             WHERE steam_id ~ '^[0-9]{17}$'
-             GROUP BY steam_id
-           ) l
-           JOIN ban_records br
-             ON br.steam_id = l.steam_id
-            AND br.status = 'active'
-            AND (br.expires_at IS NULL OR br.expires_at > now())
-           ORDER BY l.last_seen_at DESC NULLS LAST
-           LIMIT 1"#,
-    )
-    .bind(ip_address)
-    .bind(steamid64)
-    .fetch_optional(&db.pool)
-    .await?;
+    anyhow::ensure!(
+        steamid64.len() == 17 && steamid64.chars().all(|ch| ch.is_ascii_digit()),
+        "SteamID64 格式无效"
+    );
+    let current_ip = ip_address.map(str::trim).filter(|ip| !ip.is_empty());
 
-    Ok(row.map(
-        |(linked_steamid, player_name, has_local_ban, last_seen_at)| {
-            let message = if has_local_ban {
-                format!(
-                    "同 IP 关联账号 {}{} 存在本地有效封禁",
-                    player_name
-                        .as_deref()
-                        .map(|name| format!("{name} / "))
-                        .unwrap_or_default(),
-                    linked_steamid
-                )
-            } else {
-                format!("同 IP 关联账号 {linked_steamid} 存在封禁风险")
-            };
-            RiskReason {
-                code: "linked_ip_local_ban".to_string(),
-                severity: RiskSeverity::Block,
-                message,
-                steamid64: Some(linked_steamid),
-                ip: Some(ip_address.to_string()),
-                count: 1,
-                last_seen_at,
-            }
-        },
-    ))
+    let self_steamids = vec![steamid64.to_string()];
+    let (self_bans, self_global_bans, player_ip_rows) = tokio::try_join!(
+        load_active_bans_for_steamids(db, &self_steamids),
+        load_active_global_bans(db, &self_steamids),
+        load_player_ips(db, steamid64),
+    )?;
+
+    let mut reasons = Vec::new();
+    add_self_ban_reasons(&mut reasons, &self_bans);
+    add_self_global_ban_reasons(&mut reasons, &self_global_bans);
+    if !reasons.is_empty() {
+        return Ok(access_ban_risk_from_reasons(reasons));
+    }
+
+    // 同 IP 关联：玩家历史 IP + 本次上报的当前 IP。
+    // 首次进服时当前 IP 可能尚未写入历史，必须一并纳入判定，
+    // 否则与原先的「同 IP 关联封禁」直接拦截相比会漏判。
+    let mut ips: Vec<String> = player_ip_rows.into_iter().map(|(ip,)| ip).collect();
+    if let Some(ip) = current_ip {
+        if !ips.iter().any(|existing| existing == ip) {
+            ips.push(ip.to_string());
+        }
+    }
+    if ips.is_empty() {
+        return Ok(None);
+    }
+
+    let linked_rows = load_linked_accounts_by_ips(db, steamid64, &ips).await?;
+    if linked_rows.is_empty() {
+        return Ok(None);
+    }
+
+    let mut linked_by_steam: HashMap<String, RiskLinkedAccount> = HashMap::new();
+    for row in linked_rows {
+        let entry = linked_by_steam
+            .entry(row.steam_id.clone())
+            .or_insert_with(|| RiskLinkedAccount {
+                steamid64: row.steam_id.clone(),
+                player_name: row.player_name.clone(),
+                shared_ips: Vec::new(),
+                last_seen_at: row.last_seen_at,
+                has_active_local_ban: false,
+                has_active_global_ban: false,
+                rejected_whitelist_count: 0,
+            });
+        if !entry.shared_ips.iter().any(|ip| ip == &row.ip) {
+            entry.shared_ips.push(row.ip);
+        }
+        if entry.player_name.is_none() {
+            entry.player_name = row.player_name;
+        }
+        entry.last_seen_at = [entry.last_seen_at, row.last_seen_at]
+            .into_iter()
+            .flatten()
+            .max();
+    }
+
+    let linked_ids: Vec<String> = linked_by_steam.keys().cloned().collect();
+    let (linked_bans, linked_global_bans) = tokio::try_join!(
+        load_active_bans_for_steamids(db, &linked_ids),
+        load_active_global_bans(db, &linked_ids),
+    )?;
+    let linked_local_banned: HashSet<String> =
+        linked_bans.iter().map(|row| row.steam_id.clone()).collect();
+    let linked_global_banned: HashSet<String> = linked_global_bans
+        .iter()
+        .map(|row| row.steam_id64.clone())
+        .collect();
+    for (steam_id, account) in linked_by_steam.iter_mut() {
+        account.has_active_local_ban = linked_local_banned.contains(steam_id);
+        account.has_active_global_ban = linked_global_banned.contains(steam_id);
+    }
+
+    let mut linked_accounts: Vec<RiskLinkedAccount> = linked_by_steam.into_values().collect();
+    linked_accounts.sort_by(|a, b| {
+        linked_account_score(b)
+            .cmp(&linked_account_score(a))
+            .then_with(|| b.last_seen_at.cmp(&a.last_seen_at))
+            .then_with(|| a.steamid64.cmp(&b.steamid64))
+    });
+
+    add_linked_account_reasons(&mut reasons, &linked_accounts);
+    Ok(access_ban_risk_from_reasons(reasons))
+}
+
+/// 由风险原因收敛出进服准入结论：只保留封禁类信号，且整体风险需为中/高。
+fn access_ban_risk_from_reasons(reasons: Vec<RiskReason>) -> Option<AccessBanRisk> {
+    let mut codes = Vec::new();
+    let mut details = Vec::new();
+    for reason in reasons
+        .iter()
+        .filter(|reason| is_ban_risk_reason_code(&reason.code))
+    {
+        if !codes.iter().any(|code| code == &reason.code) {
+            codes.push(reason.code.clone());
+        }
+        details.push(reason.message.clone());
+    }
+    if codes.is_empty() {
+        return None;
+    }
+    let action = classify_action(&reasons);
+    if action == RiskAction::Allow {
+        return None;
+    }
+    Some(AccessBanRisk {
+        codes,
+        action,
+        detail: details.join("；"),
+    })
 }
 
 async fn load_active_bans_for_steamids(
@@ -724,4 +825,87 @@ fn parse_kzt_datetime(value: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value)
         .ok()
         .map(|value| value.with_timezone(&Utc))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reason(code: &str, severity: RiskSeverity) -> RiskReason {
+        RiskReason {
+            code: code.to_string(),
+            severity,
+            message: format!("测试信号 {code}"),
+            steamid64: None,
+            ip: None,
+            count: 1,
+            last_seen_at: None,
+        }
+    }
+
+    #[test]
+    fn ban_risk_reason_codes_stay_within_medium_or_high() {
+        for code in BAN_RISK_REASON_CODES {
+            assert!(is_ban_risk_reason_code(code), "未登记封禁类信号: {code}");
+        }
+        // 非封禁类信号（白名单拒绝历史等）不得参与进服拦截
+        assert!(!is_ban_risk_reason_code("linked_ip_negative_history"));
+        assert!(!is_ban_risk_reason_code("many_linked_accounts"));
+    }
+
+    #[test]
+    fn access_ban_risk_ignores_non_ban_signals() {
+        assert!(access_ban_risk_from_reasons(Vec::new()).is_none());
+        assert!(access_ban_risk_from_reasons(vec![reason(
+            "linked_ip_negative_history",
+            RiskSeverity::Block
+        )])
+        .is_none());
+        assert!(access_ban_risk_from_reasons(vec![reason(
+            "many_linked_accounts",
+            RiskSeverity::Info
+        )])
+        .is_none());
+    }
+
+    #[test]
+    fn access_ban_risk_reports_linked_historical_ban_as_medium() {
+        let risk = access_ban_risk_from_reasons(vec![reason(
+            "linked_ip_local_ban",
+            RiskSeverity::Warning,
+        )])
+        .expect("关联账号封禁应命中拦截");
+        assert!(risk.is_medium_or_high());
+        assert_eq!(risk.action, RiskAction::Warn);
+        assert_eq!(risk.action.label(), "中风险");
+        assert_eq!(risk.codes, vec!["linked_ip_local_ban".to_string()]);
+        assert!(risk.detail.contains("linked_ip_local_ban"));
+    }
+
+    #[test]
+    fn access_ban_risk_reports_self_ban_as_high() {
+        let risk = access_ban_risk_from_reasons(vec![
+            reason("self_active_global_ban", RiskSeverity::Block),
+            reason("linked_ip_global_ban", RiskSeverity::Block),
+        ])
+        .expect("自身全球封禁应命中拦截");
+        assert!(risk.is_medium_or_high());
+        assert_eq!(risk.action, RiskAction::Deny);
+        assert_eq!(risk.action.label(), "高风险");
+        assert_eq!(
+            risk.codes,
+            vec![
+                "self_active_global_ban".to_string(),
+                "linked_ip_global_ban".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn risk_action_labels_match_admin_console_levels() {
+        assert_eq!(RiskAction::Allow.label(), "低风险");
+        assert_eq!(RiskAction::Warn.label(), "中风险");
+        assert_eq!(RiskAction::RequireForce.label(), "高风险");
+        assert_eq!(RiskAction::Deny.label(), "高风险");
+    }
 }

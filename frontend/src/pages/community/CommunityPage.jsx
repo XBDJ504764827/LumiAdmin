@@ -784,6 +784,13 @@ export function CommunityPage() {
               </div>
             </>
           ) : null}
+          <div className="toggle-row">
+            <div>
+              <div className="toggle-label">中高风险账号拦截</div>
+              <div className="toggle-desc">账号存在封禁类风险（自身有效封禁，或同 IP 关联账号存在有效封禁）时视为中/高风险，必须持有白名单才能进入；不受上方「自定义设置」影响</div>
+            </div>
+            <ToggleSwitch checked={serverForm.risk_block_enabled} onChange={(v) => handleServerFieldChange('risk_block_enabled', v)} />
+          </div>
         </FormSectionCard>
       </Modal>
     );

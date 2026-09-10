@@ -20,6 +20,8 @@ use tracing::warn;
 
 const GOKZ_RATING_SCOPES: [&str; 4] = ["KZT", "SKZ", "VNL", "OVR"];
 pub(crate) const ACCESS_RATING_SOURCE: &str = "scoped_max";
+/// 中高风险账号（存在封禁类风险信号）且没有白名单时的进服提示。
+pub(crate) const RISK_BLOCK_MESSAGE: &str = "您的账号可能有些问题，本次进入服务器被阻止\n您可以进行申请白名单后再尝试进入\n如有疑问加入Q群275164688寻求帮助";
 static GOKZ_NEGATIVE_CACHE: OnceLock<Mutex<HashMap<String, std::time::Instant>>> = OnceLock::new();
 
 #[derive(Debug, Clone)]
@@ -199,24 +201,36 @@ async fn check_access_live(
         ));
     }
 
-    if let Some(ip_risk) =
-        player_risk_service::evaluate_ip_ban_for_access(db, steam_id64, input.ip_address.as_deref())
-            .await?
-    {
-        return Ok(reject_with_method(
-            &format!(
-                "当前 IP 存在高风险关联，无法进入服务器。\n原因：{}",
-                ip_risk.message
-            ),
-            "banned",
-            "linked_ip_banned",
-        ));
-    }
-
     // 2. 检查服务器访问模式（开启的模式之间为 OR：满足任意一种即可进入）
     let effective_restriction = server.effective_access_restriction_enabled();
     let effective_whitelist = server.effective_whitelist_mode_enabled();
     let effective_cs_prime = server.effective_cs_prime_enabled();
+    let risk_block_enabled = server.risk_block_enabled;
+
+    // 白名单状态：白名单模式需要它判定准入；中高风险拦截把它作为唯一的豁免条件，
+    // 因此只在真正需要时才查询缓存。
+    let whitelist_approved = if effective_whitelist || risk_block_enabled {
+        wl_cache.contains(steam_id64).await
+    } else {
+        false
+    };
+
+    // 2.1 中高风险账号拦截：账号存在封禁类风险信号（自身有效封禁、同 IP 关联账号
+    // 有效封禁）时为中/高风险，需持有白名单才可进入。该开关独立于上方进服模式，
+    // 因此必须放在「无限制放行」与「CS 优先账户放行」之前。
+    if risk_block_enabled && !whitelist_approved {
+        if let Some(risk) = player_risk_service::evaluate_ban_risk_for_access(
+            db,
+            steam_id64,
+            input.ip_address.as_deref(),
+        )
+        .await?
+        {
+            if risk.is_medium_or_high() {
+                return Ok(reject_access_risk(&risk));
+            }
+        }
+    }
 
     // 都没开 → 无限制放行
     if !effective_whitelist && !effective_restriction && !effective_cs_prime {
@@ -227,12 +241,6 @@ async fn check_access_live(
             None,
         ));
     }
-
-    let whitelist_approved = if effective_whitelist {
-        wl_cache.contains(steam_id64).await
-    } else {
-        false
-    };
 
     // CS 优先账户：由游戏插件通过 Steam GameServer API 查询后上报
     // 优先账户检查必须在进入限制之前执行，确保优先账号直接放行
@@ -313,6 +321,27 @@ async fn check_access_live(
         restriction_failure_code,
         cs_prime_failure_code,
     ))
+}
+
+/// 中高风险账号（封禁类风险信号）无白名单时的拒绝结果。
+///
+/// 玩家侧只看到统一提示；命中明细写入 `audit_message`，仅进服日志可见。
+fn reject_access_risk(risk: &player_risk_service::AccessBanRisk) -> AccessCheckResult {
+    let audit_message = format!("账号风险拦截（{}）：{}", risk.action.label(), risk.detail);
+    let mut result =
+        reject_with_method(RISK_BLOCK_MESSAGE, "risk_blocked", risk_failure_code(risk));
+    result.audit_message = Some(audit_message);
+    result
+}
+
+/// 失败原因代码：纯「同 IP 关联封禁」保留既有代码，便于沿用历史筛选口径；
+/// 涉及账号自身封禁信号时归入通用的中高风险拦截。
+fn risk_failure_code(risk: &player_risk_service::AccessBanRisk) -> &'static str {
+    if risk.codes.iter().all(|code| code.starts_with("linked_ip_")) {
+        "linked_ip_banned"
+    } else {
+        "risk_blocked"
+    }
 }
 
 fn evaluate_restriction(
@@ -810,6 +839,7 @@ mod tests {
             min_steam_level,
             whitelist_mode_enabled: false,
             cs_prime_enabled: false,
+            risk_block_enabled: false,
             use_custom_access: true,
             community_whitelist_mode_enabled: false,
             community_min_rating: 0,
@@ -945,6 +975,62 @@ mod tests {
             .unwrap()
             .contains("白名单未通过；Rating 未达标；CS 优先账户状态无法验证"));
         assert!(combined_unknown_prime.message.len() < 256);
+    }
+
+    fn ban_risk(
+        codes: &[&str],
+        action: player_risk_service::RiskAction,
+    ) -> player_risk_service::AccessBanRisk {
+        player_risk_service::AccessBanRisk {
+            codes: codes.iter().map(|code| code.to_string()).collect(),
+            action,
+            detail: "同 IP 关联账号中有 1 个存在本地有效封禁".to_string(),
+        }
+    }
+
+    #[test]
+    fn reject_access_risk_uses_player_message_and_audits_signal_detail() {
+        let result = reject_access_risk(&ban_risk(
+            &["linked_ip_local_ban"],
+            player_risk_service::RiskAction::RequireForce,
+        ));
+
+        assert!(!result.allowed);
+        assert_eq!(result.access_method.as_deref(), Some("risk_blocked"));
+        assert_eq!(result.failure_code.as_deref(), Some("linked_ip_banned"));
+        assert!(result
+            .message
+            .contains("您的账号可能有些问题，本次进入服务器被阻止"));
+        assert!(result.message.contains("您可以进行申请白名单后再尝试进入"));
+        assert_eq!(
+            result.audit_message.as_deref(),
+            Some("账号风险拦截（高风险）：同 IP 关联账号中有 1 个存在本地有效封禁")
+        );
+        // 审计原因不返回给游戏插件
+        let plugin_result = serde_json::to_value(&result).unwrap();
+        assert!(plugin_result.get("audit_message").is_none());
+        assert!(result.message.len() < 256);
+    }
+
+    #[test]
+    fn reject_access_risk_maps_self_ban_signals_to_generic_failure_code() {
+        let self_ban = reject_access_risk(&ban_risk(
+            &["self_active_global_ban"],
+            player_risk_service::RiskAction::Deny,
+        ));
+        assert_eq!(self_ban.failure_code.as_deref(), Some("risk_blocked"));
+
+        let mixed = reject_access_risk(&ban_risk(
+            &["self_active_global_ban", "linked_ip_global_ban"],
+            player_risk_service::RiskAction::Deny,
+        ));
+        assert_eq!(mixed.failure_code.as_deref(), Some("risk_blocked"));
+    }
+
+    #[test]
+    fn risk_block_message_stays_within_plugin_chat_limit() {
+        assert!(RISK_BLOCK_MESSAGE.contains("Q群275164688"));
+        assert!(RISK_BLOCK_MESSAGE.len() < 256);
     }
 
     #[test]

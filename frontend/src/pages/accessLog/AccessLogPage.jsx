@@ -22,6 +22,7 @@ const ACCESS_METHOD_MAP = {
   restriction_rejected: { label: 'Rating 不足', kind: 'danger' },
   cs_prime_rejected: { label: '非CS优先账户', kind: 'danger' },
   custom_rule_rejected: { label: '规则拒绝', kind: 'danger' },
+  risk_blocked: { label: '中高风险拦截', kind: 'danger' },
 };
 
 const FAILURE_CODE_MAP = {
@@ -33,6 +34,7 @@ const FAILURE_CODE_MAP = {
   low_steam_level: 'Steam 等级不足',
   not_cs_prime: '非 CS 优先账户',
   custom_rule_rejected: '自定义规则拒绝',
+  risk_blocked: '中高风险账号拦截',
   profile_fetch_failed: '无法获取玩家资料',
   prime_verification_failed: '无法验证 CS 优先账户',
   snapshot_unavailable: '服务降级',
@@ -56,6 +58,7 @@ const ACCESS_METHOD_OPTIONS = [
   { value: 'whitelist_rejected', label: '白名单未通过' },
   { value: 'restriction_rejected', label: 'Rating 不足' },
   { value: 'cs_prime_rejected', label: '非CS优先账户' },
+  { value: 'risk_blocked', label: '中高风险拦截' },
 ];
 
 const ALLOWED_OPTIONS = [

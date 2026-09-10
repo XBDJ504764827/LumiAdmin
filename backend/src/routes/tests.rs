@@ -871,6 +871,326 @@ async fn access_check_restriction_uses_success_cache_and_rejects_low_values() {
         }).await;
 }
 
+/// 中高风险账号拦截：账号存在封禁类风险信号（同 IP 关联账号有效封禁）时，
+/// 即使服务器没有任何进服模式（满足最低进入要求/无限制）也必须在无白名单时拦截。
+#[tokio::test]
+async fn access_check_blocks_linked_ban_risk_without_whitelist() {
+    with_test_app(async |db, config| {
+            const BANNED_STEAMID: &str = "76561198000000081";
+            const PLAYER_STEAMID: &str = "76561198000000082";
+            const SHARED_IP: &str = "203.0.113.81";
+
+            let community_id = Uuid::new_v4();
+            sqlx::query(r#"INSERT INTO communities (id, name) VALUES ($1, '风险社区')"#)
+                .bind(community_id)
+                .execute(&db.pool)
+                .await?;
+            sqlx::query(
+                r#"INSERT INTO servers (id, community_id, name, ip, port, rcon_password, report_token, status, players)
+                   VALUES ($1, $2, '无限制服', '127.0.0.1', 27015, 'secret', 'access-token-risk', 'online', $3)"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(community_id)
+            .bind(Vec::<String>::new())
+            .execute(&db.pool)
+            .await?;
+
+            // 被封禁账号：封禁只挂在账号上（未封禁 IP），确保本次拦截来自账号风险而非 IP 封禁
+            sqlx::query(
+                r#"INSERT INTO ban_records (id, player, steam_id, ban_type, reason, duration_minutes, status, operator_name, source)
+                   VALUES ($1, 'bad-player', $2, 'steam', '作弊', 0, 'active', 'ConsoleAdmin', 'manual')"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(BANNED_STEAMID)
+            .execute(&db.pool)
+            .await?;
+            // 该账号与玩家共用过 IP（历史进服记录）
+            sqlx::query(
+                r#"INSERT INTO player_access_logs (
+                       id, steam_id64, player_name, ip_address, server_id, server_name, server_port,
+                       community_id, community_name, allowed, access_method, created_at
+                   )
+                   VALUES (gen_random_uuid(), $1, 'bad-player', $2, $3, '无限制服', 27015, $4, '风险社区', true, 'unrestricted', now())"#,
+            )
+            .bind(BANNED_STEAMID)
+            .bind(SHARED_IP)
+            .bind(server_id_by_token(&db, "access-token-risk").await?)
+            .bind(community_id)
+            .execute(&db.pool)
+            .await?;
+
+            let app = test_app(config, db.clone());
+            let blocked = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/plugin/access/check")
+                        .header("content-type", "application/json")
+                        .body(Body::from(json!({
+                            "report_token": "access-token-risk",
+                            "port": 27015,
+                            "steam_id64": PLAYER_STEAMID,
+                            "ip_address": SHARED_IP
+                        }).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(blocked.status(), StatusCode::OK);
+            let body = to_bytes(blocked.into_body(), usize::MAX).await.unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(payload["result"]["allowed"], false);
+            assert_eq!(payload["result"]["access_method"], "risk_blocked");
+            assert_eq!(payload["result"]["failure_code"], "linked_ip_banned");
+            assert_eq!(
+                payload["result"]["message"],
+                "您的账号可能有些问题，本次进入服务器被阻止\n您可以进行申请白名单后再尝试进入\n如有疑问加入Q群275164688寻求帮助"
+            );
+
+            // 拥有白名单后放行
+            insert_whitelist_for_steamid64(&db, PLAYER_STEAMID, "approved").await?;
+            app.whitelist_cache.refresh(&db).await?;
+            let allowed = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/plugin/access/check")
+                        .header("content-type", "application/json")
+                        .body(Body::from(json!({
+                            "report_token": "access-token-risk",
+                            "port": 27015,
+                            "steam_id64": PLAYER_STEAMID,
+                            "ip_address": SHARED_IP
+                        }).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(allowed.status(), StatusCode::OK);
+            let body = to_bytes(allowed.into_body(), usize::MAX).await.unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(payload["result"]["allowed"], true);
+            assert_eq!(payload["result"]["message"], "允许进入服务器。");
+            Ok(())
+        }).await;
+}
+
+/// 服务器关闭「中高风险账号拦截」开关后，风险账号按原有规则放行。
+#[tokio::test]
+async fn access_check_skips_risk_block_when_server_disables_switch() {
+    with_test_app(async |db, config| {
+            const BANNED_STEAMID: &str = "76561198000000083";
+            const PLAYER_STEAMID: &str = "76561198000000084";
+            const SHARED_IP: &str = "203.0.113.82";
+
+            let community_id = Uuid::new_v4();
+            sqlx::query(r#"INSERT INTO communities (id, name) VALUES ($1, '关闭拦截社区')"#)
+                .bind(community_id)
+                .execute(&db.pool)
+                .await?;
+            sqlx::query(
+                r#"INSERT INTO servers (id, community_id, name, ip, port, rcon_password, report_token, status, players, risk_block_enabled)
+                   VALUES ($1, $2, '不拦截服', '127.0.0.1', 27015, 'secret', 'access-token-risk-off', 'online', $3, false)"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(community_id)
+            .bind(Vec::<String>::new())
+            .execute(&db.pool)
+            .await?;
+
+            sqlx::query(
+                r#"INSERT INTO ban_records (id, player, steam_id, ban_type, reason, duration_minutes, status, operator_name, source)
+                   VALUES ($1, 'bad-player', $2, 'steam', '作弊', 0, 'active', 'ConsoleAdmin', 'manual')"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(BANNED_STEAMID)
+            .execute(&db.pool)
+            .await?;
+            sqlx::query(
+                r#"INSERT INTO player_access_logs (
+                       id, steam_id64, player_name, ip_address, server_id, server_name, server_port,
+                       community_id, community_name, allowed, access_method, created_at
+                   )
+                   VALUES (gen_random_uuid(), $1, 'bad-player', $2, $3, '不拦截服', 27015, $4, '关闭拦截社区', true, 'unrestricted', now())"#,
+            )
+            .bind(BANNED_STEAMID)
+            .bind(SHARED_IP)
+            .bind(server_id_by_token(&db, "access-token-risk-off").await?)
+            .bind(community_id)
+            .execute(&db.pool)
+            .await?;
+
+            let app = test_app(config, db);
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/plugin/access/check")
+                        .header("content-type", "application/json")
+                        .body(Body::from(json!({
+                            "report_token": "access-token-risk-off",
+                            "port": 27015,
+                            "steam_id64": PLAYER_STEAMID,
+                            "ip_address": SHARED_IP
+                        }).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(payload["result"]["allowed"], true);
+            assert_eq!(payload["result"]["message"], "允许进入服务器。");
+            Ok(())
+        }).await;
+}
+
+/// 白名单不豁免账号自身的有效封禁。
+#[tokio::test]
+async fn access_check_still_blocks_whitelisted_banned_account() {
+    with_test_app(async |db, config| {
+            const BANNED_STEAMID: &str = "76561198000000085";
+
+            let community_id = Uuid::new_v4();
+            sqlx::query(r#"INSERT INTO communities (id, name) VALUES ($1, '白名单封禁社区')"#)
+                .bind(community_id)
+                .execute(&db.pool)
+                .await?;
+            sqlx::query(
+                r#"INSERT INTO servers (id, community_id, name, ip, port, rcon_password, report_token, status, players)
+                   VALUES ($1, $2, '无限制服', '127.0.0.1', 27015, 'secret', 'access-token-risk-banned', 'online', $3)"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(community_id)
+            .bind(Vec::<String>::new())
+            .execute(&db.pool)
+            .await?;
+            sqlx::query(
+                r#"INSERT INTO ban_records (id, player, steam_id, ban_type, reason, duration_minutes, status, operator_name, source)
+                   VALUES ($1, 'bad-player', $2, 'steam', '作弊', 0, 'active', 'ConsoleAdmin', 'manual')"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(BANNED_STEAMID)
+            .execute(&db.pool)
+            .await?;
+            insert_whitelist_for_steamid64(&db, BANNED_STEAMID, "approved").await?;
+
+            let app = test_app(config, db.clone());
+            app.whitelist_cache.refresh(&db).await?;
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/plugin/access/check")
+                        .header("content-type", "application/json")
+                        .body(Body::from(json!({
+                            "report_token": "access-token-risk-banned",
+                            "port": 27015,
+                            "steam_id64": BANNED_STEAMID
+                        }).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(payload["result"]["allowed"], false);
+            assert_eq!(
+                payload["result"]["message"],
+                "你已被该服务器封禁。\n如有异议可前往社区论坛进行申诉。"
+            );
+            Ok(())
+        }).await;
+}
+
+/// 全球封禁尚未同步成本地封禁时，账号风险拦截同样生效；白名单可豁免。
+#[tokio::test]
+async fn access_check_blocks_account_with_active_global_ban() {
+    with_test_app(async |db, config| {
+            const STEAMID: &str = "76561198000000086";
+
+            let community_id = Uuid::new_v4();
+            sqlx::query(r#"INSERT INTO communities (id, name) VALUES ($1, '全球封禁社区')"#)
+                .bind(community_id)
+                .execute(&db.pool)
+                .await?;
+            sqlx::query(
+                r#"INSERT INTO servers (id, community_id, name, ip, port, rcon_password, report_token, status, players)
+                   VALUES ($1, $2, '无限制服', '127.0.0.1', 27015, 'secret', 'access-token-global-ban', 'online', $3)"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(community_id)
+            .bind(Vec::<String>::new())
+            .execute(&db.pool)
+            .await?;
+            sqlx::query(
+                r#"INSERT INTO global_bans (id, kzt_ban_id, steam_id64, player_name, ban_type, notes, is_expired, manual_unbanned)
+                   VALUES ($1, 900001, $2, 'global-bad-player', '作弊', 'KZTimer 全球封禁', false, false)"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(STEAMID)
+            .execute(&db.pool)
+            .await?;
+
+            let app = test_app(config, db.clone());
+            let blocked = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/plugin/access/check")
+                        .header("content-type", "application/json")
+                        .body(Body::from(json!({
+                            "report_token": "access-token-global-ban",
+                            "port": 27015,
+                            "steam_id64": STEAMID
+                        }).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(blocked.status(), StatusCode::OK);
+            let body = to_bytes(blocked.into_body(), usize::MAX).await.unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(payload["result"]["allowed"], false);
+            assert_eq!(payload["result"]["failure_code"], "risk_blocked");
+
+            insert_whitelist_for_steamid64(&db, STEAMID, "approved").await?;
+            app.whitelist_cache.refresh(&db).await?;
+            let allowed = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/plugin/access/check")
+                        .header("content-type", "application/json")
+                        .body(Body::from(json!({
+                            "report_token": "access-token-global-ban",
+                            "port": 27015,
+                            "steam_id64": STEAMID
+                        }).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(allowed.status(), StatusCode::OK);
+            let body = to_bytes(allowed.into_body(), usize::MAX).await.unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(payload["result"]["allowed"], true);
+            Ok(())
+        }).await;
+}
+
+async fn server_id_by_token(db: &Database, report_token: &str) -> anyhow::Result<Uuid> {
+    let (id,): (Uuid,) = sqlx::query_as(r#"SELECT id FROM servers WHERE report_token = $1"#)
+        .bind(report_token)
+        .fetch_one(&db.pool)
+        .await?;
+    Ok(id)
+}
+
 async fn insert_whitelist_for_steamid64(
     db: &Database,
     steamid64: &str,

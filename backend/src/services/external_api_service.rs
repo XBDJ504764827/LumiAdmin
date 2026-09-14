@@ -87,6 +87,13 @@ fn cooldown_remaining(key: &'static str) -> Option<Duration> {
     }
 }
 
+/// 指定外部 API 当前是否处于限流冷却中。
+///
+/// 供调用方在重试前判断：冷却期内重试只会立即失败，应立即放弃等待冷却结束。
+pub fn in_cooldown(key: &'static str) -> bool {
+    cooldown_remaining(key).is_some()
+}
+
 fn clear_expired_cooldown(state: &mut ExternalApiState) {
     if state
         .cooldown_until_instant

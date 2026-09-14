@@ -517,23 +517,40 @@ pub async fn report_whitelist_created(
     .unwrap_or_default();
     // 风险动作：低风险（allow）在无人审核时将由系统自动通过；其余等待管理员
     let risk_action: Option<String> =
-        crate::services::player_risk_service::build_player_risk_profile(db, &item.steamid64)
+        match crate::services::player_risk_service::build_player_risk_profile(db, &item.steamid64)
             .await
-            .ok()
-            .map(|profile| match profile.action {
-                crate::services::player_risk_service::RiskAction::Allow => "allow",
-                crate::services::player_risk_service::RiskAction::Warn => "warn",
-                crate::services::player_risk_service::RiskAction::RequireForce => "require_force",
-                crate::services::player_risk_service::RiskAction::Deny => "deny",
-            })
-            .map(str::to_string);
-    // 中文风险标签（供 QQ 通知直接展示）：低风险 / 历史风险 / 高风险（需强制通过）
-    let risk_label = risk_action.as_deref().map(|action| match action {
-        "allow" => "低风险",
-        "warn" => "历史风险",
-        "require_force" | "deny" => "高风险",
-        _ => action,
-    });
+        {
+            Ok(profile) => Some(
+                match profile.action {
+                    crate::services::player_risk_service::RiskAction::Allow => "allow",
+                    crate::services::player_risk_service::RiskAction::Warn => "warn",
+                    crate::services::player_risk_service::RiskAction::RequireForce => {
+                        "require_force"
+                    }
+                    crate::services::player_risk_service::RiskAction::Deny => "deny",
+                }
+                .to_string(),
+            ),
+            Err(error) => {
+                // 风险评分构建失败不等于高风险：标记为「待复核」，由自动通过
+                // 循环在超时后重新评级，避免提交时误发高风险通知。
+                tracing::warn!(
+                    %error,
+                    steamid64 = %item.steamid64,
+                    "提交白名单时构建风险评分失败，标记为待复核"
+                );
+                None
+            }
+        };
+    // 中文风险标签（供 QQ 通知直接展示）：低风险 / 历史风险 / 高风险（需强制通过）；
+    // 风险未知时明确标注「待复核」，绝不冒充高风险。
+    let risk_label = match risk_action.as_deref() {
+        Some("allow") => Some("低风险"),
+        Some("warn") => Some("历史风险"),
+        Some("require_force") | Some("deny") => Some("高风险"),
+        Some(other) => Some(other),
+        None => Some("待复核"),
+    };
     // 风险展示（带 emoji 前缀，供 QQ 模板直接渲染）
     let risk_display = risk_label.map(|label| match label {
         "低风险" => "🟢 低风险".to_string(),
@@ -669,11 +686,31 @@ async fn mark_review_notified(db: &Database, whitelist_id: &Uuid) -> anyhow::Res
     Ok(())
 }
 
-/// 白名单中/高风险人工审核提醒入队（warning 级别，会推送 QQ 提醒管理员）。
+/// 人工审核提醒的类别。
+///
+/// 必须严格区分「已确认的中/高风险」与「系统暂时无法核验」：后者只是
+/// fail-closed 地保持待审核，**不是**高风险，绝不能给玩家贴上高风险标签。
+#[derive(Debug, Clone, Copy)]
+pub enum PendingReviewKind<'a> {
+    /// 已由风险评分 / 权威复核确认的中/高风险
+    ConfirmedRisk {
+        /// 风险等级中文标签：中风险 / 历史风险 / 高风险
+        risk_label: &'a str,
+        /// 命中原因（可选）
+        reason: Option<&'a str>,
+    },
+    /// fail-closed：系统暂时无法完成权威核验，申请保持待审核等待人工处理
+    VerificationUnavailable { reason: &'a str },
+}
+
+/// 白名单人工审核提醒入队（warning 级别，会推送 QQ 提醒管理员）。
 ///
 /// 调用场景：自动通过循环扫描到「等待时长已满」的 pending 申请时，若风险
 /// 评级为中/高风险（或复核发现存在未解封封禁），则绝不自动通过，改为发送
 /// 本提醒，确保管理员一定会通过 QQ 收到通知并手动审核。
+///
+/// 若只是权威复核 / 本地终检暂时失败（`VerificationUnavailable`），同样保持
+/// 待审核，但提醒文案与标签必须显示为「待人工复核」，**不得**标记为高风险。
 ///
 /// 与提交时的 `report_whitelist_created` 互补：提交时若本地风险数据尚未
 /// 同步（如全球封禁尚未拉取），申请会被判为低风险（info 级、不推送 QQ），
@@ -685,8 +722,7 @@ pub async fn report_whitelist_pending_review(
     config: &Config,
     item: &WhitelistItem,
     hours: i64,
-    risk_label: &str,
-    risk_reason: Option<&str>,
+    kind: PendingReviewKind<'_>,
 ) -> anyhow::Result<()> {
     let display_name = item.steam_persona_name.as_deref().unwrap_or(&item.nickname);
     let player_info = collect_whitelist_player_info(db, &item.steamid64).await;
@@ -700,11 +736,46 @@ pub async fn report_whitelist_pending_review(
     .fetch_all(&db.pool)
     .await
     .unwrap_or_default();
-    let risk_display = match risk_label {
-        "低风险" => "🟢 低风险".to_string(),
-        "历史风险" => "🟡 历史风险".to_string(),
-        "高风险" => "🔴 高风险".to_string(),
-        other => format!("⚠️ {other}"),
+
+    // 提醒类别：确认风险 → 展示风险等级；无法核验 → 展示「待人工复核」。
+    // 绝不把「无法核验」渲染成高风险。
+    let (review_kind, risk_display, title, message) = match kind {
+        PendingReviewKind::ConfirmedRisk { risk_label, reason } => {
+            let risk_display = match risk_label {
+                "低风险" => "🟢 低风险".to_string(),
+                "历史风险" => "🟡 历史风险".to_string(),
+                "高风险" => "🔴 高风险".to_string(),
+                other => format!("⚠️ {other}"),
+            };
+            let message = format!(
+                "玩家 {}（{}）的白名单申请已等待 {} 小时无人审核，风险评级：{}。{}系统不会自动通过，请尽快人工审核",
+                display_name,
+                item.steamid64,
+                hours,
+                risk_display,
+                reason
+                    .map(|reason| format!("{}。", reason))
+                    .unwrap_or_default()
+            );
+            (
+                "confirmed_risk",
+                risk_display,
+                "白名单待人工审核提醒",
+                message,
+            )
+        }
+        PendingReviewKind::VerificationUnavailable { reason } => {
+            let message = format!(
+                "玩家 {}（{}）的白名单申请已等待 {} 小时无人审核，系统暂时无法完成权威核验（{}）。为安全起见系统不会自动通过，请人工审核",
+                display_name, item.steamid64, hours, reason
+            );
+            (
+                "verification_unavailable",
+                "⚠️ 待人工复核".to_string(),
+                "白名单待人工复核提醒",
+                message,
+            )
+        }
     };
     let mut ban_flags: Vec<&str> = Vec::new();
     if player_info.has_global_ban {
@@ -734,17 +805,8 @@ pub async fn report_whitelist_pending_review(
     let input = EventInput {
         event_type: EVENT_WHITELIST_REQUEST_CREATED.to_string(),
         level: "warning".to_string(),
-        title: "白名单待人工审核提醒".to_string(),
-        message: format!(
-            "玩家 {}（{}）的白名单申请已等待 {} 小时无人审核，风险评级：{}。{}系统不会自动通过，请尽快人工审核",
-            display_name,
-            item.steamid64,
-            hours,
-            risk_display,
-            risk_reason
-                .map(|reason| format!("{}。", reason))
-                .unwrap_or_default()
-        ),
+        title: title.to_string(),
+        message,
         data: serde_json::json!({
             "whitelist_id": item.id,
             "steamid64": item.steamid64,
@@ -766,6 +828,7 @@ pub async fn report_whitelist_pending_review(
             "active_ban_count": player_info.active_ban_count,
             "active_ban_reason": player_info.active_ban_reason,
             "risk_display": risk_display,
+            "review_kind": review_kind,
             "ban_flags": ban_flags,
             "ban_reason": ban_reason,
             "detail_url": detail_url,
@@ -1795,24 +1858,33 @@ mod tests {
                 &config,
                 &item,
                 3,
-                "高风险",
-                Some("存在未过期全球封禁"),
+                PendingReviewKind::ConfirmedRisk {
+                    risk_label: "高风险",
+                    reason: Some("存在未过期全球封禁"),
+                },
             )
             .await?;
 
-            let (level, event_type, message): (String, String, String) = sqlx::query_as(
-                r#"SELECT level, event_type, message FROM lumi_bot_event_queue
-                   WHERE data->>'whitelist_id' = $1"#,
-            )
-            .bind(id.to_string())
-            .fetch_one(&db.pool)
-            .await?;
+            let (level, event_type, message, review_kind): (String, String, String, String) =
+                sqlx::query_as(
+                    r#"SELECT level, event_type, message, data->>'review_kind'
+                       FROM lumi_bot_event_queue
+                       WHERE data->>'whitelist_id' = $1"#,
+                )
+                .bind(id.to_string())
+                .fetch_one(&db.pool)
+                .await?;
             assert_eq!(
                 level, "warning",
                 "人工审核提醒必须是 warning 级（会推送 QQ）"
             );
             assert_eq!(event_type, EVENT_WHITELIST_REQUEST_CREATED);
             assert!(message.contains("不会自动通过"), "实际：{message}");
+            assert!(
+                message.contains("风险评级：🔴 高风险"),
+                "确认风险应展示风险等级：{message}"
+            );
+            assert_eq!(review_kind, "confirmed_risk");
 
             let notified: (bool,) = sqlx::query_as(
                 "SELECT review_notified_at IS NOT NULL FROM whitelist_requests WHERE id = $1",
@@ -1821,6 +1893,66 @@ mod tests {
             .fetch_one(&db.pool)
             .await?;
             assert!(notified.0, "提醒入队后应标记 review_notified_at");
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn report_whitelist_pending_review_never_labels_unverified_as_high_risk() {
+        with_test_db(async |db| {
+            let steamid64 = "76561198000000051";
+            let id = insert_whitelist_request_row(&db, steamid64).await?;
+            let item = sample_whitelist_item(id, steamid64);
+            let mut config = Config::from_env();
+            config.lumi_bot_api_url = None;
+            config.lumi_bot_api_key = None;
+
+            report_whitelist_pending_review(
+                &db,
+                &config,
+                &item,
+                3,
+                PendingReviewKind::VerificationUnavailable {
+                    reason: "KZTimer 权威复核失败",
+                },
+            )
+            .await?;
+
+            let (level, title, message, risk_display, review_kind): (
+                String,
+                String,
+                String,
+                String,
+                String,
+            ) = sqlx::query_as(
+                r#"SELECT level, COALESCE(title, ''), COALESCE(message, ''),
+                          COALESCE(data->>'risk_display', ''), data->>'review_kind'
+                   FROM lumi_bot_event_queue
+                   WHERE data->>'whitelist_id' = $1"#,
+            )
+            .bind(id.to_string())
+            .fetch_one(&db.pool)
+            .await?;
+
+            assert_eq!(level, "warning");
+            assert_eq!(review_kind, "verification_unavailable");
+            assert_eq!(risk_display, "⚠️ 待人工复核");
+            // 注意：测试玩家昵称本身含「高风险」，因此只校验风险标签文案
+            assert!(
+                !message.contains("风险评级"),
+                "无法核验不得展示风险评级：{message}"
+            );
+            assert!(
+                !message.contains("🔴"),
+                "无法核验不得出现高风险标记：{message}"
+            );
+            assert!(
+                !risk_display.contains("高风险"),
+                "无法核验的展示标签不能是高风险：{risk_display}"
+            );
+            assert!(title.contains("待人工复核"), "实际标题：{title}");
+            assert!(message.contains("不会自动通过"), "实际：{message}");
             Ok(())
         })
         .await;

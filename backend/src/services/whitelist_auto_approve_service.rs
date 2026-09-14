@@ -8,13 +8,16 @@
 //! 自动通过规则：
 //! - 仅 `RiskAction::Allow`（低风险）参与自动通过；
 //! - `Warn`（历史风险）/ `RequireForce` / `Deny`（中高风险，含自身全球封禁）
-//!   保持 `pending`，继续等待管理员审核，并通过 QQ 发送提醒（`warning`
-//!   级事件，见 `lumi_bot_service::report_whitelist_pending_review`），
+//!   保持 `pending`，继续等待管理员审核，并通过 QQ 发送「中/高风险」提醒
+//!   （`warning` 级事件，见 `lumi_bot_service::report_whitelist_pending_review`），
 //!   绝不自动通过；
-//! - 自动通过前还有最后一道闸：先直接以本地最新封禁数据复核，再向
-//!   KZTimer 权威 API 实时查询该玩家当前活跃全球封禁；本地镜像滞后或
-//!   查询失败时均 fail-closed，任何存在未解封封禁或无法确认低风险的玩家
-//!   都绝不自动通过（防风险数据滞后误判）——命中时同样转为人工审核提醒；
+//! - 自动通过前还有最后一道闸：先直接以本地最新封禁数据复核；仅当本地
+//!   `global_bans` 镜像不新鲜（同步超过 2 个周期）时，才向 KZTimer 权威 API
+//!   实时查询该玩家当前活跃全球封禁。镜像新鲜时信任本地复核结果，避免把
+//!   KZTimer 打到限流导致低风险玩家永远无法自动通过；
+//! - 权威查询带重试与每轮调用预算；查询失败时依旧 fail-closed（绝不自动
+//!   通过），但**不得**把「无法核验」标记成高风险——提醒文案与标签统一显示
+//!   为「⚠️ 待人工复核」，由管理员决定，下一轮复核恢复后仍会自动通过；
 //! - 若管理员在等待窗口内已审批（status 不再是 pending），自动通过会因
 //!   `WHERE status='pending'` 原子条件更新命中 0 行而跳过，不会覆盖人工结果；
 //! - 自动通过后主动刷新白名单缓存（`WhitelistCache`），玩家可立即进服，
@@ -29,7 +32,8 @@ use crate::{
         access_cache::WhitelistCache,
         audit_service, global_ban_service,
         global_ban_service::KZTBan,
-        lumi_bot_service, observability_service,
+        lumi_bot_service::{self, PendingReviewKind},
+        observability_service,
         player_risk_service::{self, RiskAction},
         whitelist_service::{self, ApproveWhitelistInput},
     },
@@ -54,10 +58,15 @@ pub struct AutoApproveConfig {
 pub struct AutoApproveSummary {
     pub scanned: usize,
     pub approved: usize,
+    /// 已确认的中/高风险（含未解封封禁）跳过条数
     pub skipped_high_risk: usize,
     pub already_processed: usize,
     /// 本轮为中/高风险申请补发的 QQ 人工审核提醒条数（幂等去重后）
     pub reminded: usize,
+    /// 本轮因「系统暂时无法核验」而 fail-closed 延后处理的条数
+    /// （风险评分失败 / 复核失败 / 每轮远程复核预算用尽）。
+    /// 这些申请保持 pending，等待下一轮，**不是**高风险。
+    pub verify_deferred: usize,
 }
 
 /// 读取自动通过配置（表为空时使用默认值：开启 + 3 小时）
@@ -139,11 +148,12 @@ pub fn start_auto_approve_loop(
                     process_auto_approve(&db, &whitelist_cache, &config),
                     |summary| {
                         format!(
-                            "扫描 {} 条（自动通过 {}，高风险跳过 {}，人工审核提醒 {}，已处理 {}）",
+                            "扫描 {} 条（自动通过 {}，高风险跳过 {}，人工审核提醒 {}，待复核 {}，已处理 {}）",
                             summary.scanned,
                             summary.approved,
                             summary.skipped_high_risk,
                             summary.reminded,
+                            summary.verify_deferred,
                             summary.already_processed
                         )
                     },
@@ -151,13 +161,14 @@ pub fn start_auto_approve_loop(
                 .await
                 {
                     Ok(summary) => {
-                        if summary.approved > 0 || summary.reminded > 0 {
+                        if summary.approved > 0 || summary.reminded > 0 || summary.verify_deferred > 0 {
                             tracing::info!(
                                 scanned = summary.scanned,
                                 approved = summary.approved,
                                 skipped_high_risk = summary.skipped_high_risk,
                                 already_processed = summary.already_processed,
                                 reminded = summary.reminded,
+                                verify_deferred = summary.verify_deferred,
                                 "白名单低风险自动通过完成"
                             );
                         }
@@ -176,6 +187,34 @@ pub fn start_auto_approve_loop(
 struct PendingCandidate {
     id: Uuid,
     steamid64: String,
+}
+
+/// 每轮最多向 KZTimer 权威 API 发起的单玩家复核次数。
+///
+/// 超出预算的申请本轮不再复核，保持 `pending` 等待下一轮；绝不因为预算
+/// 用尽就把玩家标记成高风险。
+const MAX_REMOTE_VERIFICATIONS_PER_ROUND: usize = 10;
+
+/// 判断本地 `global_bans` 镜像是否新鲜，用于决定是否需要逐人调用权威 API。
+///
+/// 同步任务每 `global_ban_sync_interval_secs` 全量拉取一次；最近一次同步距今
+/// 不超过 2 个周期（下限 10 分钟）时认为镜像可信，跳过逐人远程查询，避免把
+/// KZTimer 打到限流而让低风险玩家永远无法自动通过。
+/// 镜像不存在（从未同步成功）时视为不新鲜，必须走权威复核。
+async fn global_ban_mirror_is_fresh(
+    db: &Database,
+    sync_interval_secs: u64,
+) -> anyhow::Result<bool> {
+    let last_synced_at: Option<DateTime<Utc>> =
+        sqlx::query_scalar("SELECT MAX(synced_at) FROM global_bans")
+            .fetch_one(&db.pool)
+            .await
+            .context("读取全球封禁镜像同步时间失败")?;
+    let Some(last_synced_at) = last_synced_at else {
+        return Ok(false);
+    };
+    let max_age_secs = sync_interval_secs.saturating_mul(2).max(600);
+    Ok(Utc::now() - last_synced_at <= chrono::Duration::seconds(max_age_secs as i64))
 }
 
 /// KZTimer 权威全球封禁查询结果（异步 stub 与生产实现共用）。
@@ -246,6 +285,12 @@ async fn process_auto_approve_with_remote_check(
     summary.scanned = candidates.len();
 
     let mut approved_any = false;
+    // 本地镜像新鲜时无需逐人请求权威 API；仅在镜像滞后时复核，并按预算限流。
+    let mirror_fresh = global_ban_mirror_is_fresh(db, app_config.global_ban_sync_interval_secs)
+        .await
+        .unwrap_or(false);
+    let mut remote_checks = 0usize;
+
     for candidate in candidates {
         // 构建风险评分：仅低风险（Allow）自动通过
         let risk_profile =
@@ -255,9 +300,9 @@ async fn process_auto_approve_with_remote_check(
                     tracing::warn!(
                         %error,
                         steamid64 = %candidate.steamid64,
-                        "白名单自动通过：风险评分构建失败，跳过"
+                        "白名单自动通过：风险评分构建失败，本轮延后（fail-closed）"
                     );
-                    summary.skipped_high_risk += 1;
+                    summary.verify_deferred += 1;
                     let reason =
                         format!("风险评分构建失败（{error}），无法确认低风险，系统不会自动通过");
                     summary.reminded += remind_manual_review(
@@ -265,15 +310,16 @@ async fn process_auto_approve_with_remote_check(
                         app_config,
                         &candidate,
                         auto_config.hours,
-                        "高风险",
-                        Some(reason.as_str()),
+                        PendingReviewKind::VerificationUnavailable {
+                            reason: reason.as_str(),
+                        },
                     )
                     .await
                     .unwrap_or_else(|error| {
                         tracing::warn!(
                             %error,
                             whitelist_id = %candidate.id,
-                            "白名单中/高风险人工审核提醒入队失败"
+                            "白名单人工复核提醒入队失败"
                         );
                         0
                     });
@@ -304,8 +350,10 @@ async fn process_auto_approve_with_remote_check(
                     app_config,
                     &candidate,
                     auto_config.hours,
-                    risk_label,
-                    risk_reason,
+                    PendingReviewKind::ConfirmedRisk {
+                        risk_label,
+                        reason: risk_reason,
+                    },
                 )
                 .await
                 .unwrap_or_else(|error| {
@@ -337,8 +385,10 @@ async fn process_auto_approve_with_remote_check(
                     app_config,
                     &candidate,
                     auto_config.hours,
-                    "高风险",
-                    Some(ban_reason.as_str()),
+                    PendingReviewKind::ConfirmedRisk {
+                        risk_label: "高风险",
+                        reason: Some(ban_reason.as_str()),
+                    },
                 )
                 .await
                 .unwrap_or_else(|error| {
@@ -358,7 +408,7 @@ async fn process_auto_approve_with_remote_check(
                     whitelist_id = %candidate.id,
                     "白名单自动通过终检失败，本轮跳过（fail-closed）"
                 );
-                summary.skipped_high_risk += 1;
+                summary.verify_deferred += 1;
                 let reason =
                     format!("本地封禁复核失败（{error}），无法确认低风险，系统不会自动通过");
                 summary.reminded += remind_manual_review(
@@ -366,15 +416,16 @@ async fn process_auto_approve_with_remote_check(
                     app_config,
                     &candidate,
                     auto_config.hours,
-                    "高风险",
-                    Some(reason.as_str()),
+                    PendingReviewKind::VerificationUnavailable {
+                        reason: reason.as_str(),
+                    },
                 )
                 .await
                 .unwrap_or_else(|error| {
                     tracing::warn!(
                         %error,
                         whitelist_id = %candidate.id,
-                        "白名单中/高风险人工审核提醒入队失败"
+                        "白名单人工复核提醒入队失败"
                     );
                     0
                 });
@@ -383,25 +434,82 @@ async fn process_auto_approve_with_remote_check(
         }
 
         // 权威复核：本地 global_bans 是定时同步镜像，可能滞后于 KZTimer
-        // （同步任务失败/限流/进程异常时，镜像会停留在旧数据）。这里直接
-        // 向 KZTimer 权威 API 查询当前活跃全球封禁：命中则拒绝自动通过并
-        // 转人工审核；查询失败同样 fail-closed，绝不凭过期镜像放行。
-        match remote_source.active_bans(&candidate.steamid64).await {
-            Ok(bans) => {
-                // 与本地语义保持一致：管理员已在 LumiAdmin 中手动解封的
-                // 全球封禁（global_bans.manual_unbanned=true）不再视为风险，
-                // 即使 KZTimer 权威 API 仍返回该封禁。
-                let bans = match filter_out_manual_unbanned(db, &candidate.steamid64, bans).await {
-                    Ok(bans) => bans,
-                    Err(error) => {
-                        let reason = format!(
-                                "全球封禁权威数据与本地人工解封标记核对失败（{error}），无法确认低风险，系统不会自动通过"
+        // （同步任务失败/限流/进程异常时，镜像会停留在旧数据）。
+        // 镜像新鲜时信任本地终检结论；仅当镜像滞后时才逐人查询权威 API，
+        // 且每轮最多 MAX_REMOTE_VERIFICATIONS_PER_ROUND 次。超出预算的申请
+        // 延后到下一轮，绝不因预算用尽而标记高风险。
+        if mirror_fresh {
+            // 镜像新鲜：本地数据即权威，无需远程请求
+        } else if remote_checks >= MAX_REMOTE_VERIFICATIONS_PER_ROUND {
+            tracing::info!(
+                whitelist_id = %candidate.id,
+                "本轮权威复核预算已用尽，申请延后到下一轮（保持待审核）"
+            );
+            summary.verify_deferred += 1;
+            continue;
+        } else {
+            remote_checks += 1;
+            match remote_source.active_bans(&candidate.steamid64).await {
+                Ok(bans) => {
+                    // 与本地语义保持一致：管理员已在 LumiAdmin 中手动解封的
+                    // 全球封禁（global_bans.manual_unbanned=true）不再视为风险，
+                    // 即使 KZTimer 权威 API 仍返回该封禁。
+                    let bans = match filter_out_manual_unbanned(db, &candidate.steamid64, bans)
+                        .await
+                    {
+                        Ok(bans) => bans,
+                        Err(error) => {
+                            let reason = format!(
+                                    "全球封禁权威数据与本地人工解封标记核对失败（{error}），无法确认低风险，系统不会自动通过"
+                                );
+                            tracing::warn!(
+                                %error,
+                                whitelist_id = %candidate.id,
+                                steamid64 = %candidate.steamid64,
+                                "白名单自动通过权威复核标记核对失败，本轮延后（fail-closed）"
                             );
+                            summary.verify_deferred += 1;
+                            summary.reminded += remind_manual_review(
+                                db,
+                                app_config,
+                                &candidate,
+                                auto_config.hours,
+                                PendingReviewKind::VerificationUnavailable {
+                                    reason: reason.as_str(),
+                                },
+                            )
+                            .await
+                            .unwrap_or_else(|error| {
+                                tracing::warn!(
+                                    %error,
+                                    whitelist_id = %candidate.id,
+                                    "白名单人工复核提醒入队失败"
+                                );
+                                0
+                            });
+                            continue;
+                        }
+                    };
+
+                    if !bans.is_empty() {
+                        let ban_types: Vec<String> = bans
+                            .iter()
+                            .take(3)
+                            .map(|ban| ban.ban_type.clone())
+                            .collect();
+                        let ban_types_text = if ban_types.is_empty() {
+                            "未知类型".to_string()
+                        } else {
+                            ban_types.join("、")
+                        };
+                        let reason = format!(
+                            "KZTimer 权威 API 查询到活跃全球封禁（{ban_types_text}），系统不会自动通过"
+                        );
                         tracing::warn!(
-                            %error,
                             whitelist_id = %candidate.id,
                             steamid64 = %candidate.steamid64,
-                            "白名单自动通过权威复核标记核对失败，拒绝自动通过并转人工审核（fail-closed）"
+                            %reason,
+                            "白名单自动通过权威复核发现活跃全球封禁，拒绝自动通过并转人工审核"
                         );
                         summary.skipped_high_risk += 1;
                         summary.reminded += remind_manual_review(
@@ -409,8 +517,10 @@ async fn process_auto_approve_with_remote_check(
                             app_config,
                             &candidate,
                             auto_config.hours,
-                            "高风险",
-                            Some(reason.as_str()),
+                            PendingReviewKind::ConfirmedRisk {
+                                risk_label: "高风险",
+                                reason: Some(reason.as_str()),
+                            },
                         )
                         .await
                         .unwrap_or_else(|error| {
@@ -423,77 +533,38 @@ async fn process_auto_approve_with_remote_check(
                         });
                         continue;
                     }
-                };
-
-                if !bans.is_empty() {
-                    let ban_types: Vec<String> = bans
-                        .iter()
-                        .take(3)
-                        .map(|ban| ban.ban_type.clone())
-                        .collect();
-                    let ban_types_text = if ban_types.is_empty() {
-                        "未知类型".to_string()
-                    } else {
-                        ban_types.join("、")
-                    };
+                }
+                Err(error) => {
                     let reason = format!(
-                        "KZTimer 权威 API 查询到活跃全球封禁（{ban_types_text}），系统不会自动通过"
+                        "全球封禁权威复核失败（{error}），无法确认低风险，系统不会自动通过"
                     );
                     tracing::warn!(
+                        %error,
                         whitelist_id = %candidate.id,
                         steamid64 = %candidate.steamid64,
-                        %reason,
-                        "白名单自动通过权威复核发现活跃全球封禁，拒绝自动通过并转人工审核"
+                        "白名单自动通过权威复核失败，本轮延后（fail-closed）"
                     );
-                    summary.skipped_high_risk += 1;
+                    summary.verify_deferred += 1;
                     summary.reminded += remind_manual_review(
                         db,
                         app_config,
                         &candidate,
                         auto_config.hours,
-                        "高风险",
-                        Some(reason.as_str()),
+                        PendingReviewKind::VerificationUnavailable {
+                            reason: reason.as_str(),
+                        },
                     )
                     .await
                     .unwrap_or_else(|error| {
                         tracing::warn!(
                             %error,
                             whitelist_id = %candidate.id,
-                            "白名单中/高风险人工审核提醒入队失败"
+                            "白名单人工复核提醒入队失败"
                         );
                         0
                     });
                     continue;
                 }
-            }
-            Err(error) => {
-                let reason =
-                    format!("全球封禁权威复核失败（{error}），无法确认低风险，系统不会自动通过");
-                tracing::warn!(
-                    %error,
-                    whitelist_id = %candidate.id,
-                    steamid64 = %candidate.steamid64,
-                    "白名单自动通过权威复核失败，拒绝自动通过并转人工审核（fail-closed）"
-                );
-                summary.skipped_high_risk += 1;
-                summary.reminded += remind_manual_review(
-                    db,
-                    app_config,
-                    &candidate,
-                    auto_config.hours,
-                    "高风险",
-                    Some(reason.as_str()),
-                )
-                .await
-                .unwrap_or_else(|error| {
-                    tracing::warn!(
-                        %error,
-                        whitelist_id = %candidate.id,
-                        "白名单中/高风险人工审核提醒入队失败"
-                    );
-                    0
-                });
-                continue;
             }
         }
 
@@ -540,7 +611,10 @@ fn risk_action_label(action: RiskAction) -> &'static str {
     }
 }
 
-/// 为超时未审核的中/高风险申请发送 QQ 人工审核提醒（幂等）。
+/// 为超时未审核的申请发送 QQ 人工审核提醒（幂等）。
+///
+/// `kind` 严格区分「已确认的中/高风险」与「系统暂时无法核验」：后者只是
+/// fail-closed 保持待审核，提醒文案显示为「待人工复核」，绝不标记高风险。
 ///
 /// 去重规则（命中任一即跳过）：
 /// 1. `review_notified_at` 已标记（提交时 warning 级提醒过，或此前已补发过提醒）；
@@ -553,8 +627,7 @@ async fn remind_manual_review(
     config: &crate::config::Config,
     candidate: &PendingCandidate,
     hours: i32,
-    risk_label: &str,
-    risk_reason: Option<&str>,
+    kind: PendingReviewKind<'_>,
 ) -> anyhow::Result<usize> {
     // 1) 已提醒过 → 幂等跳过
     let notified: (bool,) = sqlx::query_as(
@@ -634,15 +707,8 @@ async fn remind_manual_review(
         risk_profile: None,
     };
 
-    lumi_bot_service::report_whitelist_pending_review(
-        db,
-        config,
-        &item,
-        hours as i64,
-        risk_label,
-        risk_reason,
-    )
-    .await?;
+    lumi_bot_service::report_whitelist_pending_review(db, config, &item, hours as i64, kind)
+        .await?;
     Ok(1)
 }
 
@@ -1335,10 +1401,11 @@ mod tests {
 
             // 本地已记录该全球封禁为「管理员已手动解封」，权威 API 仍返回它；
             // 应与本地语义一致：不视为活跃风险，允许自动通过。
+            // 注意把镜像时间戳做旧，强制本用例走远程复核路径。
             sqlx::query(
                 r#"INSERT INTO global_bans
-                   (id, kzt_ban_id, steam_id64, player_name, ban_type, is_expired, manual_unbanned)
-                   VALUES ($1, $2, $3, '已解封玩家', 'bhop_hack', false, true)"#,
+                   (id, kzt_ban_id, steam_id64, player_name, ban_type, is_expired, manual_unbanned, synced_at)
+                   VALUES ($1, $2, $3, '已解封玩家', 'bhop_hack', false, true, now() - interval '1 day')"#,
             )
             .bind(Uuid::new_v4())
             .bind(90002_i64)
@@ -1371,7 +1438,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_ban_check_failure_fails_closed_and_reminds() {
+    async fn remote_ban_check_failure_fails_closed_without_marking_high_risk() {
         with_test_db(async |db| {
             let steamid64 = "76561198000000061";
             let id = insert_pending(
@@ -1392,7 +1459,11 @@ mod tests {
                 process_auto_approve_with_remote_check(&db, &cache, &config, source).await?;
 
             assert_eq!(summary.approved, 0, "权威复核失败必须 fail-closed");
-            assert_eq!(summary.skipped_high_risk, 1);
+            assert_eq!(
+                summary.skipped_high_risk, 0,
+                "系统无法核验 != 高风险，不能计入高风险跳过"
+            );
+            assert_eq!(summary.verify_deferred, 1, "应计入本轮待复核延后");
             assert_eq!(summary.reminded, 1, "应提醒管理员人工审核");
 
             let (status,): (String,) =
@@ -1401,7 +1472,104 @@ mod tests {
                     .fetch_one(&db.pool)
                     .await?;
             assert_eq!(status, "pending");
-            assert_eq!(queue_event_count(&db, &id, "warning").await, 1);
+
+            // 关键：提醒必须标为「待人工复核」，绝不能误标高风险
+            let (message, risk_display, review_kind): (String, String, String) = sqlx::query_as(
+                r#"SELECT COALESCE(message, ''), COALESCE(data->>'risk_display', ''),
+                          data->>'review_kind'
+                   FROM lumi_bot_event_queue
+                   WHERE event_type = 'WHITELIST_REQUEST_CREATED'
+                     AND data->>'whitelist_id' = $1"#,
+            )
+            .bind(id.to_string())
+            .fetch_one(&db.pool)
+            .await?;
+            assert_eq!(review_kind, "verification_unavailable");
+            assert!(!message.contains("高风险"), "实际：{message}");
+            assert!(!risk_display.contains("高风险"), "实际：{risk_display}");
+            assert!(risk_display.contains("待人工复核"), "实际：{risk_display}");
+
+            // 复核恢复后，下一轮应自动通过（无需管理员介入）
+            let summary =
+                process_auto_approve_with_remote_check(&db, &cache, &config, clean_remote_source())
+                    .await?;
+            assert_eq!(summary.approved, 1, "复核恢复后低风险申请应自动通过");
+            let (status,): (String,) =
+                sqlx::query_as("SELECT status FROM whitelist_requests WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&db.pool)
+                    .await?;
+            assert_eq!(status, "approved");
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn fresh_global_ban_mirror_skips_remote_check_and_auto_approves() {
+        with_test_db(async |db| {
+            let steamid64 = "76561198000000064";
+            let id = insert_pending(
+                &db,
+                steamid64,
+                "镜像新鲜玩家",
+                Utc::now() - Duration::hours(4),
+            )
+            .await;
+            // 另一名玩家的全球封禁记录让镜像 MAX(synced_at) 保持新鲜
+            insert_global_ban(&db, "76561198000000065", "bhop_hack").await;
+
+            // 镜像新鲜时绝不能调用权威 API：一旦调用本 stub 会直接报错
+            let source = RemoteBanSource::Stub(Arc::new(|_steamid: String| {
+                Box::pin(async { Err(anyhow::anyhow!("镜像新鲜时不应调用权威 API")) })
+            }));
+
+            let config = Config::from_env();
+            let cache = std::sync::Arc::new(WhitelistCache::new());
+            let summary =
+                process_auto_approve_with_remote_check(&db, &cache, &config, source).await?;
+
+            assert_eq!(summary.approved, 1, "镜像新鲜时低风险申请应自动通过");
+            assert_eq!(summary.verify_deferred, 0);
+            assert_eq!(summary.reminded, 0);
+            let (status,): (String,) =
+                sqlx::query_as("SELECT status FROM whitelist_requests WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&db.pool)
+                    .await?;
+            assert_eq!(status, "approved");
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn remote_verification_budget_defers_excess_candidates() {
+        with_test_db(async |db| {
+            let total = MAX_REMOTE_VERIFICATIONS_PER_ROUND + 1;
+            for index in 0..total {
+                let steamid64 = format!("7656119800000{:04}", 1000 + index);
+                insert_pending(
+                    &db,
+                    &steamid64,
+                    "预算测试玩家",
+                    Utc::now() - Duration::hours(4),
+                )
+                .await;
+            }
+
+            let config = Config::from_env();
+            let cache = std::sync::Arc::new(WhitelistCache::new());
+            let summary =
+                process_auto_approve_with_remote_check(&db, &cache, &config, clean_remote_source())
+                    .await?;
+
+            assert_eq!(
+                summary.approved, MAX_REMOTE_VERIFICATIONS_PER_ROUND,
+                "每轮最多复核预算内的申请"
+            );
+            assert_eq!(summary.verify_deferred, 1, "超预算的申请延后到下一轮");
+            assert_eq!(summary.reminded, 0, "预算用尽不是高风险，不应提醒");
             Ok(())
         })
         .await;

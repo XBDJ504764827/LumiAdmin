@@ -34,6 +34,15 @@ const GLOBAL_BAN_SYNC_MAX_PAGES_ENV: &str = "GLOBAL_BAN_SYNC_MAX_PAGES";
 /// KZTimer 单玩家实时查询时的最大分页数（正常玩家远小于一页，
 /// 此处仅防止 API 异常返回满页导致无限循环）。
 const KZT_GLOBAL_BAN_PER_PLAYER_MAX_PAGES: i64 = 10;
+/// 单玩家权威查询使用独立的限流通道：与全量同步分开，避免全量同步触发的
+/// 429 冷却把白名单自动通过的逐人复核一并拖垮。
+const KZT_PLAYER_BANS_API_KEY: &str = "kztimer_player_bans";
+const KZT_PLAYER_BANS_API_NAME: &str = "KZTimer GlobalAPI (玩家查询)";
+/// 单玩家权威查询的最大尝试次数。仅对超时 / 网络错误 / 5xx 重试；
+/// 命中限流冷却时不重试（重试只会立即失败）。
+const KZT_PLAYER_QUERY_ATTEMPTS: u32 = 3;
+/// 单玩家权威查询每次请求的超时。
+const KZT_PLAYER_QUERY_TIMEOUT_SECS: u64 = 10;
 
 /// KZTimer API 返回的封禁记录
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -209,7 +218,11 @@ async fn fetch_kzt_bans(
 /// 等安全性关键路径必须先向权威 API 实时复核，避免把「刚被封禁但本地
 /// 尚未同步」的玩家误判为低风险而自动通过。
 ///
-/// 查询失败时由调用方按 fail-closed 处理（绝不自动通过）。
+/// 可靠性处理：
+/// - 使用独立的限流通道（`KZT_PLAYER_BANS_API_KEY`），不会被全量同步的
+///   429 冷却阻塞；
+/// - 超时 / 网络错误 / 5xx 最多重试 [`KZT_PLAYER_QUERY_ATTEMPTS`] 次；
+///   命中限流冷却时立即放弃（重试无意义），由调用方 fail-closed 处理。
 pub async fn fetch_active_global_bans_by_steamid64(steamid64: &str) -> anyhow::Result<Vec<KZTBan>> {
     let steamid64 = steamid64.trim();
     anyhow::ensure!(
@@ -217,6 +230,33 @@ pub async fn fetch_active_global_bans_by_steamid64(steamid64: &str) -> anyhow::R
         "SteamID64 格式无效: {steamid64}"
     );
 
+    let mut last_error: Option<anyhow::Error> = None;
+    for attempt in 1..=KZT_PLAYER_QUERY_ATTEMPTS {
+        match fetch_active_global_bans_page_loop(steamid64).await {
+            Ok(bans) => return Ok(bans),
+            Err(error) => {
+                if external_api_service::in_cooldown(KZT_PLAYER_BANS_API_KEY) {
+                    tracing::warn!(
+                        %error,
+                        steamid64,
+                        "KZTimer 玩家查询处于限流冷却，放弃重试"
+                    );
+                    return Err(error);
+                }
+                last_error = Some(error);
+                if attempt < KZT_PLAYER_QUERY_ATTEMPTS {
+                    let backoff_ms = 300u64 * 2u64.pow(attempt - 1);
+                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                }
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("KZTimer 玩家查询失败")))
+}
+
+/// 单次尝试：拉取某玩家的活跃全球封禁（内部按页翻页）。
+async fn fetch_active_global_bans_page_loop(steamid64: &str) -> anyhow::Result<Vec<KZTBan>> {
     let mut all_bans: Vec<KZTBan> = Vec::new();
     for page in 0..KZT_GLOBAL_BAN_PER_PLAYER_MAX_PAGES {
         let offset = page * KZT_GLOBAL_BAN_PAGE_LIMIT;
@@ -225,10 +265,10 @@ pub async fn fetch_active_global_bans_by_steamid64(steamid64: &str) -> anyhow::R
             steamid64, KZT_GLOBAL_BAN_PAGE_LIMIT, offset
         );
         let bans: Vec<KZTBan> = external_api_service::get_json(
-            KZT_GLOBAL_BANS_API_KEY,
-            KZT_GLOBAL_BANS_API_NAME,
+            KZT_PLAYER_BANS_API_KEY,
+            KZT_PLAYER_BANS_API_NAME,
             &url,
-            Duration::from_secs(10),
+            Duration::from_secs(KZT_PLAYER_QUERY_TIMEOUT_SECS),
         )
         .await?;
         let len = bans.len() as i64;

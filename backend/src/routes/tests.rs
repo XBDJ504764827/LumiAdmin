@@ -3434,7 +3434,6 @@ async fn player_detail_ip_links_filter_invalid_steamid64() {
 async fn auth_events_poll_ack_snapshot_flow() {
     with_test_app(async |db, config| {
         let (_, _) = insert_community_with_server(&db, "授权事件服").await;
-        let app = test_app(config.clone(), db.clone());
 
         // 1) 后台创建封禁 → 应产生 ban.add 事件（同事务）
         // 注：SteamResolver.for_tests 之外走真实解析，此处直接插 DB 行再补事件，

@@ -58,7 +58,11 @@ pub(crate) async fn poll_auth_events(
     let latest = auth_event_service::latest_version(&ctx.db)
         .await
         .map_err(invalid_request)?;
-    if auth_event_service::needs_snapshot(latest, after) {
+    if auth_event_service::needs_snapshot(latest, after)
+        || auth_event_service::is_offline_snapshot_required(&ctx.db, server.id, after, latest)
+            .await
+            .map_err(invalid_request)?
+    {
         auth_event_service::mark_seen(&ctx.db, server.id, true)
             .await
             .map_err(invalid_request)?;
@@ -93,7 +97,11 @@ pub(crate) async fn poll_auth_events(
         let latest = auth_event_service::latest_version(&ctx.db)
             .await
             .map_err(invalid_request)?;
-        if auth_event_service::needs_snapshot(latest, after) {
+        if auth_event_service::needs_snapshot(latest, after)
+            || auth_event_service::is_offline_snapshot_required(&ctx.db, server.id, after, latest)
+                .await
+                .map_err(invalid_request)?
+        {
             auth_event_service::mark_seen(&ctx.db, server.id, true)
                 .await
                 .map_err(invalid_request)?;

@@ -16,10 +16,13 @@ use uuid::Uuid;
 
 /// 与插件约定的阈值（Phase2 定稿）：版本差 >500 或离线 >30min 走 Snapshot，其余增量。
 pub const SNAPSHOT_VERSION_GAP: i64 = 500;
+/// 离线超过该秒数（30min）的服务器建议直接走 Snapshot 全量恢复。
+/// 插件侧按“版本差 >500 或本地库缺失”触发；该常量供运维/文档引用。
 pub const SNAPSHOT_OFFLINE_SECS: i64 = 1800;
 /// 事件 Long-Poll 最长挂起秒数（插件 timeout=25s，后端略小避免竞态）。
 pub const EVENTS_POLL_HOLD_SECS: u64 = 20;
-/// 事件保留：插件 30s 补偿 poll 足够覆盖，重放窗口保留 7 天便于排查。
+/// 事件保留天数：插件 30s 补偿 poll 足够覆盖，重放窗口保留 7 天便于排查。
+/// 由 [`cleanup_old_events`] 按此窗口清理，清理任务见 [`register_cleanup_task`]。
 pub const EVENTS_RETENTION_DAYS: i64 = 7;
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -153,6 +156,35 @@ pub async fn ack_version(
     Ok((acked, latest))
 }
 
+pub async fn last_seen_at(db: &Database, server_id: Uuid) -> anyhow::Result<Option<DateTime<Utc>>> {
+    let row: Option<(Option<DateTime<Utc>>,)> =
+        sqlx::query_as("SELECT last_seen_at FROM auth_server_state WHERE server_id = $1")
+            .bind(server_id)
+            .fetch_optional(&db.pool)
+            .await?;
+    Ok(row.and_then(|r| r.0))
+}
+
+/// 离线过久（> [`SNAPSHOT_OFFLINE_SECS`]）且落后时建议走 Snapshot 全量恢复。
+///
+/// 首访（无 `last_seen_at`）或已追平（`latest <= after`）时返回 false，
+/// 避免无新事件时做无谓的全量替换。
+pub async fn is_offline_snapshot_required(
+    db: &Database,
+    server_id: Uuid,
+    after_version: i64,
+    latest: i64,
+) -> anyhow::Result<bool> {
+    if latest <= after_version {
+        return Ok(false);
+    }
+    let seen = last_seen_at(db, server_id).await?;
+    let Some(seen) = seen else {
+        return Ok(false);
+    };
+    Ok((Utc::now() - seen).num_seconds() > SNAPSHOT_OFFLINE_SECS)
+}
+
 pub async fn last_acked_version(db: &Database, server_id: Uuid) -> anyhow::Result<i64> {
     let row: (Option<i64>,) =
         sqlx::query_as("SELECT last_acked_version FROM auth_server_state WHERE server_id = $1")
@@ -245,7 +277,7 @@ pub fn needs_snapshot(latest: i64, after_version: i64) -> bool {
     latest - after_version > SNAPSHOT_VERSION_GAP
 }
 
-/// 定期清理 7 天前的已投递事件（保留排查窗口）。
+/// 定期清理保留窗口之外的已投递事件（保留排查窗口）。
 pub async fn cleanup_old_events(db: &Database) -> anyhow::Result<u64> {
     let result = sqlx::query(
         r#"DELETE FROM auth_events WHERE created_at < now() - make_interval(days => $1)"#,
@@ -254,6 +286,38 @@ pub async fn cleanup_old_events(db: &Database) -> anyhow::Result<u64> {
     .execute(&db.pool)
     .await?;
     Ok(result.rows_affected())
+}
+
+/// 注册事件保留清理后台任务（每天一次），避免 `auth_events` 无限增长。
+///
+/// 与 `log_retention_service` 的清理任务保持一致：失败仅告警，不影响主流程。
+pub fn register_cleanup_task(db: Database) {
+    crate::services::observability_service::register_task(
+        "auth_events_cleanup",
+        "授权事件保留清理",
+        "清理",
+        Some(86400),
+        true,
+    );
+    crate::services::task_runtime::spawn_persistent("auth_events_cleanup", move || {
+        let db = db.clone();
+        async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(86400));
+            loop {
+                interval.tick().await;
+                match crate::services::observability_service::observe_task(
+                    "auth_events_cleanup",
+                    cleanup_old_events(&db),
+                    |count| format!("清理过期授权事件 {count} 条"),
+                )
+                .await
+                {
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(%e, "授权事件保留清理失败"),
+                }
+            }
+        }
+    });
 }
 
 #[cfg(test)]

@@ -363,7 +363,7 @@ pub async fn create_manual_whitelist(
     input: ManualWhitelistInput,
     operator_name: &str,
     resolver: &SteamResolver,
-) -> anyhow::Result<WhitelistItem> {
+) -> anyhow::Result<(WhitelistItem, i64)> {
     let nickname = input.nickname.trim();
     anyhow::ensure!(!nickname.is_empty(), "请输入玩家名称");
     anyhow::ensure!(!operator_name.trim().is_empty(), "缺少审核管理员信息");
@@ -434,7 +434,17 @@ pub async fn create_manual_whitelist(
     .fetch_one(&db.pool)
     .await?;
 
-    Ok(map_whitelist_row(row))
+    // 手动添加即批准：同步产生 whitelist.add 事件（非事务，失败仅告警；补偿靠 30s 快照）
+    let version = super::auth_event_service::insert_event(
+        db,
+        None,
+        "whitelist.add",
+        super::auth_event_service::whitelist_add_payload(&row.steamid64, row.expires_at),
+    )
+    .await
+    .unwrap_or(0);
+
+    Ok((map_whitelist_row(row), version))
 }
 
 pub async fn approve_whitelist(
@@ -449,6 +459,19 @@ pub async fn approve_whitelist(
 
     let mut tx = db.pool.begin().await?;
     let item = approve_whitelist_tx(&mut tx, id, input).await?;
+    super::auth_event_service::insert_event_tx(
+        &mut tx,
+        None,
+        "whitelist.add",
+        super::auth_event_service::whitelist_add_payload(
+            &item.steamid64,
+            item.expires_at
+                .as_deref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&Utc)),
+        ),
+    )
+    .await?;
     tx.commit().await?;
     Ok(item)
 }
@@ -601,9 +624,9 @@ pub async fn restore_whitelist(
             updated_at = now()
         WHERE id = $1
         RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
-                  applied_at, approved_at, approved_by, approval_reason,
-                  expires_at, duration_days, expired_at,
-                  rejected_at, rejected_by, rejection_reason
+                   applied_at, approved_at, approved_by, approval_reason,
+                   expires_at, duration_days, expired_at,
+                   rejected_at, rejected_by, rejection_reason
         "#,
     )
     .bind(id)
@@ -613,6 +636,15 @@ pub async fn restore_whitelist(
     .bind(duration_days)
     .fetch_one(&db.pool)
     .await?;
+
+    // 恢复通过即批准：同步产生 whitelist.add 事件（失败仅告警；补偿靠 30s 快照）
+    let _ = super::auth_event_service::insert_event(
+        db,
+        None,
+        "whitelist.add",
+        super::auth_event_service::whitelist_add_payload(&row.steamid64, row.expires_at),
+    )
+    .await;
 
     Ok(map_whitelist_row(row))
 }
@@ -624,7 +656,9 @@ pub async fn revoke_whitelist(
 ) -> anyhow::Result<WhitelistItem> {
     let current = find_by_id(db, id).await?;
     anyhow::ensure!(current.status == "approved", "只有已通过记录可以删除审核");
+    let steamid64 = current.steamid64.clone();
 
+    let mut tx = db.pool.begin().await?;
     let row = sqlx::query_as::<_, WhitelistRow>(
         r#"
         UPDATE whitelist_requests
@@ -634,15 +668,24 @@ pub async fn revoke_whitelist(
             updated_at = now()
         WHERE id = $1
         RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
-                  applied_at, approved_at, approved_by, approval_reason,
-                  expires_at, duration_days, expired_at,
-                  rejected_at, rejected_by, rejection_reason
+                   applied_at, approved_at, approved_by, approval_reason,
+                   expires_at, duration_days, expired_at,
+                   rejected_at, rejected_by, rejection_reason
         "#,
     )
     .bind(id)
     .bind(operator_name.trim())
-    .fetch_one(&db.pool)
+    .fetch_one(&mut *tx)
     .await?;
+
+    super::auth_event_service::insert_event_tx(
+        &mut tx,
+        None,
+        "whitelist.remove",
+        serde_json::json!({ "steamid64": steamid64 }),
+    )
+    .await?;
+    tx.commit().await?;
 
     Ok(map_whitelist_row(row))
 }
@@ -726,7 +769,7 @@ async fn approve_existing_record(
     duration: ApproveExistingDuration,
     identity: &ParsedSteamIdentity,
     resolver: &SteamResolver,
-) -> anyhow::Result<WhitelistItem> {
+) -> anyhow::Result<(WhitelistItem, i64)> {
     let steam_persona_name = resolver
         .fetch_profile(&identity.steamid64)
         .await
@@ -780,7 +823,16 @@ async fn approve_existing_record(
     .fetch_one(&db.pool)
     .await?;
 
-    Ok(map_whitelist_row(row))
+    let version = super::auth_event_service::insert_event(
+        db,
+        None,
+        "whitelist.add",
+        super::auth_event_service::whitelist_add_payload(&row.steamid64, row.expires_at),
+    )
+    .await
+    .unwrap_or(0);
+
+    Ok((map_whitelist_row(row), version))
 }
 
 /// 查询指定 SteamID64 的全部白名单历史记录，按最近更新时间倒序返回。
@@ -1057,6 +1109,21 @@ fn map_whitelist_row(row: WhitelistRow) -> WhitelistItem {
 /// expired，供过期任务周期调用。由 PG 触发器自动 NOTIFY 刷新白名单缓存。
 /// 返回过期处理的记录数量。
 pub async fn process_expired_whitelist(db: &Database) -> anyhow::Result<usize> {
+    // 先取回到期的 steamid64（用于事件），再批量更新，最后逐条插事件。
+    // 过期量通常很小（每天几条），逐条事件可接受；避免大事务持有锁过久。
+    let expired: Vec<(String,)> = sqlx::query_as(
+        r#"SELECT steamid64 FROM whitelist_requests
+           WHERE status = 'approved'
+             AND expires_at IS NOT NULL
+             AND expires_at <= now()"#,
+    )
+    .fetch_all(&db.pool)
+    .await?;
+
+    if expired.is_empty() {
+        return Ok(0);
+    }
+
     let result = sqlx::query(
         r#"UPDATE whitelist_requests
            SET status = 'expired',
@@ -1068,8 +1135,22 @@ pub async fn process_expired_whitelist(db: &Database) -> anyhow::Result<usize> {
     )
     .execute(&db.pool)
     .await?;
+    let count = result.rows_affected() as usize;
 
-    Ok(result.rows_affected() as usize)
+    for (steamid64,) in &expired {
+        if let Err(e) = super::auth_event_service::insert_event(
+            db,
+            None,
+            "whitelist.remove",
+            serde_json::json!({ "steamid64": steamid64, "reason": "expired" }),
+        )
+        .await
+        {
+            tracing::warn!(%e, steamid64 = %steamid64, "白名单过期事件写入失败");
+        }
+    }
+
+    Ok(count)
 }
 
 #[cfg(test)]
@@ -1330,7 +1411,7 @@ mod tests {
     #[tokio::test]
     async fn create_manual_whitelist_creates_approved_record() {
         with_test_db(async |db| {
-            let item = create_manual_whitelist(
+            let (item, _) = create_manual_whitelist(
                 &db,
                 ManualWhitelistInput {
                     nickname: "管理员添加玩家".to_string(),
@@ -1613,7 +1694,7 @@ mod tests {
     #[tokio::test]
     async fn manual_whitelist_with_duration_sets_expires_at() {
         with_test_db(async |db| {
-            let item = create_manual_whitelist(
+            let (item, _) = create_manual_whitelist(
                 &db,
                 ManualWhitelistInput {
                     nickname: "限期玩家".to_string(),
@@ -1643,7 +1724,7 @@ mod tests {
     #[tokio::test]
     async fn manual_whitelist_without_duration_is_permanent() {
         with_test_db(async |db| {
-            let item = create_manual_whitelist(
+            let (item, _) = create_manual_whitelist(
                 &db,
                 ManualWhitelistInput {
                     nickname: "永久玩家".to_string(),

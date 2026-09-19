@@ -52,6 +52,14 @@ pub struct Config {
     pub access_log_retention_days: i64,
     // 全球封禁同步
     pub global_ban_sync_interval_secs: u64,
+    // 插件免配置自识别：面板级安装密钥（留空表示不校验；设置后插件需在 core.cfg 填同一值）
+    pub plugin_install_key: Option<String>,
+    // 是否允许插件按「来源 IP + 端口」自动绑定服务器（默认开启）
+    pub plugin_auto_bind: bool,
+    // 面板位于反向代理/CDN 之后时，是否信任 X-Forwarded-For / CF-Connecting-IP 等头
+    pub plugin_trust_proxy_headers: bool,
+    // 自动绑定后，同一服务器被新安装实例重新认领所需的最短静默时间（秒）
+    pub plugin_rebind_after_secs: i64,
     // Cloudflare R2 存储配置
     pub r2_endpoint: Option<String>,
     pub r2_bucket: Option<String>,
@@ -222,6 +230,14 @@ impl Config {
                 .unwrap_or(90),
             // 全球封禁同步：默认 5 分钟
             global_ban_sync_interval_secs: env_u64("GLOBAL_BAN_SYNC_INTERVAL_SECS", 300),
+            // 插件免配置自识别
+            plugin_install_key: std::env::var("PLUGIN_INSTALL_KEY")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty()),
+            plugin_auto_bind: env_bool("PLUGIN_AUTO_BIND", true),
+            plugin_trust_proxy_headers: env_bool("PLUGIN_TRUST_PROXY_HEADERS", false),
+            plugin_rebind_after_secs: env_u64("PLUGIN_REBIND_AFTER_SECS", 3600) as i64,
             // R2 配置
             r2_endpoint: std::env::var("R2_ENDPOINT").ok().filter(|v| !v.is_empty()),
             r2_bucket: std::env::var("R2_BUCKET").ok().filter(|v| !v.is_empty()),

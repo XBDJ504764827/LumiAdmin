@@ -162,14 +162,20 @@ fn format_expires_at_for_display(rfc3339_time: &str) -> String {
     }
 }
 
-pub async fn create_plugin_ban(db: &Database, input: PluginBanInput) -> anyhow::Result<BanItem> {
+pub async fn create_plugin_ban(
+    db: &Database,
+    input: PluginBanInput,
+) -> anyhow::Result<(BanItem, i64)> {
     let server = authenticate_server(db, input.port, &input.report_token).await?;
-    let ban_type = input.ban_type.trim();
-    let reason = input.reason.trim();
-    let operator_name = input.operator_name.trim();
+    let ban_type = input.ban_type.trim().to_string();
+    let reason = input.reason.trim().to_string();
+    let operator_name = input.operator_name.trim().to_string();
     let steam_id =
         super::normalize_optional_string(input.steam_id.clone()).map(|s| normalize_steam_id(&s));
-    let ip_address = super::normalize_optional_string(input.ip_address);
+    let ip_address = super::normalize_optional_string(input.ip_address.clone());
+    let ban_type = ban_type.as_str();
+    let reason = reason.as_str();
+    let operator_name = operator_name.as_str();
 
     anyhow::ensure!(matches!(ban_type, "steam" | "ip"), "封禁属性无效");
     anyhow::ensure!(input.duration_minutes >= 0, "封禁时长不能为负数");
@@ -199,6 +205,8 @@ pub async fn create_plugin_ban(db: &Database, input: PluginBanInput) -> anyhow::
     anyhow::ensure!(duplicate_count.0 == 0, "目标已有有效封禁");
 
     let expires_at = expires_at(input.duration_minutes);
+    let ban_id = Uuid::new_v4();
+    let mut tx = db.pool.begin().await?;
     let row = sqlx::query_as::<_, super::ban_service::BanRow>(
         r#"INSERT INTO ban_records (
                id, player, steam_id, ip_address, server_name, ban_type,
@@ -210,11 +218,11 @@ pub async fn create_plugin_ban(db: &Database, input: PluginBanInput) -> anyhow::
                      duration_minutes, expires_at, reason, status, operator_name, source,
                      server_id, server_port, removed_reason, removed_by, removed_at, created_at"#,
     )
-    .bind(Uuid::new_v4())
+    .bind(ban_id)
     .bind(super::normalize_optional_string(input.player))
-    .bind(steam_id.unwrap_or_default())
-    .bind(ip_address)
-    .bind(server.name)
+    .bind(steam_id.clone().unwrap_or_default())
+    .bind(ip_address.clone())
+    .bind(server.name.clone())
     .bind(ban_type)
     .bind(input.duration_minutes)
     .bind(expires_at)
@@ -222,16 +230,31 @@ pub async fn create_plugin_ban(db: &Database, input: PluginBanInput) -> anyhow::
     .bind(operator_name)
     .bind(server.id)
     .bind(server.port)
-    .fetch_one(&db.pool)
+    .fetch_one(&mut *tx)
     .await?;
 
-    Ok(super::ban_service::row_to_item(row))
+    let version = super::auth_event_service::insert_event_tx(
+        &mut tx,
+        None,
+        "ban.add",
+        super::auth_event_service::ban_add_payload(
+            ban_id,
+            &steam_id.clone().unwrap_or_default(),
+            ip_address.as_deref(),
+            reason,
+            expires_at,
+        ),
+    )
+    .await?;
+    tx.commit().await?;
+
+    Ok((super::ban_service::row_to_item(row), version))
 }
 
 pub async fn unban_plugin_target(
     db: &Database,
     input: PluginUnbanInput,
-) -> anyhow::Result<BanItem> {
+) -> anyhow::Result<(BanItem, i64)> {
     authenticate_server(db, input.port, &input.report_token).await?;
     let target = input.target.trim();
     let normalized_target = normalize_steam_id(target);
@@ -270,7 +293,8 @@ pub async fn unban_plugin_target(
         }
     }
 
-    // 执行解封
+    // 执行解封（同事务产生 ban.remove 事件）
+    let mut tx = db.pool.begin().await?;
     let row = sqlx::query_as::<_, super::ban_service::BanRow>(
         r#"UPDATE ban_records
            SET status = 'inactive', removed_reason = $2, removed_by = $3, removed_at = now()
@@ -289,11 +313,20 @@ pub async fn unban_plugin_target(
         }
     }))
     .bind(operator_name)
-    .fetch_one(&db.pool)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|_| anyhow::anyhow!("解封失败"))?;
 
-    Ok(super::ban_service::row_to_item(row))
+    let version = super::auth_event_service::insert_event_tx(
+        &mut tx,
+        None,
+        "ban.remove",
+        super::auth_event_service::ban_remove_payload(row.id, &row.steam_id),
+    )
+    .await?;
+    tx.commit().await?;
+
+    Ok((super::ban_service::row_to_item(row), version))
 }
 
 /// 检查操作员是否具有特权（developer 或 admin）

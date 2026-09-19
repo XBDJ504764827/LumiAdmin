@@ -156,7 +156,7 @@ pub(crate) async fn create_whitelist(
     let operator_name = actor.display_name.clone();
     let resolver = &ctx.steam_resolver;
     let force = body.force.unwrap_or(false);
-    let mut item = whitelist_service::create_manual_whitelist(
+    let (mut item, _) = whitelist_service::create_manual_whitelist(
         &ctx.db,
         whitelist_service::ManualWhitelistInput {
             nickname: body.nickname,

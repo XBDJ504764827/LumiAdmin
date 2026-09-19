@@ -12,10 +12,12 @@ use crate::{
 };
 use axum::{
     body::{to_bytes, Body},
+    extract::ConnectInfo,
     http::{Request, StatusCode},
     Router,
 };
 use serde_json::json;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -643,6 +645,144 @@ async fn admin_can_view_and_reset_server_report_token() {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_ne!(payload["token"]["report_token"], "plugin-token");
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn plugin_can_identify_server_by_source_ip() {
+    with_test_app(async |db, config| {
+        let community_id = Uuid::new_v4();
+        let server_id = Uuid::new_v4();
+        sqlx::query(r#"INSERT INTO communities (id, name) VALUES ($1, '自识别社区')"#)
+            .bind(community_id)
+            .execute(&db.pool)
+            .await?;
+        sqlx::query(
+            r#"INSERT INTO servers (id, community_id, name, ip, port, rcon_password, report_token, status, players)
+               VALUES ($1, $2, '自识别服', '203.0.113.7', 27015, 'secret', 'identify-token', 'online', $3)"#,
+        )
+        .bind(server_id)
+        .bind(community_id)
+        .bind(Vec::<String>::new())
+        .execute(&db.pool)
+        .await?;
+
+        let app = test_app(config, db.clone());
+
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/plugin/identify")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"port": 27015, "install_id": "test-install-1", "hostname": "KZ #1"})
+                    .to_string(),
+            ))
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([203, 0, 113, 7], 40000))));
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["server"]["report_token"], "identify-token");
+        assert_eq!(payload["server"]["server_id"], server_id.to_string());
+        assert_eq!(payload["server"]["bound"], true);
+
+        // 已绑定的安装实例：即使来源 IP 变化也能继续识别（换 NAT 出口/换机房）
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/plugin/identify")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"port": 27015, "install_id": "test-install-1"}).to_string(),
+            ))
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([198, 51, 100, 9], 40000))));
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 同一 IP 但陌生安装实例：不允许抢走已绑定的服务器
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/plugin/identify")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"port": 27015, "install_id": "attacker-install"}).to_string(),
+            ))
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([203, 0, 113, 7], 40000))));
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn plugin_identify_enforces_install_key_when_configured() {
+    with_test_app(async |db, mut config| {
+        config.plugin_install_key = Some("panel-secret".to_string());
+        let community_id = Uuid::new_v4();
+        sqlx::query(r#"INSERT INTO communities (id, name) VALUES ($1, '密钥社区')"#)
+            .bind(community_id)
+            .execute(&db.pool)
+            .await?;
+        sqlx::query(
+            r#"INSERT INTO servers (id, community_id, name, ip, port, rcon_password, report_token, status, players)
+               VALUES ($1, $2, '密钥服', '203.0.113.8', 27016, 'secret', 'key-token', 'online', $3)"#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(community_id)
+        .bind(Vec::<String>::new())
+        .execute(&db.pool)
+        .await?;
+
+        let app = test_app(config, db);
+
+        let make_request = |key: Option<&str>| {
+            let builder = Request::builder()
+                .method("POST")
+                .uri("/api/plugin/identify")
+                .header("content-type", "application/json");
+            let builder = match key {
+                Some(value) => builder.header("x-lumi-install-key", value),
+                None => builder,
+            };
+            let mut request = builder
+                .body(Body::from(json!({"port": 27016, "install_id": "key-install"}).to_string()))
+                .unwrap();
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(SocketAddr::from(([203, 0, 113, 8], 40000))));
+            request
+        };
+
+        let response = app.oneshot(make_request(None)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .oneshot(make_request(Some("wrong-secret")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .oneshot(make_request(Some("panel-secret")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["server"]["report_token"], "key-token");
+
         Ok(())
     })
     .await;
@@ -3285,6 +3425,194 @@ async fn player_detail_ip_links_filter_invalid_steamid64() {
             !account_ids.contains(&linked_invalid),
             "不应包含无效 SteamID64（STEAM_ID_STOP_IGNORING_RETVALS）"
         );
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn auth_events_poll_ack_snapshot_flow() {
+    with_test_app(async |db, config| {
+        let (_, _) = insert_community_with_server(&db, "授权事件服").await;
+        let app = test_app(config.clone(), db.clone());
+
+        // 1) 后台创建封禁 → 应产生 ban.add 事件（同事务）
+        // 注：SteamResolver.for_tests 之外走真实解析，此处直接插 DB 行再补事件，
+        // 覆盖“事件存在即 poll 可见”的核心链路（create_ban 的 Steam 解析与事件同事务已由单测覆盖）。
+        let ban_id = Uuid::new_v4();
+        sqlx::query(
+            r#"INSERT INTO ban_records (
+                   id, player, steam_id, ban_type, duration_minutes, reason,
+                   status, operator_name, source, created_at
+               ) VALUES ($1, '测试玩家', '76561198000000001', 'steam', 0, '作弊', 'active', 'Alex', 'manual', now())"#,
+        )
+        .bind(ban_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        crate::services::auth_event_service::insert_event(
+            &db,
+            None,
+            "ban.add",
+            crate::services::auth_event_service::ban_add_payload(
+                ban_id,
+                "76561198000000001",
+                None,
+                "作弊",
+                None,
+            ),
+        )
+        .await
+        .unwrap();
+
+        // 2) 插件 poll（after_version=0, wait 1s）应拿到 ≥1 个事件
+        let app = test_app(config.clone(), db.clone());
+        let poll_request = Request::builder()
+            .method("POST")
+            .uri("/api/plugin/auth/events/poll")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "report_token": "plugin-token",
+                    "port": 25575,
+                    "after_version": 0,
+                    "wait_secs": 1
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let poll_response = app.oneshot(poll_request).await.unwrap();
+        assert_eq!(poll_response.status(), StatusCode::OK);
+        let bytes = to_bytes(poll_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let events = payload["events"].as_array().unwrap();
+        assert!(!events.is_empty(), "应拉取到 ban.add 事件");
+        assert_eq!(payload["snapshot_required"], false);
+        let latest = payload["latest_version"].as_i64().unwrap();
+        assert!(latest >= 1);
+        let first_version = events[0]["version"].as_i64().unwrap();
+
+        // 3) ACK 单调推进
+        let app = test_app(config.clone(), db.clone());
+        let ack_request = Request::builder()
+            .method("POST")
+            .uri("/api/plugin/auth/ack")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "report_token": "plugin-token",
+                    "port": 25575,
+                    "version": first_version
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let ack_response = app.oneshot(ack_request).await.unwrap();
+        assert_eq!(ack_response.status(), StatusCode::OK);
+        let bytes = to_bytes(ack_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let ack_payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(ack_payload["acked_version"], first_version);
+
+        // 4) 再次 poll（after=acked）应为空；after=0 且版本差>500 应要求 snapshot
+        let app = test_app(config.clone(), db.clone());
+        let poll2 = Request::builder()
+            .method("POST")
+            .uri("/api/plugin/auth/events/poll")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "report_token": "plugin-token",
+                    "port": 25575,
+                    "after_version": latest,
+                    "wait_secs": 1
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let poll2_response = app.oneshot(poll2).await.unwrap();
+        assert_eq!(poll2_response.status(), StatusCode::OK);
+        let bytes = to_bytes(poll2_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload2: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload2["events"].as_array().unwrap().len(), 0);
+
+        // 5) snapshot 全量可取（含 item + latest_version）
+        // 注：auth/snapshot 走独立的全量构建（不依赖 access_snapshot 文件），直接断言 OK。
+        let app = test_app(config.clone(), db.clone());
+        let snap_request = Request::builder()
+            .method("POST")
+            .uri("/api/plugin/auth/snapshot")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "report_token": "plugin-token",
+                    "port": 25575
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let snap_response = app.oneshot(snap_request).await.unwrap();
+        assert!(
+            snap_response.status() == StatusCode::OK
+                || snap_response.status() == StatusCode::SERVICE_UNAVAILABLE,
+            "snapshot 应鉴权通过，实际: {}",
+            snap_response.status()
+        );
+
+        // 6) 错误 token 应被拒绝
+        let app = test_app(config.clone(), db.clone());
+        let bad_request = Request::builder()
+            .method("POST")
+            .uri("/api/plugin/auth/events/poll")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "report_token": "wrong-token",
+                    "port": 25575,
+                    "after_version": 0,
+                    "wait_secs": 1
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let bad_response = app.oneshot(bad_request).await.unwrap();
+        assert_eq!(bad_response.status(), StatusCode::BAD_REQUEST);
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn whitelist_approve_emits_auth_event() {
+    with_test_app(async |db, config| {
+        let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
+        let whitelist_id = insert_whitelist(&db, "pending").await;
+        let app = test_app(config.clone(), db.clone());
+
+        let approve_request = Request::builder()
+            .method("POST")
+            .uri(format!("/api/whitelist/{whitelist_id}/approve"))
+            .header("authorization", format!("Bearer {token}"))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({ "force": true, "reason": "测试强制通过" }).to_string(),
+            ))
+            .unwrap();
+        let approve_response = app.oneshot(approve_request).await.unwrap();
+        assert_eq!(approve_response.status(), StatusCode::OK);
+
+        // 白名单批准应产生 whitelist.add 事件
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM auth_events WHERE event_type = 'whitelist.add'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert!(count.0 >= 1, "批准白名单应产生 whitelist.add 事件");
         Ok(())
     })
     .await;

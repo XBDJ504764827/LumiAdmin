@@ -273,6 +273,9 @@ pub(crate) async fn create_ban(
         }),
     )
     .await;
+    // RCON 快车道：事件已随 create_ban 同事务落地；先广播后踢人。
+    // 失败只记审计 + 后台重试，不回滚封禁（本地 Ban 状态已是最终态）。
+    crate::services::auth_apply_service::apply_ban_fast_path(&ctx.db, &ctx.config, &item).await;
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({ "item": item })),
@@ -394,9 +397,30 @@ pub(crate) async fn delete_ban(
         .unwrap_or_default();
     let sync_record_count = sync_records.len();
 
+    let deleted_steam_id = before.steam_id.clone();
     ban_service::delete_ban(&ctx.db, id)
         .await
         .map_err(invalid_request)?;
+
+    // 硬删同样产生 ban.remove 事件 + 快车道（玩家不再被拦）。
+    if let Err(e) = crate::services::auth_event_service::insert_event(
+        &ctx.db,
+        None,
+        "ban.remove",
+        crate::services::auth_event_service::ban_remove_payload(id, &deleted_steam_id),
+    )
+    .await
+    {
+        tracing::warn!(%e, ban_id = %id, "封禁删除事件写入失败");
+    } else {
+        crate::services::auth_apply_service::apply_unban_fast_path(
+            &ctx.db,
+            &ctx.config,
+            id,
+            &deleted_steam_id,
+        )
+        .await;
+    }
 
     // Notify external APIs about the deletion (fire-and-forget)
     if !sync_records.is_empty() {
@@ -468,6 +492,13 @@ pub(crate) async fn unban_ban(
     let item = ban_service::unban(&ctx.db, id, &actor.display_name)
         .await
         .map_err(invalid_request)?;
+    crate::services::auth_apply_service::apply_unban_fast_path(
+        &ctx.db,
+        &ctx.config,
+        item.id,
+        &item.steam_id,
+    )
+    .await;
     let log_target = format!(
         "{} ({}) | 类型: {}",
         item.player.as_deref().unwrap_or("未知"),
@@ -784,7 +815,7 @@ pub(crate) async fn create_plugin_ban(
     State(ctx): State<AppCtx>,
     Json(body): Json<PluginBanBody>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    let item = plugin_ban_service::create_plugin_ban(
+    let (item, auth_version) = plugin_ban_service::create_plugin_ban(
         &ctx.db,
         plugin_ban_service::PluginBanInput {
             report_token: body.report_token,
@@ -898,7 +929,9 @@ pub(crate) async fn create_plugin_ban(
     };
     Ok((
         StatusCode::CREATED,
-        Json(serde_json::json!({ "item": item, "kick_message": kick_message })),
+        Json(
+            serde_json::json!({ "item": item, "kick_message": kick_message, "auth_version": auth_version }),
+        ),
     ))
 }
 
@@ -951,7 +984,7 @@ pub(crate) async fn unban_plugin_ban(
     State(ctx): State<AppCtx>,
     Json(body): Json<PluginUnbanBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let item = plugin_ban_service::unban_plugin_target(
+    let (item, auth_version) = plugin_ban_service::unban_plugin_target(
         &ctx.db,
         plugin_ban_service::PluginUnbanInput {
             report_token: body.report_token,
@@ -1013,7 +1046,9 @@ pub(crate) async fn unban_plugin_ban(
         tracing::warn!(%e, ban_id = %item.id, "external ban unsync failed on plugin unban");
     }
 
-    Ok(Json(serde_json::json!({ "item": item })))
+    Ok(Json(
+        serde_json::json!({ "item": item, "auth_version": auth_version }),
+    ))
 }
 
 pub(crate) async fn check_plugin_ban(

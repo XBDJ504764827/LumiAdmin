@@ -31,6 +31,16 @@ pub struct ServerItem {
     /// 中高风险账号拦截（需白名单才可进入）
     pub risk_block_enabled: bool,
     pub use_custom_access: bool,
+    /// 授权同步状态（LumiAuth Data Plane）：连接 / 版本 / 最新版本 / 待投递 / 上次同步
+    #[serde(default)]
+    pub auth_connection: String,
+    #[serde(default)]
+    pub auth_version: i64,
+    #[serde(default)]
+    pub auth_latest_version: i64,
+    #[serde(default)]
+    pub auth_pending_events: i64,
+    pub auth_last_sync_at: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -335,6 +345,12 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
     let mut group_indexes: HashMap<Uuid, usize> = HashMap::new();
     let now = Utc::now();
 
+    // 授权同步状态：一次性查出所有服的 auth_server_state，避免 N+1。
+    let server_ids: Vec<Uuid> = rows.iter().filter_map(|r| r.server_id).collect();
+    let auth_status = super::auth_event_service::sync_status_for_servers(db, &server_ids)
+        .await
+        .unwrap_or_default();
+
     for row in rows {
         let group_index = match group_indexes.get(&row.community_id).copied() {
             Some(index) => index,
@@ -365,6 +381,25 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
                 row.online_players.unwrap_or_default()
             };
             let online_player_count = players.len();
+            let (
+                auth_connection,
+                auth_version,
+                auth_latest_version,
+                auth_pending_events,
+                auth_last_sync_at,
+            ) = auth_status
+                .iter()
+                .find(|s| s.server_id == id)
+                .map(|s| {
+                    (
+                        s.connection_status.clone(),
+                        s.version,
+                        s.latest_version,
+                        s.pending_events,
+                        s.last_sync_at.map(|v| v.to_rfc3339()),
+                    )
+                })
+                .unwrap_or_else(empty_auth_status);
             group.servers.push(ServerItem {
                 id,
                 name,
@@ -385,6 +420,11 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
                 cs_prime_enabled: row.cs_prime_enabled.unwrap_or(false),
                 risk_block_enabled: row.risk_block_enabled.unwrap_or(true),
                 use_custom_access: row.use_custom_access.unwrap_or(false),
+                auth_connection,
+                auth_version,
+                auth_latest_version,
+                auth_pending_events,
+                auth_last_sync_at,
             });
         }
     }
@@ -415,6 +455,10 @@ pub async fn create_group(
         cs_prime_enabled: false,
         servers: Vec::new(),
     })
+}
+
+fn empty_auth_status() -> (String, i64, i64, i64, Option<String>) {
+    ("disconnected".to_string(), 0, 0, 0, None)
 }
 
 pub async fn create_server(
@@ -473,6 +517,13 @@ pub async fn create_server(
     .await?;
 
     let online_player_count = tested.players.len();
+    let (
+        auth_connection,
+        auth_version,
+        auth_latest_version,
+        auth_pending_events,
+        auth_last_sync_at,
+    ) = empty_auth_status();
     Ok(ServerItem {
         id,
         name: name.to_string(),
@@ -493,6 +544,11 @@ pub async fn create_server(
         cs_prime_enabled: input.cs_prime_enabled,
         risk_block_enabled: input.risk_block_enabled,
         use_custom_access: input.use_custom_access,
+        auth_connection,
+        auth_version,
+        auth_latest_version,
+        auth_pending_events,
+        auth_last_sync_at,
     })
 }
 
@@ -524,6 +580,29 @@ pub async fn update_server(
         vec![]
     };
 
+    // 单服访问配置变更若实际变化，给该服下一条 server.config.update 事件（同事务）。
+    // 先读旧值用于变更比对。
+    let old: Option<(bool, i32, i32, bool, bool, bool, bool)> = sqlx::query_as(
+        r#"SELECT access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled,
+                  cs_prime_enabled, risk_block_enabled, use_custom_access
+           FROM servers WHERE id = $1"#,
+    )
+    .bind(server_id)
+    .fetch_optional(&db.pool)
+    .await?;
+    let changed = old
+        .map(|o| {
+            o.0 != input.access_restriction_enabled
+                || o.1 != input.min_rating
+                || o.2 != input.min_steam_level
+                || o.3 != input.whitelist_mode_enabled
+                || o.4 != input.cs_prime_enabled
+                || o.5 != input.risk_block_enabled
+                || o.6 != input.use_custom_access
+        })
+        .unwrap_or(false);
+
+    let mut tx = db.pool.begin().await?;
     let row = if changing_password {
         sqlx::query_as::<_, ServerDetailRow>(
             r#"
@@ -532,7 +611,8 @@ pub async fn update_server(
                 report_token = COALESCE($6, report_token), note = $7,
                 status = 'online', players = $8, last_tested_at = now(),
                 access_restriction_enabled = $9, min_rating = $10, min_steam_level = $11, whitelist_mode_enabled = $12,
-                cs_prime_enabled = $13, risk_block_enabled = $14, max_players = $15, use_custom_access = $16
+                cs_prime_enabled = $13, risk_block_enabled = $14, max_players = $15, use_custom_access = $16,
+                plugin_instance_id = CASE WHEN ip <> $3 OR port <> $4 THEN NULL ELSE plugin_instance_id END
             WHERE id = $1
             RETURNING id, name, ip, port, report_token, note, status, players, max_players, last_tested_at, last_reported_at,
                       access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled, cs_prime_enabled,
@@ -555,7 +635,7 @@ pub async fn update_server(
         .bind(input.risk_block_enabled)
         .bind(input.max_players)
         .bind(input.use_custom_access)
-        .fetch_one(&db.pool)
+        .fetch_one(&mut *tx)
         .await?
     } else {
         sqlx::query_as::<_, ServerDetailRow>(
@@ -564,7 +644,8 @@ pub async fn update_server(
             SET name = $2, ip = $3, port = $4,
                 report_token = COALESCE($5, report_token), note = $6,
                 access_restriction_enabled = $7, min_rating = $8, min_steam_level = $9, whitelist_mode_enabled = $10,
-                cs_prime_enabled = $11, risk_block_enabled = $12, max_players = $13, use_custom_access = $14
+                cs_prime_enabled = $11, risk_block_enabled = $12, max_players = $13, use_custom_access = $14,
+                plugin_instance_id = CASE WHEN ip <> $3 OR port <> $4 THEN NULL ELSE plugin_instance_id END
             WHERE id = $1
             RETURNING id, name, ip, port, report_token, note, status, players, max_players, last_tested_at, last_reported_at,
                       access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled, cs_prime_enabled,
@@ -585,12 +666,40 @@ pub async fn update_server(
         .bind(input.risk_block_enabled)
         .bind(input.max_players)
         .bind(input.use_custom_access)
-        .fetch_one(&db.pool)
+        .fetch_one(&mut *tx)
         .await?
     };
 
+    if changed {
+        super::auth_event_service::insert_event_tx(
+            &mut tx,
+            Some(server_id),
+            "server.config.update",
+            serde_json::json!({
+                "scope": "server",
+                "server_id": server_id,
+                "access_restriction_enabled": input.access_restriction_enabled,
+                "min_rating": input.min_rating,
+                "min_steam_level": input.min_steam_level,
+                "whitelist_mode_enabled": input.whitelist_mode_enabled,
+                "cs_prime_enabled": input.cs_prime_enabled,
+                "risk_block_enabled": input.risk_block_enabled,
+                "use_custom_access": input.use_custom_access,
+            }),
+        )
+        .await?;
+    }
+    tx.commit().await?;
+
     let players = row.players.unwrap_or_default();
     let online_player_count = players.len();
+    let (
+        auth_connection,
+        auth_version,
+        auth_latest_version,
+        auth_pending_events,
+        auth_last_sync_at,
+    ) = empty_auth_status();
     Ok(ServerItem {
         id: row.id,
         name: row.name,
@@ -611,6 +720,11 @@ pub async fn update_server(
         cs_prime_enabled: row.cs_prime_enabled,
         risk_block_enabled: row.risk_block_enabled,
         use_custom_access: row.use_custom_access,
+        auth_connection,
+        auth_version,
+        auth_latest_version,
+        auth_pending_events,
+        auth_last_sync_at,
     })
 }
 
@@ -641,6 +755,7 @@ pub async fn update_community_access(
     anyhow::ensure!(input.min_rating >= 0, "最低进入 rating 不能为负数");
     anyhow::ensure!(input.min_steam_level >= 0, "最低 Steam 等级不能为负数");
 
+    let mut tx = db.pool.begin().await?;
     sqlx::query(
         r#"UPDATE communities SET whitelist_mode_enabled = $2, min_rating = $3, min_steam_level = $4, cs_prime_enabled = $5 WHERE id = $1"#,
     )
@@ -649,8 +764,32 @@ pub async fn update_community_access(
     .bind(input.min_rating)
     .bind(input.min_steam_level)
     .bind(input.cs_prime_enabled)
-    .execute(&db.pool)
+    .execute(&mut *tx)
     .await?;
+
+    // 社区级访问配置变更：给该社区下每服各下一条 server.config.update 事件
+    let server_ids: Vec<(Uuid,)> =
+        sqlx::query_as(r#"SELECT id FROM servers WHERE community_id = $1"#)
+            .bind(community_id)
+            .fetch_all(&mut *tx)
+            .await?;
+    for (server_id,) in &server_ids {
+        super::auth_event_service::insert_event_tx(
+            &mut tx,
+            Some(*server_id),
+            "server.config.update",
+            serde_json::json!({
+                "scope": "community",
+                "community_id": community_id,
+                "whitelist_mode_enabled": input.whitelist_mode_enabled,
+                "min_rating": input.min_rating,
+                "min_steam_level": input.min_steam_level,
+                "cs_prime_enabled": input.cs_prime_enabled,
+            }),
+        )
+        .await?;
+    }
+    tx.commit().await?;
 
     let groups = list_groups(db).await?;
     groups
@@ -678,7 +817,10 @@ pub async fn reset_report_token(
     let row: (String,) = sqlx::query_as(
         r#"
         UPDATE servers
-        SET report_token = $2
+        SET report_token = $2,
+            plugin_instance_id = NULL,
+            plugin_last_seen_at = NULL,
+            plugin_bound_at = NULL
         WHERE id = $1
         RETURNING report_token
         "#,

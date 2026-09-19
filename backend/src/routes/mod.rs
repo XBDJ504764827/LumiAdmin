@@ -1,6 +1,7 @@
 pub mod abnormal_record;
 pub mod access;
 pub mod auth;
+pub mod auth_sync;
 pub mod ban;
 pub mod ban_api;
 pub mod community;
@@ -234,6 +235,13 @@ pub fn router(
             "/api/plugin/offline/sync",
             post(plugin::sync_offline_operations),
         )
+        .route("/api/plugin/identify", post(plugin::identify_plugin_server))
+        .route(
+            "/api/plugin/auth/events/poll",
+            post(auth_sync::poll_auth_events),
+        )
+        .route("/api/plugin/auth/ack", post(auth_sync::ack_auth_version))
+        .route("/api/plugin/auth/snapshot", post(auth_sync::auth_snapshot))
         // -- external servers --
         .route(
             "/api/external-servers",

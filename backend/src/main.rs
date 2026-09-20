@@ -91,6 +91,8 @@ async fn main() -> anyhow::Result<()> {
     );
     // 启动审计/操作日志/会话历史保留清理（默认每天一次）
     services::log_retention_service::start_log_retention_loop(db.clone(), 86400);
+    // 启动授权事件保留清理（默认每天一次，按 EVENTS_RETENTION_DAYS 窗口清理）
+    services::auth_event_service::register_cleanup_task(db.clone());
     // 启动全球封禁同步（从 KZTimer GlobalAPI）— 在 active_ban_cache 创建后调用
     // （移到 active_ban_cache 初始化之后）
 

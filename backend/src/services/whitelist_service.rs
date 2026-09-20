@@ -37,6 +37,13 @@ pub struct WhitelistItem {
     pub rejected_at: Option<String>,
     pub rejected_by: Option<String>,
     pub rejection_reason: Option<String>,
+    /// 是否通过 Steam OpenID 登录验证（false = 手动填写 Steam 标识）
+    pub steam_verified: bool,
+    /// 绑定的 QQ openid（两步验证）
+    pub qq_openid: Option<String>,
+    pub qq_group_id: Option<String>,
+    pub qq_username: Option<String>,
+    pub qq_verified_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub risk_profile: Option<PlayerRiskProfile>,
 }
@@ -45,8 +52,9 @@ pub struct WhitelistItem {
 pub struct PublicWhitelistRequestInput {
     pub nickname: String,
     pub steam_input: String,
-    pub contact: Option<String>,
     pub reason: Option<String>,
+    /// 是否通过 Steam OpenID 登录验证（false = 手动填写 Steam 标识）
+    pub steam_verified: bool,
 }
 
 #[derive(Clone)]
@@ -120,6 +128,11 @@ struct WhitelistRow {
     rejected_at: Option<DateTime<Utc>>,
     rejected_by: Option<String>,
     rejection_reason: Option<String>,
+    steam_verified: bool,
+    qq_openid: Option<String>,
+    qq_group_id: Option<String>,
+    qq_username: Option<String>,
+    qq_verified_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -201,6 +214,7 @@ pub async fn list_whitelist(
                   wr.applied_at, wr.approved_at, wr.approved_by, wr.approval_reason,
                   wr.expires_at, wr.duration_days, wr.expired_at,
                   wr.rejected_at, wr.rejected_by, wr.rejection_reason,
+                  wr.steam_verified, wr.qq_openid, wr.qq_group_id, wr.qq_username, wr.qq_verified_at,
                   COUNT(*) OVER() as total_count
            FROM whitelist_requests wr
            {where_clause} {order_clause} LIMIT ${param_idx} OFFSET ${}"#,
@@ -283,15 +297,32 @@ pub async fn create_public_whitelist_request(
 ) -> anyhow::Result<WhitelistItem> {
     let nickname = input.nickname.trim();
     anyhow::ensure!(!nickname.is_empty(), "请输入玩家名称");
-    // 联系方式与申请理由均为必填（前端已强制，这里兜底防止绕过）
-    let contact =
-        super::normalize_optional_string(input.contact).filter(|value| !value.trim().is_empty());
-    anyhow::ensure!(contact.is_some(), "请填写联系方式");
+    // 申请理由必填（前端已强制，这里兜底防止绕过）
     let reason =
         super::normalize_optional_string(input.reason).filter(|value| !value.trim().is_empty());
     anyhow::ensure!(reason.is_some(), "请填写申请理由");
 
     let identity = resolver.resolve(&input.steam_input).await?;
+
+    // 两步验证：要求 Steam 已绑定 QQ（绑定在生成验证码并由 QQBot 回传后完成）。
+    // 关闭该功能时不强制，兼容历史部署。联系方式统一使用绑定的 QQ openid。
+    // 注意：仅在真正要新建/重开申请时才强制绑定；已存在 pending/approved/rejected
+    // 记录时优先返回其状态，避免玩家被绑定步骤挡住而看不到既有结果。
+    let qq_config = super::whitelist_qq_service::load_config(db).await?;
+    let binding =
+        super::whitelist_qq_service::find_binding_by_steamid64(db, &identity.steamid64).await?;
+    let require_binding = |binding: &Option<super::whitelist_qq_service::SteamQqBinding>| {
+        if qq_config.enabled && binding.is_none() {
+            anyhow::bail!("请先加入 QQ 群并发送验证码完成绑定");
+        }
+        Ok(())
+    };
+    // 联系方式统一使用绑定的 QQ openid，不再接收前端手填
+    let contact = binding
+        .as_ref()
+        .map(|b| b.qq_openid.clone())
+        .filter(|value| !value.trim().is_empty());
+
     if let Some(existing) = find_by_steamid64(db, &identity.steamid64).await? {
         match existing.status.as_str() {
             "pending" => anyhow::bail!("该玩家白名单还在审核中"),
@@ -303,20 +334,24 @@ pub async fn create_public_whitelist_request(
                     .unwrap_or_else(|| "未填写拒绝理由".to_string())
             ),
             "revoked" | "expired" => {
+                require_binding(&binding)?;
                 return reopen_inactive_whitelist(
                     db,
                     existing.id,
                     nickname,
                     contact.as_deref(),
                     reason.as_deref(),
+                    input.steam_verified,
                     &identity,
                     resolver,
                 )
-                .await
+                .await;
             }
             _ => anyhow::bail!("白名单状态异常，无法重复申请"),
         }
     }
+
+    require_binding(&binding)?;
 
     // 尝试获取 Steam 名称（5秒超时，超时则留空，后续定时任务会补充）
     let steam_persona_name = match tokio::time::timeout(
@@ -333,13 +368,16 @@ pub async fn create_public_whitelist_request(
         r#"
         INSERT INTO whitelist_requests (
             id, steam_id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name,
-            contact, reason, status, applied_at, source, updated_at
+            contact, reason, status, applied_at, source, updated_at, steam_verified,
+            qq_openid, qq_group_id, qq_username, qq_verified_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', now(), 'public', now())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', now(), 'public', now(), $11,
+                $12, $13, $14, $15)
         RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
                   applied_at, approved_at, approved_by, approval_reason,
                   expires_at, duration_days, expired_at,
-                  rejected_at, rejected_by, rejection_reason
+                  rejected_at, rejected_by, rejection_reason,
+                  steam_verified, qq_openid, qq_group_id, qq_username, qq_verified_at
         "#,
     )
     .bind(Uuid::new_v4())
@@ -352,6 +390,15 @@ pub async fn create_public_whitelist_request(
     .bind(steam_persona_name.as_deref())
     .bind(contact.as_deref())
     .bind(reason.as_deref())
+    .bind(input.steam_verified)
+    .bind(binding.as_ref().map(|b| b.qq_openid.as_str()))
+    .bind(binding.as_ref().map(|b| b.qq_group_id.as_str()))
+    .bind(
+        binding
+            .as_ref()
+            .and_then(|b| b.qq_username.as_deref()),
+    )
+    .bind(binding.as_ref().map(|b| b.verified_at))
     .fetch_one(&db.pool)
     .await?;
 
@@ -413,7 +460,8 @@ pub async fn create_manual_whitelist(
         RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
                   applied_at, approved_at, approved_by, approval_reason,
                   expires_at, duration_days, expired_at,
-                  rejected_at, rejected_by, rejection_reason
+                  rejected_at, rejected_by, rejection_reason,
+                  steam_verified, qq_openid, qq_group_id, qq_username, qq_verified_at
         "#,
     )
     .bind(Uuid::new_v4())
@@ -517,7 +565,8 @@ pub async fn approve_whitelist_tx(
         RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
                   applied_at, approved_at, approved_by, approval_reason, approved_via,
                   expires_at, duration_days, expired_at,
-                  rejected_at, rejected_by, rejection_reason, rejected_via
+                  rejected_at, rejected_by, rejection_reason, rejected_via,
+                  steam_verified, qq_openid, qq_group_id, qq_username, qq_verified_at
         "#,
     )
     .bind(id)
@@ -576,7 +625,8 @@ pub async fn reject_whitelist_tx(
         RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
                   applied_at, approved_at, approved_by, approval_reason, approved_via,
                   expires_at, duration_days, expired_at,
-                  rejected_at, rejected_by, rejection_reason, rejected_via
+                  rejected_at, rejected_by, rejection_reason, rejected_via,
+                  steam_verified, qq_openid, qq_group_id, qq_username, qq_verified_at
         "#,
     )
     .bind(id)
@@ -626,7 +676,8 @@ pub async fn restore_whitelist(
         RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
                    applied_at, approved_at, approved_by, approval_reason,
                    expires_at, duration_days, expired_at,
-                   rejected_at, rejected_by, rejection_reason
+                   rejected_at, rejected_by, rejection_reason,
+                  steam_verified, qq_openid, qq_group_id, qq_username, qq_verified_at
         "#,
     )
     .bind(id)
@@ -670,7 +721,8 @@ pub async fn revoke_whitelist(
         RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
                    applied_at, approved_at, approved_by, approval_reason,
                    expires_at, duration_days, expired_at,
-                   rejected_at, rejected_by, rejection_reason
+                   rejected_at, rejected_by, rejection_reason,
+                  steam_verified, qq_openid, qq_group_id, qq_username, qq_verified_at
         "#,
     )
     .bind(id)
@@ -691,12 +743,14 @@ pub async fn revoke_whitelist(
 }
 
 /// 将已撤销 / 已过期的白名单记录重开为待审核，写入最新的联系方式与申请理由。
+#[allow(clippy::too_many_arguments)]
 async fn reopen_inactive_whitelist(
     db: &Database,
     id: Uuid,
     nickname: &str,
     contact: Option<&str>,
     reason: Option<&str>,
+    steam_verified: bool,
     identity: &ParsedSteamIdentity,
     resolver: &SteamResolver,
 ) -> anyhow::Result<WhitelistItem> {
@@ -706,6 +760,10 @@ async fn reopen_inactive_whitelist(
         .ok()
         .flatten()
         .map(|p| p.persona_name);
+
+    // 重新申请时刷新 QQ 绑定快照（绑定在 verify_and_bind 时已校验存在）
+    let binding =
+        super::whitelist_qq_service::find_binding_by_steamid64(db, &identity.steamid64).await?;
 
     let row = sqlx::query_as::<_, WhitelistRow>(
         r#"
@@ -731,12 +789,18 @@ async fn reopen_inactive_whitelist(
             revoked_at = NULL,
             revoked_by = NULL,
             source = 'public',
+            steam_verified = $9,
+            qq_openid = $10,
+            qq_group_id = $11,
+            qq_username = $12,
+            qq_verified_at = $13,
             updated_at = now()
         WHERE id = $1
         RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
                   applied_at, approved_at, approved_by, approval_reason,
                   expires_at, duration_days, expired_at,
-                  rejected_at, rejected_by, rejection_reason
+                  rejected_at, rejected_by, rejection_reason,
+                  steam_verified, qq_openid, qq_group_id, qq_username, qq_verified_at
         "#,
     )
     .bind(id)
@@ -747,6 +811,11 @@ async fn reopen_inactive_whitelist(
     .bind(steam_persona_name.as_deref())
     .bind(contact)
     .bind(reason)
+    .bind(steam_verified)
+    .bind(binding.as_ref().map(|b| b.qq_openid.as_str()))
+    .bind(binding.as_ref().map(|b| b.qq_group_id.as_str()))
+    .bind(binding.as_ref().and_then(|b| b.qq_username.as_deref()))
+    .bind(binding.as_ref().map(|b| b.verified_at))
     .fetch_one(&db.pool)
     .await?;
 
@@ -804,7 +873,8 @@ async fn approve_existing_record(
         RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
                   applied_at, approved_at, approved_by, approval_reason,
                   expires_at, duration_days, expired_at,
-                  rejected_at, rejected_by, rejection_reason
+                  rejected_at, rejected_by, rejection_reason,
+                  steam_verified, qq_openid, qq_group_id, qq_username, qq_verified_at
         "#,
     )
     .bind(id)
@@ -1101,6 +1171,11 @@ fn map_whitelist_row(row: WhitelistRow) -> WhitelistItem {
         rejected_at: row.rejected_at.map(|value| value.to_rfc3339()),
         rejected_by: row.rejected_by,
         rejection_reason: row.rejection_reason,
+        steam_verified: row.steam_verified,
+        qq_openid: row.qq_openid,
+        qq_group_id: row.qq_group_id,
+        qq_username: row.qq_username,
+        qq_verified_at: row.qq_verified_at.map(|value| value.to_rfc3339()),
         risk_profile: None,
     }
 }
@@ -1195,6 +1270,26 @@ mod tests {
         result.unwrap();
     }
 
+    /// 在测试库中直接写入一条 Steam↔QQ 绑定，供需要绑定才能提交的用例复用。
+    async fn bind_steam_to_qq(db: &Database, steamid64: &str, qq_openid: &str) {
+        let issued = crate::services::whitelist_qq_service::issue_code(db, steamid64, None)
+            .await
+            .unwrap();
+        let outcome = crate::services::whitelist_qq_service::verify_and_bind(
+            db,
+            &issued.code,
+            qq_openid,
+            "group-openid-test",
+            Some("测试玩家"),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            outcome,
+            crate::services::whitelist_qq_service::BindOutcome::Bound { .. }
+        ));
+    }
+
     async fn insert_whitelist_record(
         db: &Database,
         steamid64: &str,
@@ -1257,8 +1352,8 @@ mod tests {
                 PublicWhitelistRequestInput {
                     nickname: "玩家甲".to_string(),
                     steam_input: "76561198000000001".to_string(),
-                    contact: Some("QQ 111111".to_string()),
                     reason: Some("测试申请理由".to_string()),
+                    steam_verified: true,
                 },
                 &SteamResolver::for_tests(),
             )
@@ -1289,8 +1384,8 @@ mod tests {
                 PublicWhitelistRequestInput {
                     nickname: "玩家乙".to_string(),
                     steam_input: "76561198000000002".to_string(),
-                    contact: Some("QQ 111111".to_string()),
                     reason: Some("测试申请理由".to_string()),
+                    steam_verified: true,
                 },
                 &SteamResolver::for_tests(),
             )
@@ -1321,8 +1416,8 @@ mod tests {
                 PublicWhitelistRequestInput {
                     nickname: "玩家丙".to_string(),
                     steam_input: "76561198000000003".to_string(),
-                    contact: Some("QQ 111111".to_string()),
                     reason: Some("测试申请理由".to_string()),
+                    steam_verified: true,
                 },
                 &SteamResolver::for_tests(),
             )
@@ -1341,6 +1436,7 @@ mod tests {
     #[tokio::test]
     async fn create_whitelist_request_reopens_revoked_record_as_pending() {
         with_test_db(async |db| {
+            bind_steam_to_qq(&db, "76561198000000004", "qq-reopen-4").await;
             insert_whitelist_record(
                 &db,
                 "76561198000000004",
@@ -1356,8 +1452,8 @@ mod tests {
                 PublicWhitelistRequestInput {
                     nickname: "玩家丁".to_string(),
                     steam_input: "76561198000000004".to_string(),
-                    contact: Some("QQ 111111".to_string()),
                     reason: Some("测试申请理由".to_string()),
+                    steam_verified: true,
                 },
                 &SteamResolver::for_tests(),
             )
@@ -1372,22 +1468,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_whitelist_request_saves_optional_contact() {
+    async fn create_whitelist_request_uses_bound_qq_as_contact() {
         with_test_db(async |db| {
+            // 两步验证：先完成 Steam↔QQ 绑定，联系方式由绑定自动写入
+            bind_steam_to_qq(&db, "76561198000000005", "qq-openid-5").await;
+
             let item = create_public_whitelist_request(
                 &db,
                 PublicWhitelistRequestInput {
                     nickname: "玩家联系方式".to_string(),
                     steam_input: "76561198000000005".to_string(),
-                    contact: Some("  QQ 123456  ".to_string()),
                     reason: Some("测试申请理由".to_string()),
+                    steam_verified: true,
                 },
                 &SteamResolver::for_tests(),
             )
             .await
             .unwrap();
 
-            assert_eq!(item.contact.as_deref(), Some("QQ 123456"));
+            assert_eq!(item.contact.as_deref(), Some("qq-openid-5"));
+            assert_eq!(item.qq_openid.as_deref(), Some("qq-openid-5"));
+            assert!(item.qq_verified_at.is_some());
 
             let result = list_whitelist(
                 &db,
@@ -1401,7 +1502,7 @@ mod tests {
             )
             .await?;
             assert_eq!(result.items.len(), 1);
-            assert_eq!(result.items[0].contact.as_deref(), Some("QQ 123456"));
+            assert_eq!(result.items[0].contact.as_deref(), Some("qq-openid-5"));
 
             Ok(())
         })
@@ -1645,24 +1746,24 @@ mod tests {
         .await;
     }
 
-    // ===== 申请理由 / 联系方式必填 =====
+    // ===== 申请理由必填 / QQ 绑定必填 =====
 
     #[tokio::test]
-    async fn create_whitelist_request_requires_contact() {
+    async fn create_whitelist_request_requires_qq_binding() {
         with_test_db(async |db| {
             let error = create_public_whitelist_request(
                 &db,
                 PublicWhitelistRequestInput {
-                    nickname: "缺联系方式".to_string(),
+                    nickname: "未绑定QQ".to_string(),
                     steam_input: "76561198000000006".to_string(),
-                    contact: None,
                     reason: Some("测试申请理由".to_string()),
+                    steam_verified: true,
                 },
                 &SteamResolver::for_tests(),
             )
             .await
             .unwrap_err();
-            assert_eq!(error.to_string(), "请填写联系方式");
+            assert_eq!(error.to_string(), "请先加入 QQ 群并发送验证码完成绑定");
             Ok(())
         })
         .await;
@@ -1676,8 +1777,8 @@ mod tests {
                 PublicWhitelistRequestInput {
                     nickname: "缺申请理由".to_string(),
                     steam_input: "76561198000000007".to_string(),
-                    contact: Some("QQ 111111".to_string()),
                     reason: None,
+                    steam_verified: true,
                 },
                 &SteamResolver::for_tests(),
             )
@@ -1896,6 +1997,7 @@ mod tests {
     #[tokio::test]
     async fn create_whitelist_request_reopens_expired_record_as_pending() {
         with_test_db(async |db| {
+            bind_steam_to_qq(&db, "76561198000000061", "qq-reopen-61").await;
             let id = insert_whitelist_record(
                 &db,
                 "76561198000000061",
@@ -1911,8 +2013,8 @@ mod tests {
                 PublicWhitelistRequestInput {
                     nickname: "过期玩家".to_string(),
                     steam_input: "76561198000000061".to_string(),
-                    contact: Some("QQ 222222".to_string()),
                     reason: Some("重新申请理由".to_string()),
+                    steam_verified: true,
                 },
                 &SteamResolver::for_tests(),
             )

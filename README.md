@@ -77,7 +77,7 @@ LumiAdmin/
 |------|------|
 | **仪表盘** | 服务器状态总览（在线/离线）、核心数据统计、服务器性能指标（FPS、CPU、Tickrate）、白名单统计、管理员预览 |
 | **社区组管理** | 社区组 CRUD、服务器 CRUD（含 RCON 连接测试）、在线玩家实时查看、Token 管理、访问限制配置（白名单模式 / Rating / Steam 等级门槛 / 中高风险账号拦截）、RCON 远程命令执行 |
-| **白名单管理** | 白名单审核大厅（待审核/已通过/未通过三个标签页）、全球封禁记录检测（KZTimerGlobal API）、手动添加白名单、Steam 名称刷新、全球封禁玩家审核强制填写理由、低风险自动通过开关（低风险玩家申请满 3 小时无人审核自动通过） |
+| **白名单管理** | 白名单审核大厅（待审核/已通过/未通过三个标签页）、全球封禁记录检测（KZTimerGlobal API）、手动添加白名单、Steam 名称刷新、全球封禁玩家审核强制填写理由、低风险自动通过开关（低风险玩家申请满 3 小时无人审核自动通过）、**两步验证（Steam 身份 + QQ 群验证码绑定）**、**群内 @玩家**、QQ 群绑定设置 |
 | **封禁管理** | 玩家封禁/解封、Steam/IP 封禁属性、时长设置（临时/永久）、到期自动解封、封禁公示 |
 | **用户管理** | 管理员账户 CRUD、权限组（developer/admin/normal）、密码管理、账号启用/禁用、会话管理 |
 
@@ -95,7 +95,7 @@ LumiAdmin/
 
 | 页面 | 说明 |
 |------|------|
-| 白名单申请 | 玩家自助提交白名单申请（SteamID 解析） |
+| 白名单申请 | 玩家自助提交白名单申请：Steam 身份验证（登录或手动）→ 加入 QQ 群发送验证码完成绑定 → 填写申请理由 |
 | 白名单公示 | 已通过白名单公开展示 |
 | 封禁公示 | 公开播封记录查看 |
 
@@ -319,6 +319,44 @@ LumiBot 的 `/wl <steamid64/steamid2>` 指令调用
 LumiAdmin 使用 `interaction_id` 生成唯一幂等键，在同一 PostgreSQL 事务中更新
 白名单申请并写入 `audit_logs`；重复请求返回第一次审批的 `audit_id` 与结果。
 
+### 白名单两步验证（Steam + QQ 群绑定）
+
+为避免玩家填写错误联系方式，公开白名单申请改为两步验证：
+
+1. **Steam 验证**：通过 Steam 登录（OpenID）或手动填写 Steam 标识符确认账号。
+2. **QQ 群绑定**：网站在第一步后自动生成一次性验证码（`WL-XXXXXX`，默认 **5 分钟**有效，
+   单个 Steam 仅保留一条活跃码，过期需重新生成）。玩家加入 QQ 群后，在群内
+   **@机器人发送验证码**（如 `绑定 WL-7KQ2XA`），LumiBot 调用
+   `POST /api/integration/qq/bind/verify` 完成 `steamid64 ↔ QQ(openid)` 绑定。
+3. **填写理由**：绑定成功后回到网站填写申请理由并提交，等待管理员审核。
+
+约束与说明：
+
+- 绑定永久有效；`revoked` / `expired` 重新申请复用绑定，无需重新加群。
+- 1 个 QQ（openid）默认最多绑定 **5** 个 Steam；换绑需管理员先解绑。
+- 申请的联系方式由绑定的 QQ openid 自动写入（`contact` = openid），不再手填。
+- QQ 官方 Bot 只能拿到用户在**该群场景**的 openid（非真实 QQ 号），因此管理员联系人
+  统一使用「群内 @玩家」按钮（详见下文）。
+- QQ 群号 / 加群链接 / 允许的群 openid / 绑定上限 / 验证码有效期均可在
+   白名单管理页的「QQ 群绑定设置」中修改（`whitelist_qq_config`）。
+- 关闭该功能（`enabled = false`）时不强制绑定，兼容历史部署。
+
+管理侧接口与「群内 @玩家」：
+
+- `GET /api/whitelist/qq-binding/:steamid64`：查询绑定详情、同 QQ 关联账号、
+  最近群内通知与冷却剩余时间。
+- `DELETE /api/whitelist/qq-binding/:steamid64`：管理员解绑（换绑前必须先解绑）。
+- `POST /api/whitelist/qq-mention/:steamid64`：在 QQ 群内 @玩家（文案可编辑，
+  ≤200 字）。权限 `developer/admin`，同玩家 **1 分钟**冷却；成功/失败均写入
+  `qq_mention_logs` 与审计日志。后端通过 `POST {LUMI_BOT_API_URL}/api/v1/messages/group-mention`
+  调用 LumiBot 发送。
+- `GET/PUT /api/whitelist/qq-config`：读取/更新 QQ 群绑定设置。
+
+LumiBot 侧需配置 `LUMIADMIN_URL` 与 `LUMIADMIN_QQ_TOKEN`（与
+`QQ_INTEGRATION_TOKEN` 一致）以启用绑定；群内 @玩家 复用 `LUMI_BOT_API_URL/KEY`
+（`X-API-Key`）。
+
+
 ### 数据库迁移
 
 后端启动时会先执行旧版幂等 Schema 兼容迁移，再执行 `backend/migrations/` 下的 SQLx 正式迁移文件。后续新增或修改数据库结构时，优先添加带时间戳的 SQL 迁移文件，旧版代码迁移只作为兼容已有部署的过渡层保留。生产部署建议在切换应用前单独执行迁移，并在 CI 同时验证全新数据库和旧版数据库升级路径。
@@ -362,6 +400,11 @@ LumiAdmin 使用 `interaction_id` 生成唯一幂等键，在同一 PostgreSQL �
 | POST | `/api/whitelist/:id/reject` | 拒绝审核 |
 | POST | `/api/whitelist/:id/restore` | 恢复通过 |
 | POST | `/api/whitelist/:id/revoke` | 撤销白名单 |
+| GET | `/api/whitelist/qq-config` | 读取 QQ 群绑定设置 |
+| PUT | `/api/whitelist/qq-config` | 更新 QQ 群绑定设置 |
+| GET | `/api/whitelist/qq-binding/:steamid64` | 查询 QQ 绑定详情 |
+| DELETE | `/api/whitelist/qq-binding/:steamid64` | 解绑 Steam↔QQ |
+| POST | `/api/whitelist/qq-mention/:steamid64` | 群内 @玩家 |
 
 ### 封禁管理
 
@@ -398,11 +441,14 @@ LumiAdmin 使用 `interaction_id` 生成唯一幂等键，在同一 PostgreSQL �
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/public/whitelist` | 白名单公示 |
-| POST | `/api/public/whitelist` | 提交白名单申请 |
+| POST | `/api/public/whitelist` | 提交白名单申请（需先完成 QQ 绑定） |
+| POST | `/api/public/whitelist/qq-code` | 生成 QQ 群绑定验证码 |
+| GET | `/api/public/whitelist/qq-status` | 查询 QQ 绑定状态 |
 | GET | `/api/public/bans` | 封禁公示 |
 | POST | `/api/public/steam/resolve` | SteamID 解析 |
 | GET | `/api/public/global-bans/:steamid64` | 查询全球封禁记录 |
 | POST | `/api/public/global-bans/batch` | 批量查询全球封禁 |
+| POST | `/api/integration/qq/bind/verify` | QQ 群验证码绑定校验（LumiBot 调用） |
 
 ---
 

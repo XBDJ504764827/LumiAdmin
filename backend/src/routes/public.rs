@@ -2,7 +2,7 @@ use crate::routes::{forbidden, invalid_request, AppCtx, ListQuery};
 use crate::services::{
     audit_service, ban_service, dashboard_service, global_ban_service, log_service,
     lumi_bot_service, notification_service, permission_service, public_service,
-    rate_limit_service::extract_client_ip, whitelist_service,
+    rate_limit_service::extract_client_ip, whitelist_qq_service, whitelist_service,
 };
 use anyhow;
 use axum::{
@@ -24,6 +24,27 @@ pub(crate) struct WhitelistBody {
     reason: Option<String>,
     operator_name: Option<String>,
     steam_token: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct IssueQqCodeBody {
+    /// 二选一：Steam 认证令牌 或 手动填写的 Steam 标识
+    steam_token: Option<String>,
+    steam_input: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct QqBindStatusQuery {
+    steam_input: String,
+}
+
+/// QQ 群绑定校验（供 LumiBot 调用）
+#[derive(serde::Deserialize)]
+pub(crate) struct QqBindVerifyBody {
+    code: String,
+    qq_openid: String,
+    qq_group_id: String,
+    qq_username: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -178,7 +199,7 @@ pub(crate) async fn submit_whitelist(
     let resolver = &ctx.steam_resolver;
 
     // 如果提供了 steam_token，验证 Steam 认证会话
-    let (steam_input, nickname) = if let Some(ref token) = body.steam_token {
+    let (steam_input, nickname, steam_verified) = if let Some(ref token) = body.steam_token {
         let verified_steamid64 = crate::routes::steam_auth::verify_steam_session(&ctx.db, token)
             .await
             .map_err(invalid_request)?;
@@ -193,9 +214,9 @@ pub(crate) async fn submit_whitelist(
             .nickname
             .clone()
             .unwrap_or_else(|| persona_name.unwrap_or_else(|| verified_steamid64.clone()));
-        (Some(verified_steamid64), Some(nick))
+        (Some(verified_steamid64), Some(nick), true)
     } else {
-        (body.steam_input.clone(), body.nickname.clone())
+        (body.steam_input.clone(), body.nickname.clone(), false)
     };
 
     let si = steam_input
@@ -207,8 +228,8 @@ pub(crate) async fn submit_whitelist(
         whitelist_service::PublicWhitelistRequestInput {
             nickname: nn,
             steam_input: si,
-            contact: body.contact,
             reason: body.reason,
+            steam_verified,
         },
         resolver,
     )
@@ -242,6 +263,140 @@ pub(crate) async fn submit_whitelist(
         StatusCode::CREATED,
         Json(serde_json::json!({ "item": item })),
     ))
+}
+
+/// 解析玩家提交的 Steam 标识（自动模式用 token，手动模式用 steam_input），
+/// 返回 SteamID64 与展示昵称。
+async fn resolve_public_steam_identity(
+    ctx: &AppCtx,
+    steam_token: Option<&str>,
+    steam_input: Option<&str>,
+) -> Result<(String, Option<String>), (StatusCode, Json<serde_json::Value>)> {
+    let resolver = &ctx.steam_resolver;
+    if let Some(token) = steam_token.filter(|t| !t.trim().is_empty()) {
+        let steamid64 = crate::routes::steam_auth::verify_steam_session(&ctx.db, token)
+            .await
+            .map_err(invalid_request)?;
+        let persona_name = resolver
+            .fetch_profile(&steamid64)
+            .await
+            .ok()
+            .flatten()
+            .map(|p| p.persona_name);
+        return Ok((steamid64, persona_name));
+    }
+
+    let input = steam_input
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| invalid_request(anyhow::anyhow!("请提供 Steam 标识符或 Steam 认证令牌")))?;
+    let identity = resolver.resolve(input).await.map_err(invalid_request)?;
+    let persona_name = resolver
+        .fetch_profile(&identity.steamid64)
+        .await
+        .ok()
+        .flatten()
+        .map(|p| p.persona_name);
+    Ok((identity.steamid64, persona_name))
+}
+
+/// 生成 QQ 群验证码（玩家完成 Steam 验证后调用）。
+pub(crate) async fn issue_whitelist_qq_code(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Json(body): Json<IssueQqCodeBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let (steamid64, _persona) = resolve_public_steam_identity(
+        &ctx,
+        body.steam_token.as_deref(),
+        body.steam_input.as_deref(),
+    )
+    .await?;
+
+    let ip = extract_client_ip(&headers);
+    let created_ip = (!ip.trim().is_empty()).then_some(ip.as_str());
+    let issued = whitelist_qq_service::issue_code(&ctx.db, &steamid64, created_ip)
+        .await
+        .map_err(invalid_request)?;
+
+    Ok(Json(serde_json::json!({
+        "steamid64": steamid64,
+        "code": issued.code,
+        "expires_at": issued.expires_at,
+        "ttl_seconds": issued.ttl_seconds,
+        "group_number": issued.group_number,
+        "group_link": issued.group_link,
+    })))
+}
+
+/// 查询指定 Steam 的 QQ 绑定状态（前端轮询）。
+pub(crate) async fn whitelist_qq_bind_status(
+    State(ctx): State<AppCtx>,
+    Query(query): Query<QqBindStatusQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let input = query.steam_input.trim();
+    if input.is_empty() || input.len() > 500 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "steam_input 不能为空且不能超过 500 字符" })),
+        ));
+    }
+    let identity = ctx
+        .steam_resolver
+        .resolve(input)
+        .await
+        .map_err(invalid_request)?;
+    let binding = whitelist_qq_service::find_binding_by_steamid64(&ctx.db, &identity.steamid64)
+        .await
+        .map_err(invalid_request)?;
+    let config = whitelist_qq_service::load_config(&ctx.db)
+        .await
+        .map_err(invalid_request)?;
+
+    Ok(Json(serde_json::json!({
+        "steamid64": identity.steamid64,
+        "bound": binding.is_some(),
+        "qq_username": binding.as_ref().and_then(|b| b.qq_username.clone()),
+        "verified_at": binding.as_ref().map(|b| b.verified_at),
+        "group_number": config.group_number,
+        "group_link": config.group_link,
+    })))
+}
+
+/// QQ 群绑定校验（供 LumiBot 在群内解析到验证码后调用）。
+pub(crate) async fn qq_whitelist_bind_verify(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Json(body): Json<QqBindVerifyBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    verify_qq_token(&ctx, &headers)?;
+
+    let outcome = whitelist_qq_service::verify_and_bind(
+        &ctx.db,
+        &body.code,
+        &body.qq_openid,
+        &body.qq_group_id,
+        body.qq_username.as_deref(),
+    )
+    .await;
+
+    match outcome {
+        Ok(outcome) => Ok(Json(serde_json::json!({ "outcome": outcome }))),
+        Err(e) => {
+            let message = e.to_string();
+            // 业务校验错误（如已绑定其他 QQ）以 200 + message 返回，供 Bot 展示
+            if message.contains("已绑定其他 QQ") || message.contains("不能为空") {
+                return Ok(Json(serde_json::json!({
+                    "outcome": { "result": "rejected", "message": message }
+                })));
+            }
+            tracing::error!(error = %e, "QQ 绑定校验失败");
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "绑定校验失败" })),
+            ))
+        }
+    }
 }
 
 pub(crate) async fn public_bans(

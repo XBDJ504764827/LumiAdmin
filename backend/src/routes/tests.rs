@@ -1919,6 +1919,21 @@ async fn plugin_report_rejects_matching_token_with_wrong_port() {
 #[tokio::test]
 async fn submit_whitelist_returns_json_body() {
     with_test_app(async |db, config| {
+        // 两步验证：提交前需先完成 Steam↔QQ 绑定
+        let issued =
+            crate::services::whitelist_qq_service::issue_code(&db, "76561197960290419", None)
+                .await
+                .unwrap();
+        crate::services::whitelist_qq_service::verify_and_bind(
+            &db,
+            &issued.code,
+            "qq-openid-route-test",
+            "group-openid-route-test",
+            Some("测试玩家"),
+        )
+        .await
+        .unwrap();
+
         let app = test_app(config, db);
         let request = Request::builder()
             .method("POST")
@@ -1928,7 +1943,6 @@ async fn submit_whitelist_returns_json_body() {
                 json!({
                     "steam_input": "76561197960290419",
                     "nickname": "测试玩家",
-                    "contact": "QQ 123456",
                     "reason": "测试申请理由"
                 })
                 .to_string(),
@@ -2724,6 +2738,155 @@ async fn qq_whitelist_status_returns_all_history_records() {
             serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await?)?;
         assert_eq!(payload["steamid64"], STEAMID64);
         assert_eq!(payload["items"].as_array().unwrap().len(), 2);
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn qq_bind_verify_requires_token_and_binds_steam() {
+    with_test_app(async |db, mut config| {
+        const TOKEN: &str = "qq-bind-verify-test-token";
+        config.qq_integration_token = Some(TOKEN.to_string());
+
+        // 玩家在网站生成验证码
+        let issued =
+            crate::services::whitelist_qq_service::issue_code(&db, "76561198000000777", None)
+                .await?;
+
+        // 缺少令牌应被拒绝
+        let unauthorized = test_app(config.clone(), db.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/integration/qq/bind/verify")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "code": issued.code,
+                            "qq_openid": "qq-openid-777",
+                            "qq_group_id": "group-openid-777"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        // 携带令牌完成绑定
+        let response = test_app(config, db.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/integration/qq/bind/verify")
+                    .header("x-qq-token", TOKEN)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "code": issued.code,
+                            "qq_openid": "qq-openid-777",
+                            "qq_group_id": "group-openid-777",
+                            "qq_username": "绑定玩家"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await?)?;
+        assert_eq!(payload["outcome"]["result"], "bound");
+        assert_eq!(payload["outcome"]["steamid64"], "76561198000000777");
+
+        let binding = crate::services::whitelist_qq_service::find_binding_by_steamid64(
+            &db,
+            "76561198000000777",
+        )
+        .await?
+        .expect("binding should exist");
+        assert_eq!(binding.qq_openid, "qq-openid-777");
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn public_qq_code_and_status_flow() {
+    with_test_app(async |db, config| {
+        let app = test_app(config, db.clone());
+
+        // 生成验证码
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/public/whitelist/qq-code")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({ "steam_input": "76561198000000888" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await?)?;
+        assert_eq!(payload["steamid64"], "76561198000000888");
+        assert!(payload["code"].as_str().unwrap().starts_with("WL-"));
+
+        // 未绑定时状态为 false
+        let status = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/public/whitelist/qq-status?steam_input=76561198000000888")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        let payload: serde_json::Value =
+            serde_json::from_slice(&to_bytes(status.into_body(), usize::MAX).await?)?;
+        assert_eq!(payload["bound"], false);
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn qq_bind_verify_rejects_invalid_code() {
+    with_test_app(async |db, mut config| {
+        const TOKEN: &str = "qq-bind-invalid-token";
+        config.qq_integration_token = Some(TOKEN.to_string());
+
+        // 先签发验证码，再用错误的验证码提交
+        crate::services::whitelist_qq_service::issue_code(&db, "76561198000000999", None).await?;
+        let app = test_app(config, db);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/integration/qq/bind/verify")
+                    .header("x-qq-token", TOKEN)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "code": "WL-NOPE00",
+                            "qq_openid": "qq-openid-999",
+                            "qq_group_id": "group-openid-999"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await?)?;
+        assert_eq!(payload["outcome"]["result"], "invalid_code");
         Ok(())
     })
     .await;

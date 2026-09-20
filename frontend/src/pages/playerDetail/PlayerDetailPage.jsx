@@ -8,6 +8,7 @@ import { BanFormModal } from '../ban/BanFormModal.jsx';
 import { StatusPill } from '../../shared/StatusPill.jsx';
 import { Modal } from '../../shared/Modal.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
+import { QqBindingPanel } from '../../shared/QqBindingPanel.jsx';
 import {
   candidateMeta,
   categoryKind,
@@ -493,6 +494,10 @@ function PlayerSummaryRail({detail, globalBans, canEdit, onSaveInternal, interna
       {profile.steamid&&<div className="player-summary-id-row"><span>SteamID2</span><code>{profile.steamid}</code></div>}
       {profile.steamid3&&<div className="player-summary-id-row"><span>SteamID3</span><code>{profile.steamid3}</code></div>}
       <div className="player-summary-id-row"><span>联系方式</span><code>{contact || ''}</code></div>
+    </div>
+
+    <div className="player-summary-section">
+      <QqBindingPanel steamid64={profile.steamid64} compact />
     </div>
 
     <div className="player-summary-section">

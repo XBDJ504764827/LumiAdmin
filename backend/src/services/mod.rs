@@ -46,6 +46,7 @@ pub mod task_runtime;
 pub mod user_service;
 pub mod whitelist_auto_approve_service;
 pub mod whitelist_expiry_service;
+pub mod whitelist_qq_service;
 pub mod whitelist_service;
 
 /// Trim an optional string, returning None if empty after trimming.

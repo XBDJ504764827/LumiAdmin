@@ -914,6 +914,61 @@ pub async fn report_whitelist_auto_approved(
 }
 
 // ---------------------------------------------------------------------------
+// 管理员群内 @玩家（供后台按钮调用）
+// ---------------------------------------------------------------------------
+
+/// 调用 LumiBot 的群内 @玩家接口。
+/// `POST {api}/api/v1/messages/group-mention`，Header `X-API-Key`。
+/// 成功返回 LumiBot 的 JSON 响应；失败返回错误（由调用方落库 `qq_mention_logs`）。
+pub async fn send_group_mention(
+    config: &Config,
+    group_id: &str,
+    mention_openid: &str,
+    content: &str,
+    operator: &str,
+) -> anyhow::Result<serde_json::Value> {
+    if !config.lumi_bot_enabled() {
+        anyhow::bail!("LumiBot 未配置（缺少 LUMI_BOT_API_URL / LUMI_BOT_API_KEY）");
+    }
+    let api_base_url = config
+        .lumi_bot_api_url
+        .as_deref()
+        .context("LUMI_BOT_API_URL 未配置")?;
+    let api_key = config
+        .lumi_bot_api_key
+        .as_deref()
+        .context("LUMI_BOT_API_KEY 未配置")?;
+
+    let url = format!(
+        "{}/api/v1/messages/group-mention",
+        api_base_url.trim_end_matches('/')
+    );
+    let body = serde_json::json!({
+        "group_id": group_id,
+        "mention_openid": mention_openid,
+        "content": content,
+        "operator": operator,
+    });
+
+    let response = http_client::http_client()
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .header("X-API-Key", api_key)
+        .json(&body)
+        .send()
+        .await
+        .context("请求 LumiBot 群内通知失败")?;
+
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        let truncated: String = text.chars().take(300).collect();
+        anyhow::bail!("LumiBot 返回 HTTP {status}: {truncated}");
+    }
+    serde_json::from_str(&text).or_else(|_| Ok(serde_json::json!({ "raw": text })))
+}
+
+// ---------------------------------------------------------------------------
 // 后台定时异步发送任务
 //
 // 所有事件都先进入持久化队列，由本任务 claim 后发送、重试并记录死信，
@@ -1401,6 +1456,11 @@ mod tests {
                 rejected_at: None,
                 rejected_by: None,
                 rejection_reason: None,
+                steam_verified: false,
+                qq_openid: None,
+                qq_group_id: None,
+                qq_username: None,
+                qq_verified_at: None,
                 risk_profile: None,
             };
 
@@ -1509,6 +1569,11 @@ mod tests {
             rejected_at: None,
             rejected_by: None,
             rejection_reason: None,
+            steam_verified: false,
+            qq_openid: None,
+            qq_group_id: None,
+            qq_username: None,
+            qq_verified_at: None,
             risk_profile: None,
         }
     }
@@ -1558,6 +1623,11 @@ mod tests {
                 rejected_at: None,
                 rejected_by: None,
                 rejection_reason: None,
+                steam_verified: false,
+                qq_openid: None,
+                qq_group_id: None,
+                qq_username: None,
+                qq_verified_at: None,
                 risk_profile: None,
             };
 
@@ -1839,6 +1909,11 @@ mod tests {
             rejected_at: None,
             rejected_by: None,
             rejection_reason: None,
+            steam_verified: false,
+            qq_openid: None,
+            qq_group_id: None,
+            qq_username: None,
+            qq_verified_at: None,
             risk_profile: None,
         }
     }

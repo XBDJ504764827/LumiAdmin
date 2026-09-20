@@ -349,6 +349,18 @@ pub fn router(
         )
         .route("/api/whitelist/manual", post(whitelist::create_whitelist))
         .route(
+            "/api/whitelist/qq-config",
+            get(whitelist_config::get_qq_config).put(whitelist_config::update_qq_config),
+        )
+        .route(
+            "/api/whitelist/qq-binding/:steamid64",
+            get(whitelist::get_qq_binding).delete(whitelist::delete_qq_binding),
+        )
+        .route(
+            "/api/whitelist/qq-mention/:steamid64",
+            post(whitelist::mention_qq_player),
+        )
+        .route(
             "/api/whitelist/:id/approve",
             post(whitelist::approve_whitelist_request),
         )
@@ -517,6 +529,14 @@ pub fn router(
             "/api/public/whitelist",
             get(public::public_whitelist).post(public::submit_whitelist),
         )
+        .route(
+            "/api/public/whitelist/qq-code",
+            post(public::issue_whitelist_qq_code),
+        )
+        .route(
+            "/api/public/whitelist/qq-status",
+            get(public::whitelist_qq_bind_status),
+        )
         .route("/api/public/bans", get(public::public_bans))
         .route("/api/public/steam/resolve", post(public::resolve_steam))
         .route("/api/public/bans/query", post(public::query_active_bans))
@@ -571,6 +591,10 @@ pub fn router(
             get(public::qq_whitelist_status),
         )
         .route("/api/integration/qq/ban/status", get(public::qq_ban_status))
+        .route(
+            "/api/integration/qq/bind/verify",
+            post(public::qq_whitelist_bind_verify),
+        )
         .route(
             "/api/integration/qq/whitelist/:id/review",
             post(public::qq_whitelist_review),

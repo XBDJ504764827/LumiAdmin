@@ -8,7 +8,10 @@ use uuid::Uuid;
 
 use crate::routes::{current_operator, AppCtx, AppError, ListQuery};
 use crate::services::rate_limit_service::extract_client_ip;
-use crate::services::{audit_service, log_service, permission_service, whitelist_service};
+use crate::services::{
+    audit_service, log_service, lumi_bot_service, permission_service, whitelist_qq_service,
+    whitelist_service,
+};
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
@@ -42,6 +45,13 @@ pub(crate) struct WhitelistActionBody {
 #[derive(Deserialize)]
 pub(crate) struct RefreshSteamNamesBody {
     pub status: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+pub(crate) struct QqMentionBody {
+    /// 管理员可编辑的通知文案
+    pub content: Option<String>,
 }
 
 fn optional_client_ip(headers: &HeaderMap) -> Option<String> {
@@ -510,4 +520,244 @@ pub(crate) async fn refresh_all_steam_names(
     )
     .await;
     Ok(Json(serde_json::json!({ "updated_count": updated_count })))
+}
+
+/// 查询指定 Steam 的 QQ 绑定信息（管理后台玩家详情/审核弹窗使用）。
+pub(crate) async fn get_qq_binding(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Path(steamid64): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let _actor = current_operator(&ctx, &headers).await?;
+    let binding = whitelist_qq_service::find_binding_by_steamid64(&ctx.db, &steamid64)
+        .await
+        .map_err(AppError::internal)?;
+    let latest = whitelist_qq_service::latest_mention(&ctx.db, &steamid64)
+        .await
+        .map_err(AppError::internal)?;
+    let qq_count = match binding.as_ref() {
+        Some(b) => whitelist_qq_service::count_bindings_for_qq(&ctx.db, &b.qq_openid)
+            .await
+            .map_err(AppError::internal)?,
+        None => 0,
+    };
+    // 同 QQ 绑定的其他 Steam，供管理员排查多开
+    let sibling_bindings = match binding.as_ref() {
+        Some(b) => whitelist_qq_service::list_bindings_for_qq(&ctx.db, &b.qq_openid)
+            .await
+            .map_err(AppError::internal)?
+            .into_iter()
+            .filter(|item| item.steamid64 != steamid64)
+            .collect::<Vec<_>>(),
+        None => Vec::new(),
+    };
+    let cooldown_seconds = whitelist_qq_service::MENTION_COOLDOWN_SECONDS;
+    let last_sent_at = whitelist_qq_service::last_mention_at(&ctx.db, &steamid64)
+        .await
+        .map_err(AppError::internal)?;
+    let next_allowed_at = last_sent_at.map(|t| t + chrono::Duration::seconds(cooldown_seconds));
+    Ok(Json(serde_json::json!({
+        "binding": binding,
+        "qq_binding_count": qq_count,
+        "sibling_bindings": sibling_bindings,
+        "latest_mention": latest,
+        "cooldown_seconds": cooldown_seconds,
+        "last_sent_at": last_sent_at,
+        "next_allowed_at": next_allowed_at,
+    })))
+}
+
+/// 管理员解绑 Steam↔QQ（换绑前必须先解绑）。
+pub(crate) async fn delete_qq_binding(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Path(steamid64): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let actor = current_operator(&ctx, &headers).await?;
+    if !permission_service::can_manage_whitelist_manually(&actor) {
+        return Err(AppError::forbidden());
+    }
+    let removed = whitelist_qq_service::delete_binding(&ctx.db, &steamid64)
+        .await
+        .map_err(AppError::internal)?;
+    let operator_name = actor.display_name.clone();
+    let Some(binding) = removed else {
+        return Err(AppError::bad_request(anyhow::anyhow!(
+            "该 Steam 账号没有 QQ 绑定"
+        )));
+    };
+    log_service::log_action(
+        &ctx.db,
+        &operator_name,
+        "白名单管理",
+        "解绑QQ绑定",
+        &steamid64,
+        &extract_client_ip(&headers),
+    )
+    .await;
+    if let Err(e) = audit_service::write_audit_log_with_context(
+        &ctx.db,
+        audit_service::AuditLogInput {
+            operation: "whitelist_qq_unbind".to_string(),
+            target: steamid64.clone(),
+            target_type: "whitelist".to_string(),
+            player_name: None,
+            reason: None,
+            duration_minutes: None,
+            operator_id: Some(actor.id),
+            operator_name: operator_name.clone(),
+            operator_steamid: None,
+            source: "web".to_string(),
+            server_id: None,
+            server_name: None,
+            server_port: None,
+            success: true,
+            message: Some(format!("解绑 Steam↔QQ，原 openid: {}", binding.qq_openid)),
+            idempotency_key: None,
+        },
+        None,
+        Some(serde_json::json!({
+            "action": "delete_qq_binding",
+            "steamid64": steamid64,
+            "qq_openid": binding.qq_openid,
+            "qq_group_id": binding.qq_group_id,
+            "operator_username": actor.username,
+            "operator_role": actor.role,
+        })),
+    )
+    .await
+    {
+        tracing::warn!(%e, "QQ 解绑审计写入失败");
+    }
+    Ok(Json(serde_json::json!({ "removed": binding })))
+}
+
+/// 管理员在 QQ 群内 @玩家（通过 LumiBot 发送）。
+pub(crate) async fn mention_qq_player(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Path(steamid64): Path<String>,
+    Json(body): Json<QqMentionBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let actor = current_operator(&ctx, &headers).await?;
+    if !permission_service::can_manage_whitelist_manually(&actor) {
+        return Err(AppError::forbidden());
+    }
+    let binding = whitelist_qq_service::find_binding_by_steamid64(&ctx.db, &steamid64)
+        .await
+        .map_err(AppError::internal)?
+        .ok_or_else(|| AppError::bad_request(anyhow::anyhow!("该 Steam 账号未绑定 QQ")))?;
+
+    // 冷却：同玩家 1 分钟内只允许成功发送一次
+    if let Some(last) = whitelist_qq_service::last_mention_at(&ctx.db, &steamid64)
+        .await
+        .map_err(AppError::internal)?
+    {
+        let elapsed = chrono::Utc::now().signed_duration_since(last).num_seconds();
+        if elapsed < whitelist_qq_service::MENTION_COOLDOWN_SECONDS {
+            let wait = whitelist_qq_service::MENTION_COOLDOWN_SECONDS - elapsed;
+            return Err(AppError::bad_request(anyhow::anyhow!(
+                "发送过于频繁，请 {} 秒后再试",
+                wait
+            )));
+        }
+    }
+
+    let content = body
+        .content
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .unwrap_or("管理员请你查看白名单审核进度，尽快回复。")
+        .to_string();
+    if content.chars().count() > 200 {
+        return Err(AppError::bad_request(anyhow::anyhow!(
+            "通知内容不能超过 200 字"
+        )));
+    }
+
+    let operator_name = actor.display_name.clone();
+    let result = lumi_bot_service::send_group_mention(
+        &ctx.config,
+        &binding.qq_group_id,
+        &binding.qq_openid,
+        &content,
+        &operator_name,
+    )
+    .await;
+
+    let (status, error) = match &result {
+        Ok(_) => ("sent", None),
+        Err(e) => ("failed", Some(e.to_string())),
+    };
+    if let Err(e) = whitelist_qq_service::record_mention(
+        &ctx.db,
+        &steamid64,
+        &binding.qq_openid,
+        &binding.qq_group_id,
+        &content,
+        status,
+        error.as_deref(),
+        Some(actor.id),
+        Some(&operator_name),
+    )
+    .await
+    {
+        tracing::warn!(%e, "写入 QQ 群内通知记录失败");
+    }
+
+    log_service::log_action(
+        &ctx.db,
+        &operator_name,
+        "白名单管理",
+        "QQ群内通知玩家",
+        &steamid64,
+        &extract_client_ip(&headers),
+    )
+    .await;
+    if let Err(e) = audit_service::write_audit_log_with_context(
+        &ctx.db,
+        audit_service::AuditLogInput {
+            operation: "whitelist_qq_mention".to_string(),
+            target: steamid64.clone(),
+            target_type: "whitelist".to_string(),
+            player_name: None,
+            reason: None,
+            duration_minutes: None,
+            operator_id: Some(actor.id),
+            operator_name: operator_name.clone(),
+            operator_steamid: None,
+            source: "web".to_string(),
+            server_id: None,
+            server_name: None,
+            server_port: None,
+            success: result.is_ok(),
+            message: Some(format!("QQ 群内通知玩家：{content}")),
+            idempotency_key: None,
+        },
+        None,
+        Some(serde_json::json!({
+            "action": "mention_qq_player",
+            "steamid64": steamid64,
+            "qq_openid": binding.qq_openid,
+            "qq_group_id": binding.qq_group_id,
+            "content": content,
+            "status": status,
+            "error": error,
+            "operator_username": actor.username,
+            "operator_role": actor.role,
+        })),
+    )
+    .await
+    {
+        tracing::warn!(%e, "QQ 群内通知审计写入失败");
+    }
+
+    match result {
+        Ok(response) => Ok(Json(serde_json::json!({
+            "status": status,
+            "response": response,
+        }))),
+        Err(e) => Err(AppError::bad_request(anyhow::anyhow!("发送失败：{e}"))),
+    }
 }

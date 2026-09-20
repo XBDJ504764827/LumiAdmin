@@ -34,6 +34,12 @@ impl Database {
             r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS duration_days INTEGER"#,
             // 到期任务将 approved 记录置为 expired 后写入的过期时间
             r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS expired_at TIMESTAMPTZ"#,
+            // 两步验证：QQ 绑定快照与 Steam 验证方式
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS qq_openid TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS qq_group_id TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS qq_username TEXT"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS qq_verified_at TIMESTAMPTZ"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS steam_verified BOOLEAN NOT NULL DEFAULT false"#,
         ];
         for sql in alters {
             sqlx::query(sql).execute(&self.pool).await?;

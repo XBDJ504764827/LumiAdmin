@@ -62,6 +62,11 @@ export const api = {
   revokeWhitelist: (token, id, body = {}) => request(`/api/whitelist/${id}/revoke`, { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   whitelistAutoApproveConfig: (token) => request('/api/whitelist/auto-approve-config', { headers: withAuth(token) }),
   updateWhitelistAutoApproveConfig: (token, body) => request('/api/whitelist/auto-approve-config', { method: 'PUT', headers: withAuth(token), body: JSON.stringify(body) }),
+  whitelistQqConfig: (token) => request('/api/whitelist/qq-config', { headers: withAuth(token) }),
+  updateWhitelistQqConfig: (token, body) => request('/api/whitelist/qq-config', { method: 'PUT', headers: withAuth(token), body: JSON.stringify(body) }),
+  whitelistQqBinding: (token, steamid64) => request(`/api/whitelist/qq-binding/${encodeURIComponent(steamid64)}`, { headers: withAuth(token) }),
+  deleteWhitelistQqBinding: (token, steamid64) => request(`/api/whitelist/qq-binding/${encodeURIComponent(steamid64)}`, { method: 'DELETE', headers: withAuth(token) }),
+  mentionWhitelistQq: (token, steamid64, body = {}) => request(`/api/whitelist/qq-mention/${encodeURIComponent(steamid64)}`, { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   refreshSingleSteamName: (token, id) => request(`/api/whitelist/${id}/refresh-steam-name`, { method: 'POST', headers: withAuth(token), body: JSON.stringify({}) }),
   refreshAllSteamNames: (token, status = null) => {
     const body = status ? { status } : {};

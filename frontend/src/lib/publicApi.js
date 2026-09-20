@@ -15,6 +15,9 @@ export const publicApi = {
     return request(`/api/public/steam/auth/login${origin ? `?origin=${encodeURIComponent(origin)}` : ''}`);
   },
   getSteamSession: (token) => request(`/api/public/steam/auth/session?token=${encodeURIComponent(token)}`),
+  // 两步验证：QQ 群绑定
+  issueQqCode: (body) => request('/api/public/whitelist/qq-code', { method: 'POST', body: JSON.stringify(body) }),
+  qqBindStatus: (steamInput) => request(`/api/public/whitelist/qq-status?steam_input=${encodeURIComponent(steamInput)}`),
   globalBansBatch: (steamids) => request('/api/public/global-bans/batch', { method: 'POST', body: JSON.stringify({ steamids }) }),
   gokzPlayerStatsBatch: (steamid64) => request('/api/public/gokz/player-stats/batch', { method: 'POST', body: JSON.stringify({ steamid64 }) }),
 };

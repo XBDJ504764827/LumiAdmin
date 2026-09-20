@@ -12,6 +12,7 @@ import { formatChinaDateTime } from '../../shared/time.js';
 import { notifyPendingReviewsUpdated, usePendingReviewIndicators } from '../../hooks/usePendingReviewIndicators.js';
 import { fetchGlobalBansBatch, parseBanData, inferGlobalBanRisk } from './whitelistGlobalBans.js';
 import { ManualCreateModal, RejectModal, ApproveModal, BanDetailModal, PlayerDetailModal, RiskDetailModal } from './WhitelistModals.jsx';
+import { QqConfigModal } from './QqConfigModal.jsx';
 import { ToggleSwitch } from '../community/CommunityComponents.jsx';
 import { InternalNoteInline } from '../../shared/InternalNote.jsx';
 import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
@@ -199,6 +200,9 @@ export function WhitelistPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [autoApproveConfig, setAutoApproveConfig] = useState({ enabled: true, hours: 3, loading: true });
   const [savingAutoApprove, setSavingAutoApprove] = useState(false);
+  const [qqConfigModalOpen, setQqConfigModalOpen] = useState(false);
+  const [qqConfig, setQqConfig] = useState(null);
+  const [savingQqConfig, setSavingQqConfig] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [playerContextMenu, setPlayerContextMenu] = useState({
     open: false, x: 0, y: 0, steamid64: '', nickname: '',
@@ -502,6 +506,28 @@ export function WhitelistPage() {
     return () => { cancelled = true; };
   }, [token, canManualCreate]);
 
+  // QQ 群绑定配置加载
+  useEffect(() => {
+    if (!canManualCreate) return;
+    let cancelled = false;
+    api.whitelistQqConfig(token)
+      .then((data) => { if (!cancelled) setQqConfig(data.config); })
+      .catch(() => { /* 静默失败 */ });
+    return () => { cancelled = true; };
+  }, [token, canManualCreate]);
+
+  async function handleQqConfigSave(body) {
+    try {
+      setSavingQqConfig(true);
+      const data = await api.updateWhitelistQqConfig(token, body);
+      setQqConfig(data.config);
+      setQqConfigModalOpen(false);
+      toast({ title: '已保存', message: 'QQ 群绑定设置已更新。' });
+    } catch (actionError) {
+      toast({ title: '保存失败', message: actionError.message, tone: 'danger' });
+    } finally { setSavingQqConfig(false); }
+  }
+
   async function handleAutoApproveToggle(nextEnabled) {
     try {
       setSavingAutoApprove(true);
@@ -561,6 +587,7 @@ export function WhitelistPage() {
         </div>
         <div className="flex gap-10">
           {canManualCreate ? <button className="btn btn-accent" onClick={() => setManualModalOpen(true)}>手动添加白名单</button> : null}
+          {canManualCreate ? <button className="btn btn-outline" onClick={() => setQqConfigModalOpen(true)}>QQ 群绑定设置</button> : null}
           {canRefreshSteam ? <button className="btn btn-outline" onClick={handleRefreshAllSteamNames} disabled={refreshing}>{refreshing ? '刷新中...' : '刷新Steam名称'}</button> : null}
         </div>
       </div>
@@ -769,6 +796,14 @@ export function WhitelistPage() {
         submitting={submitting}
         onApprove={handleApprove}
         onReject={openRejectModal}
+      />
+
+      <QqConfigModal
+        open={qqConfigModalOpen}
+        onClose={() => setQqConfigModalOpen(false)}
+        config={qqConfig}
+        onSave={handleQqConfigSave}
+        saving={savingQqConfig}
       />
 
       {dialog}

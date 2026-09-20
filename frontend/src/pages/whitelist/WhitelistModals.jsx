@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Modal } from '../../shared/Modal.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { InternalNoteBadge } from '../../shared/InternalNote.jsx';
+import { QqBindingPanel } from '../../shared/QqBindingPanel.jsx';
 import { publicApi } from '../../lib/publicApi.js';
 
 // ---------------------------------------------------------------------------
@@ -626,14 +627,18 @@ export function PlayerDetailModal({ open, onClose, item, canReview, submitting, 
               <div>SteamID64：{item.steamid64 || '-'}</div>
               <div>SteamID2：{item.steamid || '-'}</div>
               <div>SteamID3：{item.steamid3 || '-'}</div>
+              <div>Steam 验证：{item.steam_verified ? 'Steam 登录验证' : '手动填写'}</div>
             </div>
           </div>
 
           <div className="form-group">
             <label className="mb-4">申请信息</label>
             <div style={{ color: 'var(--text2)', fontSize: 13 }}>
-              <div>联系方式：{item.contact || '-'}</div>
+              <div>联系方式：{item.qq_openid || item.contact || '-'}</div>
               <div>申请时间：{item.applied_at ? formatChinaDateTime(item.applied_at) : '-'}</div>
+              {item.qq_verified_at ? (
+                <div>QQ 绑定时间：{formatChinaDateTime(item.qq_verified_at)}</div>
+              ) : null}
               {item.reason ? (
                 <div style={{ marginTop: 6, whiteSpace: 'pre-wrap' }}>
                   <span style={{ fontWeight: 600 }}>申请理由：</span>
@@ -642,6 +647,8 @@ export function PlayerDetailModal({ open, onClose, item, canReview, submitting, 
               ) : null}
             </div>
           </div>
+
+          <QqBindingPanel steamid64={item.steamid64} />
 
           <RiskProfilePanel profile={item.risk_profile} mainName={item.nickname} />
 

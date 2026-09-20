@@ -704,6 +704,11 @@ async fn remind_manual_review(
         rejected_at: None,
         rejected_by: None,
         rejection_reason: None,
+        steam_verified: false,
+        qq_openid: None,
+        qq_group_id: None,
+        qq_username: None,
+        qq_verified_at: None,
         risk_profile: None,
     };
 

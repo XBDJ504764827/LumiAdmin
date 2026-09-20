@@ -914,16 +914,15 @@ pub async fn report_whitelist_auto_approved(
 }
 
 // ---------------------------------------------------------------------------
-// 管理员群内 @玩家（供后台按钮调用）
+// 管理员私聊玩家（供后台聊天面板调用）
 // ---------------------------------------------------------------------------
 
-/// 调用 LumiBot 的群内 @玩家接口。
-/// `POST {api}/api/v1/messages/group-mention`，Header `X-API-Key`。
-/// 成功返回 LumiBot 的 JSON 响应；失败返回错误（由调用方落库 `qq_mention_logs`）。
-pub async fn send_group_mention(
+/// 调用 LumiBot 的私聊（C2C）推送接口。
+/// `POST {api}/api/v1/messages/chat`，Header `X-API-Key`。
+/// 成功返回 LumiBot 的 JSON 响应；失败返回错误（由调用方落库 `qq_chat_messages`）。
+pub async fn send_c2c_message(
     config: &Config,
-    group_id: &str,
-    mention_openid: &str,
+    qq_openid: &str,
     content: &str,
     operator: &str,
 ) -> anyhow::Result<serde_json::Value> {
@@ -940,12 +939,11 @@ pub async fn send_group_mention(
         .context("LUMI_BOT_API_KEY 未配置")?;
 
     let url = format!(
-        "{}/api/v1/messages/group-mention",
+        "{}/api/v1/messages/chat",
         api_base_url.trim_end_matches('/')
     );
     let body = serde_json::json!({
-        "group_id": group_id,
-        "mention_openid": mention_openid,
+        "openid": qq_openid,
         "content": content,
         "operator": operator,
     });
@@ -957,11 +955,18 @@ pub async fn send_group_mention(
         .json(&body)
         .send()
         .await
-        .context("请求 LumiBot 群内通知失败")?;
+        .context("请求 LumiBot 私聊推送失败")?;
 
     let status = response.status();
     let text = response.text().await.unwrap_or_default();
     if !status.is_success() {
+        // QQ 主动消息限制（40034105）是平台策略：未开通主动消息权限时，
+        // 只有在玩家近期私聊过机器人的窗口内才能送达。
+        if text.contains("主动消息") && text.contains("无权限") {
+            anyhow::bail!(
+                "QQ 平台禁止机器人主动发送消息（主动消息无权限）。请让该玩家先私聊机器人一条消息，再发送（被动回复窗口内可送达）"
+            );
+        }
         let truncated: String = text.chars().take(300).collect();
         anyhow::bail!("LumiBot 返回 HTTP {status}: {truncated}");
     }

@@ -5,24 +5,25 @@ import { useToast } from './Toast.jsx';
 import { useConfirmDialog } from './ConfirmModal.jsx';
 import { formatChinaDateTime } from './time.js';
 
-// QQ 绑定信息面板 + 群内 @玩家：白名单审核/玩家详情共用。
+// QQ 绑定信息面板 + 管理员私聊：白名单审核/玩家详情共用。
 //
 // 功能：
-// - 展示 Steam 绑定的 QQ openid / 群 / 昵称 / 验证方式
-// - 管理员在群内 @玩家（可编辑文案，同玩家 1 分钟冷却）
+// - 展示 Steam 绑定的 QQ openid / 昵称 / 验证时间
+// - 管理员向玩家发起 QQ 私聊（已开通主动消息权限时可直接发送）
+// - 展示与玩家的聊天记录（管理员发送 / 玩家回复）
 // - 解绑（换绑前需先解绑）
 export function QqBindingPanel({ steamid64, compact = false }) {
   const { session } = useAuth();
   const { toast } = useToast();
   const { confirm, dialog } = useConfirmDialog();
   const token = session?.token ?? null;
-  // 群内 @玩家 / 解绑仅限 developer / admin（后端同样鉴权）
+  // 私聊 / 解绑仅限 developer / admin（后端同样鉴权）
   const canManage = session?.role === 'developer' || session?.role === 'admin';
 
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [mentionOpen, setMentionOpen] = useState(false);
-  const [mentionText, setMentionText] = useState('管理员请你查看白名单审核进度，尽快回复。');
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatText, setChatText] = useState('');
   const [sending, setSending] = useState(false);
 
   const load = useCallback(async () => {
@@ -45,15 +46,17 @@ export function QqBindingPanel({ steamid64, compact = false }) {
   if (!steamid64) return null;
 
   const binding = data?.binding;
-  const latest = data?.latest_mention;
+  const messages = data?.chat_messages || [];
 
-  async function handleMention() {
+  async function handleSend() {
     if (sending) return;
+    const content = chatText.trim();
+    if (!content) { toast({ title: '请输入消息内容', tone: 'warning' }); return; }
     setSending(true);
     try {
-      const result = await api.mentionWhitelistQq(token, steamid64, { content: mentionText.trim() || undefined });
-      toast({ title: '已发送群内通知', message: result?.response?.message_id ? `消息ID：${result.response.message_id}` : undefined });
-      setMentionOpen(false);
+      await api.sendWhitelistQqChat(token, steamid64, { content });
+      toast({ title: '已发送' });
+      setChatText('');
       await load();
     } catch (e) {
       toast({ title: '发送失败', message: e.message, tone: 'danger' });
@@ -66,7 +69,7 @@ export function QqBindingPanel({ steamid64, compact = false }) {
   async function handleUnbind() {
     const ok = await confirm({
       title: '解除 QQ 绑定',
-      message: '确定解除该 Steam 账号的 QQ 绑定吗？解除后玩家需重新加群验证才能申请白名单。',
+      message: '确定解除该 Steam 账号的 QQ 绑定吗？解除后玩家需重新私聊验证才能申请白名单。',
       tone: 'danger',
       confirmText: '确认解绑',
     });
@@ -91,40 +94,51 @@ export function QqBindingPanel({ steamid64, compact = false }) {
         <div style={{ color: 'var(--text2)', fontSize: 13, display: 'flex', flexDirection: 'column', gap: 4 }}>
           <div>QQ openid：<code className="steam-id">{binding.qq_openid}</code></div>
           <div>QQ 昵称：{binding.qq_username || '-'}</div>
-          <div>群 openid：<code className="steam-id">{binding.qq_group_id}</code></div>
           <div>绑定时间：{formatChinaDateTime(binding.verified_at)}</div>
           <div>同 QQ 绑定数：{data?.qq_binding_count ?? 1}</div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
-            {canManage ? <button className="action-btn action-btn-accent" type="button" onClick={() => setMentionOpen(true)}>群内 @玩家</button> : null}
+            {canManage ? <button className="action-btn action-btn-accent" type="button" onClick={() => setChatOpen((v) => !v)}>{chatOpen ? '收起聊天' : '私聊玩家'}</button> : null}
             {canManage ? <button className="action-btn action-btn-danger" type="button" onClick={handleUnbind}>解绑</button> : null}
           </div>
-          {latest ? (
-            <div style={{ marginTop: 6, fontSize: 12, color: latest.status === 'sent' ? 'var(--teal)' : 'var(--danger-text)' }}>
-              最近群内通知：{formatChinaDateTime(latest.created_at, { seconds: false })} · {latest.status === 'sent' ? '已发送' : `失败（${latest.error || '未知原因'}）`}
+
+          {chatOpen && canManage ? (
+            <div style={{ marginTop: 10, border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface2)' }}>
+              <div className="qq-chat-list">
+                {messages.length === 0 ? (
+                  <div className="qq-chat-empty">暂无聊天记录</div>
+                ) : messages.map((m) => (
+                  <div key={m.id} className={`qq-chat-row ${m.direction === 'admin_to_player' ? 'mine' : 'theirs'} ${m.status === 'failed' ? 'failed' : ''}`}>
+                    <div className="qq-chat-bubble">
+                      <div className="qq-chat-content">{m.content}</div>
+                      <div className="qq-chat-meta">
+                        {formatChinaDateTime(m.created_at, { seconds: false })}
+                        {m.operator_name ? ` · ${m.operator_name}` : ''}
+                        {m.status === 'failed' ? ` · 发送失败（${m.error || '未知原因'}）` : ''}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ padding: 10, borderTop: '1px solid var(--border)' }}>
+                <textarea
+                  className="form-control"
+                  rows={compact ? 2 : 3}
+                  value={chatText}
+                  maxLength={500}
+                  placeholder="输入要私聊发送给玩家的内容"
+                  onChange={(e) => setChatText(e.target.value)}
+                  disabled={sending}
+                />
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+                  <button className="btn btn-accent" type="button" onClick={handleSend} disabled={sending}>{sending ? '发送中...' : '发送私聊'}</button>
+                </div>
+              </div>
             </div>
           ) : null}
         </div>
       ) : (
-        <div className="text-muted-light fs-12">该玩家尚未完成 QQ 群验证绑定。</div>
+        <div className="text-muted-light fs-12">该玩家尚未完成 QQ 私聊验证绑定。</div>
       )}
-
-      {mentionOpen ? (
-        <div style={{ marginTop: 10, padding: 12, border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface2)' }}>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>群内通知内容（最多 200 字）</div>
-          <textarea
-            className="form-control"
-            rows={compact ? 2 : 3}
-            value={mentionText}
-            maxLength={200}
-            onChange={(e) => setMentionText(e.target.value)}
-            disabled={sending}
-          />
-          <div style={{ display: 'flex', gap: 8, marginTop: 8, justifyContent: 'flex-end' }}>
-            <button className="btn btn-outline" type="button" onClick={() => setMentionOpen(false)} disabled={sending}>取消</button>
-            <button className="btn btn-accent" type="button" onClick={handleMention} disabled={sending}>{sending ? '发送中...' : '发送并 @玩家'}</button>
-          </div>
-        </div>
-      ) : null}
 
       {dialog}
     </div>

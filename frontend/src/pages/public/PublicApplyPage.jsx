@@ -46,8 +46,8 @@ export function PublicApplyPage() {
   // Steam 身份确认后进入第二步所需的稳定 Steam 标识
   const [confirmedSteamId, setConfirmedSteamId] = useState('');
 
-  // 第二步：QQ 群绑定
-  const [qqCode, setQqCode] = useState(null); // { code, expires_at, ttl_seconds, group_number, group_link }
+  // 第二步：QQ 私聊绑定
+  const [qqCode, setQqCode] = useState(null); // { code, expires_at, ttl_seconds, bot_name, bot_qq }
   const [qqBound, setQqBound] = useState(false);
   const [qqUserName, setQqUserName] = useState('');
   const [qqLoading, setQqLoading] = useState(false);
@@ -62,9 +62,11 @@ export function PublicApplyPage() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  // 是否已成功提交（提交后展示独立成功页，三个步骤全部打勾）
+  const [submitted, setSubmitted] = useState(false);
 
-  // 记录当前步骤：1 Steam 验证，2 QQ 绑定，3 填写理由
-  const step = !confirmedSteamId ? 1 : (!qqBound ? 2 : 3);
+  // 记录当前步骤：0 已提交完成，1 Steam 验证，2 QQ 绑定，3 填写理由
+  const step = submitted ? 0 : (!confirmedSteamId ? 1 : (!qqBound ? 2 : 3));
 
   // ——————————————————————————————————————————————————————————————
   // Steam 回调：获取已验证会话
@@ -163,9 +165,9 @@ export function PublicApplyPage() {
       if (data.bound) {
         setQqBound(true);
         setQqUserName(data.qq_username || '');
-        if (data.group_number) {
-          setQqCode((prev) => prev || { group_number: data.group_number, group_link: data.group_link });
-        }
+      }
+      if (data.bot_name || data.bot_qq) {
+        setQqCode((prev) => prev || { bot_name: data.bot_name, bot_qq: data.bot_qq });
       }
       return data;
     } catch {
@@ -251,6 +253,7 @@ export function PublicApplyPage() {
       });
       setMessage('申请已提交，请等待管理员审核。');
       setReason('');
+      setSubmitted(true);
     } catch (submitError) {
       setError(submitError.message);
     } finally {
@@ -274,6 +277,7 @@ export function PublicApplyPage() {
     setError('');
     setAuthError('');
     setQqError('');
+    setSubmitted(false);
   }
 
   // ——————————————————————————————————————————————————————————————
@@ -329,14 +333,15 @@ export function PublicApplyPage() {
   function renderSteps() {
     const steps = [
       { n: 1, label: 'Steam 验证' },
-      { n: 2, label: '加入 QQ 群验证' },
+      { n: 2, label: '添加机器人私聊验证' },
       { n: 3, label: '填写理由' },
     ];
     return (
       <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
         {steps.map((s, i) => {
+          // 提交成功后（step=0）所有步骤视为已完成
+          const done = step === 0 || step > s.n;
           const active = step === s.n;
-          const done = step > s.n;
           return (
             <div key={s.n} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <div style={{
@@ -358,6 +363,44 @@ export function PublicApplyPage() {
             </div>
           );
         })}
+      </div>
+    );
+  }
+
+  // 提交成功页：三个步骤全部打勾，明确提示申请已提交
+  function renderSuccess() {
+    return (
+      <div className="public-card">
+        <div className="public-card-body" style={{ textAlign: 'center', padding: '32px 20px' }}>
+          <div style={{
+            width: 72, height: 72, margin: '0 auto 18px',
+            background: 'var(--success-bg, rgba(34,197,94,.15))', borderRadius: '50%',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: '#22c55e', fontSize: 36,
+          }}>✓</div>
+          <h2 style={{ margin: '0 0 8px', fontSize: 20 }}>申请提交成功</h2>
+          <p style={{ margin: '0 0 20px', color: 'var(--text3)', fontSize: 13 }}>
+            您的白名单申请已提交，请耐心等待管理员审核。<br />
+            审核通过后即可进入服务器；也可在「白名单公示」页查看状态。
+          </p>
+          <div style={{
+            textAlign: 'left', background: 'var(--surface2)', border: '1px solid var(--border)',
+            borderRadius: 10, padding: '12px 14px', fontSize: 13, color: 'var(--text2)',
+            display: 'flex', flexDirection: 'column', gap: 4,
+          }}>
+            <div><strong>SteamID64：</strong>{confirmedSteamId}</div>
+            {nickname && <div><strong>昵称：</strong>{nickname}</div>}
+            <div><strong>QQ 绑定：</strong>已完成{qqUserName ? `（${qqUserName}）` : ''}</div>
+          </div>
+          <button
+            className="btn btn-accent"
+            style={{ marginTop: 20, padding: '10px 28px', fontSize: 14 }}
+            type="button"
+            onClick={handleLogout}
+          >
+            再为其他账号申请
+          </button>
+        </div>
       </div>
     );
   }
@@ -387,11 +430,12 @@ export function PublicApplyPage() {
           </svg>
         </div>
         <h1>白名单申请</h1>
-        <p>两步验证：先验证 Steam 身份，再加入 QQ 群完成验证，最后填写申请理由。</p>
+        <p>两步验证：先验证 Steam 身份，再添加机器人 QQ 私聊验证，最后填写申请理由。</p>
       </div>
 
       <div style={{ maxWidth: 520, margin: '0 auto' }}>
         {renderSteps()}
+        {submitted ? renderSuccess() : (
         <div className="public-card">
           <div className="public-card-body">
             {/* ————————————————— Step 1: Steam 验证 ————————————————— */}
@@ -489,7 +533,7 @@ export function PublicApplyPage() {
               </>
             )}
 
-            {/* ————————————————— Step 2: QQ 群绑定 ————————————————— */}
+            {/* ————————————————— Step 2: QQ 私聊绑定 ————————————————— */}
             {step === 2 && (
               <>
                 <div className="alert alert-success" style={{ marginBottom: 16 }}>
@@ -504,9 +548,11 @@ export function PublicApplyPage() {
                   </div>
                 </div>
 
-                <h3 style={{ margin: '0 0 8px', fontSize: 16, textAlign: 'center' }}>第二步：加入 QQ 群并发送验证码</h3>
+                <h3 style={{ margin: '0 0 8px', fontSize: 16, textAlign: 'center' }}>第二步：添加机器人 QQ 并私聊验证码</h3>
                 <p style={{ margin: '0 0 16px', fontSize: 13, color: 'var(--text3)', textAlign: 'center' }}>
-                  加入 QQ 群后，在群内 <strong>@机器人</strong> 发送下方验证码即可完成绑定。
+                  添加机器人 <strong>{qqCode?.bot_name || 'QQ 机器人'}</strong>（QQ：
+                  <strong>{qqCode?.bot_qq || '加载中'}</strong>）为好友，然后把下方验证码
+                  <strong>私聊发送给机器人</strong>即可完成绑定。
                 </p>
 
                 {qqError && (
@@ -516,20 +562,15 @@ export function PublicApplyPage() {
                   </div>
                 )}
 
-                {qqCode?.group_link && (
-                  <a
-                    className="btn btn-accent"
-                    style={{ width: '100%', padding: 12, fontSize: 14, display: 'block', textAlign: 'center', textDecoration: 'none', marginBottom: 12 }}
-                    href={qqCode.group_link}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    一键加入 QQ 群（{qqCode.group_number}）
-                  </a>
-                )}
-                {qqCode && !qqCode.group_link && qqCode.group_number && (
-                  <div style={{ textAlign: 'center', marginBottom: 12, fontSize: 13, color: 'var(--text2)' }}>
-                    请手动搜索并加入 QQ 群：<strong>{qqCode.group_number}</strong>
+                {qqCode?.bot_qq && (
+                  <div style={{
+                    background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 10,
+                    padding: '12px 14px', marginBottom: 12, fontSize: 13, color: 'var(--text2)',
+                  }}>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>操作步骤</div>
+                    <div>1. 打开 QQ，搜索并添加机器人好友：<strong>{qqCode.bot_name}</strong>（QQ <strong>{qqCode.bot_qq}</strong>）</div>
+                    <div style={{ marginTop: 4 }}>2. 复制下方验证码，<strong>私聊发送</strong>给机器人（无需 @，也不用加群）</div>
+                    <div style={{ marginTop: 4 }}>3. 机器人回复「绑定成功」后，本页会自动进入下一步</div>
                   </div>
                 )}
 
@@ -556,7 +597,7 @@ export function PublicApplyPage() {
                       {copied ? '已复制 ✓' : '复制验证码'}
                     </button>
                     <div style={{ fontSize: 12, color: 'var(--text4)', textAlign: 'center', marginBottom: 8 }}>
-                      在 QQ 群内发送：<code>绑定 {qqCode.code}</code>（需 @机器人）
+                      私聊机器人发送：<code>{qqCode.code}</code>
                     </div>
                     {(codeRemaining <= 0 || qqError) && (
                       <button
@@ -583,7 +624,7 @@ export function PublicApplyPage() {
                 <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px dashed var(--border)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text3)' }}>
                     <span className="public-loading-spinner" style={{ width: 12, height: 12 }} />
-                    正在等待您完成群内验证，完成后会自动进入下一步...
+                    正在等待机器人确认绑定，完成后会自动进入下一步...
                   </div>
                   <button className="btn btn-outline" style={{ marginTop: 12, fontSize: 12 }} type="button" onClick={refreshBindStatus}>
                     我已发送，立即检查
@@ -649,6 +690,7 @@ export function PublicApplyPage() {
             )}
           </div>
         </div>
+        )}
 
         <div style={{ textAlign: 'center', marginTop: 16, fontSize: 12, color: 'var(--text3)' }}>
           提交后可在「白名单公示」页查看审核状态

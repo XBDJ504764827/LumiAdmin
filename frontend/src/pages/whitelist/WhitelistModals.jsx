@@ -145,6 +145,67 @@ function RiskReasonItem({ reason, accountName }) {
   );
 }
 
+// 关联账号风险明细：把命中风险的关联账号逐条列出，明确“是哪个账号、因何、共享哪个 IP”。
+// 相比聚合文案（只带首个账号/IP），逐条展示可避免管理员误判。
+function LinkedAccountRiskCard({ account, reasons }) {
+  // 与该账号相关的风险原因（后端会把关联账号的 steamid64 写入 reason）
+  const related = reasons.filter((reason) => reason.steamid64 === account.steamid64);
+  const tone = account.has_active_global_ban || account.has_active_local_ban ? 'danger' : 'warning';
+  const chips = accountStatusChips(account);
+  const sharedIps = account.shared_ips || [];
+
+  return (
+    <div className={`whitelist-linked-risk-card risk-severity-${tone}`}>
+      <div className="whitelist-linked-risk-head">
+        <span className="whitelist-linked-risk-icon">{severityIcon(tone === 'danger' ? 'block' : 'warning')}</span>
+        <div className="whitelist-linked-risk-identity">
+          <span className="whitelist-linked-risk-name">{account.player_name || '(未知玩家)'}</span>
+          <code className="whitelist-linked-risk-id">{account.steamid64}</code>
+        </div>
+        <div className="whitelist-linked-risk-chips">{chips}</div>
+      </div>
+      <div className="whitelist-linked-risk-body">
+        <div className="whitelist-linked-risk-field">
+          <span className="whitelist-linked-risk-label">关联方式</span>
+          <span className="whitelist-linked-risk-value">
+            {sharedIps.length > 0
+              ? sharedIps.map((ip) => <code key={ip} className="whitelist-linked-risk-ip">{ip}</code>)
+              : <span className="text-muted-light">共享 IP 未知</span>}
+          </span>
+        </div>
+        {account.last_seen_at ? (
+          <div className="whitelist-linked-risk-field">
+            <span className="whitelist-linked-risk-label">最近出现</span>
+            <span className="whitelist-linked-risk-value">{formatChinaDateTime(account.last_seen_at, { seconds: false })}</span>
+          </div>
+        ) : null}
+        {related.length > 0 ? (
+          <div className="whitelist-linked-risk-field">
+            <span className="whitelist-linked-risk-label">命中原因</span>
+            <span className="whitelist-linked-risk-value">
+              {related.map((reason, index) => (
+                <span key={`${reason.code}-${index}`} className="whitelist-linked-risk-reason">
+                  {friendlyReasonMessage(reason.message)}
+                </span>
+              ))}
+            </span>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+// 取出需要重点关注的关联账号（有封禁或有拒绝历史），按风险高低排序
+function flaggedLinkedAccounts(accounts) {
+  return (accounts || [])
+    .filter((account) => account.has_active_global_ban || account.has_active_local_ban || account.rejected_whitelist_count > 0)
+    .sort((a, b) => {
+      const score = (acc) => (acc.has_active_global_ban ? 100 : 0) + (acc.has_active_local_ban ? 80 : 0) + Math.min(acc.rejected_whitelist_count, 10) * 6;
+      return score(b) - score(a);
+    });
+}
+
 // 用连线图展示当前玩家与各关联账号之间的关系，线上的标签即关联依据（共享 IP）
 function RiskLinkGraph({ profile, mainName }) {
   const accounts = profile.linked_accounts || [];
@@ -204,6 +265,7 @@ function RiskProfilePanel({ profile, mainName }) {
   const tone = riskTone(profile);
   const reasons = profile.reasons || [];
   const linkedAccounts = profile.linked_accounts || [];
+  const flaggedAccounts = flaggedLinkedAccounts(linkedAccounts);
   return (
     <div className={`whitelist-risk-panel ${tone}`}>
       <div className="whitelist-risk-panel-head">
@@ -217,6 +279,16 @@ function RiskProfilePanel({ profile, mainName }) {
           <RiskLinkGraph profile={profile} mainName={mainName} />
         </div>
       ) : null}
+      {flaggedAccounts.length > 0 ? (
+        <div className="whitelist-risk-section">
+          <div className="whitelist-risk-section-title">关联账号风险明细</div>
+          <div className="whitelist-linked-risk-list">
+            {flaggedAccounts.map((account) => (
+              <LinkedAccountRiskCard key={account.steamid64} account={account} reasons={reasons} />
+            ))}
+          </div>
+        </div>
+      ) : null}
       {reasons.length > 0 ? (
         <div className="whitelist-risk-section">
           <div className="whitelist-risk-section-title">风险原因</div>
@@ -224,14 +296,21 @@ function RiskProfilePanel({ profile, mainName }) {
             {REASON_GROUPS.map((group) => {
               const groupReasons = reasons.filter((reason) => group.match(reason.code));
               if (groupReasons.length === 0) return null;
+              // 关联账号风险已在上方按账号逐条展示，这里仅保留无法归属到已展示账号的项，
+              // 避免同一风险重复展示造成干扰；被截断未展示的账号仍会保留在此。
+              const shownIds = new Set(flaggedAccounts.map((account) => account.steamid64));
+              const visibleReasons = group.key === 'linked'
+                ? groupReasons.filter((reason) => !reason.steamid64 || !shownIds.has(reason.steamid64))
+                : groupReasons;
+              if (visibleReasons.length === 0) return null;
               return (
                 <div key={group.key} className="whitelist-risk-reason-group">
                   <div className="whitelist-risk-reason-group-title">
                     <span>{group.title}</span>
-                    <span className="whitelist-risk-reason-group-count">{groupReasons.length}</span>
+                    <span className="whitelist-risk-reason-group-count">{visibleReasons.length}</span>
                   </div>
                   <div className="whitelist-risk-reason-list">
-                    {groupReasons.map((reason, index) => {
+                    {visibleReasons.map((reason, index) => {
                       const account = (profile.linked_accounts || []).find((a) => a.steamid64 === reason.steamid64);
                       return (
                         <RiskReasonItem

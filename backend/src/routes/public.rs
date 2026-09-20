@@ -38,12 +38,11 @@ pub(crate) struct QqBindStatusQuery {
     steam_input: String,
 }
 
-/// QQ 群绑定校验（供 LumiBot 调用）
+/// QQ 绑定校验（供 LumiBot 私聊收到验证码后调用）
 #[derive(serde::Deserialize)]
 pub(crate) struct QqBindVerifyBody {
     code: String,
     qq_openid: String,
-    qq_group_id: String,
     qq_username: Option<String>,
 }
 
@@ -324,8 +323,8 @@ pub(crate) async fn issue_whitelist_qq_code(
         "code": issued.code,
         "expires_at": issued.expires_at,
         "ttl_seconds": issued.ttl_seconds,
-        "group_number": issued.group_number,
-        "group_link": issued.group_link,
+        "bot_name": issued.bot_name,
+        "bot_qq": issued.bot_qq,
     })))
 }
 
@@ -358,8 +357,8 @@ pub(crate) async fn whitelist_qq_bind_status(
         "bound": binding.is_some(),
         "qq_username": binding.as_ref().and_then(|b| b.qq_username.clone()),
         "verified_at": binding.as_ref().map(|b| b.verified_at),
-        "group_number": config.group_number,
-        "group_link": config.group_link,
+        "bot_name": config.bot_name,
+        "bot_qq": config.bot_qq,
     })))
 }
 
@@ -375,7 +374,6 @@ pub(crate) async fn qq_whitelist_bind_verify(
         &ctx.db,
         &body.code,
         &body.qq_openid,
-        &body.qq_group_id,
         body.qq_username.as_deref(),
     )
     .await;
@@ -397,6 +395,66 @@ pub(crate) async fn qq_whitelist_bind_verify(
             ))
         }
     }
+}
+
+/// 玩家私聊消息接入（供 LumiBot 在 C2C 收到玩家消息后回传，按 openid 归属到 Steam）。
+#[derive(serde::Deserialize)]
+pub(crate) struct QqChatInboundBody {
+    qq_openid: String,
+    content: String,
+}
+
+pub(crate) async fn qq_chat_inbound(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Json(body): Json<QqChatInboundBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    verify_qq_token(&ctx, &headers)?;
+
+    let content = body.content.trim();
+    if content.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "消息内容不能为空" })),
+        ));
+    }
+    // 按 openid 定位该 QQ 绑定的全部 Steam，取最近绑定的一条归属消息
+    let bindings = whitelist_qq_service::find_bindings_by_openid(&ctx.db, &body.qq_openid)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "QQ 私聊消息：查询绑定失败");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "查询绑定失败" })),
+            )
+        })?;
+    let steamid64 = bindings.first().map(|b| b.steamid64.as_str());
+
+    if let Err(e) = whitelist_qq_service::record_chat_message(
+        &ctx.db,
+        steamid64,
+        &body.qq_openid,
+        "player_to_admin",
+        content,
+        "received",
+        None,
+        None,
+        None,
+    )
+    .await
+    {
+        tracing::error!(error = %e, "QQ 私聊消息：写入记录失败");
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "记录消息失败" })),
+        ));
+    }
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "bound": steamid64.is_some(),
+        "steamid64": steamid64,
+    })))
 }
 
 pub(crate) async fn public_bans(

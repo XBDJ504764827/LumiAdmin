@@ -18,10 +18,8 @@ pub(crate) struct AutoApproveConfigBody {
 #[allow(dead_code)]
 pub(crate) struct QqConfigBody {
     pub enabled: bool,
-    pub group_number: String,
-    pub group_link: Option<String>,
-    #[serde(default)]
-    pub group_openids: Vec<String>,
+    pub bot_name: Option<String>,
+    pub bot_qq: Option<String>,
     pub max_bindings: Option<i32>,
     pub code_ttl_seconds: Option<i32>,
 }
@@ -73,35 +71,41 @@ pub(crate) async fn update_auto_approve_config(
     Ok(Json(serde_json::json!({ "config": config })))
 }
 
-/// 获取白名单 QQ 群配置。
+/// 获取白名单 QQ 群配置（仅开发管理员可见）。
 pub(crate) async fn get_qq_config(
     State(ctx): State<AppCtx>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let _actor = current_operator(&ctx, &headers).await?;
+    let actor = current_operator(&ctx, &headers).await?;
+    if !permission_service::can_manage_whitelist_qq_config(&actor) {
+        return Err(AppError::forbidden());
+    }
     let config = whitelist_qq_service::load_config(&ctx.db)
         .await
         .map_err(AppError::internal)?;
     Ok(Json(serde_json::json!({ "config": config })))
 }
 
-/// 更新白名单 QQ 群配置。
+/// 更新白名单 QQ 群配置（仅开发管理员可改）。
 pub(crate) async fn update_qq_config(
     State(ctx): State<AppCtx>,
     headers: HeaderMap,
     Json(body): Json<QqConfigBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let actor = current_operator(&ctx, &headers).await?;
-    if !permission_service::can_manage_whitelist_manually(&actor) {
+    if !permission_service::can_manage_whitelist_qq_config(&actor) {
         return Err(AppError::forbidden());
     }
     let operator_name = actor.display_name.clone();
     let config = whitelist_qq_service::update_config(
         &ctx.db,
         body.enabled,
-        &body.group_number,
-        body.group_link.as_deref(),
-        body.group_openids,
+        body.bot_name
+            .as_deref()
+            .unwrap_or(whitelist_qq_service::DEFAULT_BOT_NAME),
+        body.bot_qq
+            .as_deref()
+            .unwrap_or(whitelist_qq_service::DEFAULT_BOT_QQ),
         body.max_bindings
             .unwrap_or(whitelist_qq_service::DEFAULT_MAX_BINDINGS),
         body.code_ttl_seconds
@@ -114,11 +118,12 @@ pub(crate) async fn update_qq_config(
         &ctx.db,
         &operator_name,
         "白名单管理",
-        "修改QQ群绑定设置",
+        "修改QQ绑定设置",
         &format!(
-            "启用：{}，群号：{}，单QQ上限：{}，验证码有效期：{}秒",
+            "启用：{}，机器人：{}（QQ {}），单QQ上限：{}，验证码有效期：{}秒",
             if config.enabled { "是" } else { "否" },
-            config.group_number,
+            config.bot_name,
+            config.bot_qq,
             config.max_bindings,
             config.code_ttl_seconds
         ),

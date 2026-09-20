@@ -392,12 +392,9 @@ pub async fn create_public_whitelist_request(
     .bind(reason.as_deref())
     .bind(input.steam_verified)
     .bind(binding.as_ref().map(|b| b.qq_openid.as_str()))
-    .bind(binding.as_ref().map(|b| b.qq_group_id.as_str()))
-    .bind(
-        binding
-            .as_ref()
-            .and_then(|b| b.qq_username.as_deref()),
-    )
+    // 私聊绑定没有群 ID，快照固定写 NULL（历史群绑定字段仍保留兼容）
+    .bind(None::<&str>)
+    .bind(binding.as_ref().and_then(|b| b.qq_username.as_deref()))
     .bind(binding.as_ref().map(|b| b.verified_at))
     .fetch_one(&db.pool)
     .await?;
@@ -813,7 +810,7 @@ async fn reopen_inactive_whitelist(
     .bind(reason)
     .bind(steam_verified)
     .bind(binding.as_ref().map(|b| b.qq_openid.as_str()))
-    .bind(binding.as_ref().map(|b| b.qq_group_id.as_str()))
+    .bind(None::<&str>)
     .bind(binding.as_ref().and_then(|b| b.qq_username.as_deref()))
     .bind(binding.as_ref().map(|b| b.verified_at))
     .fetch_one(&db.pool)
@@ -1279,7 +1276,6 @@ mod tests {
             db,
             &issued.code,
             qq_openid,
-            "group-openid-test",
             Some("测试玩家"),
         )
         .await

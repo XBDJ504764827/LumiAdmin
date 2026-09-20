@@ -209,6 +209,7 @@ export function WhitelistPage() {
   });
 
   const canManualCreate = session?.role === 'developer' || session?.role === 'admin';
+  const canManageQqConfig = session?.role === 'developer';
   const canReview = ['developer', 'admin', 'normal'].includes(session?.role);
   const canRevoke = session?.role === 'developer' || session?.role === 'admin';
   const canRefreshSteam = session?.role === 'developer';
@@ -506,15 +507,15 @@ export function WhitelistPage() {
     return () => { cancelled = true; };
   }, [token, canManualCreate]);
 
-  // QQ 群绑定配置加载
+  // QQ 群绑定配置加载（仅开发管理员）
   useEffect(() => {
-    if (!canManualCreate) return;
+    if (!canManageQqConfig) return;
     let cancelled = false;
     api.whitelistQqConfig(token)
       .then((data) => { if (!cancelled) setQqConfig(data.config); })
       .catch(() => { /* 静默失败 */ });
     return () => { cancelled = true; };
-  }, [token, canManualCreate]);
+  }, [token, canManageQqConfig]);
 
   async function handleQqConfigSave(body) {
     try {
@@ -522,7 +523,7 @@ export function WhitelistPage() {
       const data = await api.updateWhitelistQqConfig(token, body);
       setQqConfig(data.config);
       setQqConfigModalOpen(false);
-      toast({ title: '已保存', message: 'QQ 群绑定设置已更新。' });
+      toast({ title: '已保存', message: 'QQ 绑定设置已更新。' });
     } catch (actionError) {
       toast({ title: '保存失败', message: actionError.message, tone: 'danger' });
     } finally { setSavingQqConfig(false); }
@@ -587,7 +588,7 @@ export function WhitelistPage() {
         </div>
         <div className="flex gap-10">
           {canManualCreate ? <button className="btn btn-accent" onClick={() => setManualModalOpen(true)}>手动添加白名单</button> : null}
-          {canManualCreate ? <button className="btn btn-outline" onClick={() => setQqConfigModalOpen(true)}>QQ 群绑定设置</button> : null}
+          {canManageQqConfig ? <button className="btn btn-outline" onClick={() => setQqConfigModalOpen(true)}>QQ 绑定设置</button> : null}
           {canRefreshSteam ? <button className="btn btn-outline" onClick={handleRefreshAllSteamNames} disabled={refreshing}>{refreshing ? '刷新中...' : '刷新Steam名称'}</button> : null}
         </div>
       </div>

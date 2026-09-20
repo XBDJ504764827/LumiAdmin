@@ -41,6 +41,11 @@ pub fn can_manage_whitelist_manually(actor: &Operator) -> bool {
     matches!(actor.role.as_str(), ROLE_DEVELOPER | ROLE_ADMIN)
 }
 
+/// QQ 群绑定设置属于高风险配置（影响公开申请入口与绑定策略），仅开发管理员可改。
+pub fn can_manage_whitelist_qq_config(actor: &Operator) -> bool {
+    actor.role == ROLE_DEVELOPER
+}
+
 pub fn can_create_ban(actor: &Operator) -> bool {
     matches!(actor.role.as_str(), ROLE_DEVELOPER | ROLE_ADMIN)
 }

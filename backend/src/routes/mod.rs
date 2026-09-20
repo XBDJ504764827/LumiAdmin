@@ -357,8 +357,8 @@ pub fn router(
             get(whitelist::get_qq_binding).delete(whitelist::delete_qq_binding),
         )
         .route(
-            "/api/whitelist/qq-mention/:steamid64",
-            post(whitelist::mention_qq_player),
+            "/api/whitelist/qq-chat/:steamid64",
+            get(whitelist::list_qq_chat).post(whitelist::send_qq_chat),
         )
         .route(
             "/api/whitelist/:id/approve",
@@ -594,6 +594,10 @@ pub fn router(
         .route(
             "/api/integration/qq/bind/verify",
             post(public::qq_whitelist_bind_verify),
+        )
+        .route(
+            "/api/integration/qq/chat/inbound",
+            post(public::qq_chat_inbound),
         )
         .route(
             "/api/integration/qq/whitelist/:id/review",

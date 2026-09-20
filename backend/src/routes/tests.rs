@@ -1928,7 +1928,6 @@ async fn submit_whitelist_returns_json_body() {
             &db,
             &issued.code,
             "qq-openid-route-test",
-            "group-openid-route-test",
             Some("测试玩家"),
         )
         .await
@@ -2764,8 +2763,7 @@ async fn qq_bind_verify_requires_token_and_binds_steam() {
                     .body(Body::from(
                         json!({
                             "code": issued.code,
-                            "qq_openid": "qq-openid-777",
-                            "qq_group_id": "group-openid-777"
+                            "qq_openid": "qq-openid-777"
                         })
                         .to_string(),
                     ))
@@ -2786,7 +2784,6 @@ async fn qq_bind_verify_requires_token_and_binds_steam() {
                         json!({
                             "code": issued.code,
                             "qq_openid": "qq-openid-777",
-                            "qq_group_id": "group-openid-777",
                             "qq_username": "绑定玩家"
                         })
                         .to_string(),
@@ -2875,8 +2872,7 @@ async fn qq_bind_verify_rejects_invalid_code() {
                     .body(Body::from(
                         json!({
                             "code": "WL-NOPE00",
-                            "qq_openid": "qq-openid-999",
-                            "qq_group_id": "group-openid-999"
+                            "qq_openid": "qq-openid-999"
                         })
                         .to_string(),
                     ))
@@ -3775,6 +3771,184 @@ async fn whitelist_approve_emits_auth_event() {
                 .await
                 .unwrap();
         assert!(count.0 >= 1, "批准白名单应产生 whitelist.add 事件");
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn qq_config_only_editable_by_developer() {
+    with_test_app(async |db, config| {
+        let app = test_app(config, db.clone());
+
+        // admin 无权读取/修改 QQ 群绑定设置
+        let admin_token =
+            create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
+        let admin_get = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/whitelist/qq-config")
+                    .header("authorization", format!("Bearer {admin_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(admin_get.status(), StatusCode::FORBIDDEN);
+
+        let admin_put = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/whitelist/qq-config")
+                    .header("authorization", format!("Bearer {admin_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "enabled": true,
+                            "bot_name": "CNGOKZBOT",
+                            "bot_qq": "3889010779",
+                            "max_bindings": 5,
+                            "code_ttl_seconds": 300
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(admin_put.status(), StatusCode::FORBIDDEN);
+
+        // developer 可读取并修改
+        let dev_token =
+            create_session_for_user(&db, "22222222-2222-2222-2222-222222222222").await?;
+        let dev_get = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/whitelist/qq-config")
+                    .header("authorization", format!("Bearer {dev_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(dev_get.status(), StatusCode::OK);
+
+        let dev_put = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/whitelist/qq-config")
+                    .header("authorization", format!("Bearer {dev_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "enabled": true,
+                            "bot_name": "CNGOKZBOT",
+                            "bot_qq": "3889010779",
+                            "max_bindings": 5,
+                            "code_ttl_seconds": 300
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(dev_put.status(), StatusCode::OK);
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn qq_chat_inbound_records_player_message() {
+    with_test_app(async |db, mut config| {
+        const TOKEN: &str = "qq-chat-inbound-token";
+        config.qq_integration_token = Some(TOKEN.to_string());
+
+        // 先完成一次绑定，便于按 openid 归属
+        let issued =
+            crate::services::whitelist_qq_service::issue_code(&db, "76561198000000999", None)
+                .await?;
+        crate::services::whitelist_qq_service::verify_and_bind(
+            &db,
+            &issued.code,
+            "qq-chat-openid",
+            Some("聊天玩家"),
+        )
+        .await?;
+
+        let app = test_app(config, db.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/integration/qq/chat/inbound")
+                    .header("x-qq-token", TOKEN)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "qq_openid": "qq-chat-openid",
+                            "content": "你好，我想问下白名单进度"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await?)?;
+        assert_eq!(payload["bound"], true);
+        assert_eq!(payload["steamid64"], "76561198000000999");
+
+        let messages =
+            crate::services::whitelist_qq_service::list_chat_messages(&db, "76561198000000999", 10)
+                .await?;
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].direction, "player_to_admin");
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn qq_chat_list_and_send_requires_binding() {
+    with_test_app(async |db, config| {
+        let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
+        let app = test_app(config, db);
+
+        // 未绑定：读取为空，发送报错
+        let list = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/whitelist/qq-chat/76561198000000888")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(list.status(), StatusCode::OK);
+        let payload: serde_json::Value =
+            serde_json::from_slice(&to_bytes(list.into_body(), usize::MAX).await?)?;
+        assert!(payload["messages"].as_array().unwrap().is_empty());
+
+        let send = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/whitelist/qq-chat/76561198000000888")
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "content": "你好" }).to_string()))
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(send.status(), StatusCode::BAD_REQUEST);
         Ok(())
     })
     .await;

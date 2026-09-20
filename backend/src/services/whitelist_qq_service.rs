@@ -1,16 +1,19 @@
-//! 白名单两步验证：Steam ↔ QQ 群绑定服务
+//! 白名单两步验证：Steam ↔ QQ 私聊绑定服务
 //!
 //! 流程：
 //! 1. 玩家在网站完成 Steam 身份验证后，请求生成一次性验证码（默认 5 分钟有效）。
-//! 2. 玩家加入 QQ 群并在群内 @机器人 发送该验证码。
-//! 3. LumiBot 调用 `/api/integration/qq/bind/verify` 校验并写入 `steam_qq_bindings`。
+//! 2. 玩家添加机器人 QQ 好友，私聊直接发送该验证码。
+//! 3. LumiBot 调用 `/api/integration/qq/bind/verify` 校验并写入 `steam_qq_bindings`，
+//!    随后 Bot 在私聊中被动回复绑定结果。
 //! 4. 玩家回到网站，系统确认绑定后即可填写理由并提交白名单申请。
 //!
 //! 设计要点：
 //! - 验证码单个 Steam 仅保留一条活跃码，重新生成即作废上一条；
+//! - 验证码为一次性：绑定成功后立即作废该 Steam 全部未消费验证码；
 //! - 绑定关系以 `steamid64` 唯一，1 个 QQ(openid) 最多绑定 N 个 Steam（默认 5）；
-//! - 绑定永久有效，`revoked`/`expired` 重新申请时复用绑定，无需重新加群；
-//! - 换绑需要管理员先删除绑定（`delete_binding`）。
+//! - 绑定永久有效，`revoked`/`expired` 重新申请时复用绑定，无需重新私聊；
+//! - 换绑需要管理员先删除绑定（`delete_binding`）；
+//! - 采用私聊（C2C）而非 QQ 群，规避「群内主动消息无权限」的平台限制。
 
 use crate::db::Database;
 use anyhow::Context;
@@ -25,17 +28,24 @@ pub const DEFAULT_CODE_TTL_SECONDS: i32 = 300;
 /// 默认单 QQ 最多绑定 Steam 数
 pub const DEFAULT_MAX_BINDINGS: i32 = 5;
 
+/// 默认机器人名称（引导文案展示）
+pub const DEFAULT_BOT_NAME: &str = "CNGOKZBOT";
+
+/// 默认机器人 QQ 号（引导玩家添加好友）
+pub const DEFAULT_BOT_QQ: &str = "3889010779";
+
 /// 验证码字符集：去掉容易混淆的 0/O/1/I/L
 const CODE_CHARSET: &[u8] = b"ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 const CODE_LENGTH: usize = 6;
 
-/// QQ 群配置（单行表）。
+/// QQ 绑定配置（单行表）。
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct QqConfig {
     pub enabled: bool,
-    pub group_number: String,
-    pub group_link: Option<String>,
-    pub group_openids: Vec<String>,
+    /// 机器人名称（引导文案，如 CNGOKZBOT）
+    pub bot_name: String,
+    /// 机器人 QQ 号（引导玩家添加好友）
+    pub bot_qq: String,
     pub max_bindings: i32,
     pub code_ttl_seconds: i32,
     pub updated_by: Option<String>,
@@ -47,44 +57,35 @@ impl QqConfig {
     fn default_row() -> Self {
         Self {
             enabled: true,
-            group_number: "275164688".to_string(),
-            group_link: Some("https://qm.qq.com/q/vRqmiKS6oE".to_string()),
-            group_openids: Vec::new(),
+            bot_name: DEFAULT_BOT_NAME.to_string(),
+            bot_qq: DEFAULT_BOT_QQ.to_string(),
             max_bindings: DEFAULT_MAX_BINDINGS,
             code_ttl_seconds: DEFAULT_CODE_TTL_SECONDS,
             updated_by: None,
             updated_at: Utc::now(),
         }
     }
-
-    /// 是否允许该群 openid 参与绑定（白名单为空表示不限制）
-    pub fn allows_group(&self, group_openid: &str) -> bool {
-        self.group_openids.is_empty() || self.group_openids.iter().any(|g| g == group_openid)
-    }
 }
 
-/// 读取 QQ 群配置（表为空时返回默认值）。
+/// 读取 QQ 绑定配置（表为空时返回默认值）。
 pub async fn load_config(db: &Database) -> anyhow::Result<QqConfig> {
     let row: Option<QqConfig> = sqlx::query_as(
-        r#"SELECT enabled, group_number, group_link, group_openids,
-                  max_bindings, code_ttl_seconds, updated_by, updated_at
+        r#"SELECT enabled, bot_name, bot_qq, max_bindings, code_ttl_seconds, updated_by, updated_at
            FROM whitelist_qq_config
            WHERE id = true"#,
     )
     .fetch_optional(&db.pool)
     .await
-    .context("读取白名单 QQ 群配置失败")?;
+    .context("读取白名单 QQ 配置失败")?;
     Ok(row.unwrap_or_else(QqConfig::default_row))
 }
 
-/// 更新 QQ 群配置（管理后台）。
-#[allow(clippy::too_many_arguments)]
+/// 更新 QQ 绑定配置（管理后台，仅开发管理员）。
 pub async fn update_config(
     db: &Database,
     enabled: bool,
-    group_number: &str,
-    group_link: Option<&str>,
-    group_openids: Vec<String>,
+    bot_name: &str,
+    bot_qq: &str,
     max_bindings: i32,
     code_ttl_seconds: i32,
     updated_by: &str,
@@ -92,35 +93,44 @@ pub async fn update_config(
     let max_bindings = max_bindings.clamp(1, 50);
     // 验证码有效期限制在 1 分钟 ~ 1 小时，避免过短或过长
     let code_ttl_seconds = code_ttl_seconds.clamp(60, 3600);
-    let group_openids: Vec<String> = group_openids
-        .into_iter()
-        .map(|g| g.trim().to_string())
-        .filter(|g| !g.is_empty())
-        .collect();
+    let bot_name = {
+        let trimmed = bot_name.trim();
+        if trimmed.is_empty() {
+            DEFAULT_BOT_NAME.to_string()
+        } else {
+            trimmed.to_string()
+        }
+    };
+    let bot_qq = {
+        let trimmed = bot_qq.trim();
+        if trimmed.is_empty() {
+            DEFAULT_BOT_QQ.to_string()
+        } else {
+            trimmed.to_string()
+        }
+    };
     sqlx::query(
         r#"INSERT INTO whitelist_qq_config
-             (id, enabled, group_number, group_link, group_openids, max_bindings, code_ttl_seconds, updated_by, updated_at)
-           VALUES (true, $1, $2, $3, $4, $5, $6, $7, now())
+             (id, enabled, bot_name, bot_qq, max_bindings, code_ttl_seconds, updated_by, updated_at)
+           VALUES (true, $1, $2, $3, $4, $5, $6, now())
            ON CONFLICT (id) DO UPDATE
            SET enabled = EXCLUDED.enabled,
-               group_number = EXCLUDED.group_number,
-               group_link = EXCLUDED.group_link,
-               group_openids = EXCLUDED.group_openids,
+               bot_name = EXCLUDED.bot_name,
+               bot_qq = EXCLUDED.bot_qq,
                max_bindings = EXCLUDED.max_bindings,
                code_ttl_seconds = EXCLUDED.code_ttl_seconds,
                updated_by = EXCLUDED.updated_by,
                updated_at = now()"#,
     )
     .bind(enabled)
-    .bind(group_number.trim())
-    .bind(group_link.map(str::trim).filter(|s| !s.is_empty()))
-    .bind(&group_openids)
+    .bind(&bot_name)
+    .bind(&bot_qq)
     .bind(max_bindings)
     .bind(code_ttl_seconds)
     .bind(updated_by.trim())
     .execute(&db.pool)
     .await
-    .context("更新白名单 QQ 群配置失败")?;
+    .context("更新白名单 QQ 配置失败")?;
     load_config(db).await
 }
 
@@ -130,8 +140,9 @@ pub struct SteamQqBinding {
     pub id: Uuid,
     pub steamid64: String,
     pub qq_openid: String,
-    pub qq_group_id: String,
+    pub qq_group_id: Option<String>,
     pub qq_username: Option<String>,
+    pub qq_scene: String,
     pub verified_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -142,8 +153,8 @@ pub struct SteamQqBinding {
 pub struct IssuedCode {
     pub code: String,
     pub expires_at: DateTime<Utc>,
-    pub group_number: String,
-    pub group_link: Option<String>,
+    pub bot_name: String,
+    pub bot_qq: String,
     pub ttl_seconds: i32,
 }
 
@@ -197,8 +208,8 @@ pub async fn issue_code(
                 return Ok(IssuedCode {
                     code,
                     expires_at,
-                    group_number: config.group_number,
-                    group_link: config.group_link,
+                    bot_name: config.bot_name,
+                    bot_qq: config.bot_qq,
                     ttl_seconds: config.code_ttl_seconds,
                 });
             }
@@ -224,7 +235,6 @@ pub enum BindOutcome {
     Bound {
         steamid64: String,
         qq_openid: String,
-        qq_group_id: String,
         already: bool,
     },
     /// 验证码不存在或已过期
@@ -233,35 +243,29 @@ pub enum BindOutcome {
     Consumed,
     /// 该 QQ 绑定数量已达上限
     LimitReached { max: i32 },
-    /// 该 QQ 群不在允许列表
-    GroupDenied,
     /// 功能未开启
     Disabled,
 }
 
-/// 校验验证码并写入绑定（供 LumiBot 调用）。
+/// 校验验证码并写入绑定（供 LumiBot 私聊收到验证码后调用）。
 ///
 /// 并发安全：通过 `UPDATE ... WHERE consumed_at IS NULL` 原子消费验证码，
 /// 两位玩家同时提交同一验证码时只有一个能成功。
+/// 绑定成功后立即作废该 Steam 其余所有未消费验证码（严格一次性）。
 pub async fn verify_and_bind(
     db: &Database,
     code: &str,
     qq_openid: &str,
-    qq_group_id: &str,
     qq_username: Option<&str>,
 ) -> anyhow::Result<BindOutcome> {
     let config = load_config(db).await?;
     if !config.enabled {
         return Ok(BindOutcome::Disabled);
     }
-    if !config.allows_group(qq_group_id) {
-        return Ok(BindOutcome::GroupDenied);
-    }
 
     let code = code.trim();
     anyhow::ensure!(!code.is_empty(), "验证码不能为空");
     anyhow::ensure!(!qq_openid.trim().is_empty(), "QQ 用户标识不能为空");
-    anyhow::ensure!(!qq_group_id.trim().is_empty(), "QQ 群标识不能为空");
 
     // 查询验证码（含已过期/已消费，用于区分提示文案）
     /// (id, steamid64, expires_at, consumed_at)
@@ -291,10 +295,10 @@ pub async fn verify_and_bind(
     if let Some(existing) = find_binding_by_steamid64(db, &steamid64).await? {
         if existing.qq_openid == qq_openid {
             mark_code_consumed(db, code_id, qq_openid).await?;
+            invalidate_codes_for_steam(db, &steamid64).await?;
             return Ok(BindOutcome::Bound {
                 steamid64,
                 qq_openid: qq_openid.to_string(),
-                qq_group_id: existing.qq_group_id,
                 already: true,
             });
         }
@@ -336,30 +340,40 @@ pub async fn verify_and_bind(
 
     sqlx::query(
         r#"INSERT INTO steam_qq_bindings
-             (id, steamid64, qq_openid, qq_group_id, qq_username)
-           VALUES ($1, $2, $3, $4, $5)
+             (id, steamid64, qq_openid, qq_group_id, qq_username, qq_scene)
+           VALUES ($1, $2, $3, NULL, $4, 'c2c')
            ON CONFLICT (steamid64) DO UPDATE
            SET qq_openid = EXCLUDED.qq_openid,
-               qq_group_id = EXCLUDED.qq_group_id,
                qq_username = EXCLUDED.qq_username,
+               qq_scene = 'c2c',
                verified_at = now(),
                updated_at = now()"#,
     )
     .bind(Uuid::new_v4())
     .bind(&steamid64)
     .bind(qq_openid)
-    .bind(qq_group_id)
     .bind(qq_username.map(str::trim).filter(|s| !s.is_empty()))
     .execute(&mut *tx)
     .await
     .context("写入 Steam-QQ 绑定失败")?;
+
+    // 绑定成功后立即作废该 Steam 其余所有未消费验证码
+    sqlx::query(
+        r#"UPDATE whitelist_qq_verify_codes
+           SET consumed_at = now(), consumed_by_qq_openid = $2
+           WHERE steamid64 = $1 AND consumed_at IS NULL"#,
+    )
+    .bind(&steamid64)
+    .bind(qq_openid)
+    .execute(&mut *tx)
+    .await
+    .context("作废绑定后残留验证码失败")?;
 
     tx.commit().await?;
 
     Ok(BindOutcome::Bound {
         steamid64,
         qq_openid: qq_openid.to_string(),
-        qq_group_id: qq_group_id.to_string(),
         already: false,
     })
 }
@@ -378,13 +392,27 @@ async fn mark_code_consumed(db: &Database, code_id: Uuid, qq_openid: &str) -> an
     Ok(())
 }
 
+/// 作废指定 Steam 的所有未消费验证码（绑定成功后调用）。
+async fn invalidate_codes_for_steam(db: &Database, steamid64: &str) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"UPDATE whitelist_qq_verify_codes
+           SET consumed_at = now()
+           WHERE steamid64 = $1 AND consumed_at IS NULL"#,
+    )
+    .bind(steamid64)
+    .execute(&db.pool)
+    .await
+    .context("作废残留验证码失败")?;
+    Ok(())
+}
+
 /// 按 SteamID64 查询绑定。
 pub async fn find_binding_by_steamid64(
     db: &Database,
     steamid64: &str,
 ) -> anyhow::Result<Option<SteamQqBinding>> {
     sqlx::query_as::<_, SteamQqBinding>(
-        r#"SELECT id, steamid64, qq_openid, qq_group_id, qq_username,
+        r#"SELECT id, steamid64, qq_openid, qq_group_id, qq_username, qq_scene,
                   verified_at, created_at, updated_at
            FROM steam_qq_bindings
            WHERE steamid64 = $1"#,
@@ -393,6 +421,24 @@ pub async fn find_binding_by_steamid64(
     .fetch_optional(&db.pool)
     .await
     .context("查询 Steam-QQ 绑定失败")
+}
+
+/// 按 QQ openid 查询其绑定的全部 Steam（用于玩家私聊时定位账号）。
+pub async fn find_bindings_by_openid(
+    db: &Database,
+    qq_openid: &str,
+) -> anyhow::Result<Vec<SteamQqBinding>> {
+    sqlx::query_as::<_, SteamQqBinding>(
+        r#"SELECT id, steamid64, qq_openid, qq_group_id, qq_username, qq_scene,
+                  verified_at, created_at, updated_at
+           FROM steam_qq_bindings
+           WHERE qq_openid = $1
+           ORDER BY verified_at DESC"#,
+    )
+    .bind(qq_openid)
+    .fetch_all(&db.pool)
+    .await
+    .context("查询 QQ 绑定列表失败")
 }
 
 /// 统计某个 QQ 已绑定的 Steam 数量。
@@ -412,7 +458,7 @@ pub async fn delete_binding(
     let row = sqlx::query_as::<_, SteamQqBinding>(
         r#"DELETE FROM steam_qq_bindings
            WHERE steamid64 = $1
-           RETURNING id, steamid64, qq_openid, qq_group_id, qq_username,
+           RETURNING id, steamid64, qq_openid, qq_group_id, qq_username, qq_scene,
                      verified_at, created_at, updated_at"#,
     )
     .bind(steamid64)
@@ -422,28 +468,10 @@ pub async fn delete_binding(
     Ok(row)
 }
 
-/// 列出某个 QQ 绑定的全部 Steam（供管理端排查多开）。
-pub async fn list_bindings_for_qq(
-    db: &Database,
-    qq_openid: &str,
-) -> anyhow::Result<Vec<SteamQqBinding>> {
-    sqlx::query_as::<_, SteamQqBinding>(
-        r#"SELECT id, steamid64, qq_openid, qq_group_id, qq_username,
-                  verified_at, created_at, updated_at
-           FROM steam_qq_bindings
-           WHERE qq_openid = $1
-           ORDER BY verified_at DESC"#,
-    )
-    .bind(qq_openid)
-    .fetch_all(&db.pool)
-    .await
-    .context("查询 QQ 绑定列表失败")
-}
-
 /// 生成随机验证码串（大写去混淆字符）。
 fn random_code() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    // 随机源：线程本地计数器 + 纳秒时间，拼接后做简单打散。
+    // 随机源：纳秒时间 + UUID，拼接后做简单打散。
     // 验证码仅 6 位且 5 分钟过期，配合限流足以抵御爆破，无需加密级随机。
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -474,13 +502,17 @@ pub fn mask_openid(openid: &str) -> String {
     format!("{head}****{tail}")
 }
 
-/// 群内 @玩家 记录（成功/失败均落库）
+// ---------------------------------------------------------------------------
+// 管理员 ↔ 玩家 私聊聊天记录
+// ---------------------------------------------------------------------------
+
+/// 聊天消息记录
 #[derive(Debug, Clone, Serialize, FromRow)]
-pub struct QqMentionLog {
+pub struct QqChatMessage {
     pub id: Uuid,
-    pub steamid64: String,
+    pub steamid64: Option<String>,
     pub qq_openid: String,
-    pub qq_group_id: String,
+    pub direction: String,
     pub content: String,
     pub status: String,
     pub error: Option<String>,
@@ -489,13 +521,13 @@ pub struct QqMentionLog {
     pub created_at: DateTime<Utc>,
 }
 
-/// 写入一条群内 @玩家 记录（成功或失败）。
+/// 写入一条聊天记录。
 #[allow(clippy::too_many_arguments)]
-pub async fn record_mention(
+pub async fn record_chat_message(
     db: &Database,
-    steamid64: &str,
+    steamid64: Option<&str>,
     qq_openid: &str,
-    qq_group_id: &str,
+    direction: &str,
     content: &str,
     status: &str,
     error: Option<&str>,
@@ -503,14 +535,14 @@ pub async fn record_mention(
     operator_name: Option<&str>,
 ) -> anyhow::Result<()> {
     sqlx::query(
-        r#"INSERT INTO qq_mention_logs
-             (id, steamid64, qq_openid, qq_group_id, content, status, error, operator_id, operator_name)
+        r#"INSERT INTO qq_chat_messages
+             (id, steamid64, qq_openid, direction, content, status, error, operator_id, operator_name)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#,
     )
     .bind(Uuid::new_v4())
     .bind(steamid64)
     .bind(qq_openid)
-    .bind(qq_group_id)
+    .bind(direction)
     .bind(content)
     .bind(status)
     .bind(error)
@@ -518,47 +550,32 @@ pub async fn record_mention(
     .bind(operator_name)
     .execute(&db.pool)
     .await
-    .context("写入 QQ 群内通知记录失败")?;
+    .context("写入 QQ 聊天记录失败")?;
     Ok(())
 }
 
-/// 最近一次成功发送时间（用于冷却判断）。
-pub async fn last_mention_at(
+/// 查询与某 Steam 的聊天记录（时间正序，最多 limit 条）。
+pub async fn list_chat_messages(
     db: &Database,
     steamid64: &str,
-) -> anyhow::Result<Option<DateTime<Utc>>> {
-    let row: Option<DateTime<Utc>> = sqlx::query_scalar(
-        r#"SELECT MAX(created_at) FROM qq_mention_logs
-           WHERE steamid64 = $1 AND status = 'sent'"#,
-    )
-    .bind(steamid64)
-    .fetch_one(&db.pool)
-    .await
-    .context("查询最近一次群内通知时间失败")?;
-    Ok(row)
-}
-
-/// 最近一条群内 @玩家 记录（供前端展示发送结果）。
-pub async fn latest_mention(
-    db: &Database,
-    steamid64: &str,
-) -> anyhow::Result<Option<QqMentionLog>> {
-    sqlx::query_as::<_, QqMentionLog>(
-        r#"SELECT id, steamid64, qq_openid, qq_group_id, content, status, error,
+    limit: i64,
+) -> anyhow::Result<Vec<QqChatMessage>> {
+    let mut rows = sqlx::query_as::<_, QqChatMessage>(
+        r#"SELECT id, steamid64, qq_openid, direction, content, status, error,
                   operator_id, operator_name, created_at
-           FROM qq_mention_logs
+           FROM qq_chat_messages
            WHERE steamid64 = $1
            ORDER BY created_at DESC
-           LIMIT 1"#,
+           LIMIT $2"#,
     )
     .bind(steamid64)
-    .fetch_optional(&db.pool)
+    .bind(limit.clamp(1, 200))
+    .fetch_all(&db.pool)
     .await
-    .context("查询 QQ 群内通知记录失败")
+    .context("查询 QQ 聊天记录失败")?;
+    rows.reverse();
+    Ok(rows)
 }
-
-/// 群内 @玩家 冷却秒数（同玩家）。
-pub const MENTION_COOLDOWN_SECONDS: i64 = 60;
 
 #[cfg(test)]
 mod tests {
@@ -604,16 +621,11 @@ mod tests {
                 .unwrap();
             assert!(issued.code.starts_with("WL-"));
             assert_eq!(issued.ttl_seconds, DEFAULT_CODE_TTL_SECONDS);
+            assert_eq!(issued.bot_qq, DEFAULT_BOT_QQ);
 
-            let outcome = verify_and_bind(
-                &db,
-                &issued.code,
-                "qq-openid-1",
-                "group-openid-1",
-                Some("玩家甲"),
-            )
-            .await
-            .unwrap();
+            let outcome = verify_and_bind(&db, &issued.code, "qq-openid-1", Some("玩家甲"))
+                .await
+                .unwrap();
             assert!(matches!(outcome, BindOutcome::Bound { already: false, .. }));
 
             let binding = find_binding_by_steamid64(&db, "76561198000000001")
@@ -621,6 +633,7 @@ mod tests {
                 .unwrap()
                 .expect("binding should exist");
             assert_eq!(binding.qq_openid, "qq-openid-1");
+            assert_eq!(binding.qq_scene, "c2c");
             assert_eq!(binding.qq_username.as_deref(), Some("玩家甲"));
             Ok(())
         })
@@ -634,12 +647,12 @@ mod tests {
             let second = issue_code(&db, "76561198000000002", None).await.unwrap();
             assert_ne!(first.code, second.code);
 
-            let outcome = verify_and_bind(&db, &first.code, "qq-2", "group-2", None)
+            let outcome = verify_and_bind(&db, &first.code, "qq-2", None)
                 .await
                 .unwrap();
             assert!(matches!(outcome, BindOutcome::Consumed));
 
-            let outcome = verify_and_bind(&db, &second.code, "qq-2", "group-2", None)
+            let outcome = verify_and_bind(&db, &second.code, "qq-2", None)
                 .await
                 .unwrap();
             assert!(matches!(outcome, BindOutcome::Bound { already: false, .. }));
@@ -652,12 +665,12 @@ mod tests {
     async fn code_is_single_use() {
         with_test_db(async |db| {
             let issued = issue_code(&db, "76561198000000003", None).await.unwrap();
-            let outcome = verify_and_bind(&db, &issued.code, "qq-3a", "group-3", None)
+            let outcome = verify_and_bind(&db, &issued.code, "qq-3a", None)
                 .await
                 .unwrap();
             assert!(matches!(outcome, BindOutcome::Bound { .. }));
 
-            let outcome = verify_and_bind(&db, &issued.code, "qq-3b", "group-3", None)
+            let outcome = verify_and_bind(&db, &issued.code, "qq-3b", None)
                 .await
                 .unwrap();
             assert!(matches!(outcome, BindOutcome::Consumed));
@@ -669,7 +682,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_code_reports_invalid() {
         with_test_db(async |db| {
-            let outcome = verify_and_bind(&db, "WL-NOPE00", "qq-x", "group-x", None)
+            let outcome = verify_and_bind(&db, "WL-NOPE00", "qq-x", None)
                 .await
                 .unwrap();
             assert!(matches!(outcome, BindOutcome::InvalidCode));
@@ -681,7 +694,7 @@ mod tests {
     #[tokio::test]
     async fn qq_limit_blocks_extra_bindings() {
         with_test_db(async |db| {
-            update_config(&db, true, "275164688", None, vec![], 2, 300, "tester")
+            update_config(&db, true, "CNGOKZBOT", "3889010779", 2, 300, "tester")
                 .await
                 .unwrap();
 
@@ -690,20 +703,15 @@ mod tests {
                 .enumerate()
             {
                 let issued = issue_code(&db, steam, None).await.unwrap();
-                let outcome = verify_and_bind(
-                    &db,
-                    &issued.code,
-                    "qq-limit",
-                    "group-limit",
-                    Some(&format!("玩家{i}")),
-                )
-                .await
-                .unwrap();
+                let outcome =
+                    verify_and_bind(&db, &issued.code, "qq-limit", Some(&format!("玩家{i}")))
+                        .await
+                        .unwrap();
                 assert!(matches!(outcome, BindOutcome::Bound { .. }));
             }
 
             let issued = issue_code(&db, "76561198000000013", None).await.unwrap();
-            let outcome = verify_and_bind(&db, &issued.code, "qq-limit", "group-limit", None)
+            let outcome = verify_and_bind(&db, &issued.code, "qq-limit", None)
                 .await
                 .unwrap();
             assert!(matches!(outcome, BindOutcome::LimitReached { max: 2 }));
@@ -713,41 +721,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn group_allowlist_rejects_unknown_group() {
-        with_test_db(async |db| {
-            update_config(
-                &db,
-                true,
-                "275164688",
-                None,
-                vec!["allowed-group".to_string()],
-                5,
-                300,
-                "tester",
-            )
-            .await
-            .unwrap();
-
-            let issued = issue_code(&db, "76561198000000021", None).await.unwrap();
-            let outcome = verify_and_bind(&db, &issued.code, "qq-g", "other-group", None)
-                .await
-                .unwrap();
-            assert!(matches!(outcome, BindOutcome::GroupDenied));
-
-            let outcome = verify_and_bind(&db, &issued.code, "qq-g", "allowed-group", None)
-                .await
-                .unwrap();
-            assert!(matches!(outcome, BindOutcome::Bound { .. }));
-            Ok(())
-        })
-        .await;
-    }
-
-    #[tokio::test]
     async fn delete_binding_allows_rebind() {
         with_test_db(async |db| {
             let issued = issue_code(&db, "76561198000000031", None).await.unwrap();
-            verify_and_bind(&db, &issued.code, "qq-old", "group-1", None)
+            verify_and_bind(&db, &issued.code, "qq-old", None)
                 .await
                 .unwrap();
 
@@ -758,10 +735,51 @@ mod tests {
             assert_eq!(removed.qq_openid, "qq-old");
 
             let issued = issue_code(&db, "76561198000000031", None).await.unwrap();
-            let outcome = verify_and_bind(&db, &issued.code, "qq-new", "group-1", None)
+            let outcome = verify_and_bind(&db, &issued.code, "qq-new", None)
                 .await
                 .unwrap();
             assert!(matches!(outcome, BindOutcome::Bound { .. }));
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn chat_messages_roundtrip() {
+        with_test_db(async |db| {
+            record_chat_message(
+                &db,
+                Some("76561198000000041"),
+                "qq-chat-1",
+                "admin_to_player",
+                "你好",
+                "sent",
+                None,
+                None,
+                Some("管理员A"),
+            )
+            .await
+            .unwrap();
+            record_chat_message(
+                &db,
+                Some("76561198000000041"),
+                "qq-chat-1",
+                "player_to_admin",
+                "收到",
+                "received",
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+            let items = list_chat_messages(&db, "76561198000000041", 20)
+                .await
+                .unwrap();
+            assert_eq!(items.len(), 2);
+            assert_eq!(items[0].direction, "admin_to_player");
+            assert_eq!(items[1].direction, "player_to_admin");
             Ok(())
         })
         .await;

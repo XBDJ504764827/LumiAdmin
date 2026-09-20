@@ -1,5 +1,7 @@
-use std::net::UdpSocket;
+use std::net::SocketAddr;
 use std::time::Duration;
+use tokio::net::UdpSocket;
+use tokio::time::timeout;
 
 const A2S_INFO_REQUEST: &[u8] = b"\xFF\xFF\xFF\xFF\x54Source Engine Query\x00";
 const A2S_PLAYER_REQUEST: &[u8] = b"\xFF\xFF\xFF\xFF\x55\xFF\xFF\xFF\xFF";
@@ -21,26 +23,34 @@ pub struct PlayerInfo {
     pub duration: f32,
 }
 
-pub fn query_server(address: &str, timeout_secs: u64) -> Result<ServerInfo, String> {
-    let socket = UdpSocket::bind("0.0.0.0:0").map_err(|e| format!("绑定 UDP 端口失败: {}", e))?;
+pub async fn query_server(address: &str, timeout_secs: u64) -> Result<ServerInfo, String> {
+    // 使用 Tokio UDP，避免同步 socket 在异步任务中阻塞运行时线程。
+    let socket = UdpSocket::bind("0.0.0.0:0")
+        .await
+        .map_err(|e| format!("绑定 UDP 端口失败: {e}"))?;
+    let target: SocketAddr = tokio::net::lookup_host(address)
+        .await
+        .map_err(|e| format!("解析 {address} 失败: {e}"))?
+        .next()
+        .ok_or_else(|| format!("无法解析服务器地址: {address}"))?;
     socket
-        .set_read_timeout(Some(Duration::from_secs(timeout_secs)))
-        .map_err(|e| format!("设置超时失败: {}", e))?;
-    socket
-        .connect(address)
-        .map_err(|e| format!("连接 {} 失败: {}", address, e))?;
+        .connect(target)
+        .await
+        .map_err(|e| format!("连接 {address} 失败: {e}"))?;
+    let timeout_duration = Duration::from_secs(timeout_secs.max(1));
 
     // A2S_INFO（支持 challenge 重发）
     socket
         .send(A2S_INFO_REQUEST)
-        .map_err(|e| format!("发送 A2S_INFO 失败: {}", e))?;
+        .await
+        .map_err(|e| format!("发送 A2S_INFO 失败: {e}"))?;
     let mut buf = [0u8; 4096];
-    let n = socket
-        .recv(&mut buf)
-        .map_err(|e| format!("接收 A2S_INFO 响应失败: {}", e))?;
+    let n = timeout(timeout_duration, socket.recv(&mut buf))
+        .await
+        .map_err(|_| format!("接收 A2S_INFO 响应超时（{}s）", timeout_secs))?
+        .map_err(|e| format!("接收 A2S_INFO 响应失败: {e}"))?;
 
-    // 如果服务器返回 challenge (0x41)，需要将 challenge 追加到请求中重发
-    let info_data = if n >= 5
+    let info_len = if n >= 9
         && buf[0] == 0xFF
         && buf[1] == 0xFF
         && buf[2] == 0xFF
@@ -51,19 +61,20 @@ pub fn query_server(address: &str, timeout_secs: u64) -> Result<ServerInfo, Stri
         challenge_req.extend_from_slice(&buf[5..9]);
         socket
             .send(&challenge_req)
-            .map_err(|e| format!("发送 A2S_INFO challenge 失败: {}", e))?;
-        let n2 = socket
-            .recv(&mut buf)
-            .map_err(|e| format!("接收 A2S_INFO 响应失败: {}", e))?;
-        &buf[..n2]
+            .await
+            .map_err(|e| format!("发送 A2S_INFO challenge 失败: {e}"))?;
+        timeout(timeout_duration, socket.recv(&mut buf))
+            .await
+            .map_err(|_| format!("接收 A2S_INFO 响应超时（{}s）", timeout_secs))?
+            .map_err(|e| format!("接收 A2S_INFO 响应失败: {e}"))?
     } else {
-        &buf[..n]
+        n
     };
 
-    let info = parse_a2s_info(info_data)?;
-
-    // A2S_PLAYER
-    let players = query_players(&socket).unwrap_or_default();
+    let info = parse_a2s_info(&buf[..info_len])?;
+    let players = query_players(&socket, timeout_duration)
+        .await
+        .unwrap_or_default();
 
     Ok(ServerInfo {
         server_name: info.0,
@@ -75,17 +86,21 @@ pub fn query_server(address: &str, timeout_secs: u64) -> Result<ServerInfo, Stri
     })
 }
 
-fn query_players(socket: &UdpSocket) -> Result<Vec<PlayerInfo>, String> {
+async fn query_players(
+    socket: &UdpSocket,
+    timeout_duration: Duration,
+) -> Result<Vec<PlayerInfo>, String> {
     socket
         .send(A2S_PLAYER_REQUEST)
-        .map_err(|e| format!("发送 A2S_PLAYER 失败: {}", e))?;
+        .await
+        .map_err(|e| format!("发送 A2S_PLAYER 失败: {e}"))?;
     let mut buf = [0u8; 4096];
-    let n = socket
-        .recv(&mut buf)
-        .map_err(|e| format!("接收 A2S_PLAYER 响应失败: {}", e))?;
+    let n = timeout(timeout_duration, socket.recv(&mut buf))
+        .await
+        .map_err(|_| "接收 A2S_PLAYER 响应超时".to_string())?
+        .map_err(|e| format!("接收 A2S_PLAYER 响应失败: {e}"))?;
 
-    // 可能返回 challenge 响应 (0x41)，需要回发
-    if n > 0
+    if n >= 9
         && buf[0] == 0xFF
         && buf[1] == 0xFF
         && buf[2] == 0xFF
@@ -96,10 +111,12 @@ fn query_players(socket: &UdpSocket) -> Result<Vec<PlayerInfo>, String> {
         challenge_req.extend_from_slice(&buf[5..9]);
         socket
             .send(&challenge_req)
-            .map_err(|e| format!("发送 A2S_PLAYER challenge 失败: {}", e))?;
-        let n2 = socket
-            .recv(&mut buf)
-            .map_err(|e| format!("接收 A2S_PLAYER 响应失败: {}", e))?;
+            .await
+            .map_err(|e| format!("发送 A2S_PLAYER challenge 失败: {e}"))?;
+        let n2 = timeout(timeout_duration, socket.recv(&mut buf))
+            .await
+            .map_err(|_| "接收 A2S_PLAYER 响应超时".to_string())?
+            .map_err(|e| format!("接收 A2S_PLAYER 响应失败: {e}"))?;
         parse_a2s_player(&buf[..n2])
     } else {
         parse_a2s_player(&buf[..n])
@@ -117,6 +134,9 @@ fn parse_a2s_info(data: &[u8]) -> Result<(String, String, i32, i32, i32), String
 
     let mut pos = 5;
     pos += 1; // Protocol
+    if pos > data.len() {
+        return Err("A2S_INFO 响应缺少协议字段".to_string());
+    }
     let server_name = read_cstring(data, &mut pos);
     let current_map = read_cstring(data, &mut pos);
     let _folder = read_cstring(data, &mut pos);

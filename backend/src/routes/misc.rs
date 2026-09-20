@@ -131,6 +131,48 @@ pub(crate) async fn list_audit_logs(
     })))
 }
 
+pub(crate) async fn list_qq_bot_audit_logs(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Query(query): Query<AuditLogQueryParams>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let actor = current_operator(&ctx, &headers).await?;
+    if !permission_service::can_view_audit_logs(&actor) {
+        return Err(forbidden());
+    }
+
+    let page = query.page.unwrap_or(1).max(1);
+    let page_size = query.page_size.unwrap_or(50).clamp(1, 100);
+    let (items, total) = audit_service::list_audit_logs(
+        &ctx.db,
+        &audit_service::AuditLogQuery {
+            server_id: None,
+            operation: query.operation,
+            operator_name: query.operator_name,
+            target: query.target,
+            search: query.search,
+            source: Some("qq_bot".to_string()),
+            success: query.success,
+            page,
+            page_size,
+        },
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "message": e.to_string() })),
+        )
+    })?;
+
+    Ok(Json(serde_json::json!({
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size
+    })))
+}
+
 pub(crate) async fn api_endpoint_docs(
     State(ctx): State<AppCtx>,
     headers: HeaderMap,

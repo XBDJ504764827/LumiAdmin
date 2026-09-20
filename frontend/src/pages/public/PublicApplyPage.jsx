@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
 import { publicApi } from '../../lib/publicApi.js';
-import { Modal } from '../../shared/Modal.jsx';
 import { PublicPageShell } from './PublicPageShell.jsx';
 
 const STEAM_AUTH_ERROR_REASONS = {
@@ -48,12 +47,11 @@ export function PublicApplyPage() {
   const [steamInput, setSteamInput] = useState('');
   const [nickname, setNickname] = useState('');
   const [contact, setContact] = useState('');
+  const [reason, setReason] = useState('');
   const [resolving, setResolving] = useState(false);
   const [resolveError, setResolveError] = useState('');
 
   // 提交状态
-  const [contactPromptOpen, setContactPromptOpen] = useState(false);
-  const [contactPromptValue, setContactPromptValue] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -161,18 +159,13 @@ export function PublicApplyPage() {
   }
 
   // ——————————————————————————————————————————————————————————————
-  // 提交白名单
+  // 提交白名单（联系方式与申请理由均必填，后端同样校验）
   // ——————————————————————————————————————————————————————————————
-  const submit = async (options = {}) => {
-    const contactValue = options.contactValue ?? contact;
-
+  const submit = async () => {
     if (steamVerified) {
       // 通过 Steam OpenID 认证的提交
-      if (!contactValue.trim() && !options.allowEmptyContact) {
-        setContactPromptValue(contact);
-        setContactPromptOpen(true);
-        return;
-      }
+      if (!contact.trim()) { setError('请填写联系方式。'); return; }
+      if (!reason.trim()) { setError('请填写申请理由。'); return; }
 
       try {
         setSubmitting(true);
@@ -181,12 +174,12 @@ export function PublicApplyPage() {
         await publicApi.submitWhitelist({
           steam_token: steamToken,
           nickname: nickname.trim() || undefined,
-          contact: contactValue.trim() || undefined,
+          contact: contact.trim(),
+          reason: reason.trim(),
         });
         setMessage('申请已提交，请等待管理员审核。');
         setContact('');
-        setContactPromptValue('');
-        setContactPromptOpen(false);
+        setReason('');
       } catch (submitError) {
         setError(submitError.message);
       } finally {
@@ -196,11 +189,8 @@ export function PublicApplyPage() {
       // 手动输入模式的提交
       if (!steamInput.trim()) { setError('请输入 Steam 标识符。'); return; }
       if (!nickname.trim()) { setError('请输入游戏昵称。'); return; }
-      if (!contactValue.trim() && !options.allowEmptyContact) {
-        setContactPromptValue(contact);
-        setContactPromptOpen(true);
-        return;
-      }
+      if (!contact.trim()) { setError('请填写联系方式。'); return; }
+      if (!reason.trim()) { setError('请填写申请理由。'); return; }
 
       try {
         setSubmitting(true);
@@ -209,14 +199,14 @@ export function PublicApplyPage() {
         await publicApi.submitWhitelist({
           steam_input: steamInput.trim(),
           nickname: nickname.trim(),
-          contact: contactValue.trim() || undefined,
+          contact: contact.trim(),
+          reason: reason.trim(),
         });
         setMessage('申请已提交，请等待管理员审核。');
         setSteamInput('');
         setNickname('');
         setContact('');
-        setContactPromptValue('');
-        setContactPromptOpen(false);
+        setReason('');
         setResolveError('');
       } catch (submitError) {
         setError(submitError.message);
@@ -224,19 +214,6 @@ export function PublicApplyPage() {
         setSubmitting(false);
       }
     }
-  };
-
-  const submitWithPromptContact = () => {
-    setContact(contactPromptValue);
-    setContactPromptOpen(false);
-    submit({ allowEmptyContact: true, contactValue: contactPromptValue });
-  };
-
-  const submitWithoutContact = () => {
-    setContact('');
-    setContactPromptValue('');
-    setContactPromptOpen(false);
-    submit({ allowEmptyContact: true, contactValue: '' });
   };
 
   // ——————————————————————————————————————————————————————————————
@@ -250,6 +227,7 @@ export function PublicApplyPage() {
     setGokzStats(null);
     setNickname('');
     setContact('');
+    setReason('');
     setMessage('');
     setError('');
     setAuthError('');
@@ -571,9 +549,9 @@ export function PublicApplyPage() {
                   </div>
                 )}
 
-                {/* 联系方式 */}
+                {/* 联系方式（必填） */}
                 <div className="form-group">
-                  <label>联系方式</label>
+                  <label>联系方式 <span className="text-accent">*</span></label>
                   <input
                     type="text"
                     className="form-control"
@@ -582,7 +560,21 @@ export function PublicApplyPage() {
                     placeholder="QQ / 微信 / 邮箱等"
                     disabled={submitting}
                   />
-                  <div className="form-hint">非必填，但建议填写，方便审核员后续与您联系。</div>
+                  <div className="form-hint">必填，方便审核员在审核时与您联系。</div>
+                </div>
+
+                {/* 申请理由（必填） */}
+                <div className="form-group">
+                  <label>申请理由 <span className="text-accent">*</span></label>
+                  <textarea
+                    className="form-control"
+                    rows={4}
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                    placeholder="请填写您申请白名单的理由，例如游戏时长、KZ 经历、加入社区的原因等"
+                    disabled={submitting}
+                  />
+                  <div className="form-hint">必填，管理员将根据申请理由进行审核。</div>
                 </div>
 
                 {renderFeedback()}
@@ -618,39 +610,6 @@ export function PublicApplyPage() {
           提交后可在「白名单公示」页查看审核状态
         </div>
       </div>
-
-      {/* 联系方式提示弹窗 */}
-      <Modal
-        open={contactPromptOpen}
-        title="建议填写联系方式"
-        onClose={() => setContactPromptOpen(false)}
-        footer={
-          <>
-            <button className="btn btn-outline" type="button" onClick={submitWithoutContact} disabled={submitting}>不填写，继续提交</button>
-            <button className="btn btn-primary" type="button" onClick={submitWithPromptContact} disabled={submitting || !contactPromptValue.trim()}>{submitting ? '提交中...' : '填写并提交'}</button>
-          </>
-        }
-      >
-        <div className="alert alert-warning">
-          <span className="alert-icon">!</span>
-          <div className="alert-content">
-            <div className="alert-title">强烈建议您填写联系方式</div>
-            <div className="alert-text">QQ / 微信 / 邮箱等联系方式可以帮助管理员在审核时与您确认信息。不填写也可以继续提交申请。</div>
-          </div>
-        </div>
-        <div className="form-group">
-          <label>联系方式</label>
-          <input
-            type="text"
-            className="form-control"
-            value={contactPromptValue}
-            onChange={(e) => setContactPromptValue(e.target.value)}
-            placeholder="QQ / 微信 / 邮箱等"
-            disabled={submitting}
-            autoFocus
-          />
-        </div>
-      </Modal>
     </PublicPageShell>
   );
 }

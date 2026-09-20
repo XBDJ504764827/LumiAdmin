@@ -31,22 +31,20 @@ export function useApiMutation(mutationFn, options = {}) {
   const token = session?.token ?? null;
   const queryClient = useQueryClient();
 
+  const { invalidateQueries, onSuccess: callerOnSuccess, ...mutationOptions } = options;
+
   return useMutation({
+    ...mutationOptions,
     mutationFn: (params) => mutationFn({ token, ...params }),
-    onSuccess: (data, variables, context) => {
-      if (options.invalidateQueries) {
-        const queries = Array.isArray(options.invalidateQueries) 
-          ? options.invalidateQueries 
-          : [options.invalidateQueries];
-        queries.forEach(queryKey => {
-          queryClient.invalidateQueries({ queryKey: [queryKey] });
-        });
+    onSuccess: async (data, variables, context) => {
+      if (invalidateQueries) {
+        const queries = Array.isArray(invalidateQueries) ? invalidateQueries : [invalidateQueries];
+        await Promise.all(queries.map((queryKey) => (
+          queryClient.invalidateQueries({ queryKey: Array.isArray(queryKey) ? queryKey : [queryKey] })
+        )));
       }
-      if (options.onSuccess) {
-        options.onSuccess(data, variables, context);
-      }
+      await callerOnSuccess?.(data, variables, context);
     },
-    ...options,
   });
 }
 

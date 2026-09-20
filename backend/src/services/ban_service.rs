@@ -317,6 +317,9 @@ pub async fn create_ban(
         Some(chrono::Utc::now() + chrono::Duration::minutes(i64::from(duration_minutes)))
     };
 
+    let ban_id = Uuid::new_v4();
+    let event_ip = super::normalize_optional_string(input.ip_address.clone());
+    let mut tx = db.pool.begin().await?;
     let row = sqlx::query_as::<_, BanRow>(
         r#"INSERT INTO ban_records (
                id, player, steam_id, ip_address, server_name, ban_type,
@@ -328,7 +331,7 @@ pub async fn create_ban(
                      duration_minutes, expires_at, reason, status, operator_name, source,
                      server_id, server_port, removed_reason, removed_by, removed_at, created_at"#,
     )
-    .bind(Uuid::new_v4())
+    .bind(ban_id)
     .bind(super::normalize_optional_string(input.player))
     .bind(&steam_id)
     .bind(super::normalize_optional_string(input.ip_address))
@@ -337,8 +340,24 @@ pub async fn create_ban(
     .bind(expires_at)
     .bind(reason)
     .bind(input.operator_name)
-    .fetch_one(&db.pool)
+    .fetch_one(&mut *tx)
     .await?;
+
+    // 同一事务内产生授权事件（Transactional Outbox）：广播 ban.add
+    super::auth_event_service::insert_event_tx(
+        &mut tx,
+        None,
+        "ban.add",
+        super::auth_event_service::ban_add_payload(
+            ban_id,
+            &steam_id,
+            event_ip.as_deref(),
+            reason,
+            expires_at,
+        ),
+    )
+    .await?;
+    tx.commit().await?;
 
     Ok(row_to_item(row))
 }
@@ -442,6 +461,90 @@ pub async fn find_ban(db: &Database, id: Uuid) -> anyhow::Result<BanRecord> {
     .map_err(Into::into)
 }
 
+/// 面向 QQ `/ban` 指令的公开网站封禁记录。
+///
+/// 只返回网站自身封禁，排除由全球封禁同步生成的 `global_ban` 记录，
+/// 避免同一条记录同时出现在网站封禁和全球封禁两个区块中。
+#[derive(Debug, Serialize)]
+pub struct PublicBanStatusItem {
+    pub id: Uuid,
+    pub player: Option<String>,
+    pub steam_id: String,
+    pub ban_type: String,
+    pub duration_minutes: i32,
+    pub expires_at: Option<String>,
+    pub reason: String,
+    pub status: String,
+    pub source: String,
+    pub removed_reason: Option<String>,
+    pub removed_at: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct PublicBanStatusRow {
+    id: Uuid,
+    player: Option<String>,
+    steam_id: String,
+    ban_type: String,
+    duration_minutes: i32,
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    reason: String,
+    status: String,
+    source: String,
+    removed_reason: Option<String>,
+    removed_at: Option<chrono::DateTime<chrono::Utc>>,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// 查询指定 SteamID64 的全部网站封禁历史记录。
+///
+/// 当前有效封禁优先，随后按封禁时间倒序；调用方可以限制展示条数，
+/// 但接口本身返回完整历史记录。
+pub async fn list_public_status_by_steamid(
+    db: &Database,
+    steamid64: &str,
+) -> anyhow::Result<Vec<PublicBanStatusItem>> {
+    let rows = sqlx::query_as::<_, PublicBanStatusRow>(
+        r#"
+        SELECT id, player, steam_id, ban_type, duration_minutes, expires_at,
+               reason, status, source, removed_reason, removed_at, created_at
+        FROM ban_records
+        WHERE steam_id = $1
+          AND source <> 'global_ban'
+        ORDER BY
+          CASE
+            WHEN status = 'active' AND (expires_at IS NULL OR expires_at > now()) THEN 0
+            WHEN status = 'active' THEN 1
+            ELSE 2
+          END,
+          created_at DESC,
+          id DESC
+        "#,
+    )
+    .bind(steamid64)
+    .fetch_all(&db.pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| PublicBanStatusItem {
+            id: row.id,
+            player: row.player,
+            steam_id: row.steam_id,
+            ban_type: row.ban_type,
+            duration_minutes: row.duration_minutes,
+            expires_at: row.expires_at.map(|value| value.to_rfc3339()),
+            reason: row.reason,
+            status: row.status,
+            source: row.source,
+            removed_reason: row.removed_reason,
+            removed_at: row.removed_at.map(|value| value.to_rfc3339()),
+            created_at: row.created_at.to_rfc3339(),
+        })
+        .collect())
+}
+
 /// 按 SteamID64 查询该玩家的所有活跃封禁记录（供封禁公示页使用）
 pub async fn find_active_bans_by_steamid(
     db: &Database,
@@ -457,6 +560,7 @@ pub async fn find_active_bans_by_steamid(
 }
 
 pub async fn unban(db: &Database, id: Uuid, removed_by: &str) -> anyhow::Result<BanItem> {
+    let mut tx = db.pool.begin().await?;
     let row = sqlx::query_as::<_, BanRow>(
         r#"UPDATE ban_records
            SET status = 'inactive', removed_by = $2, removed_at = now()
@@ -467,8 +571,17 @@ pub async fn unban(db: &Database, id: Uuid, removed_by: &str) -> anyhow::Result<
     )
     .bind(id)
     .bind(removed_by)
-    .fetch_one(&db.pool)
+    .fetch_one(&mut *tx)
     .await?;
+
+    super::auth_event_service::insert_event_tx(
+        &mut tx,
+        None,
+        "ban.remove",
+        super::auth_event_service::ban_remove_payload(row.id, &row.steam_id),
+    )
+    .await?;
+    tx.commit().await?;
 
     // 如果解封的是全球封禁来源的记录，标记对应 global_bans 记录为 manual_unbanned=true
     // 仅标记这一条全球封禁记录，不影响该玩家后续的新全球封禁（不同 kzt_ban_id）

@@ -1,3 +1,5 @@
+import { publicApi } from '../../lib/publicApi.js';
+
 // 全球封禁数据缓存、批量查询、解析和风险评估工具函数
 
 const GLOBAL_BANS_SESSION_CACHE = new Map();
@@ -18,13 +20,7 @@ export async function fetchGlobalBansBatch(steamids) {
   if (missingSteamIds.length === 0) return results;
 
   try {
-    const response = await fetch('/api/public/global-bans/batch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ steamids: missingSteamIds }),
-    });
-    if (!response.ok) return results;
-    const data = await response.json();
+    const data = await publicApi.globalBansBatch(missingSteamIds);
     const fetchedResults = data.results || {};
     for (const [steamid, value] of Object.entries(fetchedResults)) {
       GLOBAL_BANS_SESSION_CACHE.set(steamid, value);

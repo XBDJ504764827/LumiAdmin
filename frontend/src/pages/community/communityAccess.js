@@ -4,6 +4,7 @@ export const emptyAccessConfig = {
   min_steam_level: '0',
   whitelist_mode_enabled: false,
   cs_prime_enabled: false,
+  risk_block_enabled: true,
   use_custom_access: false,
 };
 
@@ -51,6 +52,7 @@ export function buildServerPayloadWithAccess(form) {
     min_steam_level: Number(form.min_steam_level),
     whitelist_mode_enabled: Boolean(form.whitelist_mode_enabled),
     cs_prime_enabled: Boolean(form.cs_prime_enabled),
+    risk_block_enabled: form.risk_block_enabled !== false,
     max_players: maxPlayers,
     use_custom_access: Boolean(form.use_custom_access),
   };
@@ -75,6 +77,8 @@ export function fillAccessConfigFromServer(server) {
     min_steam_level: String(server.min_steam_level ?? 0),
     whitelist_mode_enabled: Boolean(server.whitelist_mode_enabled),
     cs_prime_enabled: Boolean(server.cs_prime_enabled),
+    // 后端默认开启：字段缺失时按开启处理，避免旧数据被静默关闭
+    risk_block_enabled: server.risk_block_enabled !== false,
     use_custom_access: Boolean(server.use_custom_access),
   };
 }
@@ -86,6 +90,11 @@ export function fillCommunityAccessConfig(group) {
     min_steam_level: String(group.min_steam_level ?? 0),
     cs_prime_enabled: Boolean(group.cs_prime_enabled),
   };
+}
+
+/** 中高风险账号拦截开关：独立于「自定义设置」，对所有服务器生效。 */
+export function riskBlockEnabled(server) {
+  return Boolean(server?.risk_block_enabled);
 }
 
 export function buildAccessSummary(server, group) {
@@ -103,14 +112,16 @@ export function buildAccessSummary(server, group) {
   if (hasRestriction) modes.push(restrictionText);
   if (hasWhitelist) modes.push('白名单');
 
-  if (modes.length === 0) return '无限制';
+  const riskNote = riskBlockEnabled(server) ? '中高风险拦截' : '';
+
+  if (modes.length === 0) return riskNote ? `无限制 · ${riskNote}` : '无限制';
   if (modes.length === 1) {
-    if (hasWhitelist) return '白名单模式';
-    if (hasCsPrime) return `CS优先账户${source}`;
-    return `限制：${restrictionText}`;
+    if (hasWhitelist) return riskNote ? `白名单模式 · ${riskNote}` : '白名单模式';
+    if (hasCsPrime) return `CS优先账户${source}${riskNote ? ` · ${riskNote}` : ''}`;
+    return `限制：${restrictionText}${riskNote ? ` · ${riskNote}` : ''}`;
   }
   if (hasWhitelist && hasRestriction && !hasCsPrime) {
-    return `满足限制即可进；不满足需通过白名单（${restrictionText}）`;
+    return `满足限制即可进；不满足需通过白名单（${restrictionText}）${riskNote ? ` · ${riskNote}` : ''}`;
   }
-  return `${modes.join(' 或 ')}`;
+  return `${modes.join(' 或 ')}${riskNote ? ` · ${riskNote}` : ''}`;
 }

@@ -51,7 +51,24 @@ pub(crate) async fn login(
     {
         tracing::warn!(%e, "日志写入失败");
     }
-    Ok(Json(serde_json::json!({"session": resp.session})))
+    let permissions = crate::services::permission_service::permissions_for_role(&resp.session.role);
+    Ok(Json(serde_json::json!({
+        "session": resp.session,
+        "permissions": permissions,
+    })))
+}
+
+pub(crate) async fn permissions(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let actor = current_operator(&ctx, &headers)
+        .await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    Ok(Json(serde_json::json!({
+        "permissions": crate::services::permission_service::permissions_for_role(&actor.role),
+        "role": actor.role,
+    })))
 }
 
 pub(crate) async fn logout(State(ctx): State<AppCtx>, headers: HeaderMap) -> StatusCode {
@@ -100,7 +117,10 @@ pub(crate) async fn me(
         return Err(StatusCode::UNAUTHORIZED);
     }
 
-    Ok(Json(serde_json::json!({"session": session})))
+    Ok(Json(serde_json::json!({
+        "session": session,
+        "permissions": crate::services::permission_service::permissions_for_role(&session.role),
+    })))
 }
 
 /// 登出当前用户的所有其他设备（保留当前 session）

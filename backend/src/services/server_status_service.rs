@@ -102,17 +102,25 @@ pub async fn report_server_status(
     .execute(&db.pool)
     .await?;
 
+    // last_reported_at 每次心跳都要刷新（离线判定依赖它），
+    // 但 players 聚合子查询（ARRAY_AGG 全服扫描）只在状态翻转为 online
+    // 或上次心跳超时后才执行，避免每个心跳都跑昂贵子查询。
     sqlx::query(
         r#"
         UPDATE servers
         SET status = 'online',
             last_reported_at = now(),
             max_players = GREATEST(max_players, $2),
-            players = COALESCE((
-                SELECT ARRAY_AGG(name ORDER BY name)
-                FROM server_online_players
-                WHERE server_id = $1
-            ), ARRAY[]::TEXT[])
+            players = CASE
+                WHEN status <> 'online' OR last_reported_at IS NULL
+                  OR last_reported_at < now() - interval '10 minutes'
+                THEN COALESCE((
+                    SELECT ARRAY_AGG(name ORDER BY name)
+                    FROM server_online_players
+                    WHERE server_id = $1
+                ), ARRAY[]::TEXT[])
+                ELSE players
+            END
         WHERE id = $1
         "#,
     )
@@ -147,24 +155,27 @@ pub fn start_status_history_cleanup_loop(db: Database, interval_secs: u64, reten
         Some(interval_secs),
         true,
     );
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
-        // 首次 tick 立即触发，等待一个周期后再开始
-        interval.tick().await;
-        loop {
+    super::task_runtime::spawn_persistent("server_status_history_cleanup", move || {
+        let db = db.clone();
+        async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+            // 首次 tick 立即触发，等待一个周期后再开始
             interval.tick().await;
-            match observability_service::observe_task(
-                "server_status_history_cleanup",
-                cleanup_old_status_history(&db, retention_secs),
-                |count| format!("清理 {} 条性能历史", count),
-            )
-            .await
-            {
-                Ok(0) => {}
-                Ok(count) => {
-                    tracing::info!(count, retention_secs, "清理过期服务器状态历史")
+            loop {
+                interval.tick().await;
+                match observability_service::observe_task(
+                    "server_status_history_cleanup",
+                    cleanup_old_status_history(&db, retention_secs),
+                    |count| format!("清理 {} 条性能历史", count),
+                )
+                .await
+                {
+                    Ok(0) => {}
+                    Ok(count) => {
+                        tracing::info!(count, retention_secs, "清理过期服务器状态历史")
+                    }
+                    Err(e) => tracing::warn!(%e, "清理服务器状态历史失败"),
                 }
-                Err(e) => tracing::warn!(%e, "清理服务器状态历史失败"),
             }
         }
     });

@@ -31,6 +31,18 @@ const KZT_GLOBAL_BANS_API_NAME: &str = "KZTimer GlobalAPI";
 const KZT_GLOBAL_BAN_PAGE_LIMIT: i64 = 500;
 const DEFAULT_KZT_GLOBAL_BAN_MAX_PAGES: i64 = 1000;
 const GLOBAL_BAN_SYNC_MAX_PAGES_ENV: &str = "GLOBAL_BAN_SYNC_MAX_PAGES";
+/// KZTimer 单玩家实时查询时的最大分页数（正常玩家远小于一页，
+/// 此处仅防止 API 异常返回满页导致无限循环）。
+const KZT_GLOBAL_BAN_PER_PLAYER_MAX_PAGES: i64 = 10;
+/// 单玩家权威查询使用独立的限流通道：与全量同步分开，避免全量同步触发的
+/// 429 冷却把白名单自动通过的逐人复核一并拖垮。
+const KZT_PLAYER_BANS_API_KEY: &str = "kztimer_player_bans";
+const KZT_PLAYER_BANS_API_NAME: &str = "KZTimer GlobalAPI (玩家查询)";
+/// 单玩家权威查询的最大尝试次数。仅对超时 / 网络错误 / 5xx 重试；
+/// 命中限流冷却时不重试（重试只会立即失败）。
+const KZT_PLAYER_QUERY_ATTEMPTS: u32 = 3;
+/// 单玩家权威查询每次请求的超时。
+const KZT_PLAYER_QUERY_TIMEOUT_SECS: u64 = 10;
 
 /// KZTimer API 返回的封禁记录
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,6 +211,78 @@ async fn fetch_kzt_bans(
     .await
 }
 
+/// 直接向 KZTimer 权威 API 查询某玩家当前的活跃全球封禁。
+///
+/// 本地 `global_bans` / `ban_records` 是后台定时同步的镜像，若同步任务
+/// 失败、限流或进程异常，镜像会滞后于 KZTimer 权威数据。白名单自动通过
+/// 等安全性关键路径必须先向权威 API 实时复核，避免把「刚被封禁但本地
+/// 尚未同步」的玩家误判为低风险而自动通过。
+///
+/// 可靠性处理：
+/// - 使用独立的限流通道（`KZT_PLAYER_BANS_API_KEY`），不会被全量同步的
+///   429 冷却阻塞；
+/// - 超时 / 网络错误 / 5xx 最多重试 [`KZT_PLAYER_QUERY_ATTEMPTS`] 次；
+///   命中限流冷却时立即放弃（重试无意义），由调用方 fail-closed 处理。
+pub async fn fetch_active_global_bans_by_steamid64(steamid64: &str) -> anyhow::Result<Vec<KZTBan>> {
+    let steamid64 = steamid64.trim();
+    anyhow::ensure!(
+        crate::services::steam_service::is_steamid64(steamid64),
+        "SteamID64 格式无效: {steamid64}"
+    );
+
+    let mut last_error: Option<anyhow::Error> = None;
+    for attempt in 1..=KZT_PLAYER_QUERY_ATTEMPTS {
+        match fetch_active_global_bans_page_loop(steamid64).await {
+            Ok(bans) => return Ok(bans),
+            Err(error) => {
+                if external_api_service::in_cooldown(KZT_PLAYER_BANS_API_KEY) {
+                    tracing::warn!(
+                        %error,
+                        steamid64,
+                        "KZTimer 玩家查询处于限流冷却，放弃重试"
+                    );
+                    return Err(error);
+                }
+                last_error = Some(error);
+                if attempt < KZT_PLAYER_QUERY_ATTEMPTS {
+                    let backoff_ms = 300u64 * 2u64.pow(attempt - 1);
+                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                }
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("KZTimer 玩家查询失败")))
+}
+
+/// 单次尝试：拉取某玩家的活跃全球封禁（内部按页翻页）。
+async fn fetch_active_global_bans_page_loop(steamid64: &str) -> anyhow::Result<Vec<KZTBan>> {
+    let mut all_bans: Vec<KZTBan> = Vec::new();
+    for page in 0..KZT_GLOBAL_BAN_PER_PLAYER_MAX_PAGES {
+        let offset = page * KZT_GLOBAL_BAN_PAGE_LIMIT;
+        let url = format!(
+            "https://kztimerglobal.com/api/v2.0/bans?steamid64={}&isExpired=false&limit={}&offset={}",
+            steamid64, KZT_GLOBAL_BAN_PAGE_LIMIT, offset
+        );
+        let bans: Vec<KZTBan> = external_api_service::get_json(
+            KZT_PLAYER_BANS_API_KEY,
+            KZT_PLAYER_BANS_API_NAME,
+            &url,
+            Duration::from_secs(KZT_PLAYER_QUERY_TIMEOUT_SECS),
+        )
+        .await?;
+        let len = bans.len() as i64;
+        all_bans.extend(bans);
+        if len < KZT_GLOBAL_BAN_PAGE_LIMIT {
+            return Ok(all_bans);
+        }
+    }
+
+    anyhow::bail!(
+        "KZTimer 单玩家活跃全球封禁超过 {KZT_GLOBAL_BAN_PER_PLAYER_MAX_PAGES} 页，拒绝按低风险处理"
+    );
+}
+
 // =====================================================
 // 本地同步表查询（前端展示用）
 // =====================================================
@@ -331,6 +415,49 @@ pub async fn public_global_bans_for_steamid(
         .collect())
 }
 
+/// QQ `/ban` 指令使用的全球封禁历史记录。
+/// 与公开展示接口不同，这里保留已过期记录，便于查询完整历史。
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct PublicGlobalBanStatusItem {
+    #[sqlx(rename = "kzt_ban_id")]
+    #[serde(rename = "id")]
+    pub kzt_ban_id: i64,
+    #[sqlx(rename = "steam_id64")]
+    #[serde(rename = "steamid64")]
+    pub steam_id64: String,
+    #[sqlx(rename = "player_name")]
+    pub player_name: Option<String>,
+    #[sqlx(rename = "steam_id")]
+    pub steam_id: Option<String>,
+    pub ban_type: String,
+    pub notes: Option<String>,
+    pub stats: Option<String>,
+    pub expires_on: Option<String>,
+    pub created_on: Option<String>,
+    pub updated_on: Option<String>,
+    pub is_expired: bool,
+    pub manual_unbanned: bool,
+}
+
+pub async fn public_global_ban_status_for_steamid(
+    db: &Database,
+    steamid64: &str,
+) -> anyhow::Result<Vec<PublicGlobalBanStatusItem>> {
+    sqlx::query_as::<_, PublicGlobalBanStatusItem>(
+        r#"SELECT kzt_ban_id::BIGINT AS kzt_ban_id, steam_id64, player_name, steam_id, ban_type,
+                  notes, stats, expires_on, created_on, updated_on,
+                  is_expired, manual_unbanned
+           FROM global_bans
+           WHERE steam_id64 = $1
+           ORDER BY created_on DESC NULLS LAST, synced_at DESC, kzt_ban_id DESC
+           LIMIT 3000"#,
+    )
+    .bind(steamid64.trim())
+    .fetch_all(&db.pool)
+    .await
+    .map_err(Into::into)
+}
+
 pub async fn public_global_bans_batch(
     db: &Database,
     steamids: &[String],
@@ -408,7 +535,14 @@ pub async fn sync_global_bans(db: &Database) -> anyhow::Result<SyncResult> {
 
 async fn sync_global_bans_locked(db: &Database) -> anyhow::Result<SyncResult> {
     let all_bans = fetch_all_active_kzt_bans().await?;
-    apply_authoritative_global_bans(db, &all_bans).await
+
+    // 一轮同步集中在单个事务内提交：KZTimer 本轮推回全量活跃封禁
+    // （通常数万条），逐条自动提交会产生数万次 WAL fsync。
+    // 事务化后每轮仅一次 fsync，且中途失败整体回滚，不会留下半同步状态。
+    let mut tx = db.pool.begin().await?;
+    let result = apply_authoritative_global_bans(&mut tx, &all_bans).await?;
+    tx.commit().await?;
+    Ok(result)
 }
 
 async fn fetch_all_active_kzt_bans() -> anyhow::Result<Vec<KZTBan>> {
@@ -485,7 +619,7 @@ where
 }
 
 async fn apply_authoritative_global_bans(
-    db: &Database,
+    tx: &mut sqlx::Transaction<'_, Postgres>,
     all_bans: &[KZTBan],
 ) -> anyhow::Result<SyncResult> {
     let mut result = SyncResult {
@@ -494,12 +628,22 @@ async fn apply_authoritative_global_bans(
     };
 
     for ban in all_bans {
-        let (local_ban_id, manual_unbanned) = upsert_global_ban_metadata(db, ban).await?;
+        // 跳过无效 SteamID64（如外部 API 返回的 "0" / "STEAM_ID_STOP_IGNORING_RETVALS" 等），
+        // 避免脏数据写入 global_bans / ban_records。
+        if !crate::services::steam_service::is_steamid64(ban.steamid64.trim()) {
+            tracing::warn!(
+                kzt_ban_id = ban.id,
+                steamid64 = %ban.steamid64,
+                "KZTimer 全球封禁包含无效 SteamID64，跳过本条同步"
+            );
+            continue;
+        }
+        let (local_ban_id, manual_unbanned) = upsert_global_ban_metadata(&mut *tx, ban).await?;
         if manual_unbanned {
             continue;
         }
 
-        let outcome = sync_local_ban_for_global(db, ban, local_ban_id).await?;
+        let outcome = sync_local_ban_for_global(&mut *tx, ban, local_ban_id).await?;
         if outcome.created {
             result.new_bans += 1;
         }
@@ -514,7 +658,7 @@ async fn apply_authoritative_global_bans(
             )
             .bind(ban.id)
             .bind(outcome.local_id)
-            .execute(&db.pool)
+            .execute(&mut **tx)
             .await?;
         }
     }
@@ -523,14 +667,14 @@ async fn apply_authoritative_global_bans(
         tracing::warn!("KZTimer 全球封禁本轮返回 0 条，跳过自动解除缺失记录以避免误解封");
     } else {
         let active_ids: Vec<i64> = all_bans.iter().map(|ban| ban.id).collect();
-        result.expired = expire_missing_global_bans(db, &active_ids).await?;
+        result.expired = expire_missing_global_bans(&mut *tx, &active_ids).await?;
     }
 
     Ok(result)
 }
 
 async fn upsert_global_ban_metadata(
-    db: &Database,
+    tx: &mut sqlx::Transaction<'_, Postgres>,
     ban: &KZTBan,
 ) -> anyhow::Result<(Option<Uuid>, bool)> {
     let (local_ban_id, manual_unbanned): (Option<Uuid>, bool) = sqlx::query_as(
@@ -568,7 +712,7 @@ async fn upsert_global_ban_metadata(
     .bind(&ban.expires_on)
     .bind(&ban.created_on)
     .bind(&ban.updated_on)
-    .fetch_one(&db.pool)
+    .fetch_one(&mut **tx)
     .await?;
 
     Ok((local_ban_id, manual_unbanned))
@@ -582,7 +726,7 @@ struct LocalBanSyncOutcome {
 }
 
 async fn sync_local_ban_for_global(
-    db: &Database,
+    tx: &mut sqlx::Transaction<'_, Postgres>,
     ban: &KZTBan,
     local_ban_id: Option<Uuid>,
 ) -> anyhow::Result<LocalBanSyncOutcome> {
@@ -591,10 +735,10 @@ async fn sync_local_ban_for_global(
             "SELECT status FROM ban_records WHERE id = $1 AND source = 'global_ban'",
         )
         .bind(local_id)
-        .fetch_optional(&db.pool)
+        .fetch_optional(&mut **tx)
         .await?;
         if let Some((status,)) = existing {
-            update_local_ban_from_global(db, local_id, ban).await?;
+            update_local_ban_from_global(&mut *tx, local_id, ban).await?;
             return Ok(LocalBanSyncOutcome {
                 local_id,
                 created: false,
@@ -604,7 +748,7 @@ async fn sync_local_ban_for_global(
     }
 
     let local_id = create_local_ban(
-        db,
+        &mut *tx,
         &ban.steamid64,
         &ban.player_name,
         &ban.ban_type,
@@ -621,7 +765,7 @@ async fn sync_local_ban_for_global(
 }
 
 async fn update_local_ban_from_global(
-    db: &Database,
+    tx: &mut sqlx::Transaction<'_, Postgres>,
     local_id: Uuid,
     ban: &KZTBan,
 ) -> anyhow::Result<()> {
@@ -656,13 +800,16 @@ async fn update_local_ban_from_global(
     .bind(reason)
     .bind(created_at)
     .bind(expires_at)
-    .execute(&db.pool)
+    .execute(&mut **tx)
     .await?;
 
     Ok(())
 }
 
-async fn expire_missing_global_bans(db: &Database, active_ids: &[i64]) -> anyhow::Result<i64> {
+async fn expire_missing_global_bans(
+    tx: &mut sqlx::Transaction<'_, Postgres>,
+    active_ids: &[i64],
+) -> anyhow::Result<i64> {
     if active_ids.is_empty() {
         return Ok(0);
     }
@@ -686,7 +833,7 @@ async fn expire_missing_global_bans(db: &Database, active_ids: &[i64]) -> anyhow
              AND br.source = 'global_ban'"#,
     )
     .bind(active_ids)
-    .execute(&db.pool)
+    .execute(&mut **tx)
     .await?;
 
     Ok(result.rows_affected() as i64)
@@ -695,7 +842,7 @@ async fn expire_missing_global_bans(db: &Database, active_ids: &[i64]) -> anyhow
 /// 在 ban_records 中创建本地封禁（source = "global_ban"）
 /// 封禁时间使用 KZTimer 的 created_on，到期时间使用 KZTimer 的 expires_on
 async fn create_local_ban(
-    db: &Database,
+    tx: &mut sqlx::Transaction<'_, Postgres>,
     steam_id64: &str,
     player_name: &Option<String>,
     ban_type: &str,
@@ -722,7 +869,7 @@ async fn create_local_ban(
     .bind(reason)
     .bind(created_at)
     .bind(expires_at)
-    .execute(&db.pool)
+    .execute(&mut **tx)
     .await?;
 
     Ok(id)
@@ -962,48 +1109,29 @@ pub fn start_global_ban_sync_loop(
         None,
         true,
     );
-    tokio::spawn(async move {
-        // 启动时清理可能的误封禁数据
-        match observability_service::observe_task(
-            "global_ban_stale_cleanup",
-            cleanup_stale_global_bans(&db),
-            |count| format!("清理 {} 条误封记录", count),
-        )
-        .await
-        {
-            Ok(0) => {}
-            Ok(n) => {
-                tracing::info!(count = n, "清理了因全球封禁过期但本地仍活跃的误封禁记录");
-                if let Err(e) = ban_cache.refresh(&db).await {
-                    tracing::warn!(%e, "清理后刷新封禁缓存失败");
-                }
-            }
-            Err(e) => tracing::warn!(%e, "清理误封禁数据失败"),
-        }
-
-        // 启动时执行一次全量同步
-        match observability_service::observe_task("global_ban_sync", sync_global_bans(&db), |r| {
-            format!(
-                "拉取 {} 条，新增 {}，过期 {}，重封 {}",
-                r.total_fetched, r.new_bans, r.expired, r.re_banned
+    super::task_runtime::spawn_persistent("global_ban_stale_cleanup", move || {
+        let db = db.clone();
+        let ban_cache = ban_cache.clone();
+        async move {
+            // 启动时清理可能的误封禁数据
+            match observability_service::observe_task(
+                "global_ban_stale_cleanup",
+                cleanup_stale_global_bans(&db),
+                |count| format!("清理 {} 条误封记录", count),
             )
-        })
-        .await
-        {
-            Ok(r) => {
-                tracing::info!(?r, "全球封禁初始同步完成");
-                if r.new_bans > 0 || r.expired > 0 || r.re_banned > 0 {
+            .await
+            {
+                Ok(0) => {}
+                Ok(n) => {
+                    tracing::info!(count = n, "清理了因全球封禁过期但本地仍活跃的误封禁记录");
                     if let Err(e) = ban_cache.refresh(&db).await {
-                        tracing::warn!(%e, "同步后刷新封禁缓存失败");
+                        tracing::warn!(%e, "清理后刷新封禁缓存失败");
                     }
                 }
+                Err(e) => tracing::warn!(%e, "清理误封禁数据失败"),
             }
-            Err(e) => tracing::warn!(%e, "全球封禁初始同步失败"),
-        }
 
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
-        loop {
-            interval.tick().await;
+            // 启动时执行一次全量同步
             match observability_service::observe_task(
                 "global_ban_sync",
                 sync_global_bans(&db),
@@ -1017,14 +1145,41 @@ pub fn start_global_ban_sync_loop(
             .await
             {
                 Ok(r) => {
+                    tracing::info!(?r, "全球封禁初始同步完成");
                     if r.new_bans > 0 || r.expired > 0 || r.re_banned > 0 {
-                        tracing::info!(?r, "全球封禁同步完成");
                         if let Err(e) = ban_cache.refresh(&db).await {
                             tracing::warn!(%e, "同步后刷新封禁缓存失败");
                         }
                     }
                 }
-                Err(e) => tracing::warn!(%e, "全球封禁同步失败"),
+                Err(e) => tracing::warn!(%e, "全球封禁初始同步失败"),
+            }
+
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+            loop {
+                interval.tick().await;
+                match observability_service::observe_task(
+                    "global_ban_sync",
+                    sync_global_bans(&db),
+                    |r| {
+                        format!(
+                            "拉取 {} 条，新增 {}，过期 {}，重封 {}",
+                            r.total_fetched, r.new_bans, r.expired, r.re_banned
+                        )
+                    },
+                )
+                .await
+                {
+                    Ok(r) => {
+                        if r.new_bans > 0 || r.expired > 0 || r.re_banned > 0 {
+                            tracing::info!(?r, "全球封禁同步完成");
+                            if let Err(e) = ban_cache.refresh(&db).await {
+                                tracing::warn!(%e, "同步后刷新封禁缓存失败");
+                            }
+                        }
+                    }
+                    Err(e) => tracing::warn!(%e, "全球封禁同步失败"),
+                }
             }
         }
     });
@@ -1073,6 +1228,14 @@ mod tests {
             created_on: Some(created_on.to_string()),
             updated_on: None,
         }
+    }
+
+    /// 测试辅助：开一个事务执行同步，模拟与生产一致的单事务提交。
+    async fn apply_bans_in_tx(db: &Database, bans: &[KZTBan]) -> anyhow::Result<SyncResult> {
+        let mut tx = db.pool.begin().await?;
+        let result = apply_authoritative_global_bans(&mut tx, bans).await?;
+        tx.commit().await?;
+        Ok(result)
     }
 
     #[tokio::test]
@@ -1143,16 +1306,21 @@ mod tests {
             .execute(&db.pool)
             .await?;
 
-            let new_local_id = create_local_ban(
-                &db,
-                steam_id,
-                &Some("Player A".to_string()),
-                "cheat",
-                &Some("new global ban".to_string()),
-                Some("2099-06-30T00:00:00Z"),
-                None,
-            )
-            .await?;
+            let new_local_id = {
+                let mut tx = db.pool.begin().await?;
+                let id = create_local_ban(
+                    &mut tx,
+                    steam_id,
+                    &Some("Player A".to_string()),
+                    "cheat",
+                    &Some("new global ban".to_string()),
+                    Some("2099-06-30T00:00:00Z"),
+                    None,
+                )
+                .await?;
+                tx.commit().await?;
+                id
+            };
 
             let row: (String, String) =
                 sqlx::query_as("SELECT status, source FROM ban_records WHERE id = $1")
@@ -1180,7 +1348,7 @@ mod tests {
                 test_kzt_ban(1002, steam_id, "2099-06-30T00:00:03Z", None),
             ];
 
-            let result = apply_authoritative_global_bans(&db, &bans).await?;
+            let result = apply_bans_in_tx(&db, &bans).await?;
             assert_eq!(result.total_fetched, 2);
             assert_eq!(result.new_bans, 2);
 
@@ -1219,7 +1387,7 @@ mod tests {
                 "2099-06-01T00:00:00Z",
                 Some("2099-07-01T00:00:00Z"),
             );
-            apply_authoritative_global_bans(&db, &[global_ban]).await?;
+            apply_bans_in_tx(&db, &[global_ban]).await?;
 
             let (global_local_id,): (Option<Uuid>,) =
                 sqlx::query_as("SELECT local_ban_id FROM global_bans WHERE kzt_ban_id = $1")
@@ -1245,7 +1413,7 @@ mod tests {
 
             let other_active =
                 test_kzt_ban(2002, "76561198000000004", "2099-06-02T00:00:00Z", None);
-            let result = apply_authoritative_global_bans(&db, &[other_active]).await?;
+            let result = apply_bans_in_tx(&db, &[other_active]).await?;
             assert_eq!(result.expired, 1);
 
             let (global_status, global_removed_by): (String, Option<String>) =

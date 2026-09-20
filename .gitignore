@@ -45,6 +45,11 @@ Desktop.ini
 # ----- 敏感数据文件 -----
 access_snapshot.json
 
+# ----- 本地工具缓存 -----
+.gocache/
+.gopath/
+.zcode/
+
 # ----- 日志 & 临时文件 -----
 *.log
 *.tmp

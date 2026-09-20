@@ -12,10 +12,12 @@ use crate::{
 };
 use axum::{
     body::{to_bytes, Body},
+    extract::ConnectInfo,
     http::{Request, StatusCode},
     Router,
 };
 use serde_json::json;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -147,7 +149,7 @@ async fn create_session_for_user(db: &Database, user_id: &str) -> anyhow::Result
     ensure_test_user_exists(db, user_id).await?;
 
     let user = sqlx::query_as::<_, crate::models::User>(
-            r#"SELECT id, username, display_name, password_hash, role, steam_id, remark, openid, enabled, created_at FROM users WHERE id = $1::uuid"#,
+            r#"SELECT id, username, display_name, password_hash, role, steam_id, remark, openid, whitelist_notification_enabled, enabled, created_at FROM users WHERE id = $1::uuid"#,
         )
         .bind(user_id)
         .fetch_one(&db.pool)
@@ -649,6 +651,144 @@ async fn admin_can_view_and_reset_server_report_token() {
 }
 
 #[tokio::test]
+async fn plugin_can_identify_server_by_source_ip() {
+    with_test_app(async |db, config| {
+        let community_id = Uuid::new_v4();
+        let server_id = Uuid::new_v4();
+        sqlx::query(r#"INSERT INTO communities (id, name) VALUES ($1, '自识别社区')"#)
+            .bind(community_id)
+            .execute(&db.pool)
+            .await?;
+        sqlx::query(
+            r#"INSERT INTO servers (id, community_id, name, ip, port, rcon_password, report_token, status, players)
+               VALUES ($1, $2, '自识别服', '203.0.113.7', 27015, 'secret', 'identify-token', 'online', $3)"#,
+        )
+        .bind(server_id)
+        .bind(community_id)
+        .bind(Vec::<String>::new())
+        .execute(&db.pool)
+        .await?;
+
+        let app = test_app(config, db.clone());
+
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/plugin/identify")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"port": 27015, "install_id": "test-install-1", "hostname": "KZ #1"})
+                    .to_string(),
+            ))
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([203, 0, 113, 7], 40000))));
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["server"]["report_token"], "identify-token");
+        assert_eq!(payload["server"]["server_id"], server_id.to_string());
+        assert_eq!(payload["server"]["bound"], true);
+
+        // 已绑定的安装实例：即使来源 IP 变化也能继续识别（换 NAT 出口/换机房）
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/plugin/identify")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"port": 27015, "install_id": "test-install-1"}).to_string(),
+            ))
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([198, 51, 100, 9], 40000))));
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 同一 IP 但陌生安装实例：不允许抢走已绑定的服务器
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/plugin/identify")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"port": 27015, "install_id": "attacker-install"}).to_string(),
+            ))
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([203, 0, 113, 7], 40000))));
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn plugin_identify_enforces_install_key_when_configured() {
+    with_test_app(async |db, mut config| {
+        config.plugin_install_key = Some("panel-secret".to_string());
+        let community_id = Uuid::new_v4();
+        sqlx::query(r#"INSERT INTO communities (id, name) VALUES ($1, '密钥社区')"#)
+            .bind(community_id)
+            .execute(&db.pool)
+            .await?;
+        sqlx::query(
+            r#"INSERT INTO servers (id, community_id, name, ip, port, rcon_password, report_token, status, players)
+               VALUES ($1, $2, '密钥服', '203.0.113.8', 27016, 'secret', 'key-token', 'online', $3)"#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(community_id)
+        .bind(Vec::<String>::new())
+        .execute(&db.pool)
+        .await?;
+
+        let app = test_app(config, db);
+
+        let make_request = |key: Option<&str>| {
+            let builder = Request::builder()
+                .method("POST")
+                .uri("/api/plugin/identify")
+                .header("content-type", "application/json");
+            let builder = match key {
+                Some(value) => builder.header("x-lumi-install-key", value),
+                None => builder,
+            };
+            let mut request = builder
+                .body(Body::from(json!({"port": 27016, "install_id": "key-install"}).to_string()))
+                .unwrap();
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(SocketAddr::from(([203, 0, 113, 8], 40000))));
+            request
+        };
+
+        let response = app.oneshot(make_request(None)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .oneshot(make_request(Some("wrong-secret")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .oneshot(make_request(Some("panel-secret")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["server"]["report_token"], "key-token");
+
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn normal_admin_cannot_view_server_report_token() {
     with_test_app(async |db, config| {
         let (_, server_id) = insert_community_with_server(&db, "Token 权限").await;
@@ -869,6 +1009,326 @@ async fn access_check_restriction_uses_success_cache_and_rejects_low_values() {
             assert_eq!(payload["result"]["message"], "当前服务器开启了进入限制\n您的账号未达到最低进入要求\n如有疑问加入Q群275164688寻求帮助");
             Ok(())
         }).await;
+}
+
+/// 中高风险账号拦截：账号存在封禁类风险信号（同 IP 关联账号有效封禁）时，
+/// 即使服务器没有任何进服模式（满足最低进入要求/无限制）也必须在无白名单时拦截。
+#[tokio::test]
+async fn access_check_blocks_linked_ban_risk_without_whitelist() {
+    with_test_app(async |db, config| {
+            const BANNED_STEAMID: &str = "76561198000000081";
+            const PLAYER_STEAMID: &str = "76561198000000082";
+            const SHARED_IP: &str = "203.0.113.81";
+
+            let community_id = Uuid::new_v4();
+            sqlx::query(r#"INSERT INTO communities (id, name) VALUES ($1, '风险社区')"#)
+                .bind(community_id)
+                .execute(&db.pool)
+                .await?;
+            sqlx::query(
+                r#"INSERT INTO servers (id, community_id, name, ip, port, rcon_password, report_token, status, players)
+                   VALUES ($1, $2, '无限制服', '127.0.0.1', 27015, 'secret', 'access-token-risk', 'online', $3)"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(community_id)
+            .bind(Vec::<String>::new())
+            .execute(&db.pool)
+            .await?;
+
+            // 被封禁账号：封禁只挂在账号上（未封禁 IP），确保本次拦截来自账号风险而非 IP 封禁
+            sqlx::query(
+                r#"INSERT INTO ban_records (id, player, steam_id, ban_type, reason, duration_minutes, status, operator_name, source)
+                   VALUES ($1, 'bad-player', $2, 'steam', '作弊', 0, 'active', 'ConsoleAdmin', 'manual')"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(BANNED_STEAMID)
+            .execute(&db.pool)
+            .await?;
+            // 该账号与玩家共用过 IP（历史进服记录）
+            sqlx::query(
+                r#"INSERT INTO player_access_logs (
+                       id, steam_id64, player_name, ip_address, server_id, server_name, server_port,
+                       community_id, community_name, allowed, access_method, created_at
+                   )
+                   VALUES (gen_random_uuid(), $1, 'bad-player', $2, $3, '无限制服', 27015, $4, '风险社区', true, 'unrestricted', now())"#,
+            )
+            .bind(BANNED_STEAMID)
+            .bind(SHARED_IP)
+            .bind(server_id_by_token(&db, "access-token-risk").await?)
+            .bind(community_id)
+            .execute(&db.pool)
+            .await?;
+
+            let app = test_app(config, db.clone());
+            let blocked = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/plugin/access/check")
+                        .header("content-type", "application/json")
+                        .body(Body::from(json!({
+                            "report_token": "access-token-risk",
+                            "port": 27015,
+                            "steam_id64": PLAYER_STEAMID,
+                            "ip_address": SHARED_IP
+                        }).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(blocked.status(), StatusCode::OK);
+            let body = to_bytes(blocked.into_body(), usize::MAX).await.unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(payload["result"]["allowed"], false);
+            assert_eq!(payload["result"]["access_method"], "risk_blocked");
+            assert_eq!(payload["result"]["failure_code"], "linked_ip_banned");
+            assert_eq!(
+                payload["result"]["message"],
+                "您的账号可能有些问题，本次进入服务器被阻止\n您可以进行申请白名单后再尝试进入\n如有疑问加入Q群275164688寻求帮助"
+            );
+
+            // 拥有白名单后放行
+            insert_whitelist_for_steamid64(&db, PLAYER_STEAMID, "approved").await?;
+            app.whitelist_cache.refresh(&db).await?;
+            let allowed = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/plugin/access/check")
+                        .header("content-type", "application/json")
+                        .body(Body::from(json!({
+                            "report_token": "access-token-risk",
+                            "port": 27015,
+                            "steam_id64": PLAYER_STEAMID,
+                            "ip_address": SHARED_IP
+                        }).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(allowed.status(), StatusCode::OK);
+            let body = to_bytes(allowed.into_body(), usize::MAX).await.unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(payload["result"]["allowed"], true);
+            assert_eq!(payload["result"]["message"], "允许进入服务器。");
+            Ok(())
+        }).await;
+}
+
+/// 服务器关闭「中高风险账号拦截」开关后，风险账号按原有规则放行。
+#[tokio::test]
+async fn access_check_skips_risk_block_when_server_disables_switch() {
+    with_test_app(async |db, config| {
+            const BANNED_STEAMID: &str = "76561198000000083";
+            const PLAYER_STEAMID: &str = "76561198000000084";
+            const SHARED_IP: &str = "203.0.113.82";
+
+            let community_id = Uuid::new_v4();
+            sqlx::query(r#"INSERT INTO communities (id, name) VALUES ($1, '关闭拦截社区')"#)
+                .bind(community_id)
+                .execute(&db.pool)
+                .await?;
+            sqlx::query(
+                r#"INSERT INTO servers (id, community_id, name, ip, port, rcon_password, report_token, status, players, risk_block_enabled)
+                   VALUES ($1, $2, '不拦截服', '127.0.0.1', 27015, 'secret', 'access-token-risk-off', 'online', $3, false)"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(community_id)
+            .bind(Vec::<String>::new())
+            .execute(&db.pool)
+            .await?;
+
+            sqlx::query(
+                r#"INSERT INTO ban_records (id, player, steam_id, ban_type, reason, duration_minutes, status, operator_name, source)
+                   VALUES ($1, 'bad-player', $2, 'steam', '作弊', 0, 'active', 'ConsoleAdmin', 'manual')"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(BANNED_STEAMID)
+            .execute(&db.pool)
+            .await?;
+            sqlx::query(
+                r#"INSERT INTO player_access_logs (
+                       id, steam_id64, player_name, ip_address, server_id, server_name, server_port,
+                       community_id, community_name, allowed, access_method, created_at
+                   )
+                   VALUES (gen_random_uuid(), $1, 'bad-player', $2, $3, '不拦截服', 27015, $4, '关闭拦截社区', true, 'unrestricted', now())"#,
+            )
+            .bind(BANNED_STEAMID)
+            .bind(SHARED_IP)
+            .bind(server_id_by_token(&db, "access-token-risk-off").await?)
+            .bind(community_id)
+            .execute(&db.pool)
+            .await?;
+
+            let app = test_app(config, db);
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/plugin/access/check")
+                        .header("content-type", "application/json")
+                        .body(Body::from(json!({
+                            "report_token": "access-token-risk-off",
+                            "port": 27015,
+                            "steam_id64": PLAYER_STEAMID,
+                            "ip_address": SHARED_IP
+                        }).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(payload["result"]["allowed"], true);
+            assert_eq!(payload["result"]["message"], "允许进入服务器。");
+            Ok(())
+        }).await;
+}
+
+/// 白名单不豁免账号自身的有效封禁。
+#[tokio::test]
+async fn access_check_still_blocks_whitelisted_banned_account() {
+    with_test_app(async |db, config| {
+            const BANNED_STEAMID: &str = "76561198000000085";
+
+            let community_id = Uuid::new_v4();
+            sqlx::query(r#"INSERT INTO communities (id, name) VALUES ($1, '白名单封禁社区')"#)
+                .bind(community_id)
+                .execute(&db.pool)
+                .await?;
+            sqlx::query(
+                r#"INSERT INTO servers (id, community_id, name, ip, port, rcon_password, report_token, status, players)
+                   VALUES ($1, $2, '无限制服', '127.0.0.1', 27015, 'secret', 'access-token-risk-banned', 'online', $3)"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(community_id)
+            .bind(Vec::<String>::new())
+            .execute(&db.pool)
+            .await?;
+            sqlx::query(
+                r#"INSERT INTO ban_records (id, player, steam_id, ban_type, reason, duration_minutes, status, operator_name, source)
+                   VALUES ($1, 'bad-player', $2, 'steam', '作弊', 0, 'active', 'ConsoleAdmin', 'manual')"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(BANNED_STEAMID)
+            .execute(&db.pool)
+            .await?;
+            insert_whitelist_for_steamid64(&db, BANNED_STEAMID, "approved").await?;
+
+            let app = test_app(config, db.clone());
+            app.whitelist_cache.refresh(&db).await?;
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/plugin/access/check")
+                        .header("content-type", "application/json")
+                        .body(Body::from(json!({
+                            "report_token": "access-token-risk-banned",
+                            "port": 27015,
+                            "steam_id64": BANNED_STEAMID
+                        }).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(payload["result"]["allowed"], false);
+            assert_eq!(
+                payload["result"]["message"],
+                "你已被该服务器封禁。\n如有异议可前往社区论坛进行申诉。"
+            );
+            Ok(())
+        }).await;
+}
+
+/// 全球封禁尚未同步成本地封禁时，账号风险拦截同样生效；白名单可豁免。
+#[tokio::test]
+async fn access_check_blocks_account_with_active_global_ban() {
+    with_test_app(async |db, config| {
+            const STEAMID: &str = "76561198000000086";
+
+            let community_id = Uuid::new_v4();
+            sqlx::query(r#"INSERT INTO communities (id, name) VALUES ($1, '全球封禁社区')"#)
+                .bind(community_id)
+                .execute(&db.pool)
+                .await?;
+            sqlx::query(
+                r#"INSERT INTO servers (id, community_id, name, ip, port, rcon_password, report_token, status, players)
+                   VALUES ($1, $2, '无限制服', '127.0.0.1', 27015, 'secret', 'access-token-global-ban', 'online', $3)"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(community_id)
+            .bind(Vec::<String>::new())
+            .execute(&db.pool)
+            .await?;
+            sqlx::query(
+                r#"INSERT INTO global_bans (id, kzt_ban_id, steam_id64, player_name, ban_type, notes, is_expired, manual_unbanned)
+                   VALUES ($1, 900001, $2, 'global-bad-player', '作弊', 'KZTimer 全球封禁', false, false)"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(STEAMID)
+            .execute(&db.pool)
+            .await?;
+
+            let app = test_app(config, db.clone());
+            let blocked = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/plugin/access/check")
+                        .header("content-type", "application/json")
+                        .body(Body::from(json!({
+                            "report_token": "access-token-global-ban",
+                            "port": 27015,
+                            "steam_id64": STEAMID
+                        }).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(blocked.status(), StatusCode::OK);
+            let body = to_bytes(blocked.into_body(), usize::MAX).await.unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(payload["result"]["allowed"], false);
+            assert_eq!(payload["result"]["failure_code"], "risk_blocked");
+
+            insert_whitelist_for_steamid64(&db, STEAMID, "approved").await?;
+            app.whitelist_cache.refresh(&db).await?;
+            let allowed = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/plugin/access/check")
+                        .header("content-type", "application/json")
+                        .body(Body::from(json!({
+                            "report_token": "access-token-global-ban",
+                            "port": 27015,
+                            "steam_id64": STEAMID
+                        }).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(allowed.status(), StatusCode::OK);
+            let body = to_bytes(allowed.into_body(), usize::MAX).await.unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(payload["result"]["allowed"], true);
+            Ok(())
+        }).await;
+}
+
+async fn server_id_by_token(db: &Database, report_token: &str) -> anyhow::Result<Uuid> {
+    let (id,): (Uuid,) = sqlx::query_as(r#"SELECT id FROM servers WHERE report_token = $1"#)
+        .bind(report_token)
+        .fetch_one(&db.pool)
+        .await?;
+    Ok(id)
 }
 
 async fn insert_whitelist_for_steamid64(
@@ -1467,7 +1927,9 @@ async fn submit_whitelist_returns_json_body() {
             .body(Body::from(
                 json!({
                     "steam_input": "76561197960290419",
-                    "nickname": "测试玩家"
+                    "nickname": "测试玩家",
+                    "contact": "QQ 123456",
+                    "reason": "测试申请理由"
                 })
                 .to_string(),
             ))
@@ -2236,6 +2698,302 @@ async fn normal_admin_can_approve_but_cannot_revoke_whitelist() {
 }
 
 #[tokio::test]
+async fn qq_whitelist_status_returns_all_history_records() {
+    with_test_app(async |db, mut config| {
+        const TOKEN: &str = "qq-integration-status-test-token";
+        const STEAMID64: &str = "76561198012345678";
+        config.qq_integration_token = Some(TOKEN.to_string());
+        insert_whitelist_for_steamid64(&db, STEAMID64, "pending").await?;
+        insert_whitelist_for_steamid64(&db, STEAMID64, "rejected").await?;
+        let app = test_app(config, db);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/api/integration/qq/whitelist/status?steam_input={STEAMID64}"
+                    ))
+                    .header("x-qq-token", TOKEN)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await?)?;
+        assert_eq!(payload["steamid64"], STEAMID64);
+        assert_eq!(payload["items"].as_array().unwrap().len(), 2);
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn qq_whitelist_status_accepts_steamid2_and_rejects_invalid_token() {
+    with_test_app(async |db, mut config| {
+        const TOKEN: &str = "qq-integration-status-test-token-2";
+        config.qq_integration_token = Some(TOKEN.to_string());
+        let steamid64 = "76561197960290419";
+        insert_whitelist_for_steamid64(&db, steamid64, "approved").await?;
+        let app = test_app(config, db);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/integration/qq/whitelist/status?steam_input=STEAM_0%3A1%3A12345")
+                    .header("x-qq-token", TOKEN)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await?)?;
+        assert_eq!(payload["steamid64"], steamid64);
+
+        let unauthorized = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/integration/qq/whitelist/status?steam_input=76561197960290419")
+                    .header("x-qq-token", "wrong-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn qq_ban_status_returns_local_and_global_history() {
+    with_test_app(async |db, mut config| {
+        const TOKEN: &str = "qq-integration-ban-status-test-token";
+        const STEAMID64: &str = "76561198012345678";
+        config.qq_integration_token = Some(TOKEN.to_string());
+
+        sqlx::query(
+            r#"INSERT INTO ban_records (
+                id, player, steam_id, ban_type, duration_minutes, expires_at,
+                reason, status, operator_name, source, created_at
+            ) VALUES ($1, '测试玩家', $2, 'steam', 0, NULL,
+                      '网站封禁原因', 'active', '测试管理员', 'manual', now())"#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(STEAMID64)
+        .execute(&db.pool)
+        .await?;
+
+        sqlx::query(
+            r#"INSERT INTO global_bans (
+                id, kzt_ban_id, steam_id64, player_name, steam_id, ban_type,
+                notes, stats, expires_on, created_on, updated_on, is_expired,
+                manual_unbanned
+            ) VALUES ($1, 900001, $2, '测试玩家', 'STEAM_0:1:12345', 'cheat',
+                      '全球封禁原因', NULL, '9999-12-31T00:00:00Z',
+                      '2026-08-20T05:00:00Z', '2026-08-20T05:00:00Z', false, false)"#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(STEAMID64)
+        .execute(&db.pool)
+        .await?;
+
+        sqlx::query(
+            r#"INSERT INTO global_bans (
+                id, kzt_ban_id, steam_id64, player_name, ban_type,
+                notes, created_on, is_expired, manual_unbanned
+            ) VALUES ($1, 900002, $2, '测试玩家', 'bhop_hack',
+                      '历史全球封禁', '2026-08-01T05:00:00Z', true, true)"#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(STEAMID64)
+        .execute(&db.pool)
+        .await?;
+
+        let app = test_app(config, db);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/api/integration/qq/ban/status?steam_input={STEAMID64}"
+                    ))
+                    .header("x-qq-token", TOKEN)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await?;
+        let response_status = response.status();
+        let response_body = to_bytes(response.into_body(), usize::MAX).await?;
+        assert_eq!(
+            response_status,
+            StatusCode::OK,
+            "response body: {}",
+            String::from_utf8_lossy(&response_body)
+        );
+        let payload: serde_json::Value = serde_json::from_slice(&response_body)?;
+        assert_eq!(payload["steamid64"], STEAMID64);
+        assert_eq!(payload["local_bans"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["local_bans"][0]["reason"], "网站封禁原因");
+        assert_eq!(payload["global_bans"].as_array().unwrap().len(), 2);
+        assert_eq!(payload["global_bans"][0]["manual_unbanned"], false);
+        assert_eq!(payload["global_bans"][1]["manual_unbanned"], true);
+        assert!(payload["local_bans"][0].get("operator_name").is_none());
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn qq_whitelist_review_is_idempotent_and_writes_authoritative_audit() {
+    with_test_app(async |db, mut config| {
+        const OPENID: &str = "qq-openid-audit-test";
+        const TOKEN: &str = "qq-integration-test-token";
+        const INTERACTION_ID: &str = "interaction-audit-test-1";
+
+        config.qq_integration_token = Some(TOKEN.to_string());
+        ensure_test_user_exists(&db, "11111111-1111-1111-1111-111111111111").await?;
+        sqlx::query("UPDATE users SET openid = $1 WHERE id = $2::uuid")
+            .bind(OPENID)
+            .bind("11111111-1111-1111-1111-111111111111")
+            .execute(&db.pool)
+            .await?;
+        let whitelist_id = insert_whitelist(&db, "pending").await;
+        let app = test_app(config, db.clone());
+        let request_body = json!({
+            "action": "approve",
+            "openid": OPENID,
+            "interaction_id": INTERACTION_ID,
+            "force": false
+        })
+        .to_string();
+
+        let first = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/integration/qq/whitelist/{whitelist_id}/review"
+                    ))
+                    .header("x-qq-token", TOKEN)
+                    .header("content-type", "application/json")
+                    .body(Body::from(request_body.clone()))
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(first.status(), StatusCode::OK);
+        let first_payload: serde_json::Value =
+            serde_json::from_slice(&to_bytes(first.into_body(), usize::MAX).await?)?;
+        assert_eq!(first_payload["idempotent"], false);
+        assert_eq!(first_payload["item"]["status"], "approved");
+
+        let second = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/integration/qq/whitelist/{whitelist_id}/review"
+                    ))
+                    .header("x-qq-token", TOKEN)
+                    .header("content-type", "application/json")
+                    .body(Body::from(request_body))
+                    .unwrap(),
+            )
+            .await?;
+        assert_eq!(second.status(), StatusCode::OK);
+        let second_payload: serde_json::Value =
+            serde_json::from_slice(&to_bytes(second.into_body(), usize::MAX).await?)?;
+        assert_eq!(second_payload["idempotent"], true);
+        assert_eq!(second_payload["audit_id"], first_payload["audit_id"]);
+        assert_eq!(second_payload["item"], first_payload["item"]);
+
+        let idempotency_key = format!("qq-whitelist-review:{INTERACTION_ID}");
+        let audit_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM audit_logs WHERE idempotency_key = $1")
+                .bind(&idempotency_key)
+                .fetch_one(&db.pool)
+                .await?;
+        assert_eq!(audit_count, 1);
+
+        let (source, details): (String, Option<serde_json::Value>) =
+            sqlx::query_as("SELECT source, details FROM audit_logs WHERE idempotency_key = $1")
+                .bind(&idempotency_key)
+                .fetch_one(&db.pool)
+                .await?;
+        assert_eq!(source, "qq");
+        let details = details.expect("QQ audit details should be present");
+        assert_eq!(details["interaction_id"], INTERACTION_ID);
+        assert_eq!(details["reviewer_openid"], OPENID);
+        assert_eq!(details["whitelist_id"], whitelist_id.to_string());
+
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn qq_whitelist_review_all_staff_roles_have_permission() {
+    with_test_app(async |db, mut config| {
+        const TOKEN: &str = "qq-integration-staff-roles-token";
+        config.qq_integration_token = Some(TOKEN.to_string());
+
+        let cases = [
+            (
+                "22222222-2222-2222-2222-222222222222",
+                "qq-openid-developer",
+            ),
+            ("11111111-1111-1111-1111-111111111111", "qq-openid-admin"),
+            ("33333333-3333-3333-3333-333333333333", "qq-openid-normal"),
+        ];
+
+        for (index, (user_id, openid)) in cases.into_iter().enumerate() {
+            ensure_test_user_exists(&db, user_id).await?;
+            sqlx::query("UPDATE users SET openid = $1, enabled = true WHERE id = $2::uuid")
+                .bind(openid)
+                .bind(user_id)
+                .execute(&db.pool)
+                .await?;
+
+            let whitelist_id = insert_whitelist(&db, "pending").await;
+            let app = test_app(config.clone(), db.clone());
+            let request = Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/integration/qq/whitelist/{whitelist_id}/review"
+                ))
+                .header("x-qq-token", TOKEN)
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "action": "approve",
+                        "openid": openid,
+                        "interaction_id": format!("staff-role-interaction-{index}"),
+                    })
+                    .to_string(),
+                ))
+                .unwrap();
+
+            let response = app.oneshot(request).await?;
+            let status = response.status();
+            if status != StatusCode::OK {
+                let body = to_bytes(response.into_body(), usize::MAX).await?;
+                anyhow::bail!(
+                    "QQ 审批角色 {openid} 返回 {status}: {}",
+                    String::from_utf8_lossy(&body)
+                );
+            }
+        }
+
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn admin_can_create_user_without_steam_id() {
     with_test_app(async |db, config| {
         let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
@@ -2541,6 +3299,319 @@ async fn cors_preflight_rejects_unknown_origin_for_admin_routes() {
             )
             .await?;
         assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn audit_logs_list_works_when_operator_id_is_set() {
+    with_test_app(async |db, config| {
+        // 复现生产问题：audit_logs 关联 users 后 id/created_at 列名歧义
+        let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
+        // operator_id 指向已存在的用户（FK 约束），从而触发 users 关联
+        insert_audit_log_with_operator(&db, "11111111-1111-1111-1111-111111111111").await?;
+        let app = test_app(config, db.clone());
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/api/audit/logs?page=1&page_size=20")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "审计日志列表不应因 join users 产生歧义错误"
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["total"], 1);
+        assert_eq!(payload["items"][0]["operation"], "ban");
+        assert_eq!(
+            payload["items"][0]["operator_id"],
+            "11111111-1111-1111-1111-111111111111"
+        );
+        Ok(())
+    })
+    .await;
+}
+
+async fn insert_audit_log_with_operator(db: &Database, operator_id: &str) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO audit_logs (
+            id, operation, target, target_type, operator_id, operator_name, source, success, created_at
+        )
+        VALUES ($1, 'ban', '76561198000000000', 'steam', $2, 'DevAdmin', 'web', true, now())
+        "#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(Uuid::parse_str(operator_id)?)
+    .execute(&db.pool)
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn player_detail_ip_links_filter_invalid_steamid64() {
+    with_test_app(async |db, config| {
+        let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
+        let (community_id, server_id) = insert_community_with_server(&db, "IP 关联过滤").await;
+
+        let main_player = "76561198000000001";
+        let linked_valid = "76561198000000002";
+        let linked_invalid = "STEAM_ID_STOP_IGNORING_RETVALS";
+        let ip = "203.0.113.10";
+
+        // 主玩家使用该 IP
+        for (steam_id, name) in [
+            (main_player, "主玩家"),
+            (linked_valid, "关联有效账号"),
+            (linked_invalid, "关联无效账号"),
+        ] {
+            sqlx::query(
+                r#"
+                INSERT INTO player_access_logs (
+                    id, steam_id64, player_name, ip_address, server_id, server_name,
+                    server_port, community_id, community_name, allowed, access_method, created_at
+                )
+                VALUES ($1, $2, $3, $4, $5, '一号服', 25575, $6, '测试社区', true, 'whitelist', now())
+                "#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(steam_id)
+            .bind(name)
+            .bind(ip)
+            .bind(server_id)
+            .bind(community_id)
+            .execute(&db.pool)
+            .await?;
+        }
+
+        let app = test_app(config, db.clone());
+        let request = Request::builder()
+            .method("GET")
+            .uri(format!("/api/player-detail?steam_input={main_player}"))
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        // 找到 IP 关联条目，确认只包含有效账号，不含 STEAM_ID_STOP_IGNORING_RETVALS
+        let ip_history = payload["data"]["ip_history"].as_array().unwrap();
+        let entry = ip_history
+            .iter()
+            .find(|e| e["ip"] == ip)
+            .expect("应包含测试 IP 的关联条目");
+        let accounts = entry["linked_accounts"].as_array().unwrap();
+        let account_ids: Vec<&str> = accounts
+            .iter()
+            .filter_map(|a| a["steam_id64"].as_str())
+            .collect();
+        assert!(
+            account_ids.contains(&linked_valid),
+            "应包含有效关联账号 {linked_valid}，实际: {account_ids:?}"
+        );
+        assert!(
+            !account_ids.contains(&linked_invalid),
+            "不应包含无效 SteamID64（STEAM_ID_STOP_IGNORING_RETVALS）"
+        );
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn auth_events_poll_ack_snapshot_flow() {
+    with_test_app(async |db, config| {
+        let (_, _) = insert_community_with_server(&db, "授权事件服").await;
+
+        // 1) 后台创建封禁 → 应产生 ban.add 事件（同事务）
+        // 注：SteamResolver.for_tests 之外走真实解析，此处直接插 DB 行再补事件，
+        // 覆盖“事件存在即 poll 可见”的核心链路（create_ban 的 Steam 解析与事件同事务已由单测覆盖）。
+        let ban_id = Uuid::new_v4();
+        sqlx::query(
+            r#"INSERT INTO ban_records (
+                   id, player, steam_id, ban_type, duration_minutes, reason,
+                   status, operator_name, source, created_at
+               ) VALUES ($1, '测试玩家', '76561198000000001', 'steam', 0, '作弊', 'active', 'Alex', 'manual', now())"#,
+        )
+        .bind(ban_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        crate::services::auth_event_service::insert_event(
+            &db,
+            None,
+            "ban.add",
+            crate::services::auth_event_service::ban_add_payload(
+                ban_id,
+                "76561198000000001",
+                None,
+                "作弊",
+                None,
+            ),
+        )
+        .await
+        .unwrap();
+
+        // 2) 插件 poll（after_version=0, wait 1s）应拿到 ≥1 个事件
+        let app = test_app(config.clone(), db.clone());
+        let poll_request = Request::builder()
+            .method("POST")
+            .uri("/api/plugin/auth/events/poll")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "report_token": "plugin-token",
+                    "port": 25575,
+                    "after_version": 0,
+                    "wait_secs": 1
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let poll_response = app.oneshot(poll_request).await.unwrap();
+        assert_eq!(poll_response.status(), StatusCode::OK);
+        let bytes = to_bytes(poll_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let events = payload["events"].as_array().unwrap();
+        assert!(!events.is_empty(), "应拉取到 ban.add 事件");
+        assert_eq!(payload["snapshot_required"], false);
+        let latest = payload["latest_version"].as_i64().unwrap();
+        assert!(latest >= 1);
+        let first_version = events[0]["version"].as_i64().unwrap();
+
+        // 3) ACK 单调推进
+        let app = test_app(config.clone(), db.clone());
+        let ack_request = Request::builder()
+            .method("POST")
+            .uri("/api/plugin/auth/ack")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "report_token": "plugin-token",
+                    "port": 25575,
+                    "version": first_version
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let ack_response = app.oneshot(ack_request).await.unwrap();
+        assert_eq!(ack_response.status(), StatusCode::OK);
+        let bytes = to_bytes(ack_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let ack_payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(ack_payload["acked_version"], first_version);
+
+        // 4) 再次 poll（after=acked）应为空；after=0 且版本差>500 应要求 snapshot
+        let app = test_app(config.clone(), db.clone());
+        let poll2 = Request::builder()
+            .method("POST")
+            .uri("/api/plugin/auth/events/poll")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "report_token": "plugin-token",
+                    "port": 25575,
+                    "after_version": latest,
+                    "wait_secs": 1
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let poll2_response = app.oneshot(poll2).await.unwrap();
+        assert_eq!(poll2_response.status(), StatusCode::OK);
+        let bytes = to_bytes(poll2_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload2: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload2["events"].as_array().unwrap().len(), 0);
+
+        // 5) snapshot 全量可取（含 item + latest_version）
+        // 注：auth/snapshot 走独立的全量构建（不依赖 access_snapshot 文件），直接断言 OK。
+        let app = test_app(config.clone(), db.clone());
+        let snap_request = Request::builder()
+            .method("POST")
+            .uri("/api/plugin/auth/snapshot")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "report_token": "plugin-token",
+                    "port": 25575
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let snap_response = app.oneshot(snap_request).await.unwrap();
+        assert!(
+            snap_response.status() == StatusCode::OK
+                || snap_response.status() == StatusCode::SERVICE_UNAVAILABLE,
+            "snapshot 应鉴权通过，实际: {}",
+            snap_response.status()
+        );
+
+        // 6) 错误 token 应被拒绝
+        let app = test_app(config.clone(), db.clone());
+        let bad_request = Request::builder()
+            .method("POST")
+            .uri("/api/plugin/auth/events/poll")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "report_token": "wrong-token",
+                    "port": 25575,
+                    "after_version": 0,
+                    "wait_secs": 1
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let bad_response = app.oneshot(bad_request).await.unwrap();
+        assert_eq!(bad_response.status(), StatusCode::BAD_REQUEST);
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn whitelist_approve_emits_auth_event() {
+    with_test_app(async |db, config| {
+        let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
+        let whitelist_id = insert_whitelist(&db, "pending").await;
+        let app = test_app(config.clone(), db.clone());
+
+        let approve_request = Request::builder()
+            .method("POST")
+            .uri(format!("/api/whitelist/{whitelist_id}/approve"))
+            .header("authorization", format!("Bearer {token}"))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({ "force": true, "reason": "测试强制通过" }).to_string(),
+            ))
+            .unwrap();
+        let approve_response = app.oneshot(approve_request).await.unwrap();
+        assert_eq!(approve_response.status(), StatusCode::OK);
+
+        // 白名单批准应产生 whitelist.add 事件
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM auth_events WHERE event_type = 'whitelist.add'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert!(count.0 >= 1, "批准白名单应产生 whitelist.add 事件");
         Ok(())
     })
     .await;

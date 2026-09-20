@@ -12,6 +12,7 @@ export function defaultSessionFromToken(token) {
     displayName: '',
     role: 'guest',
     roleLabel: '未登录',
+    permissions: [],
   };
 }
 
@@ -25,6 +26,7 @@ export function normalizeSession(payload) {
     displayName: session.display_name,
     role: session.role,
     roleLabel: session.role_label,
+    permissions: payload.permissions ?? [],
   };
 }
 

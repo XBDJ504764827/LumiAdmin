@@ -7,6 +7,7 @@ impl Database {
             r#"ALTER TABLE users ADD COLUMN IF NOT EXISTS remark TEXT"#,
             r#"ALTER TABLE users ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT true"#,
             r#"ALTER TABLE users ADD COLUMN IF NOT EXISTS openid TEXT"#,
+            r#"ALTER TABLE users ADD COLUMN IF NOT EXISTS whitelist_notification_enabled BOOLEAN NOT NULL DEFAULT true"#,
             // 若历史库中存在旧字段 qq_account：
             //  - 当 openid 不存在时，直接改名迁移；
             //  - 当 openid 已存在时，说明迁移已部分完成，直接丢弃遗留的 qq_account。

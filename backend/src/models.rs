@@ -12,6 +12,7 @@ pub struct User {
     pub steam_id: Option<String>,
     pub remark: Option<String>,
     pub openid: Option<String>,
+    pub whitelist_notification_enabled: bool,
     pub enabled: bool,
     pub created_at: DateTime<Utc>,
 }

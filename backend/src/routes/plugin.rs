@@ -1,15 +1,16 @@
 use axum::http::StatusCode;
 use axum::{
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     http::HeaderMap,
     Json,
 };
 use serde::Deserialize;
+use std::net::{IpAddr, SocketAddr};
 
 use crate::routes::{current_operator, forbidden, invalid_request, invalid_request_status, AppCtx};
 use crate::services::{
     log_service, offline_sync_service, permission_service, player_api_service,
-    server_status_service,
+    plugin_identify_service, server_status_service,
 };
 
 #[derive(Deserialize)]
@@ -116,6 +117,96 @@ pub(crate) async fn sync_offline_operations(
         "skipped": result.skipped,
         "errors": result.errors
     })))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct IdentifyServerBody {
+    port: i32,
+    #[serde(default)]
+    hostname: Option<String>,
+    #[serde(default)]
+    game: Option<String>,
+    #[serde(default)]
+    install_id: Option<String>,
+}
+
+/// 插件免配置自识别：插件只填面板地址，由面板按「来源 IP + 端口」（或已绑定的安装实例）
+/// 返回本服 report_token。成功后插件会把 token 缓存到本地，后续请求与旧版完全一致。
+pub(crate) async fn identify_plugin_server(
+    State(ctx): State<AppCtx>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<IdentifyServerBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if let Some(expected) = ctx.config.plugin_install_key.as_deref() {
+        let provided = headers
+            .get("x-lumi-install-key")
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .unwrap_or_default();
+        if provided.is_empty() || provided != expected {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({ "error": "安装密钥无效" })),
+            ));
+        }
+    }
+
+    let client_ip =
+        resolve_identify_client_ip(peer.ip(), &headers, ctx.config.plugin_trust_proxy_headers);
+
+    let result = plugin_identify_service::identify(
+        &ctx.db,
+        &plugin_identify_service::IdentifyInput {
+            port: body.port,
+            hostname: body.hostname.clone(),
+            game: body.game.clone(),
+            install_id: body.install_id.clone(),
+            client_ip,
+        },
+        ctx.config.plugin_auto_bind,
+        ctx.config.plugin_rebind_after_secs,
+    )
+    .await
+    .map_err(|error| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )
+    })?;
+
+    Ok(Json(serde_json::json!({ "server": result })))
+}
+
+/// 确定插件请求的真实来源 IP。
+///
+/// 仅当连接来自回环地址（通常为同机 Nginx）或显式开启 `PLUGIN_TRUST_PROXY_HEADERS`
+/// 时才采信转发头，避免直连场景下伪造 X-Forwarded-For 冒充服务器。
+fn resolve_identify_client_ip(peer: IpAddr, headers: &HeaderMap, trust_proxy: bool) -> String {
+    let ip = if trust_proxy || peer.is_loopback() {
+        forwarded_client_ip(headers).unwrap_or(peer)
+    } else {
+        peer
+    };
+    plugin_identify_service::normalize_client_ip(&ip.to_string())
+}
+
+fn forwarded_client_ip(headers: &HeaderMap) -> Option<IpAddr> {
+    // Cloudflare 场景优先 CF-Connecting-IP
+    let candidates = ["cf-connecting-ip", "x-real-ip", "x-forwarded-for"];
+    for name in candidates {
+        let Some(value) = headers.get(name).and_then(|value| value.to_str().ok()) else {
+            continue;
+        };
+        // X-Forwarded-For 形如 "client, proxy1, proxy2"，取最左侧的客户端地址
+        for candidate in value.split(',') {
+            let candidate = candidate.trim();
+            if let Ok(ip) = candidate.parse::<IpAddr>() {
+                return Some(ip);
+            }
+        }
+    }
+    None
 }
 
 pub(crate) async fn player_api_players(

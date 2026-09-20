@@ -591,7 +591,7 @@ export function AbnormalRecordPage() {
           ) : (
             <div className="alert alert-info" style={{ marginBottom: 0 }}>保存后，没有单独规则的地图都会使用此阈值。</div>
           )}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12 }}>
             <div className="form-group">
               <label>关卡 (Course)</label>
               <input className="form-control" type="number" min="0" max="99" value={ruleForm.course} onChange={(event) => setRuleForm((prev) => ({ ...prev, course: event.target.value }))} />

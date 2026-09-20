@@ -70,6 +70,14 @@ export function AppShell({ children }) {
     return initial;
   });
 
+  // 移动端抽屉打开时锁定背景页面滚动，避免双层滚动误操作
+  useEffect(() => {
+    if (!mobileNavOpen) return undefined;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = previous; };
+  }, [mobileNavOpen]);
+
   useEffect(() => {
     function handleDocumentMouseDown(event) {
       if (searchRef.current && !searchRef.current.contains(event.target)) {

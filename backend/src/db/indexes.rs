@@ -187,6 +187,20 @@ impl Database {
            ON audit_logs (source, created_at DESC)"#,
             r#"CREATE INDEX IF NOT EXISTS idx_audit_logs_success_created
            ON audit_logs (success, created_at DESC)"#,
+            // 进服检查/封禁轮询热点：status + steam_id / ip + 有效期
+            r#"CREATE INDEX IF NOT EXISTS idx_ban_records_active_steam
+           ON ban_records (steam_id, status, expires_at) WHERE status = 'active'"#,
+            r#"CREATE INDEX IF NOT EXISTS idx_ban_records_active_ip
+           ON ban_records (ip_address, status, expires_at) WHERE status = 'active' AND ip_address IS NOT NULL"#,
+            // 白名单审核列表热点
+            r#"CREATE INDEX IF NOT EXISTS idx_whitelist_requests_status_steamid64
+           ON whitelist_requests (status, steamid64)"#,
+            // 访问缓存过期扫描（快照加载全部未过期记录）
+            r#"CREATE INDEX IF NOT EXISTS idx_player_access_cache_source_expires
+           ON player_access_cache (rating_source, expires_at)"#,
+            // 服务器在线玩家按服务器聚合读取
+            r#"CREATE INDEX IF NOT EXISTS idx_server_online_players_server_report
+           ON server_online_players (server_id, reported_at DESC)"#,
         ];
         for sql in query_perf_indexes {
             sqlx::query(sql).execute(&self.pool).await?;

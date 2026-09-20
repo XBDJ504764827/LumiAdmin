@@ -185,7 +185,7 @@ pub async fn test_server(db: &Database, id: Uuid) -> anyhow::Result<ExternalServ
     let address = format!("{}:{}", server.ip, server.port);
 
     // 优先尝试 A2S 查询（无需密码）
-    match crate::a2s::query_server(&address, 5) {
+    match crate::a2s::query_server(&address, 5).await {
         Ok(info) => {
             let status = StatusResult {
                 server_name: info.server_name,

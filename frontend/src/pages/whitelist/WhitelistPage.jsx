@@ -12,11 +12,13 @@ import { formatChinaDateTime } from '../../shared/time.js';
 import { notifyPendingReviewsUpdated, usePendingReviewIndicators } from '../../hooks/usePendingReviewIndicators.js';
 import { fetchGlobalBansBatch, parseBanData, inferGlobalBanRisk } from './whitelistGlobalBans.js';
 import { ManualCreateModal, RejectModal, ApproveModal, BanDetailModal, PlayerDetailModal, RiskDetailModal } from './WhitelistModals.jsx';
+import { ToggleSwitch } from '../community/CommunityComponents.jsx';
 import { InternalNoteInline } from '../../shared/InternalNote.jsx';
 import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 
-const emptyManualForm = { nickname: '', steam_input: '', force: false, reason: '' };
+const emptyManualForm = { nickname: '', steam_input: '', force: false, reason: '', duration_days: 0 };
 const APPROVE_REVIEW_SECONDS = 5;
+const APPROVE_DEFAULT_DURATION_DAYS = 0;
 const PLAYER_LINK_TARGETS = [
   { key: 'gokz', label: 'GOKZ.TOP', href: (steamid64) => `https://kzcharm.com/profile/${steamid64}` },
   { key: 'kzgo', label: 'KZGO.EU', href: (steamid64) => `https://kzgo.eu/players/${steamid64}` },
@@ -24,7 +26,17 @@ const PLAYER_LINK_TARGETS = [
 const PLAYER_CONTEXT_MENU_SIZE = { width: 180, height: 112 };
 
 function emptyApproveModal() {
-  return { open: false, mode: 'approve', item: null, reason: '', error: '', bans: [], riskProfile: null, secondsRemaining: APPROVE_REVIEW_SECONDS };
+  return {
+    open: false,
+    mode: 'approve',
+    item: null,
+    reason: '',
+    error: '',
+    bans: [],
+    riskProfile: null,
+    durationDays: APPROVE_DEFAULT_DURATION_DAYS,
+    secondsRemaining: APPROVE_REVIEW_SECONDS,
+  };
 }
 
 function riskAction(item) {
@@ -57,16 +69,34 @@ function RiskBadge({ item, onClick }) {
   );
 }
 
+function AutoApproveHint({ enabled, hours, appliedAt, now }) {
+  if (!enabled) return null;
+  const applied = appliedAt ? new Date(appliedAt).getTime() : 0;
+  if (!applied) return null;
+  const autoAt = applied + hours * 3600 * 1000;
+  if (autoAt <= now) return <span className="auto-approve-hint auto-approve-hint-ready">⏱ 即将自动通过</span>;
+  const remainMs = autoAt - now;
+  const remainH = Math.floor(remainMs / 3600000);
+  const remainM = Math.floor((remainMs % 3600000) / 60000);
+  const remainText = remainH > 0 ? `${remainH}小时${remainM}分钟` : `${remainM}分钟`;
+  return <span className="auto-approve-hint">⏱ {remainText}后自动通过</span>;
+}
+
 // ---------------------------------------------------------------------------
 // 表格内联辅助函数（消除三个 tab 分支的重复 JSX）
 // ---------------------------------------------------------------------------
 
-function renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail) {
+function renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail, autoApprove, now) {
   const itemBans = globalBans[item.steamid64];
   const hasGlobalBan = Array.isArray(itemBans) && itemBans.length > 0;
   return (
     <td className="fw-600 mobile-card-primary" data-player-info="true" data-label="游戏昵称">
-      <div className="nickname-cell">{item.nickname}</div>
+      <div className="nickname-cell">
+        {item.nickname}
+        {item.status === 'expired' ? (
+          <span className="status-pill pill-offline" style={{ marginLeft: 6, fontSize: 11 }}>已过期</span>
+        ) : null}
+      </div>
       {hasGlobalBan && (
         <button className="global-ban-btn" onClick={() => openBanDetail(item.steamid64)}>
           <span className="global-ban-icon">⚠</span>
@@ -75,6 +105,9 @@ function renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail) {
         </button>
       )}
       <RiskBadge item={item} onClick={openRiskDetail} />
+      {item.status === 'pending' && riskAction(item) === 'allow' ? (
+        <AutoApproveHint enabled={autoApprove.enabled} hours={autoApprove.hours} appliedAt={item.applied_at} now={now} />
+      ) : null}
       <InternalNoteInline steamid64={item.steamid64} />
     </td>
   );
@@ -103,6 +136,28 @@ function rowClassName(item, globalBans) {
   const itemBans = globalBans[item.steamid64];
   if (riskAction(item) === 'deny' || riskAction(item) === 'require_force') return 'row-global-ban';
   return Array.isArray(itemBans) && itemBans.length > 0 ? 'row-global-ban' : '';
+}
+
+// 到期时间展示：永久 / 具体时间（剩余不足 7 天高亮，已过期标注徽章）
+function renderExpiryCell(item) {
+  if (item.status === 'expired') {
+    return (
+      <td data-label="到期时间">
+        <span className="text-muted-light">{formatChinaDateTime(item.expires_at)}</span>
+        <span className="status-pill pill-offline" style={{ marginLeft: 6 }}>已过期</span>
+      </td>
+    );
+  }
+  if (!item.expires_at) {
+    return <td data-label="到期时间"><span className="text-muted-light">永久</span></td>;
+  }
+  const remainMs = new Date(item.expires_at).getTime() - Date.now();
+  const expiringSoon = remainMs < 7 * 24 * 3600 * 1000;
+  return (
+    <td data-label="到期时间">
+      <span className={expiringSoon ? 'text-accent2' : 'text-muted-light'}>{formatChinaDateTime(item.expires_at)}</span>
+    </td>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -142,6 +197,9 @@ export function WhitelistPage() {
   const [riskDetailModal, setRiskDetailModal] = useState({ open: false, item: null });
   const [detailModal, setDetailModal] = useState({ open: false, item: null });
   const [refreshing, setRefreshing] = useState(false);
+  const [autoApproveConfig, setAutoApproveConfig] = useState({ enabled: true, hours: 3, loading: true });
+  const [savingAutoApprove, setSavingAutoApprove] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const [playerContextMenu, setPlayerContextMenu] = useState({
     open: false, x: 0, y: 0, steamid64: '', nickname: '',
   });
@@ -245,7 +303,7 @@ export function WhitelistPage() {
     }
     try {
       setSubmitting(true);
-      await api.approveWhitelist(token, item.id);
+      await api.approveWhitelist(token, item.id, { duration_days: APPROVE_DEFAULT_DURATION_DAYS });
       await invalidateWhitelist();
       notifyPendingReviewsUpdated({ source: 'whitelist', action: 'approve' });
       closeDetailModal();
@@ -268,10 +326,11 @@ export function WhitelistPage() {
     try {
       setSubmitting(true);
       const force = ['deny', 'require_force'].includes(approveModal.riskProfile?.action) || approveModal.bans.length > 0;
+      const durationDays = approveModal.durationDays ?? APPROVE_DEFAULT_DURATION_DAYS;
       if (approveModal.mode === 'restore') {
-        await api.restoreWhitelist(token, approveModal.item.id, { reason: approveModal.reason.trim(), force });
+        await api.restoreWhitelist(token, approveModal.item.id, { reason: approveModal.reason.trim(), force, duration_days: durationDays });
       } else {
-        await api.approveWhitelist(token, approveModal.item.id, { reason: approveModal.reason.trim(), force });
+        await api.approveWhitelist(token, approveModal.item.id, { reason: approveModal.reason.trim(), force, duration_days: durationDays });
       }
       setApproveModal(emptyApproveModal());
       await invalidateWhitelist();
@@ -320,7 +379,7 @@ export function WhitelistPage() {
     if (!confirmed) return;
     try {
       setSubmitting(true);
-      await api.restoreWhitelist(token, item.id);
+      await api.restoreWhitelist(token, item.id, { duration_days: APPROVE_DEFAULT_DURATION_DAYS });
       await invalidateWhitelist();
       notifyPendingReviewsUpdated({ source: 'whitelist', action: 'restore' });
       toast({ title: '恢复成功', message: `${item.nickname} 的白名单已恢复。` });
@@ -359,6 +418,7 @@ export function WhitelistPage() {
         steam_input: manualForm.steam_input.trim(),
         force: manualForm.force,
         reason: manualForm.reason.trim() || undefined,
+        duration_days: manualForm.duration_days ?? 0,
       });
       setManualModalOpen(false);
       setManualForm(emptyManualForm);
@@ -426,9 +486,50 @@ export function WhitelistPage() {
     } finally { setRefreshing(false); }
   }
 
+  // 倒计时提示：每 60 秒刷新一次当前时间（避免渲染期间调用 Date.now）
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  // 自动通过配置加载（白名单管理页面专用）
+  useEffect(() => {
+    if (!canManualCreate) return;
+    let cancelled = false;
+    api.whitelistAutoApproveConfig(token)
+      .then((data) => { if (!cancelled) setAutoApproveConfig({ ...data.config, loading: false }); })
+      .catch(() => { if (!cancelled) setAutoApproveConfig((prev) => ({ ...prev, loading: false })); });
+    return () => { cancelled = true; };
+  }, [token, canManualCreate]);
+
+  async function handleAutoApproveToggle(nextEnabled) {
+    try {
+      setSavingAutoApprove(true);
+      const data = await api.updateWhitelistAutoApproveConfig(token, { enabled: nextEnabled, hours: autoApproveConfig.hours });
+      setAutoApproveConfig({ ...data.config, loading: false });
+      toast({ title: '已保存', message: `低风险白名单自动通过已${nextEnabled ? '开启' : '关闭'}。` });
+    } catch (actionError) {
+      toast({ title: '操作失败', message: actionError.message, tone: 'danger' });
+    } finally { setSavingAutoApprove(false); }
+  }
+
+  async function handleAutoApproveHoursChange(nextHours) {
+    const hours = Math.max(1, Math.min(72, Number(nextHours) || 3));
+    try {
+      setSavingAutoApprove(true);
+      const data = await api.updateWhitelistAutoApproveConfig(token, { enabled: autoApproveConfig.enabled, hours });
+      setAutoApproveConfig({ ...data.config, loading: false });
+      toast({ title: '已保存', message: `低风险自动通过等待时长已设为 ${hours} 小时。` });
+    } catch (actionError) {
+      toast({ title: '操作失败', message: actionError.message, tone: 'danger' });
+    } finally { setSavingAutoApprove(false); }
+  }
+
   // ---------------------------------------------------------------------------
   // 派生值
   // ---------------------------------------------------------------------------
+  const autoApprovePanelVisible = canManualCreate && !autoApproveConfig.loading;
+  const lastAutoApproveAt = autoApproveConfig.updated_at;
 
   const globalBans = globalBansRef.current;
   const items = data?.items ?? [];
@@ -464,6 +565,37 @@ export function WhitelistPage() {
         </div>
       </div>
 
+      {autoApprovePanelVisible ? (
+        <div className="card auto-approve-panel">
+          <div className="card-body flex items-center gap-16 flex-wrap">
+            <div className="flex items-center gap-10">
+              <ToggleSwitch checked={autoApproveConfig.enabled} onChange={handleAutoApproveToggle} disabled={savingAutoApprove} />
+              <div>
+                <div className="fw-600 fs-14">低风险自动通过</div>
+                <div className="text-muted-light fs-12">开启后，低风险（无封禁/全球封禁/IP关联风险）玩家申请满 {autoApproveConfig.hours} 小时无人审核将自动通过</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-6 ml-auto">
+              <span className="text-muted-light fs-12">等待时长</span>
+              <input
+                type="number"
+                className="input auto-approve-hours-input"
+                value={autoApproveConfig.hours}
+                min={1}
+                max={72}
+                disabled={savingAutoApprove}
+                onChange={(e) => setAutoApproveConfig((prev) => ({ ...prev, hours: Number(e.target.value) || 3 }))}
+                onBlur={(e) => handleAutoApproveHoursChange(e.target.value)}
+                style={{ width: 64 }}
+              />
+              <span className="text-muted-light fs-12">小时</span>
+              <span className={`status-pill ${autoApproveConfig.enabled ? 'pill-online' : 'pill-default'}`}>{autoApproveConfig.enabled ? '已开启' : '已关闭'}</span>
+              {lastAutoApproveAt ? <span className="text-muted-light fs-12">最近设置：{formatChinaDateTime(lastAutoApproveAt)}</span> : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="tabs">
         <button className={`tab ${tab === 'pending' ? 'active' : ''}`} onClick={() => switchTab('pending')}>
           <span>待审核</span>
@@ -493,7 +625,7 @@ export function WhitelistPage() {
                   <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>申请时间</th><th className="text-right">操作</th></tr>
                 ) : null}
                 {tab === 'approved' ? (
-                  <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>申请时间</th><th>通过时间</th><th>审核管理员</th><th>通过理由</th><th className="text-right">操作</th></tr>
+                  <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>申请时间</th><th>通过时间</th><th>到期时间</th><th>审核管理员</th><th>通过理由</th><th className="text-right">操作</th></tr>
                 ) : null}
                 {tab === 'rejected' ? (
                   <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>拒绝理由</th><th>申请时间</th><th>拒绝时间</th><th>审核管理员</th><th className="text-right">操作</th></tr>
@@ -501,11 +633,11 @@ export function WhitelistPage() {
               </thead>
               <tbody>
                 {isLoading ? <TableLoading colSpan={tab === 'pending' ? 7 : 10} text="正在加载白名单数据..." /> : null}
-                {!isLoading && error ? <TableError colSpan={tab === 'pending' ? 7 : 10} message={error.message} /> : null}
-                {!isLoading && !error && items.length === 0 ? <TableEmpty colSpan={tab === 'pending' ? 7 : 10} text="当前分区暂无记录" /> : null}
+                {!isLoading && error ? <TableError colSpan={tab === 'pending' ? 7 : 11} message={error.message} /> : null}
+                {!isLoading && !error && items.length === 0 ? <TableEmpty colSpan={tab === 'pending' ? 7 : 11} text="当前分区暂无记录" /> : null}
                 {!isLoading && !error && tab === 'pending' ? items.map((item) => (
                     <tr key={item.id} className={rowClassName(item, globalBans)} onContextMenu={(event) => handlePendingRowContextMenu(event, item)}>
-                      {renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail)}
+                      {renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail, autoApproveConfig, now)}
                       {renderSteamNameCell(item, canRefreshSteam, refreshing, handleRefreshSteamName)}
                       <td className="steam-id" data-player-info="true" data-label="SteamID64">{item.steamid64}</td>
                       <td className="steam-id" data-player-info="true" data-label="SteamID2">{item.steamid ?? '-'}</td>
@@ -527,6 +659,7 @@ export function WhitelistPage() {
                       <td className="steam-id" data-label="SteamID3">{item.steamid3 ?? '-'}</td>
                       <td className="text-muted-light" data-label="申请时间">{formatChinaDateTime(item.applied_at)}</td>
                       <td className="text-muted-light" data-label="通过时间">{formatChinaDateTime(item.approved_at)}</td>
+                      {renderExpiryCell(item)}
                       <td data-label="审核管理员">{item.approved_by ?? '-'}</td>
                       <td className={`text-break ${item.approval_reason ? 'text-accent2' : 'text-muted-light'}`} style={{ maxWidth: 200 }} data-label="通过理由">{item.approval_reason ?? '-'}</td>
                       <td className="text-right mobile-card-actions" data-label="操作">
@@ -610,6 +743,8 @@ export function WhitelistPage() {
         riskProfile={approveRiskProfile}
         reason={approveModal.reason}
         setReason={setApproveReason}
+        durationDays={approveModal.durationDays}
+        setDurationDays={(days) => setApproveModal((prev) => ({ ...prev, durationDays: days, error: '' }))}
         error={approveModal.error}
         secondsRemaining={approveModal.secondsRemaining}
         onSubmit={handleApproveWithReason}

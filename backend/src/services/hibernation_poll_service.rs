@@ -57,22 +57,27 @@ pub fn start_hibernation_poll_loop(db: Database, config: HibernationPollConfig) 
         Some(config.scan_interval_secs),
         true,
     );
-    tokio::spawn(async move {
-        let mut poller = HibernationPoller::new(db, config.clone());
-        let mut interval = tokio::time::interval(Duration::from_secs(config.scan_interval_secs));
-        // 首个周期先等待，给插件正常上报留出机会
-        interval.tick().await;
-        loop {
+    super::task_runtime::spawn_persistent("hibernation_rcon_poll", move || {
+        let db = db.clone();
+        let config = config.clone();
+        async move {
+            let mut poller = HibernationPoller::new(db, config.clone());
+            let mut interval =
+                tokio::time::interval(Duration::from_secs(config.scan_interval_secs));
+            // 首个周期先等待，给插件正常上报留出机会
             interval.tick().await;
-            match observability_service::observe_task(
-                "hibernation_rcon_poll",
-                poller.poll_once(),
-                |count| format!("轮询 {} 台休眠服务器", count),
-            )
-            .await
-            {
-                Ok(_) => {}
-                Err(error) => tracing::warn!(%error, "休眠服务器轮询周期执行失败"),
+            loop {
+                interval.tick().await;
+                match observability_service::observe_task(
+                    "hibernation_rcon_poll",
+                    poller.poll_once(),
+                    |count| format!("轮询 {} 台休眠服务器", count),
+                )
+                .await
+                {
+                    Ok(_) => {}
+                    Err(error) => tracing::warn!(%error, "休眠服务器轮询周期执行失败"),
+                }
             }
         }
     });

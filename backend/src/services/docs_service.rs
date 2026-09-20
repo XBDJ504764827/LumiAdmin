@@ -196,11 +196,51 @@ pub fn list_endpoints() -> Vec<EndpointDoc> {
         },
         EndpointDoc {
             module: "插件准入",
+            tone: "online",
+            name: "插件免配置自识别",
+            method: "POST",
+            endpoint: "/api/plugin/identify",
+            description: "游戏插件只填面板地址，按请求来源 IP + 端口自动匹配服务器并下发该服 report_token（可选校验 X-Lumi-Install-Key）",
+            auth_required: false,
+            roles: &["game-server"],
+        },
+        EndpointDoc {
+            module: "插件准入",
+            tone: "online",
+            name: "授权事件拉取（Long-Poll）",
+            method: "POST",
+            endpoint: "/api/plugin/auth/events/poll",
+            description: "游戏服按 after_version 拉取授权事件，后端 hold≤20s；版本差>500 返回 snapshot_required",
+            auth_required: false,
+            roles: &["game-server"],
+        },
+        EndpointDoc {
+            module: "插件准入",
+            tone: "online",
+            name: "授权事件确认",
+            method: "POST",
+            endpoint: "/api/plugin/auth/ack",
+            description: "游戏服写库成功后按 version 单调 ACK",
+            auth_required: false,
+            roles: &["game-server"],
+        },
+        EndpointDoc {
+            module: "插件准入",
+            tone: "online",
+            name: "授权全量快照",
+            method: "POST",
+            endpoint: "/api/plugin/auth/snapshot",
+            description: "版本落后太多时全量替换本地授权状态（bans/whitelist/server rules）",
+            auth_required: false,
+            roles: &["game-server"],
+        },
+        EndpointDoc {
+            module: "插件准入",
             tone: "warning",
             name: "插件进服准入校验",
             method: "POST",
             endpoint: "/api/plugin/access/check",
-            description: "游戏服务器插件在玩家进服时校验封禁、白名单、进入限制与 CS 优先账户（插件上报 is_cs_prime）",
+            description: "游戏服务器插件在玩家进服时校验封禁、中高风险账号（需白名单）、白名单、进入限制与 CS 优先账户（插件上报 is_cs_prime）",
             auth_required: false,
             roles: &["game-server"],
         },
@@ -385,6 +425,16 @@ pub fn list_endpoints() -> Vec<EndpointDoc> {
             roles: &["admin", "developer"],
         },
         EndpointDoc {
+            module: "系统观测",
+            tone: "info",
+            name: "LumiBot 状态",
+            method: "GET",
+            endpoint: "/api/ops/lumi-bot",
+            description: "检查 LumiBot 连通性、事件队列统计与后台同步任务状态",
+            auth_required: true,
+            roles: &["admin", "developer"],
+        },
+        EndpointDoc {
             module: "API 文档",
             tone: "info",
             name: "接口元数据列表",
@@ -413,6 +463,16 @@ pub fn list_endpoints() -> Vec<EndpointDoc> {
             description: "公共页面接口：玩家提交 Steam 标识符及游戏昵称",
             auth_required: false,
             roles: &["guest"],
+        },
+        EndpointDoc {
+            module: "QQ 集成",
+            tone: "danger",
+            name: "QQ 封禁状态查询",
+            method: "GET",
+            endpoint: "/api/integration/qq/ban/status",
+            description: "供 LumiBot /ban 指令查询网站封禁与全球封禁历史",
+            auth_required: true,
+            roles: &["qq-integration"],
         },
         EndpointDoc {
             module: "公共展示",
@@ -450,6 +510,11 @@ mod tests {
         assert!(endpoints
             .iter()
             .any(|item| item.endpoint == "/api/plugin/bans/check" && item.method == "POST"));
+        assert!(endpoints.iter().any(|item| {
+            item.endpoint == "/api/ops/lumi-bot"
+                && item.method == "GET"
+                && item.roles == ["admin", "developer"]
+        }));
     }
 
     #[test]

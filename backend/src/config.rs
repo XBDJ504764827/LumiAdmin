@@ -52,6 +52,14 @@ pub struct Config {
     pub access_log_retention_days: i64,
     // 全球封禁同步
     pub global_ban_sync_interval_secs: u64,
+    // 插件免配置自识别：面板级安装密钥（留空表示不校验；设置后插件需在 core.cfg 填同一值）
+    pub plugin_install_key: Option<String>,
+    // 是否允许插件按「来源 IP + 端口」自动绑定服务器（默认开启）
+    pub plugin_auto_bind: bool,
+    // 面板位于反向代理/CDN 之后时，是否信任 X-Forwarded-For / CF-Connecting-IP 等头
+    pub plugin_trust_proxy_headers: bool,
+    // 自动绑定后，同一服务器被新安装实例重新认领所需的最短静默时间（秒）
+    pub plugin_rebind_after_secs: i64,
     // Cloudflare R2 存储配置
     pub r2_endpoint: Option<String>,
     pub r2_bucket: Option<String>,
@@ -70,6 +78,12 @@ pub struct Config {
     pub lumi_bot_sync_interval_secs: u64,
     pub lumi_bot_max_attempts: u32,
     pub lumi_bot_batch_size: usize,
+    /// 死信复活退避：failed 事件超过该秒数后自动重置为 pending 再试
+    pub lumi_bot_failed_retry_secs: u64,
+    /// 死信最长保留：failed 超过该秒数标记为 expired，不再重试
+    pub lumi_bot_failed_max_age_secs: u64,
+    // 管理后台地址（用于 QQ 通知中的“点击查看详情”链接）
+    pub admin_web_url: Option<String>,
 }
 
 impl Config {
@@ -172,11 +186,11 @@ impl Config {
             db_min_connections: env_u32_clamped("DB_MIN_CONNECTIONS", 2, 0, 50),
             db_acquire_timeout_secs: env_u64("DB_ACQUIRE_TIMEOUT_SECS", 10),
             db_idle_timeout_secs: env_u64("DB_IDLE_TIMEOUT_SECS", 600),
-            // HTTP 客户端配置
-            http_timeout_secs: env_u64("HTTP_TIMEOUT_SECS", 300),
+            // HTTP 客户端配置（全局兜底超时，Steam/外部 API 调用点多有更短的单独超时）
+            http_timeout_secs: env_u64("HTTP_TIMEOUT_SECS", 60),
             http_connect_timeout_secs: env_u64("HTTP_CONNECT_TIMEOUT_SECS", 5),
             // 请求超时
-            request_timeout_secs: env_u64("REQUEST_TIMEOUT_SECS", 300),
+            request_timeout_secs: env_u64("REQUEST_TIMEOUT_SECS", 60),
             // RCON 连接/读写超时
             rcon_connect_timeout_secs: env_u64("RCON_CONNECT_TIMEOUT_SECS", 10),
             rcon_io_timeout_secs: env_u64("RCON_IO_TIMEOUT_SECS", 10),
@@ -216,6 +230,14 @@ impl Config {
                 .unwrap_or(90),
             // 全球封禁同步：默认 5 分钟
             global_ban_sync_interval_secs: env_u64("GLOBAL_BAN_SYNC_INTERVAL_SECS", 300),
+            // 插件免配置自识别
+            plugin_install_key: std::env::var("PLUGIN_INSTALL_KEY")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty()),
+            plugin_auto_bind: env_bool("PLUGIN_AUTO_BIND", true),
+            plugin_trust_proxy_headers: env_bool("PLUGIN_TRUST_PROXY_HEADERS", false),
+            plugin_rebind_after_secs: env_u64("PLUGIN_REBIND_AFTER_SECS", 3600) as i64,
             // R2 配置
             r2_endpoint: std::env::var("R2_ENDPOINT").ok().filter(|v| !v.is_empty()),
             r2_bucket: std::env::var("R2_BUCKET").ok().filter(|v| !v.is_empty()),
@@ -248,6 +270,12 @@ impl Config {
             lumi_bot_sync_interval_secs: env_u64("LUMI_BOT_SYNC_INTERVAL_SECS", 1800),
             lumi_bot_max_attempts: env_u64("LUMI_BOT_MAX_ATTEMPTS", 5) as u32,
             lumi_bot_batch_size: env_u64("LUMI_BOT_BATCH_SIZE", 100) as usize,
+            lumi_bot_failed_retry_secs: env_u64("LUMI_BOT_FAILED_RETRY_SECS", 86_400),
+            lumi_bot_failed_max_age_secs: env_u64("LUMI_BOT_FAILED_MAX_AGE_SECS", 604_800),
+            admin_web_url: std::env::var("ADMIN_WEB_URL")
+                .ok()
+                .map(|v| v.trim().trim_end_matches('/').to_string())
+                .filter(|v| !v.is_empty()),
         };
 
         // 跨字段校验
@@ -275,8 +303,8 @@ impl Config {
         }
 
         if config.request_timeout_secs == 0 {
-            tracing::warn!("REQUEST_TIMEOUT_SECS 为 0，已自动修正为 300");
-            config.request_timeout_secs = 300;
+            tracing::warn!("REQUEST_TIMEOUT_SECS 为 0，已自动修正为 60");
+            config.request_timeout_secs = 60;
         }
 
         if config.rcon_connect_timeout_secs == 0 {
@@ -308,8 +336,8 @@ impl Config {
         }
 
         if config.http_timeout_secs == 0 {
-            tracing::warn!("HTTP_TIMEOUT_SECS 为 0，已自动修正为 300");
-            config.http_timeout_secs = 300;
+            tracing::warn!("HTTP_TIMEOUT_SECS 为 0，已自动修正为 60");
+            config.http_timeout_secs = 60;
         }
 
         if config.max_request_body_bytes <= config.appeal_file_max_size_bytes {

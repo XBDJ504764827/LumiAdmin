@@ -254,7 +254,7 @@ export function ExternalServerPage() {
           <div className="modal" style={{ maxWidth: 520 }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>{editingId ? '编辑外部服务器' : '添加外部服务器'}</h2>
-              <span style={{ cursor: 'pointer', color: 'var(--text3)', fontSize: 18 }} onClick={closeModal}>&#10005;</span>
+              <button type="button" className="modal-close-btn" onClick={closeModal} aria-label="关闭">&#10005;</button>
             </div>
             <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <div className="form-group">

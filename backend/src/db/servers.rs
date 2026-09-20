@@ -15,7 +15,13 @@ impl Database {
             r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS min_steam_level INTEGER NOT NULL DEFAULT 0"#,
             r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS whitelist_mode_enabled BOOLEAN NOT NULL DEFAULT false"#,
             r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS cs_prime_enabled BOOLEAN NOT NULL DEFAULT false"#,
+            // 中高风险账号拦截：存在封禁类风险信号的账号需持有白名单才可进入（默认开启）
+            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS risk_block_enabled BOOLEAN NOT NULL DEFAULT true"#,
             r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS max_players INTEGER NOT NULL DEFAULT 0"#,
+            // 插件免配置自识别：记录最后一次成功认领本服的安装实例，便于来源 IP 变化后重新定位
+            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS plugin_instance_id TEXT"#,
+            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS plugin_bound_at TIMESTAMPTZ"#,
+            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS plugin_last_seen_at TIMESTAMPTZ"#,
         ];
         for sql in alters {
             sqlx::query(sql).execute(&self.pool).await?;
@@ -28,6 +34,8 @@ impl Database {
             .execute(&self.pool)
             .await?;
         sqlx::query(r#"CREATE UNIQUE INDEX IF NOT EXISTS idx_servers_report_token_unique ON servers (report_token)"#)
+        .execute(&self.pool).await?;
+        sqlx::query(r#"CREATE INDEX IF NOT EXISTS idx_servers_plugin_instance_id ON servers (plugin_instance_id)"#)
         .execute(&self.pool).await?;
 
         sqlx::query(r#"ALTER TABLE servers ALTER COLUMN status SET DEFAULT 'untested'"#)

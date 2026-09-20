@@ -8,6 +8,7 @@ export const api = {
   logout: (token) => request('/api/auth/logout', { method: 'POST', headers: withAuth(token) }),
   logoutAllDevices: (currentToken) => request('/api/auth/logout-all', { method: 'POST', body: JSON.stringify({ current_token: currentToken }) }),
   me: (token) => request('/api/auth/me', { headers: withAuth(token) }),
+  permissions: (token) => request('/api/auth/permissions', { headers: withAuth(token) }),
   dashboard: (token) => request('/api/dashboard', { headers: withAuth(token) }),
   // ── Dashboard Analytics 图表统计 ──
   whitelistTrend: (token, days = 30) => request(`/api/dashboard/analytics/whitelist-trend${buildQueryString({ days })}`, { headers: withAuth(token) }),
@@ -24,6 +25,7 @@ export const api = {
   deleteCommunityServer: (token, serverId) => request(`/api/community/servers/${serverId}`, { method: 'DELETE', headers: withAuth(token) }),
   testCommunityServerRcon: (token, body) => request('/api/community/servers/test-rcon', { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   communityServerPlayers: (token, serverId) => request(`/api/community/servers/${serverId}/players`, { headers: withAuth(token) }),
+  communityPlayerRisk: (token, serverId, steamid64) => request(`/api/community/servers/${serverId}/players/${encodeURIComponent(steamid64)}/risk`, { headers: withAuth(token) }),
   playerApiPlayers: (token) => request('/api/player-api/players', { headers: withAuth(token) }),
   playerApiConfig: (token) => request('/api/player-api/config', { headers: withAuth(token) }),
   updatePlayerApiConfig: (token, body) => request('/api/player-api/config', { method: 'PUT', headers: withAuth(token), body: JSON.stringify(body) }),
@@ -39,6 +41,13 @@ export const api = {
   testExternalBanApiTarget: (token, id) => request(`/api/external-ban-api/targets/${id}/test`, { method: 'POST', headers: withAuth(token), body: JSON.stringify({}) }),
   playerDetail: (token, steamInput) => request(`/api/player-detail${buildQueryString({ steam_input: steamInput })}`, { headers: withAuth(token) }),
   playerDetailCandidates: (token, query) => request(`/api/player-detail/search${buildQueryString({ query })}`, { headers: withAuth(token) }),
+  playerTags: (token) => request('/api/player-detail/tags', { headers: withAuth(token) }),
+  createPlayerTag: (token, body) => request('/api/player-detail/tags', { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
+  deletePlayerTag: (token, tagId) => request(`/api/player-detail/tags/${tagId}`, { method: 'DELETE', headers: withAuth(token) }),
+  playerReport: (token, steamid64) => request(`/api/player-detail/${encodeURIComponent(steamid64)}/report`, { headers: withAuth(token) }),
+  linkedAccountsBatch: (token, steamid64, body) => request(`/api/player-detail/${encodeURIComponent(steamid64)}/linked-accounts/batch`, { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
+  downloadPlayerEvidence: (token, steamid64, sourceType, fileId) => request(`/api/player-detail/${encodeURIComponent(steamid64)}/evidence/${encodeURIComponent(sourceType)}/${fileId}/download`, { headers: withAuth(token) }),
+  playerInternalNoteHistory: (token, steamid64) => request(`/api/player-detail/internal/${encodeURIComponent(steamid64)}/history`, { headers: withAuth(token) }),
   getPlayerInternalProfile: (token, steamid64) => request(`/api/player-detail/internal/${encodeURIComponent(steamid64)}`, { headers: withAuth(token) }),
   updatePlayerInternalProfile: (token, steamid64, body) => request(`/api/player-detail/internal/${encodeURIComponent(steamid64)}`, { method: 'PUT', headers: withAuth(token), body: JSON.stringify(body) }),
   updateEvidenceMetadata: (token, sourceType, fileId, body) => request(`/api/player-detail/evidence/${encodeURIComponent(sourceType)}/${fileId}`, { method: 'PUT', headers: withAuth(token), body: JSON.stringify(body) }),
@@ -51,6 +60,8 @@ export const api = {
   rejectWhitelist: (token, id, body) => request(`/api/whitelist/${id}/reject`, { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   restoreWhitelist: (token, id, body = {}) => request(`/api/whitelist/${id}/restore`, { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   revokeWhitelist: (token, id, body = {}) => request(`/api/whitelist/${id}/revoke`, { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
+  whitelistAutoApproveConfig: (token) => request('/api/whitelist/auto-approve-config', { headers: withAuth(token) }),
+  updateWhitelistAutoApproveConfig: (token, body) => request('/api/whitelist/auto-approve-config', { method: 'PUT', headers: withAuth(token), body: JSON.stringify(body) }),
   refreshSingleSteamName: (token, id) => request(`/api/whitelist/${id}/refresh-steam-name`, { method: 'POST', headers: withAuth(token), body: JSON.stringify({}) }),
   refreshAllSteamNames: (token, status = null) => {
     const body = status ? { status } : {};
@@ -82,6 +93,9 @@ export const api = {
   revokeUserSessions: (token, userId) => request(`/api/auth/users/${userId}/sessions`, { method: 'DELETE', headers: withAuth(token) }),
   logs: (token, params = {}) => request(`/api/logs${buildQueryString(params)}`, { headers: withAuth(token) }),
   opsOverview: (token) => request('/api/ops/overview', { headers: withAuth(token) }),
+  lumiBotStatus: (token) => request('/api/ops/lumi-bot', { headers: withAuth(token) }),
+  lumiBotEvents: (token, params = {}) => request(`/api/ops/lumi-bot/events${buildQueryString(params)}`, { headers: withAuth(token) }),
+  lumiBotAuditLogs: (token, params = {}) => request(`/api/ops/lumi-bot/audit-logs${buildQueryString(params)}`, { headers: withAuth(token) }),
   docsEndpoints: (token) => request('/api/docs/endpoints', { headers: withAuth(token) }),
   accessLogs: (token, params = {}) => request(`/api/player-access/logs${buildQueryString(params)}`, { headers: withAuth(token) }),
   // Global Bans

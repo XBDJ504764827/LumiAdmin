@@ -1,6 +1,7 @@
 pub mod abnormal_record;
 pub mod access;
 pub mod auth;
+pub mod auth_sync;
 pub mod ban;
 pub mod ban_api;
 pub mod community;
@@ -19,6 +20,7 @@ pub mod steam_auth;
 pub mod tests;
 pub mod user;
 pub mod whitelist;
+pub mod whitelist_config;
 
 use axum::{
     http::{header, HeaderMap, StatusCode},
@@ -134,6 +136,7 @@ pub fn router(
         .route("/api/auth/logout", post(auth::logout))
         .route("/api/auth/logout-all", post(auth::logout_all_devices))
         .route("/api/auth/me", get(auth::me))
+        .route("/api/auth/permissions", get(auth::permissions))
         // -- dashboard --
         .route("/api/dashboard", get(misc::dashboard))
         .route(
@@ -184,6 +187,10 @@ pub fn router(
             get(community::get_online_players),
         )
         .route(
+            "/api/community/servers/:server_id/players/:steamid64/risk",
+            get(community::online_player_risk),
+        )
+        .route(
             "/api/community/servers/:server_id/report-token",
             get(community::get_server_report_token),
         )
@@ -228,6 +235,13 @@ pub fn router(
             "/api/plugin/offline/sync",
             post(plugin::sync_offline_operations),
         )
+        .route("/api/plugin/identify", post(plugin::identify_plugin_server))
+        .route(
+            "/api/plugin/auth/events/poll",
+            post(auth_sync::poll_auth_events),
+        )
+        .route("/api/plugin/auth/ack", post(auth_sync::ack_auth_version))
+        .route("/api/plugin/auth/snapshot", post(auth_sync::auth_snapshot))
         // -- external servers --
         .route(
             "/api/external-servers",
@@ -287,8 +301,28 @@ pub fn router(
         // -- player detail --
         .route("/api/player-detail", get(player_detail::get_player_detail))
         .route(
+            "/api/player-detail/tags",
+            get(player_detail::list_player_tags).post(player_detail::create_player_tag),
+        )
+        .route(
+            "/api/player-detail/tags/:tag_id",
+            delete(player_detail::delete_player_tag),
+        )
+        .route(
             "/api/player-detail/search",
             get(player_detail::search_player_candidates),
+        )
+        .route(
+            "/api/player-detail/:steamid64/report",
+            get(player_detail::player_report),
+        )
+        .route(
+            "/api/player-detail/:steamid64/linked-accounts/batch",
+            post(player_detail::linked_account_batch_action),
+        )
+        .route(
+            "/api/player-detail/:steamid64/evidence/:source_type/:file_id/download",
+            get(player_detail::download_evidence),
         )
         .route(
             "/api/player-detail/internal/:steamid64",
@@ -296,11 +330,23 @@ pub fn router(
                 .put(player_detail::update_player_internal_profile),
         )
         .route(
+            "/api/player-detail/internal/:steamid64/history",
+            get(player_detail::player_internal_note_history),
+        )
+        .route(
             "/api/player-detail/evidence/:source_type/:file_id",
             put(player_detail::update_evidence_metadata),
         )
         // -- whitelist --
         .route("/api/whitelist", get(whitelist::whitelist))
+        .route(
+            "/api/whitelist/auto-approve-config",
+            get(whitelist_config::get_auto_approve_config),
+        )
+        .route(
+            "/api/whitelist/auto-approve-config",
+            put(whitelist_config::update_auto_approve_config),
+        )
         .route("/api/whitelist/manual", post(whitelist::create_whitelist))
         .route(
             "/api/whitelist/:id/approve",
@@ -414,6 +460,10 @@ pub fn router(
         )
         // -- audit --
         .route("/api/audit/logs", get(misc::list_audit_logs))
+        .route(
+            "/api/ops/lumi-bot/audit-logs",
+            get(misc::list_qq_bot_audit_logs),
+        )
         // -- users --
         .route("/api/users", get(user::users).post(user::create_user))
         .route(
@@ -435,6 +485,8 @@ pub fn router(
         .route("/api/docs/endpoints", get(misc::api_endpoint_docs))
         // -- ops --
         .route("/api/ops/overview", get(ops::overview))
+        .route("/api/ops/lumi-bot", get(ops::lumi_bot_status))
+        .route("/api/ops/lumi-bot/events", get(ops::lumi_bot_events))
         // -- player access logs --
         .route("/api/player-access/logs", get(access::list_access_logs))
         // -- global bans --
@@ -514,6 +566,11 @@ pub fn router(
             "/api/integration/qq/pending-all",
             get(public::qq_pending_all),
         )
+        .route(
+            "/api/integration/qq/whitelist/status",
+            get(public::qq_whitelist_status),
+        )
+        .route("/api/integration/qq/ban/status", get(public::qq_ban_status))
         .route(
             "/api/integration/qq/whitelist/:id/review",
             post(public::qq_whitelist_review),
@@ -620,6 +677,11 @@ pub(crate) fn invalid_request(error: anyhow::Error) -> (StatusCode, Json<serde_j
 }
 
 /// 使用 sqlx::DatabaseError trait 进行类型安全的错误匹配
+///
+/// 返回给客户端的文案规则：
+/// - 业务校验错误（`ensure!`/`bail!` 产生的中文提示）原样保留；
+/// - 可识别的数据库约束错误翻译为友好文案；
+/// - 其余一律返回模糊文案，避免泄漏 SQL/路径等内部细节。
 pub(crate) fn translate_db_error(error: &anyhow::Error) -> String {
     // 尝试提取 sqlx::Error
     if let Some(sqlx_err) = error.downcast_ref::<sqlx::Error>() {
@@ -663,13 +725,31 @@ pub(crate) fn translate_db_error(error: &anyhow::Error) -> String {
         }
     }
 
-    // 回退到字符串匹配（兼容非 sqlx 错误）
+    // 回退到字符串匹配（兼容非 sqlx 错误）。
+    // 业务代码中的 `ensure!`/`bail!` 校验提示（中文）原样透传给用户，
+    // 其余未识别错误（可能含 SQL、路径等内部细节）返回模糊文案，原文仅进日志。
     let msg = error.to_string();
     if msg.contains("not found") || msg.contains("不存在") {
         return "记录不存在".to_string();
     }
+    if contains_cjk(&msg) {
+        return msg;
+    }
 
-    msg
+    tracing::debug!(error = %msg, "未识别的请求错误，返回模糊文案");
+    "请求处理失败，请稍后重试或联系管理员".to_string()
+}
+
+/// 判断字符串是否包含中日韩文字（用于区分业务校验提示与内部错误细节）
+fn contains_cjk(s: &str) -> bool {
+    s.chars().any(|c| {
+        matches!(u32::from(c),
+            0x4E00..=0x9FFF   // CJK 统一表意文字
+            | 0x3400..=0x4DBF // CJK 扩展 A
+            | 0x3000..=0x303F // CJK 符号与标点
+            | 0xFF00..=0xFFEF // 全角字符
+        )
+    })
 }
 
 pub(crate) fn invalid_request_status(error: anyhow::Error) -> StatusCode {

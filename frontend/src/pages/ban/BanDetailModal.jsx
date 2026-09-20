@@ -75,7 +75,7 @@ export function BanDetailModal({ open, item: initialItem, onClose, canManageAll 
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>封禁详细</h2>
-          <span style={{ cursor: 'pointer', color: 'var(--text3)', fontSize: 18 }} onClick={onClose}>&#10005;</span>
+          <button type="button" className="modal-close-btn" onClick={onClose} aria-label="关闭">&#10005;</button>
         </div>
         <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div className="form-group">
@@ -138,10 +138,10 @@ export function BanDetailModal({ open, item: initialItem, onClose, canManageAll 
                     };
                     const info = statusMap[sync.status] || { label: sync.status, cls: 'pill-idle' };
                     return (
-                      <div key={sync.target_id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-                        <span>{sync.target_name}</span>
+                      <div key={sync.target_id} style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, fontSize: 13 }}>
+                        <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>{sync.target_name}</span>
                         <span className={`status-pill ${info.cls}`}>{info.label}</span>
-                        {sync.last_error ? <span style={{ color: 'var(--danger)', fontSize: 12 }} title={sync.last_error}>（{sync.last_error.length > 40 ? sync.last_error.slice(0, 40) + '...' : sync.last_error}）</span> : null}
+                        {sync.last_error ? <span style={{ color: 'var(--danger)', fontSize: 12, minWidth: 0, overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }} title={sync.last_error}>（{sync.last_error.length > 40 ? sync.last_error.slice(0, 40) + '...' : sync.last_error}）</span> : null}
                       </div>
                     );
                   })}

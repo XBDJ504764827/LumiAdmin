@@ -47,7 +47,7 @@ export function PublicWhitelistPage() {
     return (
       <>
         <div className="table-responsive">
-          <table className="public-table">
+          <table className="public-table mobile-card-table">
             <thead>
               <tr>
                 <th>游戏昵称</th>
@@ -59,10 +59,10 @@ export function PublicWhitelistPage() {
             <tbody>
               {items.map((item) => (
                 <tr key={item.id}>
-                  <td className="fw-600">{item.nickname}</td>
-                  <td className="steam-id">{item.steamid64}</td>
-                  <td className="text-muted-light">{formatChinaDateTime(item.applied_at, { seconds: false })}</td>
-                  <td>
+                  <td className="fw-600 mobile-card-primary" data-label="游戏昵称">{item.nickname}</td>
+                  <td className="steam-id" data-label="SteamID64">{item.steamid64}</td>
+                  <td className="text-muted-light" data-label="申请时间">{formatChinaDateTime(item.applied_at, { seconds: false })}</td>
+                  <td data-label="通过时间">
                     {item.approved_at
                       ? <span style={{ color: 'var(--teal)' }}>{formatChinaDateTime(item.approved_at, { seconds: false })}</span>
                       : <span className="text-muted-light">-</span>}

@@ -103,47 +103,37 @@ fn parse_players_from_response(response: &str) -> Vec<String> {
         .collect()
 }
 
-/// 验证 RCON 命令安全性，阻止破坏性命令
-fn validate_rcon_command(command: &str) -> anyhow::Result<()> {
+/// RCON 命令白名单。
+///
+/// RCON 具备服务器控制台的全部权限，因此不能依赖黑名单拦截危险命令。
+/// developer 由路由层显式允许全部命令；其他管理员只能执行只读诊断命令。
+const STAFF_RCON_COMMANDS: &[&str] = &["status", "stats", "version", "listplayers", "sm_version"];
+
+fn validate_rcon_command(command: &str, allow_all: bool) -> anyhow::Result<()> {
     let cleaned = command.trim().trim_start_matches(';').trim();
-    let cmd = cleaned.to_lowercase();
-    anyhow::ensure!(!cmd.is_empty(), "命令不能为空");
+    anyhow::ensure!(!cleaned.is_empty(), "命令不能为空");
+    anyhow::ensure!(cleaned.len() <= 512, "RCON 命令长度不能超过 512 个字符");
+    anyhow::ensure!(
+        !cleaned.contains(';') && !cleaned.contains('\n') && !cleaned.contains('\r'),
+        "不允许执行多条 RCON 命令"
+    );
 
-    let keywords: Vec<&str> = cmd
-        .split(|c: char| c == ';' || c.is_whitespace())
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    const BLOCKED_COMMANDS: &[&str] = &[
-        "quit",
-        "exit",
-        "rcon_password",
-        "sv_password",
-        "servercfgfile",
-        "writeid",
-        "writeip",
-        "banid",
-        "removeid",
-        "removeip",
-        "exec",
-        "alias",
-        "sm_rcon",
-        "changelevel",
-        "map",
-        "kickid",
-        "banip",
-        "_restart",
-        "restart",
-    ];
-
-    for keyword in &keywords {
-        anyhow::ensure!(
-            !BLOCKED_COMMANDS.contains(keyword),
-            "命令 \"{}\" 被禁止执行",
-            keyword
-        );
+    if allow_all {
+        return Ok(());
     }
 
+    let tokens: Vec<&str> = cleaned.split_whitespace().collect();
+    let command_name = tokens.first().copied().unwrap_or_default().to_lowercase();
+    let allowed = STAFF_RCON_COMMANDS.contains(&command_name.as_str()) && tokens.len() == 1
+        || tokens.len() >= 2
+            && tokens[0].eq_ignore_ascii_case("sm")
+            && ((tokens[1].eq_ignore_ascii_case("version") && tokens.len() == 2)
+                || (tokens[1].eq_ignore_ascii_case("plugins")
+                    && (tokens.len() == 3
+                        && (tokens[2].eq_ignore_ascii_case("list")
+                            || tokens[2].eq_ignore_ascii_case("info"))
+                        || tokens.len() == 4 && tokens[2].eq_ignore_ascii_case("info"))));
+    anyhow::ensure!(allowed, "当前管理员只能执行 RCON 白名单命令");
     Ok(())
 }
 
@@ -153,8 +143,9 @@ pub async fn execute_rcon_command(
     server_id: Uuid,
     command: &str,
     timeouts: RconTimeouts,
+    allow_all: bool,
 ) -> anyhow::Result<String> {
-    validate_rcon_command(command)?;
+    validate_rcon_command(command, allow_all)?;
 
     #[derive(sqlx::FromRow)]
     struct ServerRconInfo {
@@ -185,5 +176,35 @@ pub async fn execute_rcon_command(
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    Ok(response)
+    // 防止恶意/异常服务器响应占用过多内存并污染日志/UI。
+    Ok(response.chars().take(16 * 1024).collect())
+}
+
+/// 日志中只保留命令名和参数数量，避免把密码、配置或敏感输出写入审计日志。
+pub fn audit_command(command: &str) -> String {
+    let mut parts = command.split_whitespace();
+    let name = parts.next().unwrap_or("unknown");
+    let arg_count = parts.count();
+    format!("{name}（参数 {arg_count} 个）")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_rcon_command;
+
+    #[test]
+    fn staff_commands_are_strictly_whitelisted() {
+        assert!(validate_rcon_command("status", false).is_ok());
+        assert!(validate_rcon_command("sm version", false).is_ok());
+        assert!(validate_rcon_command("sm plugins list", false).is_ok());
+        assert!(validate_rcon_command("sm plugins info 1", false).is_ok());
+        assert!(validate_rcon_command("sm plugins info; quit", false).is_err());
+        assert!(validate_rcon_command("sm_rcon sv_cheats 1", false).is_err());
+        assert!(validate_rcon_command("exec autoexec.cfg", false).is_err());
+    }
+
+    #[test]
+    fn developer_may_execute_one_arbitrary_command() {
+        assert!(validate_rcon_command("sv_cheats 1", true).is_ok());
+    }
 }

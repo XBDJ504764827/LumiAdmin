@@ -32,6 +32,8 @@ pub enum AccessMethod {
     CsPrimeRejected,
     /// 自定义权限规则拒绝
     CustomRuleRejected,
+    /// 中高风险账号拦截（无白名单）
+    RiskBlocked,
     /// 快照回退（服务降级）
     SnapshotFallback,
 }
@@ -49,6 +51,7 @@ impl AccessMethod {
             AccessMethod::RestrictionRejected => "restriction_rejected",
             AccessMethod::CsPrimeRejected => "cs_prime_rejected",
             AccessMethod::CustomRuleRejected => "custom_rule_rejected",
+            AccessMethod::RiskBlocked => "risk_blocked",
             AccessMethod::SnapshotFallback => "snapshot_fallback",
         }
     }
@@ -65,6 +68,7 @@ impl AccessMethod {
             "restriction_rejected" => AccessMethod::RestrictionRejected,
             "cs_prime_rejected" => AccessMethod::CsPrimeRejected,
             "custom_rule_rejected" => AccessMethod::CustomRuleRejected,
+            "risk_blocked" => AccessMethod::RiskBlocked,
             "snapshot_fallback" => AccessMethod::SnapshotFallback,
             _ => AccessMethod::Unrestricted,
         }
@@ -301,20 +305,23 @@ pub fn start_access_log_cleanup_loop(db: Database, interval_secs: u64, retention
         Some(interval_secs),
         true,
     );
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
-        loop {
-            interval.tick().await;
-            match observability_service::observe_task(
-                "access_log_cleanup",
-                cleanup_old_access_logs(&db, retention_days),
-                |count| format!("清理 {} 条进服记录", count),
-            )
-            .await
-            {
-                Ok(0) => {}
-                Ok(count) => tracing::info!(count, retention_days, "进服记录清理完成"),
-                Err(e) => tracing::warn!(%e, "进服记录清理失败"),
+    super::task_runtime::spawn_persistent("access_log_cleanup", move || {
+        let db = db.clone();
+        async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+            loop {
+                interval.tick().await;
+                match observability_service::observe_task(
+                    "access_log_cleanup",
+                    cleanup_old_access_logs(&db, retention_days),
+                    |count| format!("清理 {} 条进服记录", count),
+                )
+                .await
+                {
+                    Ok(0) => {}
+                    Ok(count) => tracing::info!(count, retention_days, "进服记录清理完成"),
+                    Err(e) => tracing::warn!(%e, "进服记录清理失败"),
+                }
             }
         }
     });

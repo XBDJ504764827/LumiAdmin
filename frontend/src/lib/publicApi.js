@@ -15,4 +15,6 @@ export const publicApi = {
     return request(`/api/public/steam/auth/login${origin ? `?origin=${encodeURIComponent(origin)}` : ''}`);
   },
   getSteamSession: (token) => request(`/api/public/steam/auth/session?token=${encodeURIComponent(token)}`),
+  globalBansBatch: (steamids) => request('/api/public/global-bans/batch', { method: 'POST', body: JSON.stringify({ steamids }) }),
+  gokzPlayerStatsBatch: (steamid64) => request('/api/public/gokz/player-stats/batch', { method: 'POST', body: JSON.stringify({ steamid64 }) }),
 };

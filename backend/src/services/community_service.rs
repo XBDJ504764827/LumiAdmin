@@ -28,7 +28,19 @@ pub struct ServerItem {
     pub min_steam_level: i32,
     pub whitelist_mode_enabled: bool,
     pub cs_prime_enabled: bool,
+    /// 中高风险账号拦截（需白名单才可进入）
+    pub risk_block_enabled: bool,
     pub use_custom_access: bool,
+    /// 授权同步状态（LumiAuth Data Plane）：连接 / 版本 / 最新版本 / 待投递 / 上次同步
+    #[serde(default)]
+    pub auth_connection: String,
+    #[serde(default)]
+    pub auth_version: i64,
+    #[serde(default)]
+    pub auth_latest_version: i64,
+    #[serde(default)]
+    pub auth_pending_events: i64,
+    pub auth_last_sync_at: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -66,10 +78,17 @@ pub struct ServerInput {
     pub whitelist_mode_enabled: bool,
     #[serde(default)]
     pub cs_prime_enabled: bool,
+    /// 中高风险账号拦截；缺省视为开启（与数据库默认值一致）
+    #[serde(default = "default_risk_block_enabled")]
+    pub risk_block_enabled: bool,
     #[serde(default)]
     pub max_players: i32,
     #[serde(default)]
     pub use_custom_access: bool,
+}
+
+fn default_risk_block_enabled() -> bool {
+    true
 }
 
 #[derive(Serialize)]
@@ -138,13 +157,43 @@ pub struct PlayerDisconnectReportResult {
     pub updated: bool,
 }
 
-#[derive(Serialize, sqlx::FromRow)]
+#[derive(Serialize)]
 pub struct OnlinePlayerItem {
     pub name: String,
     pub steam_id64: String,
     pub ip: String,
     pub ping: i32,
     pub server_port: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_map: Option<String>,
+    /// 在线快照上报时间（数据新鲜度）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reported_at: Option<DateTime<Utc>>,
+    // ── 关联信息（list_online_players 批量填充，非 SQL 直查） ──
+    /// 活跃本地封禁数（ban_records status=active）
+    #[serde(skip_serializing_if = "is_zero")]
+    pub local_ban_count: i64,
+    /// 活跃全球封禁数（KZTimer，未过期且未手动解封）
+    #[serde(skip_serializing_if = "is_zero")]
+    pub global_ban_count: i64,
+    /// 白名单状态：approved / pending / rejected / revoked / none
+    pub whitelist_status: String,
+    /// 累计进服次数（player_server_sessions 会话数）
+    #[serde(skip_serializing_if = "is_zero")]
+    pub session_count: i64,
+    /// 最近一次进服时间
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_seen_at: Option<DateTime<Utc>>,
+    /// 该 IP 历史上出现过的不同账号数（含自己）
+    #[serde(skip_serializing_if = "is_one")]
+    pub ip_account_count: i64,
+}
+
+fn is_zero(v: &i64) -> bool {
+    *v == 0
+}
+fn is_one(v: &i64) -> bool {
+    *v == 1
 }
 
 #[derive(Serialize)]
@@ -177,6 +226,7 @@ struct CommunityRow {
     min_steam_level: Option<i32>,
     whitelist_mode_enabled: Option<bool>,
     cs_prime_enabled: Option<bool>,
+    risk_block_enabled: Option<bool>,
     use_custom_access: Option<bool>,
 }
 
@@ -198,6 +248,7 @@ struct ServerDetailRow {
     min_steam_level: i32,
     whitelist_mode_enabled: bool,
     cs_prime_enabled: bool,
+    risk_block_enabled: bool,
     use_custom_access: bool,
 }
 
@@ -275,6 +326,7 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
             s.min_steam_level,
             s.whitelist_mode_enabled,
             s.cs_prime_enabled,
+            s.risk_block_enabled,
             s.use_custom_access
         FROM communities c
         LEFT JOIN servers s ON s.community_id = c.id
@@ -292,6 +344,12 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
     let mut groups: Vec<CommunityGroup> = Vec::new();
     let mut group_indexes: HashMap<Uuid, usize> = HashMap::new();
     let now = Utc::now();
+
+    // 授权同步状态：一次性查出所有服的 auth_server_state，避免 N+1。
+    let server_ids: Vec<Uuid> = rows.iter().filter_map(|r| r.server_id).collect();
+    let auth_status = super::auth_event_service::sync_status_for_servers(db, &server_ids)
+        .await
+        .unwrap_or_default();
 
     for row in rows {
         let group_index = match group_indexes.get(&row.community_id).copied() {
@@ -323,6 +381,25 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
                 row.online_players.unwrap_or_default()
             };
             let online_player_count = players.len();
+            let (
+                auth_connection,
+                auth_version,
+                auth_latest_version,
+                auth_pending_events,
+                auth_last_sync_at,
+            ) = auth_status
+                .iter()
+                .find(|s| s.server_id == id)
+                .map(|s| {
+                    (
+                        s.connection_status.clone(),
+                        s.version,
+                        s.latest_version,
+                        s.pending_events,
+                        s.last_sync_at.map(|v| v.to_rfc3339()),
+                    )
+                })
+                .unwrap_or_else(empty_auth_status);
             group.servers.push(ServerItem {
                 id,
                 name,
@@ -341,7 +418,13 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
                 min_steam_level: row.min_steam_level.unwrap_or(0),
                 whitelist_mode_enabled: row.whitelist_mode_enabled.unwrap_or(false),
                 cs_prime_enabled: row.cs_prime_enabled.unwrap_or(false),
+                risk_block_enabled: row.risk_block_enabled.unwrap_or(true),
                 use_custom_access: row.use_custom_access.unwrap_or(false),
+                auth_connection,
+                auth_version,
+                auth_latest_version,
+                auth_pending_events,
+                auth_last_sync_at,
             });
         }
     }
@@ -374,6 +457,10 @@ pub async fn create_group(
     })
 }
 
+fn empty_auth_status() -> (String, i64, i64, i64, Option<String>) {
+    ("disconnected".to_string(), 0, 0, 0, None)
+}
+
 pub async fn create_server(
     db: &Database,
     community_id: Uuid,
@@ -403,9 +490,10 @@ pub async fn create_server(
         r#"
         INSERT INTO servers (
             id, community_id, name, ip, port, rcon_password, report_token, note, status, players, last_tested_at,
-            access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled, cs_prime_enabled, max_players, use_custom_access
+            access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled, cs_prime_enabled,
+            risk_block_enabled, max_players, use_custom_access
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'online', $9, now(), $10, $11, $12, $13, $14, $15, $16)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'online', $9, now(), $10, $11, $12, $13, $14, $15, $16, $17)
         "#,
     )
     .bind(id)
@@ -422,12 +510,20 @@ pub async fn create_server(
     .bind(input.min_steam_level)
     .bind(input.whitelist_mode_enabled)
     .bind(input.cs_prime_enabled)
+    .bind(input.risk_block_enabled)
     .bind(input.max_players)
     .bind(input.use_custom_access)
     .execute(&db.pool)
     .await?;
 
     let online_player_count = tested.players.len();
+    let (
+        auth_connection,
+        auth_version,
+        auth_latest_version,
+        auth_pending_events,
+        auth_last_sync_at,
+    ) = empty_auth_status();
     Ok(ServerItem {
         id,
         name: name.to_string(),
@@ -446,7 +542,13 @@ pub async fn create_server(
         min_steam_level: input.min_steam_level,
         whitelist_mode_enabled: input.whitelist_mode_enabled,
         cs_prime_enabled: input.cs_prime_enabled,
+        risk_block_enabled: input.risk_block_enabled,
         use_custom_access: input.use_custom_access,
+        auth_connection,
+        auth_version,
+        auth_latest_version,
+        auth_pending_events,
+        auth_last_sync_at,
     })
 }
 
@@ -478,6 +580,29 @@ pub async fn update_server(
         vec![]
     };
 
+    // 单服访问配置变更若实际变化，给该服下一条 server.config.update 事件（同事务）。
+    // 先读旧值用于变更比对。
+    let old: Option<(bool, i32, i32, bool, bool, bool, bool)> = sqlx::query_as(
+        r#"SELECT access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled,
+                  cs_prime_enabled, risk_block_enabled, use_custom_access
+           FROM servers WHERE id = $1"#,
+    )
+    .bind(server_id)
+    .fetch_optional(&db.pool)
+    .await?;
+    let changed = old
+        .map(|o| {
+            o.0 != input.access_restriction_enabled
+                || o.1 != input.min_rating
+                || o.2 != input.min_steam_level
+                || o.3 != input.whitelist_mode_enabled
+                || o.4 != input.cs_prime_enabled
+                || o.5 != input.risk_block_enabled
+                || o.6 != input.use_custom_access
+        })
+        .unwrap_or(false);
+
+    let mut tx = db.pool.begin().await?;
     let row = if changing_password {
         sqlx::query_as::<_, ServerDetailRow>(
             r#"
@@ -486,10 +611,12 @@ pub async fn update_server(
                 report_token = COALESCE($6, report_token), note = $7,
                 status = 'online', players = $8, last_tested_at = now(),
                 access_restriction_enabled = $9, min_rating = $10, min_steam_level = $11, whitelist_mode_enabled = $12,
-                cs_prime_enabled = $13, max_players = $14, use_custom_access = $15
+                cs_prime_enabled = $13, risk_block_enabled = $14, max_players = $15, use_custom_access = $16,
+                plugin_instance_id = CASE WHEN ip <> $3 OR port <> $4 THEN NULL ELSE plugin_instance_id END
             WHERE id = $1
             RETURNING id, name, ip, port, report_token, note, status, players, max_players, last_tested_at, last_reported_at,
-                      access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled, cs_prime_enabled, use_custom_access
+                      access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled, cs_prime_enabled,
+                      risk_block_enabled, use_custom_access
             "#,
         )
         .bind(server_id)
@@ -505,9 +632,10 @@ pub async fn update_server(
         .bind(input.min_steam_level)
         .bind(input.whitelist_mode_enabled)
         .bind(input.cs_prime_enabled)
+        .bind(input.risk_block_enabled)
         .bind(input.max_players)
         .bind(input.use_custom_access)
-        .fetch_one(&db.pool)
+        .fetch_one(&mut *tx)
         .await?
     } else {
         sqlx::query_as::<_, ServerDetailRow>(
@@ -516,10 +644,12 @@ pub async fn update_server(
             SET name = $2, ip = $3, port = $4,
                 report_token = COALESCE($5, report_token), note = $6,
                 access_restriction_enabled = $7, min_rating = $8, min_steam_level = $9, whitelist_mode_enabled = $10,
-                cs_prime_enabled = $11, max_players = $12, use_custom_access = $13
+                cs_prime_enabled = $11, risk_block_enabled = $12, max_players = $13, use_custom_access = $14,
+                plugin_instance_id = CASE WHEN ip <> $3 OR port <> $4 THEN NULL ELSE plugin_instance_id END
             WHERE id = $1
             RETURNING id, name, ip, port, report_token, note, status, players, max_players, last_tested_at, last_reported_at,
-                      access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled, cs_prime_enabled, use_custom_access
+                      access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled, cs_prime_enabled,
+                      risk_block_enabled, use_custom_access
             "#,
         )
         .bind(server_id)
@@ -533,14 +663,43 @@ pub async fn update_server(
         .bind(input.min_steam_level)
         .bind(input.whitelist_mode_enabled)
         .bind(input.cs_prime_enabled)
+        .bind(input.risk_block_enabled)
         .bind(input.max_players)
         .bind(input.use_custom_access)
-        .fetch_one(&db.pool)
+        .fetch_one(&mut *tx)
         .await?
     };
 
+    if changed {
+        super::auth_event_service::insert_event_tx(
+            &mut tx,
+            Some(server_id),
+            "server.config.update",
+            serde_json::json!({
+                "scope": "server",
+                "server_id": server_id,
+                "access_restriction_enabled": input.access_restriction_enabled,
+                "min_rating": input.min_rating,
+                "min_steam_level": input.min_steam_level,
+                "whitelist_mode_enabled": input.whitelist_mode_enabled,
+                "cs_prime_enabled": input.cs_prime_enabled,
+                "risk_block_enabled": input.risk_block_enabled,
+                "use_custom_access": input.use_custom_access,
+            }),
+        )
+        .await?;
+    }
+    tx.commit().await?;
+
     let players = row.players.unwrap_or_default();
     let online_player_count = players.len();
+    let (
+        auth_connection,
+        auth_version,
+        auth_latest_version,
+        auth_pending_events,
+        auth_last_sync_at,
+    ) = empty_auth_status();
     Ok(ServerItem {
         id: row.id,
         name: row.name,
@@ -559,7 +718,13 @@ pub async fn update_server(
         min_steam_level: row.min_steam_level,
         whitelist_mode_enabled: row.whitelist_mode_enabled,
         cs_prime_enabled: row.cs_prime_enabled,
+        risk_block_enabled: row.risk_block_enabled,
         use_custom_access: row.use_custom_access,
+        auth_connection,
+        auth_version,
+        auth_latest_version,
+        auth_pending_events,
+        auth_last_sync_at,
     })
 }
 
@@ -590,6 +755,7 @@ pub async fn update_community_access(
     anyhow::ensure!(input.min_rating >= 0, "最低进入 rating 不能为负数");
     anyhow::ensure!(input.min_steam_level >= 0, "最低 Steam 等级不能为负数");
 
+    let mut tx = db.pool.begin().await?;
     sqlx::query(
         r#"UPDATE communities SET whitelist_mode_enabled = $2, min_rating = $3, min_steam_level = $4, cs_prime_enabled = $5 WHERE id = $1"#,
     )
@@ -598,8 +764,32 @@ pub async fn update_community_access(
     .bind(input.min_rating)
     .bind(input.min_steam_level)
     .bind(input.cs_prime_enabled)
-    .execute(&db.pool)
+    .execute(&mut *tx)
     .await?;
+
+    // 社区级访问配置变更：给该社区下每服各下一条 server.config.update 事件
+    let server_ids: Vec<(Uuid,)> =
+        sqlx::query_as(r#"SELECT id FROM servers WHERE community_id = $1"#)
+            .bind(community_id)
+            .fetch_all(&mut *tx)
+            .await?;
+    for (server_id,) in &server_ids {
+        super::auth_event_service::insert_event_tx(
+            &mut tx,
+            Some(*server_id),
+            "server.config.update",
+            serde_json::json!({
+                "scope": "community",
+                "community_id": community_id,
+                "whitelist_mode_enabled": input.whitelist_mode_enabled,
+                "min_rating": input.min_rating,
+                "min_steam_level": input.min_steam_level,
+                "cs_prime_enabled": input.cs_prime_enabled,
+            }),
+        )
+        .await?;
+    }
+    tx.commit().await?;
 
     let groups = list_groups(db).await?;
     groups
@@ -627,7 +817,10 @@ pub async fn reset_report_token(
     let row: (String,) = sqlx::query_as(
         r#"
         UPDATE servers
-        SET report_token = $2
+        SET report_token = $2,
+            plugin_instance_id = NULL,
+            plugin_last_seen_at = NULL,
+            plugin_bound_at = NULL
         WHERE id = $1
         RETURNING report_token
         "#,
@@ -669,7 +862,13 @@ pub async fn report_online_players(
 
     let mut normalized_players = Vec::with_capacity(input.players.len());
     for player in input.players {
-        normalized_players.push(normalize_online_player(player, input.port, report_time)?);
+        match normalize_online_player(player, input.port, report_time) {
+            Ok(normalized) => normalized_players.push(normalized),
+            Err(error) => {
+                // 无效玩家（如 STEAM_ID_STOP_IGNORING_RETVALS 占位符）跳过不阻塞整批上报
+                tracing::warn!(%error, "在线玩家上报：跳过无效玩家记录");
+            }
+        }
     }
 
     let player_names = normalized_players
@@ -894,15 +1093,29 @@ async fn sync_player_sessions(
     .execute(&mut **tx)
     .await?;
 
-    for player in players {
-        let first_seen_at = player.first_seen_at.unwrap_or(report_time);
+    // 批量 UPSERT：一次 INSERT ... SELECT ... FROM UNNEST(...) 完成全部玩家，
+    // 与 server_online_players 的批量写法保持一致，避免逐玩家单条 SQL。
+    if !players.is_empty() {
+        let steam_ids: Vec<&str> = players.iter().map(|p| p.steam_id64.as_str()).collect();
+        let player_names: Vec<&str> = players.iter().map(|p| p.name.as_str()).collect();
+        let ips: Vec<&str> = players.iter().map(|p| p.ip.as_str()).collect();
+        let pings: Vec<i32> = players.iter().map(|p| p.ping).collect();
+        let first_seen: Vec<DateTime<Utc>> = players
+            .iter()
+            .map(|p| p.first_seen_at.unwrap_or(report_time))
+            .collect();
+
         sqlx::query(
             r#"INSERT INTO player_server_sessions (
                  server_id, server_name, server_port, community_id, community_name,
                  steam_id64, player_name, ip, first_seen_at, last_seen_at,
                  last_ping, last_map, created_at, updated_at
                )
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $10, $10)
+               SELECT $1, $2, $3, $4, $5,
+                      u.steam_id64, u.player_name, u.ip, u.first_seen_at, $9,
+                      u.last_ping, $10, $9, $9
+               FROM UNNEST($6::TEXT[], $7::TEXT[], $8::TEXT[], $11::INTEGER[], $12::TIMESTAMPTZ[])
+                    AS u(steam_id64, player_name, ip, last_ping, first_seen_at)
                ON CONFLICT (server_id, steam_id64) WHERE left_at IS NULL DO UPDATE SET
                  server_name = EXCLUDED.server_name,
                  server_port = EXCLUDED.server_port,
@@ -922,13 +1135,13 @@ async fn sync_player_sessions(
         .bind(server.port)
         .bind(server.community_id)
         .bind(&server.community_name)
-        .bind(&player.steam_id64)
-        .bind(&player.name)
-        .bind(&player.ip)
-        .bind(first_seen_at)
+        .bind(&steam_ids)
+        .bind(&player_names)
+        .bind(&ips)
         .bind(report_time)
-        .bind(player.ping)
         .bind(current_map)
+        .bind(&pings)
+        .bind(&first_seen)
         .execute(&mut **tx)
         .await?;
     }
@@ -936,13 +1149,26 @@ async fn sync_player_sessions(
     Ok(())
 }
 
+/// server_online_players 行的原始查询元组（OnlinePlayerItem 含填充字段，无法直接 FromRow）
+type OnlinePlayerRow = (
+    String,                // name
+    String,                // steam_id64
+    String,                // ip
+    i32,                   // ping
+    i32,                   // server_port
+    Option<String>,        // current_map
+    Option<DateTime<Utc>>, // reported_at
+);
+
 pub async fn list_online_players(
     db: &Database,
     server_id: Uuid,
 ) -> anyhow::Result<OnlinePlayersResponse> {
-    let details = sqlx::query_as::<_, OnlinePlayerItem>(
+    // OnlinePlayerItem 含批量填充字段（非 SELECT 列），不能用 query_as 直映射，
+    // 改为查询元组后手工组装。
+    let rows: Vec<OnlinePlayerRow> = sqlx::query_as(
         r#"
-        SELECT name, steam_id64, ip, ping, server_port
+        SELECT name, steam_id64, ip, ping, server_port, current_map, reported_at
         FROM server_online_players
         WHERE server_id = $1
         ORDER BY name ASC
@@ -952,9 +1178,170 @@ pub async fn list_online_players(
     .fetch_all(&db.pool)
     .await?;
 
+    let mut details: Vec<OnlinePlayerItem> = rows
+        .into_iter()
+        .map(
+            |(name, steam_id64, ip, ping, server_port, current_map, reported_at)| {
+                OnlinePlayerItem {
+                    name,
+                    steam_id64,
+                    ip,
+                    ping,
+                    server_port,
+                    current_map,
+                    reported_at,
+                    local_ban_count: 0,
+                    global_ban_count: 0,
+                    whitelist_status: "none".to_string(),
+                    session_count: 0,
+                    last_seen_at: None,
+                    ip_account_count: 1,
+                }
+            },
+        )
+        .collect();
+
+    if !details.is_empty() {
+        enrich_online_players(db, &mut details).await?;
+    }
+
     let players = details.iter().map(|player| player.name.clone()).collect();
 
     Ok(OnlinePlayersResponse { players, details })
+}
+
+/// 为在线玩家批量填充关联信息：封禁、白名单、进服统计、IP 关联账号数。
+/// 全部使用一次 `ANY($1)` 批量查询，避免按玩家循环查询（N+1）。
+async fn enrich_online_players(
+    db: &Database,
+    players: &mut [OnlinePlayerItem],
+) -> anyhow::Result<()> {
+    let steamids: Vec<String> = players.iter().map(|p| p.steam_id64.clone()).collect();
+    let ips: Vec<String> = {
+        let mut set = Vec::new();
+        for p in players.iter() {
+            let ip = p.ip.trim();
+            if !ip.is_empty() && !set.iter().any(|v: &String| v == ip) {
+                set.push(ip.to_string());
+            }
+        }
+        set
+    };
+
+    // 本地活跃封禁（含历史封禁总数语义上的区分：这里只统计活跃封禁）
+    let local_bans: Vec<(String, i64)> = sqlx::query_as(
+        r#"SELECT steam_id, COUNT(*) AS cnt
+           FROM ban_records
+           WHERE steam_id = ANY($1) AND status = 'active'
+             AND (expires_at IS NULL OR expires_at > now())
+           GROUP BY steam_id"#,
+    )
+    .bind(&steamids)
+    .fetch_all(&db.pool)
+    .await
+    .inspect_err(|e| tracing::error!(error = %e, "在线玩家 enrich 查询失败"))
+    .unwrap_or_default();
+
+    // 活跃全球封禁（KZTimer）
+    let global_bans: Vec<(String, i64)> = sqlx::query_as(
+        r#"SELECT steam_id64, COUNT(*) AS cnt
+           FROM global_bans
+           WHERE steam_id64 = ANY($1) AND is_expired = false AND manual_unbanned = false
+           GROUP BY steam_id64"#,
+    )
+    .bind(&steamids)
+    .fetch_all(&db.pool)
+    .await
+    .inspect_err(|e| tracing::error!(error = %e, "在线玩家 enrich 查询失败"))
+    .unwrap_or_default();
+
+    // 白名单状态（取每位玩家最新一条申请的状态；steamid64 可能为 NULL，回退 steam_id 纯数字场景）
+    let whitelist: Vec<(String, String)> = sqlx::query_as(
+        r#"SELECT DISTINCT ON (COALESCE(steamid64, steam_id))
+                  COALESCE(steamid64, steam_id) AS sid, status
+           FROM whitelist_requests
+           WHERE COALESCE(steamid64, CASE WHEN steam_id ~ '^[0-9]{17}$' THEN steam_id END) = ANY($1)
+           ORDER BY COALESCE(steamid64, steam_id), created_at DESC"#,
+    )
+    .bind(&steamids)
+    .fetch_all(&db.pool)
+    .await
+    .inspect_err(|e| tracing::error!(error = %e, "在线玩家 enrich 查询失败"))
+    .unwrap_or_default();
+
+    // 进服会话统计
+    let sessions: Vec<(String, i64, Option<DateTime<Utc>>)> = sqlx::query_as(
+        r#"SELECT steam_id64, COUNT(*) AS cnt, MAX(last_seen_at) AS last_seen
+           FROM player_server_sessions
+           WHERE steam_id64 = ANY($1)
+           GROUP BY steam_id64"#,
+    )
+    .bind(&steamids)
+    .fetch_all(&db.pool)
+    .await
+    .inspect_err(|e| tracing::error!(error = %e, "在线玩家 enrich 查询失败"))
+    .unwrap_or_default();
+
+    // 同 IP 历史账号数（进服日志 + 在线快照 + 会话表中的 IP → 不同 SteamID64 去重计数）
+    let ip_accounts: Vec<(String, i64)> = if ips.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query_as(
+            r#"SELECT ip, COUNT(DISTINCT steam_id64) AS cnt FROM (
+                SELECT ip_address AS ip, steam_id64 FROM player_access_logs
+                 WHERE ip_address = ANY($1) AND steam_id64 IS NOT NULL
+                UNION
+                SELECT ip, steam_id64 FROM server_online_players
+                 WHERE ip = ANY($1)
+                UNION
+                SELECT ip, steam_id64 FROM player_server_sessions WHERE ip = ANY($1)
+            ) t GROUP BY ip"#,
+        )
+        .bind(&ips)
+        .fetch_all(&db.pool)
+        .await
+        .inspect_err(|e| tracing::error!(error = %e, "在线玩家 enrich IP 查询失败"))
+        .unwrap_or_default()
+    };
+
+    let lookup = |map: &[(String, i64)], key: &str| -> i64 {
+        map.iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| *v)
+            .unwrap_or(0)
+    };
+
+    for player in players.iter_mut() {
+        let sid = &player.steam_id64;
+        player.local_ban_count = lookup(&local_bans, sid);
+        player.global_ban_count = lookup(&global_bans, sid);
+        player.whitelist_status = whitelist
+            .iter()
+            .find(|(k, _)| k == sid)
+            .map(|(_, s)| s.clone())
+            .unwrap_or_else(|| "none".to_string());
+        player.session_count = sessions
+            .iter()
+            .find(|(k, _, _)| k == sid)
+            .map(|(_, c, _)| *c)
+            .unwrap_or(0);
+        player.last_seen_at = sessions
+            .iter()
+            .find(|(k, _, _)| k == sid)
+            .and_then(|(_, _, t)| *t);
+        player.ip_account_count = if player.ip.trim().is_empty() {
+            1
+        } else {
+            let c = lookup(&ip_accounts, player.ip.trim());
+            if c == 0 {
+                1
+            } else {
+                c
+            }
+        };
+    }
+
+    Ok(())
 }
 
 fn normalize_online_player(
@@ -982,6 +1369,11 @@ fn normalize_online_player(
             super::steam_service::steam2_to_steamid64(steam_id)?
         }
     };
+    anyhow::ensure!(
+        super::steam_service::is_steamid64(&steam_id64),
+        "玩家 SteamID64 格式无效：{}",
+        steam_id64
+    );
 
     let server_port = player.server_port.unwrap_or(report_port);
     anyhow::ensure!(
@@ -1040,13 +1432,20 @@ pub(crate) fn stale_report_interval_sql() -> String {
 }
 
 fn normalize_disconnect_steam_id(input: &PlayerDisconnectReportInput) -> anyhow::Result<String> {
-    if let Some(value) = super::normalize_optional_text(input.steam_id64.as_deref()) {
-        return Ok(value);
-    }
-    if let Some(value) = super::normalize_optional_text(input.steam_id.as_deref()) {
-        return super::steam_service::steam2_to_steamid64(&value);
-    }
-    anyhow::bail!("玩家 SteamID64 不能为空")
+    let steam_id64 =
+        if let Some(value) = super::normalize_optional_text(input.steam_id64.as_deref()) {
+            value
+        } else if let Some(value) = super::normalize_optional_text(input.steam_id.as_deref()) {
+            super::steam_service::steam2_to_steamid64(&value)?
+        } else {
+            anyhow::bail!("玩家 SteamID64 不能为空")
+        };
+    anyhow::ensure!(
+        super::steam_service::is_steamid64(&steam_id64),
+        "玩家 SteamID64 格式无效：{}",
+        steam_id64
+    );
+    Ok(steam_id64)
 }
 
 async fn mark_stale_servers_offline(db: &Database) -> anyhow::Result<()> {
@@ -1108,20 +1507,23 @@ pub fn start_stale_cleanup_loop(db: Database) {
         Some(STALE_CLEANUP_INTERVAL_SECONDS),
         true,
     );
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(
-            STALE_CLEANUP_INTERVAL_SECONDS,
-        ));
-        loop {
-            interval.tick().await;
-            if let Err(error) = observability_service::observe_task(
-                "stale_server_cleanup",
-                mark_stale_servers_offline(&db),
-                |_| "服务器状态清理完成".to_string(),
-            )
-            .await
-            {
-                tracing::warn!(%error, "清理过期服务器状态失败");
+    super::task_runtime::spawn_persistent("stale_server_cleanup", move || {
+        let db = db.clone();
+        async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(
+                STALE_CLEANUP_INTERVAL_SECONDS,
+            ));
+            loop {
+                interval.tick().await;
+                if let Err(error) = observability_service::observe_task(
+                    "stale_server_cleanup",
+                    mark_stale_servers_offline(&db),
+                    |_| "服务器状态清理完成".to_string(),
+                )
+                .await
+                {
+                    tracing::warn!(%error, "清理过期服务器状态失败");
+                }
             }
         }
     });
@@ -1151,7 +1553,7 @@ pub async fn find_server_info(db: &Database, server_id: Uuid) -> Option<String> 
 
 #[cfg(test)]
 mod tests {
-    use super::ServerInput;
+    use super::{OnlinePlayerInput, ServerInput};
     use crate::services::community_rcon::test_server_input;
     use std::io::ErrorKind;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1178,6 +1580,7 @@ mod tests {
             min_steam_level: 0,
             whitelist_mode_enabled: false,
             cs_prime_enabled: false,
+            risk_block_enabled: true,
             use_custom_access: false,
             max_players: 0,
         })
@@ -1215,6 +1618,7 @@ mod tests {
             min_steam_level: 0,
             whitelist_mode_enabled: false,
             cs_prime_enabled: false,
+            risk_block_enabled: true,
             use_custom_access: false,
             max_players: 0,
         })
@@ -1311,5 +1715,57 @@ mod tests {
         packet.extend_from_slice(body.as_bytes());
         packet.extend_from_slice(&[0, 0]);
         stream.write_all(&packet).await
+    }
+
+    fn test_online_player(steam_id64: Option<&str>, steam_id: Option<&str>) -> OnlinePlayerInput {
+        OnlinePlayerInput {
+            name: "玩家".to_string(),
+            steam_id64: steam_id64.map(str::to_string),
+            steam_id: steam_id.map(str::to_string),
+            ip: Some("1.2.3.4".to_string()),
+            ping: 40,
+            server_port: Some(27015),
+            connected_seconds: Some(120),
+        }
+    }
+
+    #[test]
+    fn normalize_online_player_rejects_invalid_steamid64() {
+        // 占位符 / 无效值应被拒绝，防止写入脏数据
+        for value in [
+            "STEAM_ID_STOP_IGNORING_RETVALS",
+            "0",
+            "STEAM_0:1:12345",
+            "7656119800000000",
+        ] {
+            let result = super::normalize_online_player(
+                test_online_player(Some(value), None),
+                27015,
+                chrono::Utc::now(),
+            );
+            assert!(result.is_err(), "应拒绝无效 SteamID64: {value}");
+        }
+    }
+
+    #[test]
+    fn normalize_online_player_accepts_valid_steamid64() {
+        let result = super::normalize_online_player(
+            test_online_player(Some("76561198000000001"), None),
+            27015,
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(result.steam_id64, "76561198000000001");
+    }
+
+    #[test]
+    fn normalize_online_player_converts_steam2_to_steamid64() {
+        let result = super::normalize_online_player(
+            test_online_player(None, Some("STEAM_0:1:12345")),
+            27015,
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(result.steam_id64, "76561197960290419");
     }
 }

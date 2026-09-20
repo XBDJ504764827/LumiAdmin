@@ -12,28 +12,33 @@ pub fn start_steam_name_refresh_loop(db: Database, config: Config, interval_seco
         Some(interval_seconds),
         true,
     );
-    tokio::spawn(async move {
-        // 首次启动延迟30秒，避免与其他初始化任务冲突
-        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+    super::task_runtime::spawn_persistent("steam_name_refresh", move || {
+        let db = db.clone();
+        let config = config.clone();
+        async move {
+            // 首次启动延迟30秒，避免与其他初始化任务冲突
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
 
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_seconds));
-        loop {
-            interval.tick().await;
-            let resolver = SteamResolver::new(&config);
-            match observability_service::observe_task(
-                "steam_name_refresh",
-                refresh_steam_names(&db, &resolver),
-                |count| format!("刷新 {} 条 Steam 资料", count),
-            )
-            .await
-            {
-                Ok(count) => {
-                    if count > 0 {
-                        tracing::info!(count, "定时刷新Steam名称完成");
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(interval_seconds));
+            loop {
+                interval.tick().await;
+                let resolver = SteamResolver::new(&config);
+                match observability_service::observe_task(
+                    "steam_name_refresh",
+                    refresh_steam_names(&db, &resolver),
+                    |count| format!("刷新 {} 条 Steam 资料", count),
+                )
+                .await
+                {
+                    Ok(count) => {
+                        if count > 0 {
+                            tracing::info!(count, "定时刷新Steam名称完成");
+                        }
                     }
-                }
-                Err(error) => {
-                    tracing::warn!(%error, "定时刷新Steam名称失败");
+                    Err(error) => {
+                        tracing::warn!(%error, "定时刷新Steam名称失败");
+                    }
                 }
             }
         }

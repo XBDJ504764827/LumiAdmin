@@ -1,18 +1,19 @@
 //! LumiBot（QQ 机器人事件接收中心）集成服务
 //!
-//! 外部事件（目前为白名单新申请）在产生时 **立即** 通过 LumiBot HTTP API
-//! `POST /api/v1/events` 上报，触发 QQ 机器人立即推送通知。
-//! 若立即上报失败，事件会降级写入 `lumi_bot_event_queue` 表，由后台任务
-//! 每隔 `LUMI_BOT_SYNC_INTERVAL_SECS`（默认 1800s = 30 分钟）集中兜底重试，
-//! 避免事件丢失。
+//! 外部事件（目前为白名单新申请）在产生时先写入
+//! `lumi_bot_event_queue` 表，用户请求立即返回；后台任务再通过
+//! LumiBot HTTP API `POST /api/v1/events` 异步发送并重试，避免外部服务阻塞业务请求。
 //!
 //! 协议说明见 LumiBot HTTP API 文档：
 //! - 请求头：`Content-Type: application/json` + `X-API-Key`
 //! - 成功响应：HTTP 202 `{"success": true, "event_id": "..."}`
 //! - 失败响应：HTTP 400/401/429/500 `{"success": false, "error": "..."}`
 //!
-//! 兜底队列中上报失败的事件保留为 pending，下轮重试；超过最大重试次数后标记为
-//! failed（死信），不再自动重试，便于人工排查。
+//! 队列中上报失败的事件保留为 pending 并按指数退避重试（最长 1 小时间隔）；
+//! 超过最大重试次数后标记为 failed（死信），但死信并非终态：超过
+//! `LUMI_BOT_FAILED_RETRY_SECS`（默认 24 小时）后自动复活为 pending 再试，
+//! 保证 LumiBot 短暂不可用不会导致事件永久丢失；死信超过
+//! `LUMI_BOT_FAILED_MAX_AGE_SECS`（默认 7 天）后标记为 expired，不再重试。
 
 use crate::{
     config::Config,
@@ -32,6 +33,9 @@ pub const SOURCE_LUMI_ADMIN: &str = "LumiAdmin";
 /// 白名单新申请事件类型（自定义事件类型，LumiBot 全部接收并记录日志，
 /// 是否触发 QQ 通知由 LumiBot 侧通知规则决定）
 pub const EVENT_WHITELIST_REQUEST_CREATED: &str = "WHITELIST_REQUEST_CREATED";
+
+/// 低风险白名单自动通过事件类型（info 级别，默认不触发管理员通知，仅作记录与扩展）
+pub const EVENT_WHITELIST_AUTO_APPROVED: &str = "WHITELIST_AUTO_APPROVED";
 
 /// 事件入队输入
 #[derive(Debug, Clone, Serialize)]
@@ -55,12 +59,203 @@ struct QueuedEventRow {
     occurred_at: DateTime<Utc>,
 }
 
+/// 事件队列逐条日志（供 LumiBot 状态页排查 bot 上报问题）。
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct EventLogItem {
+    pub id: Uuid,
+    pub event_type: String,
+    pub level: String,
+    pub title: Option<String>,
+    pub message: Option<String>,
+    pub status: String,
+    pub attempts: i32,
+    pub last_error: Option<String>,
+    pub occurred_at: DateTime<Utc>,
+    pub queued_at: DateTime<Utc>,
+    pub sent_at: Option<DateTime<Utc>>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// 事件日志查询输入。
+#[derive(Debug, Clone, Default)]
+pub struct EventLogQuery {
+    pub status: Option<String>,
+    pub page: i64,
+    pub page_size: i64,
+}
+
+/// 获取 LumiBot 事件日志（按入队时间倒序）。
+///
+/// status 仅允许 `pending` / `sent` / `failed` / `expired`，非法值按未过滤处理。
+pub async fn list_queue_events(
+    db: &Database,
+    query: &EventLogQuery,
+) -> anyhow::Result<(Vec<EventLogItem>, i64)> {
+    let status = query
+        .status
+        .as_deref()
+        .filter(|value| matches!(*value, "pending" | "sent" | "failed" | "expired"));
+
+    let count_sql = match status {
+        Some(value) => {
+            format!(r#"SELECT COUNT(*) FROM lumi_bot_event_queue WHERE status = '{value}'"#)
+        }
+        None => r#"SELECT COUNT(*) FROM lumi_bot_event_queue"#.to_string(),
+    };
+    let data_sql = match status {
+        Some(value) => format!(
+            r#"SELECT id, event_type, level, title, message, status, attempts, last_error,
+                      occurred_at, queued_at, sent_at, updated_at
+               FROM lumi_bot_event_queue
+               WHERE status = '{value}'
+               ORDER BY queued_at DESC
+               LIMIT $1 OFFSET $2"#
+        ),
+        None => r#"SELECT id, event_type, level, title, message, status, attempts, last_error,
+                          occurred_at, queued_at, sent_at, updated_at
+               FROM lumi_bot_event_queue
+               ORDER BY queued_at DESC
+               LIMIT $1 OFFSET $2"#
+            .to_string(),
+    };
+
+    let total: i64 = sqlx::query_scalar(&count_sql).fetch_one(&db.pool).await?;
+    let items: Vec<EventLogItem> = sqlx::query_as(&data_sql)
+        .bind(query.page_size)
+        .bind((query.page - 1) * query.page_size)
+        .fetch_all(&db.pool)
+        .await?;
+    Ok((items, total))
+}
+
 /// 一轮同步的结果统计
 #[derive(Debug, Default, Serialize)]
 pub struct SyncSummary {
     pub total: usize,
     pub sent: usize,
     pub failed: usize,
+    /// 本轮从死信复活为 pending 的事件数
+    pub resurrected: usize,
+    /// 本轮标记为 expired（不再重试）的旧死信数
+    pub expired: usize,
+}
+
+/// LumiBot 事件队列概况。
+#[derive(Debug, Clone, Serialize)]
+pub struct QueueOverview {
+    pub pending: i64,
+    pub sent: i64,
+    pub failed: i64,
+    pub expired: i64,
+    pub last_sent_at: Option<DateTime<Utc>>,
+    pub last_failure_at: Option<DateTime<Utc>>,
+}
+
+/// LumiBot 集成状态，供管理后台的运维页面使用。
+#[derive(Debug, Clone, Serialize)]
+pub struct StatusOverview {
+    pub configured: bool,
+    pub api_url: Option<String>,
+    pub reachable: bool,
+    pub latency_ms: Option<u64>,
+    pub checked_at: DateTime<Utc>,
+    pub health_error: Option<String>,
+    pub queue: QueueOverview,
+    pub sync_task: Option<observability_service::TaskMetric>,
+    pub last_error: Option<String>,
+}
+
+/// 获取 LumiBot 集成状态。
+///
+/// 健康探测与队列查询都在后端完成，前端不会接触 API Key。探测超时固定为
+/// 3 秒，避免管理页面因为 LumiBot 不可达而长时间阻塞。
+pub async fn status(db: &Database, config: &Config) -> anyhow::Result<StatusOverview> {
+    let checked_at = Utc::now();
+    let api_url = config
+        .lumi_bot_api_url
+        .as_ref()
+        .map(|url| url.trim_end_matches('/').to_string());
+    let configured = config.lumi_bot_enabled();
+
+    let (reachable, latency_ms, health_error) = if configured {
+        let health_url = format!("{}/health", api_url.as_deref().unwrap_or_default());
+        let started = std::time::Instant::now();
+        match tokio::time::timeout(
+            Duration::from_secs(3),
+            http_client::http_client().get(health_url).send(),
+        )
+        .await
+        {
+            Ok(Ok(response)) if response.status().is_success() => {
+                (true, Some(started.elapsed().as_millis() as u64), None)
+            }
+            Ok(Ok(response)) => (
+                false,
+                Some(started.elapsed().as_millis() as u64),
+                Some(format!("LumiBot 返回 HTTP {}", response.status())),
+            ),
+            Ok(Err(error)) => (
+                false,
+                Some(started.elapsed().as_millis() as u64),
+                Some(error.to_string()),
+            ),
+            Err(_) => (false, Some(3_000), Some("健康检查超时（3 秒）".to_string())),
+        }
+    } else {
+        (
+            false,
+            None,
+            Some("未配置 LUMI_BOT_API_URL / LUMI_BOT_API_KEY".to_string()),
+        )
+    };
+
+    /// 队列概况聚合行：pending / sent / failed / expired 计数 + 最近成功/失败时间
+    type QueueCountRow = (
+        i64,
+        i64,
+        i64,
+        i64,
+        Option<DateTime<Utc>>,
+        Option<DateTime<Utc>>,
+    );
+    let (pending, sent, failed, expired, last_sent_at, last_failure_at): QueueCountRow =
+        sqlx::query_as(
+            r#"
+        SELECT
+            COUNT(*) FILTER (WHERE status = 'pending'),
+            COUNT(*) FILTER (WHERE status = 'sent'),
+            COUNT(*) FILTER (WHERE status = 'failed'),
+            COUNT(*) FILTER (WHERE status = 'expired'),
+            MAX(sent_at),
+            MAX(updated_at) FILTER (WHERE status = 'failed')
+        FROM lumi_bot_event_queue
+        "#,
+        )
+        .fetch_one(&db.pool)
+        .await
+        .context("读取 LumiBot 事件队列状态失败")?;
+
+    let sync_task = observability_service::task_metric("lumi_bot_sync");
+    let last_error = sync_task.as_ref().and_then(|task| task.last_error.clone());
+
+    Ok(StatusOverview {
+        configured,
+        api_url,
+        reachable,
+        latency_ms,
+        checked_at,
+        health_error,
+        queue: QueueOverview {
+            pending,
+            sent,
+            failed,
+            expired,
+            last_sent_at,
+            last_failure_at,
+        },
+        sync_task,
+        last_error,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -104,6 +299,10 @@ pub struct WhitelistNotifyPlayerInfo {
     pub local_ban_reason: Option<String>,
     /// 是否在全球封禁中留有记录
     pub has_global_ban: bool,
+    /// 全球封禁原因（最近一条，ban_type + notes）
+    pub global_ban_reason: Option<String>,
+    /// 全球封禁原因列表（全部未过期记录，最多 5 条）
+    pub global_ban_reasons: Vec<String>,
     /// 是否存在未解封（未过期）的封禁记录
     pub has_active_ban: bool,
     /// 未解封封禁条数
@@ -206,6 +405,33 @@ pub async fn collect_whitelist_player_info(
     .fetch_one(&db.pool)
     .await
     .unwrap_or(false);
+    // 全球封禁原因（未过期，ban_type + notes 拼接，最多 5 条）
+    let global_ban_rows: Vec<(String, Option<String>)> = sqlx::query_as(
+        r#"SELECT ban_type, notes FROM global_bans
+           WHERE steam_id64 = $1 AND is_expired = false AND manual_unbanned = false
+           ORDER BY COALESCE(created_on, updated_on) DESC, synced_at DESC
+           LIMIT 5"#,
+    )
+    .bind(steamid64)
+    .fetch_all(&db.pool)
+    .await
+    .unwrap_or_default();
+    let global_ban_reasons: Vec<String> = global_ban_rows
+        .into_iter()
+        .map(|(ban_type, notes)| {
+            // 违规展示以 ban_type 为主，notes 附在后；用户示例仅显示 ban_type
+            let notes = notes
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            match notes {
+                Some(notes) if !notes.eq_ignore_ascii_case(ban_type.trim()) => {
+                    format!("{ban_type} - {notes}")
+                }
+                _ => ban_type,
+            }
+        })
+        .collect();
+    let global_ban_reason: Option<String> = global_ban_reasons.first().cloned();
     // 是否有未解封（未过期）的封禁记录
     let has_active_ban: bool = sqlx::query_scalar(
         r#"SELECT EXISTS(SELECT 1 FROM ban_records
@@ -258,20 +484,18 @@ pub async fn collect_whitelist_player_info(
         local_ban_count,
         local_ban_reason,
         has_global_ban,
+        global_ban_reason,
+        global_ban_reasons,
         has_active_ban,
         active_ban_count,
         active_ban_reason,
     }
 }
 
-/// 白名单新申请上报（公开页面提交 / 撤销后重新申请都会产生新申请）。
+/// 白名单新申请入队（公开页面提交 / 撤销后重新申请都会产生新申请）。
 ///
-/// 级别使用 `warning`：与 LumiBot 默认通知规则（warning 及以上默认触发 QQ
-/// 通知）对齐，确保管理员能及时收到审核提醒。
-///
-/// 上报策略：白名单申请产生时 **立即** 调用 LumiBot API 上报，再由 QQ 机器人
-/// 立即推送通知；若立即上报失败（网络/服务不可用等），则降级写入
-/// `lumi_bot_event_queue`，由后台定时任务兜底重试，避免事件丢失。
+/// 该函数只做本地数据库工作，绝不等待 LumiBot 网络请求。后台 worker 会
+/// 通过带 claim 的队列异步发送并重试，保证用户请求不会被外部服务拖住。
 pub async fn report_whitelist_created(
     db: &Database,
     config: &Config,
@@ -285,14 +509,114 @@ pub async fn report_whitelist_created(
         r#"SELECT DISTINCT openid FROM users
            WHERE role IN ('developer', 'admin', 'normal')
              AND enabled = true
+             AND whitelist_notification_enabled = true
              AND openid IS NOT NULL AND openid <> ''"#,
     )
     .fetch_all(&db.pool)
     .await
     .unwrap_or_default();
+    // 风险动作：低风险（allow）在无人审核时将由系统自动通过；其余等待管理员
+    let risk_action: Option<String> =
+        match crate::services::player_risk_service::build_player_risk_profile(db, &item.steamid64)
+            .await
+        {
+            Ok(profile) => Some(
+                match profile.action {
+                    crate::services::player_risk_service::RiskAction::Allow => "allow",
+                    crate::services::player_risk_service::RiskAction::Warn => "warn",
+                    crate::services::player_risk_service::RiskAction::RequireForce => {
+                        "require_force"
+                    }
+                    crate::services::player_risk_service::RiskAction::Deny => "deny",
+                }
+                .to_string(),
+            ),
+            Err(error) => {
+                // 风险评分构建失败不等于高风险：标记为「待复核」，由自动通过
+                // 循环在超时后重新评级，避免提交时误发高风险通知。
+                tracing::warn!(
+                    %error,
+                    steamid64 = %item.steamid64,
+                    "提交白名单时构建风险评分失败，标记为待复核"
+                );
+                None
+            }
+        };
+    // 中文风险标签（供 QQ 通知直接展示）：低风险 / 历史风险 / 高风险（需强制通过）；
+    // 风险未知时明确标注「待复核」，绝不冒充高风险。
+    let risk_label = match risk_action.as_deref() {
+        Some("allow") => Some("低风险"),
+        Some("warn") => Some("历史风险"),
+        Some("require_force") | Some("deny") => Some("高风险"),
+        Some(other) => Some(other),
+        None => Some("待复核"),
+    };
+    // 风险展示（带 emoji 前缀，供 QQ 模板直接渲染）
+    let risk_display = risk_label.map(|label| match label {
+        "低风险" => "🟢 低风险".to_string(),
+        "历史风险" => "🟡 历史风险".to_string(),
+        "高风险" => "🔴 高风险".to_string(),
+        other => format!("⚠️ {other}"),
+    });
+    // 封禁展示：全球封禁用 ❌ 前缀；组合标记
+    let mut ban_flags: Vec<&str> = Vec::new();
+    if player_info.has_global_ban {
+        ban_flags.push("❌ 全球封禁");
+    }
+    if player_info.has_local_ban {
+        ban_flags.push("本地封禁");
+    }
+    if player_info.has_active_ban {
+        ban_flags.push("未解封");
+    }
+    let ban_flags = if ban_flags.is_empty() {
+        "无".to_string()
+    } else {
+        ban_flags.join(" / ")
+    };
+    // 违规原因：优先全球封禁原因（同用户示例：仅 ban_type 一行），其次未解封原因，再退本地封禁原因
+    let ban_reason = player_info
+        .global_ban_reason
+        .clone()
+        .or_else(|| player_info.active_ban_reason.clone())
+        .or_else(|| player_info.local_ban_reason.clone());
+    // 自动通过配置（开关 + 等待小时数），供通知展示“预计自动通过”信息
+    let auto_approve = crate::services::whitelist_auto_approve_service::load_config(db)
+        .await
+        .unwrap_or(
+            crate::services::whitelist_auto_approve_service::AutoApproveConfig {
+                enabled: false,
+                hours: 3,
+                updated_by: None,
+                updated_at: Utc::now(),
+            },
+        );
+    // 自动审核文案：低风险（allow）→ 显示等待时长；中/高风险 → 等待管理员手动审核
+    let is_low_risk = risk_action.as_deref() == Some("allow");
+    let auto_approve_text = if !is_low_risk {
+        "风险玩家等待管理员进行手动审核".to_string()
+    } else if auto_approve.enabled {
+        format!("{}小时", auto_approve.hours)
+    } else {
+        "未开启".to_string()
+    };
+    // 通知级别：只有需要人工审核的申请才推送 QQ（提醒管理员审核）——
+    // 低风险且自动通过开启时交由系统自动通过，info 级别仅作记录，
+    // LumiBot 侧规则（WHITELIST_REQUEST_CREATED 要求 >= warning）会过滤不推送。
+    let notify_level = if is_low_risk && auto_approve.enabled {
+        "info"
+    } else {
+        "warning"
+    };
+    // 详情链接：优先管理后台白名单页（ADMIN_WEB_URL），其次 Steam 主页
+    let detail_url = config
+        .admin_web_url
+        .as_ref()
+        .map(|base| format!("{base}/whitelist"))
+        .or_else(|| item.profile_url.clone());
     let input = EventInput {
         event_type: EVENT_WHITELIST_REQUEST_CREATED.to_string(),
-        level: "warning".to_string(),
+        level: notify_level.to_string(),
         title: "新白名单申请".to_string(),
         message: format!(
             "玩家 {}（{}）提交了白名单申请，等待审核",
@@ -305,6 +629,8 @@ pub async fn report_whitelist_created(
             "steamid3": item.steamid3,
             "nickname": item.nickname,
             "steam_persona_name": item.steam_persona_name,
+            // 通知展示用昵称
+            "nickname_show": display_name,
             "contact": item.contact,
             "profile_url": item.profile_url,
             "applied_at": item.applied_at,
@@ -315,22 +641,243 @@ pub async fn report_whitelist_created(
             "local_ban_count": player_info.local_ban_count,
             "local_ban_reason": player_info.local_ban_reason,
             "has_global_ban": player_info.has_global_ban,
+            "global_ban_reason": player_info.global_ban_reason,
+            "global_ban_reasons": player_info.global_ban_reasons,
             "has_active_ban": player_info.has_active_ban,
             "active_ban_count": player_info.active_ban_count,
             "active_ban_reason": player_info.active_ban_reason,
+            // 风险动作（allow / warn / require_force / deny）与自动通过信息
+            "risk_action": risk_action,
+            "risk_label": risk_label,
+            // 展示字段（供 QQ 模板直接渲染）
+            "risk_display": risk_display,
+            "ban_flags": ban_flags,
+            "ban_reason": ban_reason,
+            "detail_url": detail_url,
+            "auto_approve_text": auto_approve_text,
+            "auto_approve_enabled": auto_approve.enabled,
+            "auto_approve_hours": auto_approve.hours,
             // 优先发给 LumiBot 配置的默认管理员；若配置了管理员 openid 则同时定向通知
             "openids": admin_openids,
         }),
     };
 
-    // 未配置 LumiBot：不启动上报
+    let queued_id = enqueue_event(db, input).await?;
+    tracing::info!(queued_id = %queued_id, "白名单申请事件已写入 LumiBot 异步队列");
+    // 中/高风险申请（warning 级）在提交时即完成提醒，标记 review_notified_at，
+    // 供自动通过循环幂等去重，避免后续重复提醒同一申请
+    if notify_level == "warning" {
+        mark_review_notified(db, &item.id).await?;
+    }
+    let _ = config; // 保留配置参数以兼容调用方；发送由后台任务决定是否启用。
+    Ok(())
+}
+
+/// 标记白名单申请已完成人工审核提醒（幂等：仅在未标记时写入）。
+async fn mark_review_notified(db: &Database, whitelist_id: &Uuid) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"UPDATE whitelist_requests SET review_notified_at = now()
+           WHERE id = $1 AND review_notified_at IS NULL"#,
+    )
+    .bind(whitelist_id)
+    .execute(&db.pool)
+    .await
+    .context("更新白名单审核提醒标记失败")?;
+    Ok(())
+}
+
+/// 人工审核提醒的类别。
+///
+/// 必须严格区分「已确认的中/高风险」与「系统暂时无法核验」：后者只是
+/// fail-closed 地保持待审核，**不是**高风险，绝不能给玩家贴上高风险标签。
+#[derive(Debug, Clone, Copy)]
+pub enum PendingReviewKind<'a> {
+    /// 已由风险评分 / 权威复核确认的中/高风险
+    ConfirmedRisk {
+        /// 风险等级中文标签：中风险 / 历史风险 / 高风险
+        risk_label: &'a str,
+        /// 命中原因（可选）
+        reason: Option<&'a str>,
+    },
+    /// fail-closed：系统暂时无法完成权威核验，申请保持待审核等待人工处理
+    VerificationUnavailable { reason: &'a str },
+}
+
+/// 白名单人工审核提醒入队（warning 级别，会推送 QQ 提醒管理员）。
+///
+/// 调用场景：自动通过循环扫描到「等待时长已满」的 pending 申请时，若风险
+/// 评级为中/高风险（或复核发现存在未解封封禁），则绝不自动通过，改为发送
+/// 本提醒，确保管理员一定会通过 QQ 收到通知并手动审核。
+///
+/// 若只是权威复核 / 本地终检暂时失败（`VerificationUnavailable`），同样保持
+/// 待审核，但提醒文案与标签必须显示为「待人工复核」，**不得**标记为高风险。
+///
+/// 与提交时的 `report_whitelist_created` 互补：提交时若本地风险数据尚未
+/// 同步（如全球封禁尚未拉取），申请会被判为低风险（info 级、不推送 QQ），
+/// 由自动通过循环在超时时刻重新评级后补发本提醒。
+/// 事件类型沿用 WHITELIST_REQUEST_CREATED，warning 级别命中 LumiBot 既有
+/// 推送规则，消息文案明确「系统不会自动通过，等待管理员手动审核」。
+pub async fn report_whitelist_pending_review(
+    db: &Database,
+    config: &Config,
+    item: &WhitelistItem,
+    hours: i64,
+    kind: PendingReviewKind<'_>,
+) -> anyhow::Result<()> {
+    let display_name = item.steam_persona_name.as_deref().unwrap_or(&item.nickname);
+    let player_info = collect_whitelist_player_info(db, &item.steamid64).await;
+    let admin_openids: Vec<String> = sqlx::query_scalar(
+        r#"SELECT DISTINCT openid FROM users
+           WHERE role IN ('developer', 'admin', 'normal')
+             AND enabled = true
+             AND whitelist_notification_enabled = true
+             AND openid IS NOT NULL AND openid <> ''"#,
+    )
+    .fetch_all(&db.pool)
+    .await
+    .unwrap_or_default();
+
+    // 提醒类别：确认风险 → 展示风险等级；无法核验 → 展示「待人工复核」。
+    // 绝不把「无法核验」渲染成高风险。
+    let (review_kind, risk_display, title, message) = match kind {
+        PendingReviewKind::ConfirmedRisk { risk_label, reason } => {
+            let risk_display = match risk_label {
+                "低风险" => "🟢 低风险".to_string(),
+                "历史风险" => "🟡 历史风险".to_string(),
+                "高风险" => "🔴 高风险".to_string(),
+                other => format!("⚠️ {other}"),
+            };
+            let message = format!(
+                "玩家 {}（{}）的白名单申请已等待 {} 小时无人审核，风险评级：{}。{}系统不会自动通过，请尽快人工审核",
+                display_name,
+                item.steamid64,
+                hours,
+                risk_display,
+                reason
+                    .map(|reason| format!("{}。", reason))
+                    .unwrap_or_default()
+            );
+            (
+                "confirmed_risk",
+                risk_display,
+                "白名单待人工审核提醒",
+                message,
+            )
+        }
+        PendingReviewKind::VerificationUnavailable { reason } => {
+            let message = format!(
+                "玩家 {}（{}）的白名单申请已等待 {} 小时无人审核，系统暂时无法完成权威核验（{}）。为安全起见系统不会自动通过，请人工审核",
+                display_name, item.steamid64, hours, reason
+            );
+            (
+                "verification_unavailable",
+                "⚠️ 待人工复核".to_string(),
+                "白名单待人工复核提醒",
+                message,
+            )
+        }
+    };
+    let mut ban_flags: Vec<&str> = Vec::new();
+    if player_info.has_global_ban {
+        ban_flags.push("❌ 全球封禁");
+    }
+    if player_info.has_local_ban {
+        ban_flags.push("本地封禁");
+    }
+    if player_info.has_active_ban {
+        ban_flags.push("未解封");
+    }
+    let ban_flags = if ban_flags.is_empty() {
+        "无".to_string()
+    } else {
+        ban_flags.join(" / ")
+    };
+    let ban_reason = player_info
+        .global_ban_reason
+        .clone()
+        .or_else(|| player_info.active_ban_reason.clone())
+        .or_else(|| player_info.local_ban_reason.clone());
+    let detail_url = config
+        .admin_web_url
+        .as_ref()
+        .map(|base| format!("{base}/whitelist"))
+        .or_else(|| item.profile_url.clone());
+    let input = EventInput {
+        event_type: EVENT_WHITELIST_REQUEST_CREATED.to_string(),
+        level: "warning".to_string(),
+        title: title.to_string(),
+        message,
+        data: serde_json::json!({
+            "whitelist_id": item.id,
+            "steamid64": item.steamid64,
+            "steamid": item.steamid,
+            "steamid3": item.steamid3,
+            "nickname": item.nickname,
+            "steam_persona_name": item.steam_persona_name,
+            "nickname_show": display_name,
+            "contact": item.contact,
+            "profile_url": item.profile_url,
+            "applied_at": item.applied_at,
+            "has_local_ban": player_info.has_local_ban,
+            "local_ban_count": player_info.local_ban_count,
+            "local_ban_reason": player_info.local_ban_reason,
+            "has_global_ban": player_info.has_global_ban,
+            "global_ban_reason": player_info.global_ban_reason,
+            "global_ban_reasons": player_info.global_ban_reasons,
+            "has_active_ban": player_info.has_active_ban,
+            "active_ban_count": player_info.active_ban_count,
+            "active_ban_reason": player_info.active_ban_reason,
+            "risk_display": risk_display,
+            "review_kind": review_kind,
+            "ban_flags": ban_flags,
+            "ban_reason": ban_reason,
+            "detail_url": detail_url,
+            "auto_approve_text": "不自动通过，等待管理员手动审核",
+            "auto_approve_enabled": false,
+            "openids": admin_openids,
+        }),
+    };
+
+    let queued_id = enqueue_event(db, input).await?;
+    mark_review_notified(db, &item.id).await?;
+    tracing::info!(
+        queued_id = %queued_id,
+        whitelist_id = %item.id,
+        "白名单中/高风险人工审核提醒已写入 LumiBot 异步队列"
+    );
+    Ok(())
+}
+
+/// 低风险白名单自动通过事件上报（info 级别，不做管理员通知，仅记录）。
+/// 自动通过后调用，让 LumiBot 侧能够感知系统行为（通知规则由 LumiBot 决定）。
+pub async fn report_whitelist_auto_approved(
+    db: &Database,
+    config: &Config,
+    item: &WhitelistItem,
+    hours: i64,
+) -> anyhow::Result<()> {
+    let display_name = item.steam_persona_name.as_deref().unwrap_or(&item.nickname);
+    let input = EventInput {
+        event_type: EVENT_WHITELIST_AUTO_APPROVED.to_string(),
+        level: "info".to_string(),
+        title: "白名单自动通过".to_string(),
+        message: format!(
+            "玩家 {}（{}）的低风险白名单申请已自动通过（等待 {} 小时无人审核）",
+            display_name, item.steamid64, hours
+        ),
+        data: serde_json::json!({
+            "whitelist_id": item.id,
+            "steamid64": item.steamid64,
+            "nickname": item.nickname,
+            "steam_persona_name": item.steam_persona_name,
+            "hours": hours,
+            "approved_at": item.approved_at,
+        }),
+    };
+
     if !config.lumi_bot_enabled() {
-        tracing::info!(
-            "LumiBot 未配置（缺少 LUMI_BOT_API_URL / LUMI_BOT_API_KEY），白名单申请事件未上报"
-        );
         return Ok(());
     }
-
     let api_base_url = config
         .lumi_bot_api_url
         .as_deref()
@@ -354,35 +901,23 @@ pub async fn report_whitelist_created(
 
     match send_event_payload(api_base_url, api_key, &body).await {
         Ok(()) => {
-            tracing::info!(
-                event_id = %id,
-                event_type = %input.event_type,
-                "白名单申请事件已立即上报 LumiBot"
-            );
+            tracing::info!(event_id = %id, event_type = %input.event_type, "白名单自动通过事件已上报 LumiBot");
             Ok(())
         }
         Err(error) => {
             // 立即上报失败，降级入队由后台任务兜底重试
-            tracing::warn!(
-                %error,
-                event_id = %id,
-                "白名单申请事件立即上报失败，降级入队等待后台重试"
-            );
-            let queued_id = enqueue_event(db, input).await?;
-            tracing::warn!(
-                queued_id = %queued_id,
-                "白名单申请事件已写入 LumiBot 事件队列（后台兜底重试）"
-            );
+            tracing::warn!(%error, event_id = %id, "白名单自动通过事件立即上报失败，降级入队");
+            enqueue_event(db, input).await?;
             Ok(())
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// 后台定时兜底重试任务
+// 后台定时异步发送任务
 //
-// 白名单事件在产生时已立即上报；仅当立即上报失败时才入队，由本任务集中
-// 兜底重试，避免事件因临时的网络/服务不可用而丢失。
+// 所有事件都先进入持久化队列，由本任务 claim 后发送、重试并记录死信，
+// 避免 LumiBot 不可用时阻塞业务请求。
 // ---------------------------------------------------------------------------
 
 /// 启动 LumiBot 事件上报循环。
@@ -403,36 +938,46 @@ pub fn start_sync_loop(db: Database, config: Config) {
         return;
     }
 
-    tokio::spawn(async move {
-        // 间隔至少 60 秒，避免误配置导致高频请求
-        let interval_secs = config.lumi_bot_sync_interval_secs.max(60);
-        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
-        loop {
-            interval.tick().await;
-            match observability_service::observe_task(
-                "lumi_bot_sync",
-                sync_pending_events(&db, &config),
-                |summary| {
-                    format!(
-                        "本轮上报 {} 条（成功 {}，失败 {}）",
-                        summary.total, summary.sent, summary.failed
-                    )
-                },
-            )
-            .await
-            {
-                Ok(summary) => {
-                    if summary.total > 0 {
-                        tracing::info!(
-                            total = summary.total,
-                            sent = summary.sent,
-                            failed = summary.failed,
-                            "LumiBot 事件上报完成"
-                        );
+    super::task_runtime::spawn_persistent("lumi_bot_sync", move || {
+        let db = db.clone();
+        let config = config.clone();
+        async move {
+            // 间隔至少 60 秒，避免误配置导致高频请求
+            let interval_secs = config.lumi_bot_sync_interval_secs.max(60);
+            let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+            loop {
+                interval.tick().await;
+                match observability_service::observe_task(
+                    "lumi_bot_sync",
+                    sync_pending_events(&db, &config),
+                    |summary| {
+                        format!(
+                            "本轮上报 {} 条（成功 {}，失败 {}），复活死信 {} 条，过期 {} 条",
+                            summary.total,
+                            summary.sent,
+                            summary.failed,
+                            summary.resurrected,
+                            summary.expired
+                        )
+                    },
+                )
+                .await
+                {
+                    Ok(summary) => {
+                        if summary.total > 0 || summary.resurrected > 0 || summary.expired > 0 {
+                            tracing::info!(
+                                total = summary.total,
+                                sent = summary.sent,
+                                failed = summary.failed,
+                                resurrected = summary.resurrected,
+                                expired = summary.expired,
+                                "LumiBot 事件上报完成"
+                            );
+                        }
                     }
-                }
-                Err(error) => {
-                    tracing::warn!(%error, "LumiBot 事件上报失败");
+                    Err(error) => {
+                        tracing::warn!(%error, "LumiBot 事件上报失败");
+                    }
                 }
             }
         }
@@ -450,14 +995,67 @@ pub async fn sync_pending_events(db: &Database, config: &Config) -> anyhow::Resu
         .as_deref()
         .context("LUMI_BOT_API_KEY 未配置")?;
 
-    let rows: Vec<QueuedEventRow> = sqlx::query_as(
+    sqlx::query(
+        "UPDATE lumi_bot_event_queue SET status = 'pending', locked_at = NULL, locked_by = NULL WHERE status = 'pending' AND locked_at < now() - interval '5 minutes'",
+    )
+    .execute(&db.pool)
+    .await?;
+
+    // 死信过期：failed 超过最大保留时长的事件标记为 expired，不再重试
+    let expired = sqlx::query(
         r#"
-        SELECT id, event_type, level, title, message, data, occurred_at
-        FROM lumi_bot_event_queue
-        WHERE status = 'pending' AND attempts < $1
-        ORDER BY occurred_at ASC, queued_at ASC
-        LIMIT $2
+        UPDATE lumi_bot_event_queue
+        SET status = 'expired', locked_at = NULL, locked_by = NULL, updated_at = now()
+        WHERE status = 'failed' AND updated_at <= now() - make_interval(secs => $1)
         "#,
+    )
+    .bind(config.lumi_bot_failed_max_age_secs as i64)
+    .execute(&db.pool)
+    .await
+    .context("清理 LumiBot 过期死信失败")?
+    .rows_affected() as usize;
+
+    // 死信复活：LumiBot 停机是暂时性的，failed 事件退避满
+    // LUMI_BOT_FAILED_RETRY_SECS 后重置为 pending，重新计入尝试预算再试，
+    // 保证短暂不可用期间产生的事件不会永久丢失。
+    let resurrected = sqlx::query(
+        r#"
+        UPDATE lumi_bot_event_queue
+        SET status = 'pending',
+            attempts = 0,
+            next_attempt_at = now(),
+            locked_at = NULL,
+            locked_by = NULL
+        WHERE status = 'failed' AND updated_at <= now() - make_interval(secs => $1)
+        "#,
+    )
+    .bind(config.lumi_bot_failed_retry_secs as i64)
+    .execute(&db.pool)
+    .await
+    .context("复活 LumiBot 死信事件失败")?
+    .rows_affected() as usize;
+    if resurrected > 0 || expired > 0 {
+        tracing::info!(
+            resurrected,
+            expired,
+            "LumiBot 死信队列维护完成（复活/过期）"
+        );
+    }
+
+    let rows: Vec<QueuedEventRow> = sqlx::query_as(
+        r#"WITH claimed AS (
+             SELECT id
+             FROM lumi_bot_event_queue
+             WHERE status = 'pending' AND attempts < $1 AND next_attempt_at <= now()
+             ORDER BY occurred_at ASC, queued_at ASC
+             FOR UPDATE SKIP LOCKED
+             LIMIT $2
+           )
+           UPDATE lumi_bot_event_queue q
+           SET locked_at = now(), locked_by = pg_backend_pid()::text, updated_at = now()
+           FROM claimed
+           WHERE q.id = claimed.id
+           RETURNING q.id, q.event_type, q.level, q.title, q.message, q.data, q.occurred_at"#,
     )
     .bind(config.lumi_bot_max_attempts as i32)
     .bind(config.lumi_bot_batch_size as i64)
@@ -467,6 +1065,8 @@ pub async fn sync_pending_events(db: &Database, config: &Config) -> anyhow::Resu
 
     let mut summary = SyncSummary {
         total: rows.len(),
+        resurrected,
+        expired,
         ..SyncSummary::default()
     };
 
@@ -478,7 +1078,10 @@ pub async fn sync_pending_events(db: &Database, config: &Config) -> anyhow::Resu
                     UPDATE lumi_bot_event_queue
                     SET status = 'sent',
                         sent_at = now(),
+                        attempts = attempts + 1,
                         last_error = NULL,
+                        locked_at = NULL,
+                        locked_by = NULL,
                         updated_at = now()
                     WHERE id = $1
                     "#,
@@ -503,8 +1106,9 @@ pub async fn sync_pending_events(db: &Database, config: &Config) -> anyhow::Resu
                         event_id = %row.id,
                         attempts,
                         max_attempts = config.lumi_bot_max_attempts,
+                        retry_after_secs = config.lumi_bot_failed_retry_secs,
                         %error,
-                        "LumiBot 事件重试次数耗尽，标记为 failed（不再自动重试）"
+                        "LumiBot 事件重试次数耗尽，进入死信，退避周期后自动复活重试"
                     );
                 } else {
                     tracing::warn!(
@@ -521,7 +1125,8 @@ pub async fn sync_pending_events(db: &Database, config: &Config) -> anyhow::Resu
     Ok(summary)
 }
 
-/// 上报失败：累计尝试次数；达到上限标记为 failed（死信），否则保留 pending 等待下轮重试。
+/// 上报失败：累计尝试次数；达到上限标记为 failed（死信）。死信会在退避周期后
+/// 自动复活重试（见 sync_pending_events），避免 LumiBot 短暂不可用导致事件永久丢失。
 async fn record_failure(
     db: &Database,
     id: Uuid,
@@ -531,10 +1136,13 @@ async fn record_failure(
     let (attempts,): (i32,) = sqlx::query_as(
         r#"
         UPDATE lumi_bot_event_queue
-        SET attempts = attempts + 1,
-            last_error = $2,
-            status = CASE WHEN attempts + 1 >= $3 THEN 'failed' ELSE 'pending' END,
-            updated_at = now()
+                    SET attempts = attempts + 1,
+                        last_error = $2,
+                        status = CASE WHEN attempts + 1 >= $3 THEN 'failed' ELSE 'pending' END,
+                        next_attempt_at = now() + make_interval(secs => LEAST(3600, power(2, attempts + 1)::int * 5)),
+                        locked_at = NULL,
+                        locked_by = NULL,
+                        updated_at = now()
         WHERE id = $1
         RETURNING attempts
         "#,
@@ -624,6 +1232,8 @@ async fn send_event(api_base_url: &str, api_key: &str, row: &QueuedEventRow) -> 
 mod tests {
     use super::*;
     use crate::{config::Config, db::Database, test_util};
+    use axum::{http::StatusCode, routing::get, Router};
+    use tokio::task::JoinHandle;
     use uuid::Uuid;
 
     fn schema_url(base_url: &str, schema: &str) -> String {
@@ -656,13 +1266,118 @@ mod tests {
         result.unwrap();
     }
 
-    /// 立即上报失败时降级入队，事件不丢失
+    async fn spawn_health_server(status_code: StatusCode) -> (String, JoinHandle<()>) {
+        let app = Router::new().route("/health", get(move || async move { status_code }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{address}"), task)
+    }
+
+    #[tokio::test]
+    async fn status_reports_unconfigured_integration_and_queue_counts() {
+        with_test_db(async |db| {
+            sqlx::query(
+                r#"INSERT INTO lumi_bot_event_queue
+                   (id, event_type, level, status, sent_at, updated_at)
+                   VALUES
+                   ($1, 'TEST_PENDING', 'info', 'pending', NULL, now()),
+                   ($2, 'TEST_SENT', 'info', 'sent', now() - interval '1 minute', now()),
+                   ($3, 'TEST_FAILED', 'error', 'failed', NULL, now() - interval '2 minutes')"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(Uuid::new_v4())
+            .bind(Uuid::new_v4())
+            .execute(&db.pool)
+            .await?;
+
+            let mut config = Config::from_env();
+            config.lumi_bot_api_url = None;
+            config.lumi_bot_api_key = None;
+
+            let overview = status(&db, &config).await?;
+            assert!(!overview.configured);
+            assert!(!overview.reachable);
+            assert_eq!(overview.api_url, None);
+            assert_eq!(overview.latency_ms, None);
+            assert!(overview.health_error.is_some());
+            assert_eq!(overview.queue.pending, 1);
+            assert_eq!(overview.queue.sent, 1);
+            assert_eq!(overview.queue.failed, 1);
+            assert!(overview.queue.last_sent_at.is_some());
+            assert!(overview.queue.last_failure_at.is_some());
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn status_reports_reachable_health_endpoint() {
+        with_test_db(async |db| {
+            let (api_url, server) = spawn_health_server(StatusCode::OK).await;
+            let mut config = Config::from_env();
+            config.lumi_bot_api_url = Some(format!("{api_url}/"));
+            config.lumi_bot_api_key = Some("test-key".to_string());
+
+            let overview = status(&db, &config).await;
+            server.abort();
+            let overview = overview?;
+
+            assert!(overview.configured);
+            assert!(overview.reachable);
+            assert_eq!(overview.api_url.as_deref(), Some(api_url.as_str()));
+            assert!(overview.latency_ms.is_some());
+            assert_eq!(overview.health_error, None);
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn status_reports_unhealthy_http_response() {
+        with_test_db(async |db| {
+            let (api_url, server) = spawn_health_server(StatusCode::SERVICE_UNAVAILABLE).await;
+            let mut config = Config::from_env();
+            config.lumi_bot_api_url = Some(api_url);
+            config.lumi_bot_api_key = Some("test-key".to_string());
+
+            let overview = status(&db, &config).await;
+            server.abort();
+            let overview = overview?;
+
+            assert!(overview.configured);
+            assert!(!overview.reachable);
+            assert!(overview.latency_ms.is_some());
+            assert!(overview
+                .health_error
+                .as_deref()
+                .is_some_and(|error| error.contains("503 Service Unavailable")));
+            Ok(())
+        })
+        .await;
+    }
+
+    /// 事件入队后由后台异步发送，事件不丢失
     #[tokio::test]
     async fn report_whitelist_created_falls_back_to_enqueue_on_failure() {
         with_test_db(async |db| {
             let mut config = Config::from_env();
             config.lumi_bot_api_url = Some("http://127.0.0.1:9".to_string()); // 必然连接失败
             config.lumi_bot_api_key = Some("key-admin".to_string());
+
+            sqlx::query(
+                r#"INSERT INTO users
+                   (id, username, display_name, password_hash, role, openid, whitelist_notification_enabled)
+                   VALUES
+                   ($1, 'notify-user', 'Notify User', 'test', 'normal', 'openid-enabled', true),
+                   ($2, 'muted-user', 'Muted User', 'test', 'normal', 'openid-disabled', false)"#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(Uuid::new_v4())
+            .execute(&db.pool)
+            .await?;
 
             // 构造白名单申请项
             let item = WhitelistItem {
@@ -674,11 +1389,15 @@ mod tests {
                 nickname: "玩家A".to_string(),
                 steam_persona_name: Some("玩家A".to_string()),
                 contact: None,
+                reason: None,
                 status: "pending".to_string(),
                 applied_at: Utc::now().to_rfc3339(),
                 approved_at: None,
                 approved_by: None,
                 approval_reason: None,
+                expires_at: None,
+                duration_days: None,
+                expired_at: None,
                 rejected_at: None,
                 rejected_by: None,
                 rejection_reason: None,
@@ -687,13 +1406,173 @@ mod tests {
 
             report_whitelist_created(&db, &config, &item).await?;
 
-            // 立即上报失败后应降级入队兜底重试
+            // 请求只写入 pending 队列，后台任务负责重试
             let count: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM lumi_bot_event_queue WHERE status = 'pending'",
             )
             .fetch_one(&db.pool)
             .await?;
             assert_eq!(count, 1);
+            let data: serde_json::Value = sqlx::query_scalar(
+                "SELECT data FROM lumi_bot_event_queue WHERE status = 'pending'",
+            )
+            .fetch_one(&db.pool)
+            .await?;
+            assert_eq!(data["openids"], serde_json::json!(["openid-enabled"]));
+            Ok(())
+        })
+        .await;
+    }
+
+    /// 低风险玩家（无封禁、无风险关联）提交申请：level 应为 info，
+    /// LumiBot 侧规则（>= warning 才推送）会过滤，不打扰管理员。
+    #[tokio::test]
+    async fn low_risk_whitelist_request_is_info_level() {
+        with_test_db(async |db| {
+            let mut config = Config::from_env();
+            config.lumi_bot_api_url = None;
+            config.lumi_bot_api_key = None;
+
+            // 干净玩家：无任何封禁 / IP 关联记录 → RiskAction::Allow
+            let item = test_whitelist_item("76561198000000001", "低风险玩家");
+
+            report_whitelist_created(&db, &config, &item).await?;
+
+            let (level, risk_action): (String, Option<String>) = sqlx::query_as(
+                "SELECT level, data->>'risk_action' FROM lumi_bot_event_queue WHERE data->>'steamid64' = $1",
+            )
+            .bind("76561198000000001")
+            .fetch_one(&db.pool)
+            .await?;
+            assert_eq!(risk_action.as_deref(), Some("allow"));
+            assert_eq!(level, "info", "低风险玩家申请应以 info 级别上报，避免 QQ 推送");
+            Ok(())
+        })
+        .await;
+    }
+
+    /// 中高风险玩家（存在有效本地封禁）提交申请：level 应为 warning，
+    /// 需要管理员人工审核，应推送 QQ 通知。
+    #[tokio::test]
+    async fn high_risk_whitelist_request_is_warning_level() {
+        with_test_db(async |db| {
+            let mut config = Config::from_env();
+            config.lumi_bot_api_url = None;
+            config.lumi_bot_api_key = None;
+
+            let steamid64 = "76561198000000002";
+            // 写入一条有效本地封禁 → RiskAction::Deny（高风险）
+            sqlx::query(
+                r#"INSERT INTO ban_records
+                   (id, player, steam_id, status, operator_name, reason, created_at)
+                   VALUES (gen_random_uuid(), '高风险玩家', $1, 'active', 'admin', '违规', now())"#,
+            )
+            .bind(steamid64)
+            .execute(&db.pool)
+            .await?;
+
+            let item = test_whitelist_item(steamid64, "高风险玩家");
+            report_whitelist_created(&db, &config, &item).await?;
+
+            let (level, risk_action): (String, Option<String>) = sqlx::query_as(
+                "SELECT level, data->>'risk_action' FROM lumi_bot_event_queue WHERE data->>'steamid64' = $1",
+            )
+            .bind(steamid64)
+            .fetch_one(&db.pool)
+            .await?;
+            assert_eq!(risk_action.as_deref(), Some("deny"));
+            assert_eq!(level, "warning", "高风险玩家申请应以 warning 级别上报，触发 QQ 推送");
+            Ok(())
+        })
+        .await;
+    }
+
+    fn test_whitelist_item(steamid64: &str, nickname: &str) -> WhitelistItem {
+        WhitelistItem {
+            id: Uuid::new_v4(),
+            steamid64: steamid64.to_string(),
+            steamid: Some(format!("STEAM_1:0:{}", &steamid64[10..])),
+            steamid3: Some(format!("[U:1:{}]", &steamid64[10..])),
+            profile_url: None,
+            nickname: nickname.to_string(),
+            steam_persona_name: Some(nickname.to_string()),
+            contact: None,
+            reason: None,
+            status: "pending".to_string(),
+            applied_at: Utc::now().to_rfc3339(),
+            approved_at: None,
+            approved_by: None,
+            approval_reason: None,
+            expires_at: None,
+            duration_days: None,
+            expired_at: None,
+            rejected_at: None,
+            rejected_by: None,
+            rejection_reason: None,
+            risk_profile: None,
+        }
+    }
+
+    /// 即使 LumiBot 可达，请求也只写入队列，避免外部 HTTP 阻塞用户请求。
+    #[tokio::test]
+    async fn report_whitelist_created_records_success_as_sent() {
+        with_test_db(async |db| {
+            // 健康检查 + 事件上报共用同一个监听端口：/health 返回 200，/api/v1/events 返回 202
+            let app = axum::Router::new()
+                .route(
+                    "/health",
+                    axum::routing::get(|| async { axum::http::StatusCode::OK }),
+                )
+                .route(
+                    "/api/v1/events",
+                    axum::routing::post(|| async { axum::http::StatusCode::ACCEPTED }),
+                );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            });
+
+            let mut config = Config::from_env();
+            config.lumi_bot_api_url = Some(format!("http://{address}"));
+            config.lumi_bot_api_key = Some("key-admin".to_string());
+
+            let item = WhitelistItem {
+                id: Uuid::new_v4(),
+                steamid64: "76561198000000002".to_string(),
+                steamid: Some("STEAM_1:0:2".to_string()),
+                steamid3: Some("[U:1:2]".to_string()),
+                profile_url: None,
+                nickname: "玩家B".to_string(),
+                steam_persona_name: None,
+                contact: None,
+                reason: None,
+                status: "pending".to_string(),
+                applied_at: Utc::now().to_rfc3339(),
+                approved_at: None,
+                approved_by: None,
+                approval_reason: None,
+                expires_at: None,
+                duration_days: None,
+                expired_at: None,
+                rejected_at: None,
+                rejected_by: None,
+                rejection_reason: None,
+                risk_profile: None,
+            };
+
+            report_whitelist_created(&db, &config, &item).await?;
+            server.abort();
+
+            // 请求返回时任务仍处于待发送状态，由后台 worker 异步处理。
+            let (status, attempts): (String, i32) = sqlx::query_as(
+                "SELECT status, attempts FROM lumi_bot_event_queue WHERE data->>'steamid64' = $1",
+            )
+            .bind("76561198000000002")
+            .fetch_one(&db.pool)
+            .await?;
+            assert_eq!(status, "pending");
+            assert_eq!(attempts, 0);
             Ok(())
         })
         .await;
@@ -801,6 +1680,8 @@ mod tests {
             config.lumi_bot_api_key = Some("key-admin".to_string());
             config.lumi_bot_max_attempts = 2;
             config.lumi_bot_batch_size = 100;
+            config.lumi_bot_failed_retry_secs = 60;
+            config.lumi_bot_failed_max_age_secs = 86_400;
 
             let id = enqueue_event(
                 &db,
@@ -827,6 +1708,10 @@ mod tests {
             assert_eq!(attempts, 1);
 
             // 第二轮：再次失败，达到上限，标记 failed
+            sqlx::query("UPDATE lumi_bot_event_queue SET next_attempt_at = now() WHERE id = $1")
+                .bind(id)
+                .execute(&db.pool)
+                .await?;
             let summary = sync_pending_events(&db, &config).await?;
             assert_eq!(summary.total, 1);
             assert_eq!(summary.failed, 1);
@@ -840,9 +1725,234 @@ mod tests {
             assert_eq!(attempts, 2);
             assert!(last_error.is_some());
 
-            // 第三轮：failed 不再被取出
+            // 第三轮：failed 处于退避期内，不再被取出
             let summary = sync_pending_events(&db, &config).await?;
             assert_eq!(summary.total, 0);
+            assert_eq!(summary.resurrected, 0);
+
+            // 第四轮：死信已超过退避周期，自动复活为 pending 并重新计入尝试预算
+            sqlx::query(
+                "UPDATE lumi_bot_event_queue SET updated_at = now() - interval '120 seconds' WHERE id = $1",
+            )
+            .bind(id)
+            .execute(&db.pool)
+            .await?;
+            let summary = sync_pending_events(&db, &config).await?;
+            assert_eq!(summary.resurrected, 1);
+            assert_eq!(summary.total, 1);
+            assert_eq!(summary.failed, 1); // 目标地址不可达，再次上报失败
+            let (status, attempts): (String, i32) =
+                sqlx::query_as("SELECT status, attempts FROM lumi_bot_event_queue WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&db.pool)
+                    .await?;
+            assert_eq!(status, "pending");
+            assert_eq!(attempts, 1); // 复活后尝试预算重置
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn stale_dead_letter_is_expired_and_no_longer_retried() {
+        with_test_db(async |db| {
+            let mut config = Config::from_env();
+            config.lumi_bot_api_url = Some("http://127.0.0.1:9".to_string());
+            config.lumi_bot_api_key = Some("key-admin".to_string());
+            config.lumi_bot_max_attempts = 2;
+            config.lumi_bot_batch_size = 100;
+            config.lumi_bot_failed_retry_secs = 3600;
+            config.lumi_bot_failed_max_age_secs = 60;
+
+            let id = enqueue_event(
+                &db,
+                EventInput {
+                    event_type: EVENT_WHITELIST_REQUEST_CREATED.to_string(),
+                    level: "warning".to_string(),
+                    title: "新白名单申请".to_string(),
+                    message: "测试".to_string(),
+                    data: serde_json::json!({}),
+                },
+            )
+            .await?;
+            // 直接构造已死 2 分钟的死信（超过最大保留时长）
+            sqlx::query(
+                "UPDATE lumi_bot_event_queue SET status = 'failed', attempts = 2, updated_at = now() - interval '120 seconds' WHERE id = $1",
+            )
+            .bind(id)
+            .execute(&db.pool)
+            .await?;
+
+            let summary = sync_pending_events(&db, &config).await?;
+            assert_eq!(summary.expired, 1);
+            assert_eq!(summary.total, 0);
+            assert_eq!(summary.resurrected, 0);
+            let (status,): (String,) =
+                sqlx::query_as("SELECT status FROM lumi_bot_event_queue WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&db.pool)
+                    .await?;
+            assert_eq!(status, "expired");
+            Ok(())
+        })
+        .await;
+    }
+
+    async fn insert_whitelist_request_row(db: &Database, steamid64: &str) -> anyhow::Result<Uuid> {
+        let id = Uuid::new_v4();
+        sqlx::query(
+            r#"INSERT INTO whitelist_requests (
+                id, steam_id, steamid64, steamid, steamid3, profile_url, nickname, status,
+                applied_at, source, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, '高风险玩家', 'pending', now(), 'public', now())"#,
+        )
+        .bind(id)
+        .bind(steamid64)
+        .bind(steamid64)
+        .bind(format!("STEAM_0:0:{}", &steamid64[..6]))
+        .bind(format!("[U:1:{}]", &steamid64[..6]))
+        .bind(format!("https://steamcommunity.com/profiles/{steamid64}"))
+        .execute(&db.pool)
+        .await?;
+        Ok(id)
+    }
+
+    fn sample_whitelist_item(id: Uuid, steamid64: &str) -> WhitelistItem {
+        WhitelistItem {
+            id,
+            steamid64: steamid64.to_string(),
+            steamid: Some(format!("STEAM_0:0:{}", &steamid64[..6])),
+            steamid3: Some(format!("[U:1:{}]", &steamid64[..6])),
+            profile_url: Some(format!("https://steamcommunity.com/profiles/{steamid64}")),
+            nickname: "高风险玩家".to_string(),
+            steam_persona_name: None,
+            contact: None,
+            reason: None,
+            status: "pending".to_string(),
+            applied_at: Utc::now().to_rfc3339(),
+            approved_at: None,
+            approved_by: None,
+            approval_reason: None,
+            expires_at: None,
+            duration_days: None,
+            expired_at: None,
+            rejected_at: None,
+            rejected_by: None,
+            rejection_reason: None,
+            risk_profile: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn report_whitelist_pending_review_enqueues_warning_and_marks_notified() {
+        with_test_db(async |db| {
+            let steamid64 = "76561198000000050";
+            let id = insert_whitelist_request_row(&db, steamid64).await?;
+            let item = sample_whitelist_item(id, steamid64);
+            let mut config = Config::from_env();
+            config.lumi_bot_api_url = None;
+            config.lumi_bot_api_key = None;
+
+            report_whitelist_pending_review(
+                &db,
+                &config,
+                &item,
+                3,
+                PendingReviewKind::ConfirmedRisk {
+                    risk_label: "高风险",
+                    reason: Some("存在未过期全球封禁"),
+                },
+            )
+            .await?;
+
+            let (level, event_type, message, review_kind): (String, String, String, String) =
+                sqlx::query_as(
+                    r#"SELECT level, event_type, message, data->>'review_kind'
+                       FROM lumi_bot_event_queue
+                       WHERE data->>'whitelist_id' = $1"#,
+                )
+                .bind(id.to_string())
+                .fetch_one(&db.pool)
+                .await?;
+            assert_eq!(
+                level, "warning",
+                "人工审核提醒必须是 warning 级（会推送 QQ）"
+            );
+            assert_eq!(event_type, EVENT_WHITELIST_REQUEST_CREATED);
+            assert!(message.contains("不会自动通过"), "实际：{message}");
+            assert!(
+                message.contains("风险评级：🔴 高风险"),
+                "确认风险应展示风险等级：{message}"
+            );
+            assert_eq!(review_kind, "confirmed_risk");
+
+            let notified: (bool,) = sqlx::query_as(
+                "SELECT review_notified_at IS NOT NULL FROM whitelist_requests WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(&db.pool)
+            .await?;
+            assert!(notified.0, "提醒入队后应标记 review_notified_at");
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn report_whitelist_pending_review_never_labels_unverified_as_high_risk() {
+        with_test_db(async |db| {
+            let steamid64 = "76561198000000051";
+            let id = insert_whitelist_request_row(&db, steamid64).await?;
+            let item = sample_whitelist_item(id, steamid64);
+            let mut config = Config::from_env();
+            config.lumi_bot_api_url = None;
+            config.lumi_bot_api_key = None;
+
+            report_whitelist_pending_review(
+                &db,
+                &config,
+                &item,
+                3,
+                PendingReviewKind::VerificationUnavailable {
+                    reason: "KZTimer 权威复核失败",
+                },
+            )
+            .await?;
+
+            let (level, title, message, risk_display, review_kind): (
+                String,
+                String,
+                String,
+                String,
+                String,
+            ) = sqlx::query_as(
+                r#"SELECT level, COALESCE(title, ''), COALESCE(message, ''),
+                          COALESCE(data->>'risk_display', ''), data->>'review_kind'
+                   FROM lumi_bot_event_queue
+                   WHERE data->>'whitelist_id' = $1"#,
+            )
+            .bind(id.to_string())
+            .fetch_one(&db.pool)
+            .await?;
+
+            assert_eq!(level, "warning");
+            assert_eq!(review_kind, "verification_unavailable");
+            assert_eq!(risk_display, "⚠️ 待人工复核");
+            // 注意：测试玩家昵称本身含「高风险」，因此只校验风险标签文案
+            assert!(
+                !message.contains("风险评级"),
+                "无法核验不得展示风险评级：{message}"
+            );
+            assert!(
+                !message.contains("🔴"),
+                "无法核验不得出现高风险标记：{message}"
+            );
+            assert!(
+                !risk_display.contains("高风险"),
+                "无法核验的展示标签不能是高风险：{risk_display}"
+            );
+            assert!(title.contains("待人工复核"), "实际标题：{title}");
+            assert!(message.contains("不会自动通过"), "实际：{message}");
             Ok(())
         })
         .await;

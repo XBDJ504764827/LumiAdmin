@@ -10,24 +10,28 @@ pub fn start_expiry_loop(db: Database, interval_seconds: u64) {
         Some(interval_seconds),
         true,
     );
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_seconds));
-        loop {
-            interval.tick().await;
-            match observability_service::observe_task(
-                "ban_expiry",
-                process_expired_bans(&db),
-                |count| format!("本轮自动解封 {} 条", count),
-            )
-            .await
-            {
-                Ok(count) => {
-                    if count > 0 {
-                        tracing::info!(count, "自动解封过期封禁记录");
+    super::task_runtime::spawn_persistent("ban_expiry", move || {
+        let db = db.clone();
+        async move {
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(interval_seconds));
+            loop {
+                interval.tick().await;
+                match observability_service::observe_task(
+                    "ban_expiry",
+                    process_expired_bans(&db),
+                    |count| format!("本轮自动解封 {} 条", count),
+                )
+                .await
+                {
+                    Ok(count) => {
+                        if count > 0 {
+                            tracing::info!(count, "自动解封过期封禁记录");
+                        }
                     }
-                }
-                Err(error) => {
-                    tracing::warn!(%error, "处理过期封禁记录失败");
+                    Err(error) => {
+                        tracing::warn!(%error, "处理过期封禁记录失败");
+                    }
                 }
             }
         }
@@ -37,6 +41,19 @@ pub fn start_expiry_loop(db: Database, interval_seconds: u64) {
 /// 处理所有已过期的封禁记录
 /// 返回解封的记录数量
 pub async fn process_expired_bans(db: &Database) -> anyhow::Result<usize> {
+    let expired: Vec<(uuid::Uuid, String)> = sqlx::query_as(
+        r#"SELECT id, steam_id FROM ban_records
+           WHERE status = 'active'
+             AND expires_at IS NOT NULL
+             AND expires_at <= now()"#,
+    )
+    .fetch_all(&db.pool)
+    .await?;
+
+    if expired.is_empty() {
+        return Ok(0);
+    }
+
     let result = sqlx::query(
         r#"UPDATE ban_records
            SET status = 'inactive',
@@ -49,8 +66,22 @@ pub async fn process_expired_bans(db: &Database) -> anyhow::Result<usize> {
     )
     .execute(&db.pool)
     .await?;
+    let count = result.rows_affected() as usize;
 
-    Ok(result.rows_affected() as usize)
+    for (ban_id, steam_id) in &expired {
+        if let Err(e) = super::auth_event_service::insert_event(
+            db,
+            None,
+            "ban.remove",
+            super::auth_event_service::ban_remove_payload(*ban_id, steam_id),
+        )
+        .await
+        {
+            tracing::warn!(%e, ban_id = %ban_id, "封禁过期事件写入失败");
+        }
+    }
+
+    Ok(count)
 }
 
 #[cfg(test)]

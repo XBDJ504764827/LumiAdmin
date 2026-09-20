@@ -11,8 +11,8 @@ import { Pagination } from '../../shared/Pagination.jsx';
 import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 
-const emptyCreateForm = { username: '', password: '', role: 'normal', steam_id: '', remark: '', openid: '' };
-const emptyEditForm = { id: '', username: '', role: 'normal', steam_id: '', remark: '', openid: '' };
+const emptyCreateForm = { username: '', password: '', role: 'normal', steam_id: '', remark: '', openid: '', whitelist_notification_enabled: true };
+const emptyEditForm = { id: '', username: '', role: 'normal', steam_id: '', remark: '', openid: '', whitelist_notification_enabled: true };
 const emptyPasswordForm = { id: '', password: '', confirmPassword: '', username: '' };
 
 function getRoleLabel(role) {
@@ -137,6 +137,7 @@ export function UsersPage() {
       steam_id: item.steam_id ?? '',
       remark: item.remark ?? '',
       openid: item.openid ?? '',
+      whitelist_notification_enabled: item.whitelist_notification_enabled !== false,
     });
     setEditOpen(true);
   }
@@ -280,17 +281,17 @@ export function UsersPage() {
           <div className="table-responsive">
             <table className="data-table mobile-card-table">
               <thead>
-                <tr><th>用户名</th><th>权限</th><th>状态</th><th>备注</th><th>steamid</th><th>通知openid</th><th>创建时间</th><th className="text-right">操作</th></tr>
+                <tr><th>用户名</th><th>权限</th><th>状态</th><th>备注</th><th>steamid</th><th>通知openid</th><th>申请通知</th><th>创建时间</th><th className="text-right">操作</th></tr>
               </thead>
               <tbody>
                 {isLoading ? (
-                  <TableLoading colSpan={8} />
+                  <TableLoading colSpan={9} />
                 ) : null}
                 {!isLoading && error ? (
-                  <TableError colSpan={8} message={error.message} />
+                  <TableError colSpan={9} message={error.message} />
                 ) : null}
                 {!isLoading && !error && items.length === 0 ? (
-                  <TableEmpty colSpan={8} text="暂无管理员账号" />
+                  <TableEmpty colSpan={9} text="暂无管理员账号" />
                 ) : null}
                 {!isLoading && !error && items.map((item) => (
                   <tr key={item.id}>
@@ -305,6 +306,7 @@ export function UsersPage() {
                     <td className="text-muted-light" data-label="备注">{item.remark ?? '-'}</td>
                     <td className="steam-id" data-label="SteamID">{item.steam_id ?? '-'}</td>
                     <td className="steam-id" data-label="通知openid">{item.openid ?? '-'}</td>
+                    <td data-label="申请通知"><span className={`status-pill ${item.whitelist_notification_enabled ? 'pill-online' : 'pill-offline'}`}>{item.whitelist_notification_enabled ? '已开启' : '已关闭'}</span></td>
                     <td className="text-muted-light" data-label="创建时间">{formatChinaDateTime(item.created_at)}</td>
                     <td className="text-right mobile-card-actions" data-label="操作">
                       <div className="action-btn-group">
@@ -341,6 +343,7 @@ export function UsersPage() {
         <div className="form-group"><label>权限等级</label><select className="form-control" value={createForm.role} onChange={(event) => setCreateForm((prev) => ({ ...prev, role: event.target.value }))}><option value="admin">系统管理员</option><option value="normal">普通管理员</option></select></div>
         <div className="form-group"><label>steamid</label><input className="form-control" value={createForm.steam_id} onChange={(event) => setCreateForm((prev) => ({ ...prev, steam_id: event.target.value }))} /></div>
         <div className="form-group"><label>通知openid</label><input className="form-control" placeholder="用于接收QQ机器人通知的openid" value={createForm.openid} onChange={(event) => setCreateForm((prev) => ({ ...prev, openid: event.target.value }))} /></div>
+        <div className="toggle-row"><div><div className="toggle-label">白名单申请通知</div><div className="toggle-desc">开启后，有新的白名单申请时通过 QQ 通知此用户</div></div><label className="toggle-switch"><input type="checkbox" checked={createForm.whitelist_notification_enabled} onChange={(event) => setCreateForm((prev) => ({ ...prev, whitelist_notification_enabled: event.target.checked }))} /><span className="toggle-slider" /></label></div>
         <div className="form-group"><label>备注</label><input className="form-control" value={createForm.remark} onChange={(event) => setCreateForm((prev) => ({ ...prev, remark: event.target.value }))} /></div>
       </Modal>
 
@@ -359,6 +362,7 @@ export function UsersPage() {
         {canChangeRole(editForm) ? <div className="form-group"><label>权限等级</label><select className="form-control" value={editForm.role} onChange={(event) => setEditForm((prev) => ({ ...prev, role: event.target.value }))}><option value="admin">系统管理员</option><option value="normal">普通管理员</option><option value="developer">开发管理员</option></select></div> : null}
         <div className="form-group"><label>steamid</label><input className="form-control" value={editForm.steam_id} onChange={(event) => setEditForm((prev) => ({ ...prev, steam_id: event.target.value }))} /></div>
         <div className="form-group"><label>通知openid</label><input className="form-control" placeholder="用于接收QQ机器人通知的openid" value={editForm.openid} onChange={(event) => setEditForm((prev) => ({ ...prev, openid: event.target.value }))} /></div>
+        <div className="toggle-row"><div><div className="toggle-label">白名单申请通知</div><div className="toggle-desc">开启后，有新的白名单申请时通过 QQ 通知此用户</div></div><label className="toggle-switch"><input type="checkbox" checked={editForm.whitelist_notification_enabled} onChange={(event) => setEditForm((prev) => ({ ...prev, whitelist_notification_enabled: event.target.checked }))} /><span className="toggle-slider" /></label></div>
         <div className="form-group"><label>备注</label><input className="form-control" value={editForm.remark} onChange={(event) => setEditForm((prev) => ({ ...prev, remark: event.target.value }))} /></div>
       </Modal>
 

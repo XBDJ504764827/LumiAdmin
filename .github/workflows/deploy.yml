@@ -68,7 +68,7 @@ jobs:
       - name: Lint Frontend
         run: |
           cd frontend
-          npm run lint
+          npm run lint -- --max-warnings 0
 
       - name: Build Frontend
         run: |
@@ -259,4 +259,3 @@ jobs:
           script: |
             chmod +x ${{ vars.WEB_PATH_ILIAN }}/manger-backend
             sudo systemctl restart manger-backend || true
-

@@ -62,8 +62,14 @@ pub async fn register_connection(
     hub: &NotificationHub,
     user_id: Uuid,
     tx: tokio::sync::mpsc::UnboundedSender<serde_json::Value>,
-) {
-    hub.write().await.entry(user_id).or_default().push(tx);
+) -> bool {
+    let mut guard = hub.write().await;
+    let connections = guard.entry(user_id).or_default();
+    if connections.len() >= 3 {
+        return false;
+    }
+    connections.push(tx);
+    true
 }
 
 pub async fn unregister_connection(
@@ -300,33 +306,36 @@ pub fn start_cleanup_loop(db: Database, interval_secs: u64) {
         Some(interval_secs),
         true,
     );
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
-        loop {
-            interval.tick().await;
-            match observability_service::observe_task(
-                "notification_cleanup",
-                async {
-                    let result = sqlx::query(
-                        r#"DELETE FROM notifications WHERE read = true AND created_at < now() - interval '30 days'"#,
-                    )
-                    .execute(&db.pool)
-                    .await?;
-                    Ok::<u64, sqlx::Error>(result.rows_affected())
-                },
-                |count| format!("清理 {} 条已读通知", count),
-            )
-            .await
-            {
-                Ok(count) => {
-                    if count > 0 {
-                        tracing::info!(
-                            count,
-                            "cleaned up old read notifications"
-                        );
+    super::task_runtime::spawn_persistent("notification_cleanup", move || {
+        let db = db.clone();
+        async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+            loop {
+                interval.tick().await;
+                match observability_service::observe_task(
+                    "notification_cleanup",
+                    async {
+                        let result = sqlx::query(
+                            r#"DELETE FROM notifications WHERE read = true AND created_at < now() - interval '30 days'"#,
+                        )
+                        .execute(&db.pool)
+                        .await?;
+                        Ok::<u64, sqlx::Error>(result.rows_affected())
+                    },
+                    |count| format!("清理 {} 条已读通知", count),
+                )
+                .await
+                {
+                    Ok(count) => {
+                        if count > 0 {
+                            tracing::info!(
+                                count,
+                                "cleaned up old read notifications"
+                            );
+                        }
                     }
+                    Err(e) => tracing::warn!(%e, "notification cleanup failed"),
                 }
-                Err(e) => tracing::warn!(%e, "notification cleanup failed"),
             }
         }
     });

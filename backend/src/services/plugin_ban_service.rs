@@ -162,14 +162,20 @@ fn format_expires_at_for_display(rfc3339_time: &str) -> String {
     }
 }
 
-pub async fn create_plugin_ban(db: &Database, input: PluginBanInput) -> anyhow::Result<BanItem> {
+pub async fn create_plugin_ban(
+    db: &Database,
+    input: PluginBanInput,
+) -> anyhow::Result<(BanItem, i64)> {
     let server = authenticate_server(db, input.port, &input.report_token).await?;
-    let ban_type = input.ban_type.trim();
-    let reason = input.reason.trim();
-    let operator_name = input.operator_name.trim();
+    let ban_type = input.ban_type.trim().to_string();
+    let reason = input.reason.trim().to_string();
+    let operator_name = input.operator_name.trim().to_string();
     let steam_id =
         super::normalize_optional_string(input.steam_id.clone()).map(|s| normalize_steam_id(&s));
-    let ip_address = super::normalize_optional_string(input.ip_address);
+    let ip_address = super::normalize_optional_string(input.ip_address.clone());
+    let ban_type = ban_type.as_str();
+    let reason = reason.as_str();
+    let operator_name = operator_name.as_str();
 
     anyhow::ensure!(matches!(ban_type, "steam" | "ip"), "封禁属性无效");
     anyhow::ensure!(input.duration_minutes >= 0, "封禁时长不能为负数");
@@ -177,6 +183,10 @@ pub async fn create_plugin_ban(db: &Database, input: PluginBanInput) -> anyhow::
     anyhow::ensure!(!operator_name.is_empty(), "操作人不能为空");
     if ban_type == "steam" {
         anyhow::ensure!(steam_id.is_some(), "SteamID 不能为空");
+        anyhow::ensure!(
+            super::steam_service::is_steamid64(steam_id.as_deref().unwrap_or_default()),
+            "SteamID 格式无效，无法封禁"
+        );
     }
     if ban_type == "ip" {
         anyhow::ensure!(ip_address.is_some(), "IP 地址不能为空");
@@ -195,6 +205,8 @@ pub async fn create_plugin_ban(db: &Database, input: PluginBanInput) -> anyhow::
     anyhow::ensure!(duplicate_count.0 == 0, "目标已有有效封禁");
 
     let expires_at = expires_at(input.duration_minutes);
+    let ban_id = Uuid::new_v4();
+    let mut tx = db.pool.begin().await?;
     let row = sqlx::query_as::<_, super::ban_service::BanRow>(
         r#"INSERT INTO ban_records (
                id, player, steam_id, ip_address, server_name, ban_type,
@@ -206,11 +218,11 @@ pub async fn create_plugin_ban(db: &Database, input: PluginBanInput) -> anyhow::
                      duration_minutes, expires_at, reason, status, operator_name, source,
                      server_id, server_port, removed_reason, removed_by, removed_at, created_at"#,
     )
-    .bind(Uuid::new_v4())
+    .bind(ban_id)
     .bind(super::normalize_optional_string(input.player))
-    .bind(steam_id.unwrap_or_default())
-    .bind(ip_address)
-    .bind(server.name)
+    .bind(steam_id.clone().unwrap_or_default())
+    .bind(ip_address.clone())
+    .bind(server.name.clone())
     .bind(ban_type)
     .bind(input.duration_minutes)
     .bind(expires_at)
@@ -218,16 +230,31 @@ pub async fn create_plugin_ban(db: &Database, input: PluginBanInput) -> anyhow::
     .bind(operator_name)
     .bind(server.id)
     .bind(server.port)
-    .fetch_one(&db.pool)
+    .fetch_one(&mut *tx)
     .await?;
 
-    Ok(super::ban_service::row_to_item(row))
+    let version = super::auth_event_service::insert_event_tx(
+        &mut tx,
+        None,
+        "ban.add",
+        super::auth_event_service::ban_add_payload(
+            ban_id,
+            &steam_id.clone().unwrap_or_default(),
+            ip_address.as_deref(),
+            reason,
+            expires_at,
+        ),
+    )
+    .await?;
+    tx.commit().await?;
+
+    Ok((super::ban_service::row_to_item(row), version))
 }
 
 pub async fn unban_plugin_target(
     db: &Database,
     input: PluginUnbanInput,
-) -> anyhow::Result<BanItem> {
+) -> anyhow::Result<(BanItem, i64)> {
     authenticate_server(db, input.port, &input.report_token).await?;
     let target = input.target.trim();
     let normalized_target = normalize_steam_id(target);
@@ -266,7 +293,8 @@ pub async fn unban_plugin_target(
         }
     }
 
-    // 执行解封
+    // 执行解封（同事务产生 ban.remove 事件）
+    let mut tx = db.pool.begin().await?;
     let row = sqlx::query_as::<_, super::ban_service::BanRow>(
         r#"UPDATE ban_records
            SET status = 'inactive', removed_reason = $2, removed_by = $3, removed_at = now()
@@ -285,11 +313,20 @@ pub async fn unban_plugin_target(
         }
     }))
     .bind(operator_name)
-    .fetch_one(&db.pool)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|_| anyhow::anyhow!("解封失败"))?;
 
-    Ok(super::ban_service::row_to_item(row))
+    let version = super::auth_event_service::insert_event_tx(
+        &mut tx,
+        None,
+        "ban.remove",
+        super::auth_event_service::ban_remove_payload(row.id, &row.steam_id),
+    )
+    .await?;
+    tx.commit().await?;
+
+    Ok((super::ban_service::row_to_item(row), version))
 }
 
 /// 检查操作员是否具有特权（developer 或 admin）
@@ -687,18 +724,17 @@ async fn check_plugin_ban_live(
         });
     }
 
-    let row = sqlx::query_as::<_, (Uuid, String, Option<chrono::DateTime<chrono::Utc>>)>(
-        r#"SELECT id, reason, expires_at FROM ban_records
-           WHERE status = 'active'
-             AND (expires_at IS NULL OR expires_at > now())
-             AND (($1::TEXT IS NOT NULL AND steam_id = $1) OR ($2::TEXT IS NOT NULL AND ip_address = $2))
-           ORDER BY created_at DESC
-           LIMIT 1"#,
-    )
-    .bind(steam_id.as_deref())
-    .bind(ip_address.as_deref())
-    .fetch_optional(&db.pool)
-    .await?;
+    // 拆成 steam 与 ip 两段独立查询,避免 OR 组合条件导致全表扫描。
+    // 每段都可命中对应的部分索引,配合 ActiveBanCache 兜底查询极少发生。
+    let row = match (&steam_id, &ip_address) {
+        (Some(sid), Some(ip)) => match query_active_ban_for_plugin(db, sid).await? {
+            Some(ban) => Some(ban),
+            None => query_active_ban_for_plugin_ip(db, ip).await?,
+        },
+        (Some(sid), None) => query_active_ban_for_plugin(db, sid).await?,
+        (None, Some(ip)) => query_active_ban_for_plugin_ip(db, ip).await?,
+        (None, None) => None,
+    };
 
     if let Some((ban_id, reason, expires_at)) = row {
         complete_missing_ban_details(
@@ -727,6 +763,42 @@ async fn check_plugin_ban_live(
     })
 }
 
+async fn query_active_ban_for_plugin(
+    db: &Database,
+    steam_id: &str,
+) -> anyhow::Result<Option<(Uuid, String, Option<chrono::DateTime<chrono::Utc>>)>> {
+    sqlx::query_as::<_, (Uuid, String, Option<chrono::DateTime<chrono::Utc>>)>(
+        r#"SELECT id, reason, expires_at FROM ban_records
+           WHERE status = 'active'
+             AND steam_id = $1
+             AND (expires_at IS NULL OR expires_at > now())
+           ORDER BY created_at DESC
+           LIMIT 1"#,
+    )
+    .bind(steam_id)
+    .fetch_optional(&db.pool)
+    .await
+    .map_err(Into::into)
+}
+
+async fn query_active_ban_for_plugin_ip(
+    db: &Database,
+    ip_address: &str,
+) -> anyhow::Result<Option<(Uuid, String, Option<chrono::DateTime<chrono::Utc>>)>> {
+    sqlx::query_as::<_, (Uuid, String, Option<chrono::DateTime<chrono::Utc>>)>(
+        r#"SELECT id, reason, expires_at FROM ban_records
+           WHERE status = 'active'
+             AND ip_address = $1
+             AND (expires_at IS NULL OR expires_at > now())
+           ORDER BY created_at DESC
+           LIMIT 1"#,
+    )
+    .bind(ip_address)
+    .fetch_optional(&db.pool)
+    .await
+    .map_err(Into::into)
+}
+
 pub async fn complete_missing_ban_details(
     db: &Database,
     ban_id: Uuid,
@@ -735,6 +807,7 @@ pub async fn complete_missing_ban_details(
     server: &ServerAuth,
     server_port: i32,
 ) -> anyhow::Result<()> {
+    // 仅当信息确实缺失/不同时才 Update，避免对象被重复封禁检查时每次都写库。
     sqlx::query(
         r#"UPDATE ban_records
            SET player = COALESCE(player, $2),
@@ -742,7 +815,14 @@ pub async fn complete_missing_ban_details(
                server_name = COALESCE(server_name, $4),
                server_id = COALESCE(server_id, $5),
                server_port = COALESCE(server_port, $6)
-           WHERE id = $1"#,
+           WHERE id = $1
+             AND (
+                 (player IS NULL AND $2 IS NOT NULL)
+                 OR (ip_address IS NULL AND $3 IS NOT NULL)
+                 OR (server_name IS NULL AND $4 IS NOT NULL)
+                 OR (server_id IS NULL AND $5 IS NOT NULL)
+                 OR (server_port IS NULL AND $6 IS NOT NULL)
+             )"#,
     )
     .bind(ban_id)
     .bind(player)

@@ -76,9 +76,9 @@ LumiAdmin/
 | 模块 | 说明 |
 |------|------|
 | **仪表盘** | 服务器状态总览（在线/离线）、核心数据统计、服务器性能指标（FPS、CPU、Tickrate）、白名单统计、管理员预览 |
-| **社区组管理** | 社区组 CRUD、服务器 CRUD（含 RCON 连接测试）、在线玩家实时查看、Token 管理、访问限制配置（白名单模式 / Rating / Steam 等级门槛）、RCON 远程命令执行 |
-| **白名单管理** | 白名单审核大厅（待审核/已通过/未通过三个标签页）、全球封禁记录检测（KZTimerGlobal API）、手动添加白名单、Steam 名称刷新、全球封禁玩家审核强制填写理由 |
-| **封禁管理** | 玩家封禁/解封、封禁类型（Steam/IP/双重）、时长设置（临时/永久）、到期自动解封、封禁公示 |
+| **社区组管理** | 社区组 CRUD、服务器 CRUD（含 RCON 连接测试）、在线玩家实时查看、Token 管理、访问限制配置（白名单模式 / Rating / Steam 等级门槛 / 中高风险账号拦截）、RCON 远程命令执行 |
+| **白名单管理** | 白名单审核大厅（待审核/已通过/未通过三个标签页）、全球封禁记录检测（KZTimerGlobal API）、手动添加白名单、Steam 名称刷新、全球封禁玩家审核强制填写理由、低风险自动通过开关（低风险玩家申请满 3 小时无人审核自动通过） |
+| **封禁管理** | 玩家封禁/解封、Steam/IP 封禁属性、时长设置（临时/永久）、到期自动解封、封禁公示 |
 | **用户管理** | 管理员账户 CRUD、权限组（developer/admin/normal）、密码管理、账号启用/禁用、会话管理 |
 
 ### 系统功能
@@ -86,7 +86,7 @@ LumiAdmin/
 | 模块 | 说明 |
 |------|------|
 | **玩家信息 API** | Webhook 分发在线玩家数据、自定义 API 端点（公开/密钥访问）、外部服务器数据聚合、地图等级查询 |
-| **外部服务器** | 第三方服务器管理、RCON 自动轮询采集玩家数据、服务器状态监控 |
+| **外部服务器** | 第三方服务器管理、A2S 查询（失败时 RCON fallback）采集玩家数据、服务器状态监控 |
 | **操作日志** | 管理员操作追踪（按模块、操作人、时间范围检索） |
 | **审计日志** | 详细审计记录 |
 | **API 接口文档** | 后端所有 API 端点一览 |
@@ -138,7 +138,33 @@ LumiAdmin/
 | 过期服务器清理 | 300s | 清理超时未上报的在线玩家并标记服务器为休眠/待上报 |
 | 地图等级同步 | 6h | 从 MySQL 同步地图难度等级数据 |
 | 限流器清理 | 60s | 清理过期的限流计数器 |
-| LumiBot 事件上报 | 1800s（可配置） | 将队列中的白名单新申请等事件集中上报给 QQ 机器人（LumiBot） |
+| LumiBot 事件上报 | 1800s（可配置） | 白名单申请先写入持久化队列，再由后台异步发送、重试和死信处理 |
+| 白名单低风险自动通过 | 60s | 低风险（无本地/全球封禁、无同 IP 高风险关联）玩家申请满 3 小时无人审核自动通过；中高风险（含全球封禁）等待管理员审核；通过后主动刷新白名单缓存 |
+
+---
+
+## 进服准入规则
+
+游戏服务器插件在玩家进服时调用 `POST /api/plugin/access/check`，后端按以下顺序判定，
+所有判定都以玩家账号（SteamID64）为准：
+
+1. **封禁拦截**：账号自身或上报 IP 命中有效封禁 → 直接拒绝，白名单不可豁免；
+2. **中高风险账号拦截**（服务器级开关 `servers.risk_block_enabled`，默认开启）：
+   账号存在封禁类风险信号时视为中/高风险，没有白名单一律拒绝，
+   判定信号与后台「玩家风险档案」完全一致：
+   - 账号自身存在有效本地封禁，或由全球封禁同步生成的本地封禁，或账号自身存在有效全球封禁；
+   - 同 IP 关联账号（本次上报 IP 与账号历史 IP）存在有效本地/全球封禁。
+   持有已通过的白名单（`whitelist_requests.status = 'approved'`）即可豁免本项；
+3. **服务器进服模式**：白名单模式 / 进入限制（Rating、Steam 等级）/ CS 优先账户，
+   开启的模式之间为 OR，满足任意一项即可进入。
+
+> 中高风险分级沿用风险档案的 `action`：`allow`=低风险、`warn`=中风险、
+> `require_force` / `deny`=高风险；进服检查只统计封禁类信号，不统计白名单拒绝次数等
+> 次要信号。命中明细写入进服日志的拒绝原因（玩家侧只看到统一提示）。
+>
+> 该判定需要实时查询数据库：后端降级到访问快照（`snapshot_fallback`）或快照内置的插件
+> 本地判定时，只校验快照中的封禁 / 白名单 / 进服模式，不包含中高风险拦截。
+> 关闭某台服务器的中高风险拦截后，该服务器行为与改造前一致。
 
 ---
 
@@ -146,9 +172,9 @@ LumiAdmin/
 
 | 角色 | 权限范围 |
 |------|---------|
-| `developer` | 全部权限：用户管理、封禁管理、白名单管理、社区组管理、RCON 执行、Steam 名称刷新、API 配置 |
-| `admin` | 封禁管理、白名单管理（含手动添加）、社区组管理、RCON 执行、API 配置 |
-| `normal` | 白名单审核、封禁查看（不可增删改） |
+| `developer` | 全部权限：用户管理、封禁管理、白名单管理、社区组管理、任意 RCON 命令、Steam 名称刷新、API 配置 |
+| `admin` | 封禁管理、白名单管理（含手动添加）、社区组管理、RCON 白名单命令、API 配置 |
+| `normal` | 白名单审核、封禁查看（不可增删改）、RCON 白名单命令 |
 
 ---
 
@@ -232,9 +258,9 @@ cargo build --release   # 生产构建 → target/release/manger-backend
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `HTTP_TIMEOUT_SECS` | `300` | 请求超时 |
+| `HTTP_TIMEOUT_SECS` | `60` | 请求超时（全局 HTTP 客户端兜底） |
 | `HTTP_CONNECT_TIMEOUT_SECS` | `5` | 连接超时 |
-| `REQUEST_TIMEOUT_SECS` | `300` | 全局请求超时 |
+| `REQUEST_TIMEOUT_SECS` | `60` | 全局请求超时 |
 | `MAX_REQUEST_BODY_BYTES` | `APPEAL_FILE_MAX_SIZE_MB + 10MB` | 请求体大小限制，需高于申诉文件大小上限 |
 
 ### R2 文件存储
@@ -264,20 +290,40 @@ R2 信息时，业务记录本身仍可提交，只有证据文件上传不可�
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
+| `QQ_INTEGRATION_TOKEN` | 空（禁用） | LumiBot 调用 QQ 审批/统计接口的令牌，与 LumiBot 的 `LUMIADMIN_QQ_TOKEN` 一致 |
 | `LUMI_BOT_API_URL` | 空（禁用） | LumiBot 事件接收中心地址，如 `http://127.0.0.1:8080`；与 `LUMI_BOT_API_KEY` 同时配置后启用 |
 | `LUMI_BOT_API_KEY` | 空（禁用） | LumiBot 分配的 API Key（`X-API-Key` 请求头，建议向 LumiBot 申请专属 `key-admin`） |
 | `LUMI_BOT_SYNC_INTERVAL_SECS` | `1800` | 队列集中上报周期（秒），即每 30 分钟批量上报一次 |
-| `LUMI_BOT_MAX_ATTEMPTS` | `5` | 单条事件最大重试次数，超过后标记 `failed` 不再自动重试 |
+| `LUMI_BOT_MAX_ATTEMPTS` | `5` | 单条事件最大重试次数，超过后标记 `failed`（死信），退避周期后自动复活重试 |
 | `LUMI_BOT_BATCH_SIZE` | `100` | 每轮最多上报的事件条数 |
+| `LUMI_BOT_FAILED_RETRY_SECS` | `86400` | 死信复活退避（秒）：`failed` 超过该时长后自动重置为 `pending` 再试 |
+| `LUMI_BOT_FAILED_MAX_AGE_SECS` | `604800` | 死信最长保留（秒）：超过 7 天仍无法送达的标记为 `expired`，不再重试 |
 
 启用后，玩家在公开页面提交的白名单申请会写入 `lumi_bot_event_queue` 队列，
 后台任务按周期集中调用 `POST {LUMI_BOT_API_URL}/api/v1/events`
 （`source: LumiAdmin`，`event_type: WHITELIST_REQUEST_CREATED`）上报，
 由 LumiBot 再通知 QQ 管理员/用户。
 
+**事件不会因 LumiBot 短暂停机而丢失**：上报失败按指数退避重试
+（间隔最长 1 小时）；重试耗尽后进入死信，仍会在 24 小时后自动复活重试，
+直到送达或超过 7 天标记为 `expired`。死信/过期数量可在
+`GET /api/ops/lumi-bot` 的 `queue` 字段中监控。
+
+LumiBot 点击审批调用 `POST /api/integration/qq/whitelist/:id/review`，请求体包含
+`action`、审批人 `openid`、QQ `interaction_id`、可选 `reason` 和 `force`。
+
+LumiBot 的 `/wl <steamid64/steamid2>` 指令调用
+`GET /api/integration/qq/whitelist/status?steam_input=...` 查询白名单状态。
+该接口支持 SteamID64、SteamID2 和 Steam 个人主页 URL，返回指定账号的全部历史
+白名单记录（状态、时间和拒绝原因），不返回联系方式、审核人等敏感字段。
+LumiAdmin 使用 `interaction_id` 生成唯一幂等键，在同一 PostgreSQL 事务中更新
+白名单申请并写入 `audit_logs`；重复请求返回第一次审批的 `audit_id` 与结果。
+
 ### 数据库迁移
 
-后端启动时会先执行旧版幂等 Schema 兼容迁移，再执行 `backend/migrations/` 下的 SQLx 正式迁移文件。后续新增或修改数据库结构时，优先添加带时间戳的 SQL 迁移文件，旧版代码迁移只作为兼容已有部署的过渡层保留。
+后端启动时会先执行旧版幂等 Schema 兼容迁移，再执行 `backend/migrations/` 下的 SQLx 正式迁移文件。后续新增或修改数据库结构时，优先添加带时间戳的 SQL 迁移文件，旧版代码迁移只作为兼容已有部署的过渡层保留。生产部署建议在切换应用前单独执行迁移，并在 CI 同时验证全新数据库和旧版数据库升级路径。
+
+访问控制缓存通过 PostgreSQL `LISTEN/NOTIFY` 在封禁、白名单、服务器配置或玩家访问资料变化后立即刷新，固定周期刷新仅作为断线兜底。服务器状态和访问快照刷新失败时会记录观测指标，短时间内保留旧缓存，超过宽限期则重新读取数据库。
 
 ---
 
@@ -362,13 +408,33 @@ R2 信息时，业务记录本身仍可提交，只有证据文件上传不可�
 
 ## 部署
 
-项目使用 GitHub Actions 自动化部署（`.github/workflows/deploy.yml`）：
-
-1. 推送到 `main` 分支自动触发
-2. 检测 `frontend/`、`backend/` 各模块变更
-3. 仅构建有变更的模块
 4. 通过 SSH + rsync 部署到目标服务器
 5. 自动重启后端服务（游戏插件部署见 [LumiAdmin-plugins](https://github.com/LumiAdmin/LumiAdmin-plugins)）
+
+### 后端 systemd 服务配置
+
+生产环境通过 systemd 管理后端进程（开机自启、崩溃自动拉起、优雅关闭）。
+仓库提供标准服务单元模板：[`deploy/manger-backend.service`](deploy/manger-backend.service)。
+
+目标服务器首次部署或检查配置时：
+
+1. 复制模板到 `/etc/systemd/system/manger-backend.service`，按实际部署路径
+   修改 `User` / `WorkingDirectory` / `ExecStart`（`WorkingDirectory` 必须指向
+   `.env` 所在目录，后端通过 dotenvy 从工作目录加载配置）；
+2. `systemctl daemon-reload && systemctl enable --now manger-backend` 启用
+   开机自启与崩溃自动拉起（`Restart=on-failure`）；
+3. 日志通过 `journalctl -u manger-backend` 查看（stdout 全部进 journald）。
+
+注意：
+
+- 后端已实现 SIGTERM 优雅关闭（停机时刷写最终访问快照），unit 中
+  `TimeoutStopSec=30` 预留了刷写时间，请勿改回默认之外的过短值；
+- `systemctl restart` 只重启当前进程，`enable` 才是开机自启；新服务器部署后
+  请确认 `systemctl is-enabled manger-backend` 为 enabled；
+- 应用内后台循环（缓存刷新、全球封禁同步、白名单自动通过等）由
+  `task_runtime::spawn_persistent` 提供 panic 隔离与自动重启，与 systemd 形成
+  任务级 + 进程级两层保障；若发现服务状态异常，可用
+  `GET /api/ops/overview`（含后台任务运行指标）与 `journalctl` 结合排查。
 
 ---
 
@@ -376,7 +442,7 @@ R2 信息时，业务记录本身仍可提交，只有证据文件上传不可�
 
 - 所有管理 API 需要Bearer Token 认证
 - 前端 401 全局拦截，Token 过期自动跳转登录
-- RCON 命令执行有黑名单保护（阻止 quit、exit、exec 等破坏性命令）
+- RCON 采用白名单模式：`developer` 可执行单条任意命令；其他管理员只允许 `status`、`stats`、`version`、`listplayers`、`sm_version`、`sm version`、`sm plugins list` 和 `sm plugins info`。命令长度、单条命令格式、超时和输出长度均有限制，审计日志不会记录完整敏感命令。
 - 插件 API 通过 report_token + port 双重认证
 - Webhook 密钥支持常量时间比较，防止时序攻击
 - 公开 API 有 IP 级别的速率限制

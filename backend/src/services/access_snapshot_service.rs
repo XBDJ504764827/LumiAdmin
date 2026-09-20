@@ -114,6 +114,24 @@ pub async fn refresh_snapshot(
     Ok(snapshot)
 }
 
+/// 优雅关闭时最后刷写一次快照：即使数据库不可达，也延长现有快照的有效期，
+/// 避免游戏服务器在停机窗口内因快照过期而拒绝上报。
+pub async fn shutdown_flush(db: &Database, store: &SnapshotStore) {
+    if let Err(error) = refresh_snapshot(db, store).await {
+        warn!(%error, "关闭前刷新访问快照失败，尝试延长现有快照有效期");
+        match store.read_snapshot().await {
+            Ok(Some(mut snapshot)) => {
+                snapshot.expires_at = Utc::now() + Duration::hours(SNAPSHOT_TTL_HOURS);
+                if let Err(error) = store.write_snapshot(&snapshot).await {
+                    warn!(%error, "延长现有访问快照有效期失败");
+                }
+            }
+            Ok(None) => {}
+            Err(error) => warn!(%error, "读取现有访问快照失败"),
+        }
+    }
+}
+
 async fn load_snapshot_servers(db: &Database) -> anyhow::Result<Vec<SnapshotServer>> {
     sqlx::query_as::<_, SnapshotServerRow>(
         r#"SELECT s.id, s.community_id, s.name, s.port, s.report_token, s.access_restriction_enabled,
@@ -322,28 +340,32 @@ pub fn start_refresh_loop(db: Database, store: SnapshotStore) {
         Some(300),
         true,
     );
-    tokio::spawn(async move {
-        if let Err(error) = observability_service::observe_task(
-            "access_snapshot_refresh",
-            refresh_snapshot(&db, &store),
-            |_| "初始快照刷新完成".to_string(),
-        )
-        .await
-        {
-            warn!(%error, "initial access snapshot refresh failed");
-        }
-
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
-        loop {
-            interval.tick().await;
+    super::task_runtime::spawn_persistent("access_snapshot_refresh", move || {
+        let db = db.clone();
+        let store = store.clone();
+        async move {
             if let Err(error) = observability_service::observe_task(
                 "access_snapshot_refresh",
                 refresh_snapshot(&db, &store),
-                |_| "快照刷新完成".to_string(),
+                |_| "初始快照刷新完成".to_string(),
             )
             .await
             {
-                error!(%error, "access snapshot refresh failed");
+                warn!(%error, "initial access snapshot refresh failed");
+            }
+
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+            loop {
+                interval.tick().await;
+                if let Err(error) = observability_service::observe_task(
+                    "access_snapshot_refresh",
+                    refresh_snapshot(&db, &store),
+                    |_| "快照刷新完成".to_string(),
+                )
+                .await
+                {
+                    error!(%error, "access snapshot refresh failed");
+                }
             }
         }
     });

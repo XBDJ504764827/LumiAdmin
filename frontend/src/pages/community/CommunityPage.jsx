@@ -14,6 +14,11 @@ import {
   normalizeReportTokenResponse,
 } from './communityToken.js';
 import {
+  buildAuthSyncSummary,
+  buildPlayerSummary,
+  maskReportToken,
+} from './communityServerDetail.js';
+import {
   BUILT_IN_RELOAD_PLUGINS,
   DEFAULT_RELOAD_PLUGINS,
   MAX_PLUGIN_INFO_PROBES_PER_SERVER,
@@ -33,11 +38,13 @@ import {
 import {
   buildServerPayloadWithAccess,
   buildCommunityAccessPayload,
+  buildAccessSummary,
   emptyAccessConfig,
   emptyCommunityAccessConfig,
   fillAccessConfigFromServer,
   fillCommunityAccessConfig,
 } from './communityAccess.js';
+import { serverStatusMeta } from '../../shared/serverStatus.js';
 import { onlinePlayerKey, buildKickCommand } from './onlinePlayers.js';
 import { OnlinePlayerCard, ToggleSwitch, FormSectionCard, ServerRconFeedback } from './CommunityComponents.jsx';
 import { CommunityServerTable } from './CommunityServerTable.jsx';
@@ -83,6 +90,7 @@ export function CommunityPage() {
   const [submittingServer, setSubmittingServer] = useState(false);
   const [groupError, setGroupError] = useState('');
   const [tokenPanel, setTokenPanel] = useState({ serverId: null, token: '', loading: false, error: '' });
+  const [detailModal, setDetailModal] = useState({ open: false, server: null, group: null });
   const [rconModal, setRconModal] = useState({ open: false, serverId: null, serverName: '', executing: '', customCommand: '' });
   const [savedReloadPlugins, setSavedReloadPlugins] = useState(() => readSavedReloadPluginOptions());
   const [detectedReloadPlugins, setDetectedReloadPlugins] = useState(() => readDetectedReloadPlugins());
@@ -511,6 +519,15 @@ export function CommunityPage() {
     }
   }
 
+  function openServerDetailModal(server, group) {
+    setDetailModal({ open: true, server, group });
+  }
+
+  function closeServerDetailModal() {
+    setDetailModal({ open: false, server: null, group: null });
+    setTokenPanel({ serverId: null, token: '', loading: false, error: '' });
+  }
+
   function openServerControlModal(server) {
     if (!canMutate) return;
     setRconModal({ open: true, serverId: server.id, serverName: server.name, executing: '', customCommand: '' });
@@ -542,7 +559,7 @@ export function CommunityPage() {
     setRconModal((prev) => ({ ...prev, customCommand: '' }));
   }
 
-  async function _handleResetReportToken(server) {
+  async function handleResetReportToken(server) {
     if (!canManageToken) return;
     const confirmed = await confirm({ title: '重置上报 Token', message: buildResetReportTokenConfirmMessage(server.name), confirmText: '确认重置' });
     if (!confirmed) return;
@@ -679,6 +696,101 @@ export function CommunityPage() {
   }
 
   // ── 渲染：服务器编辑弹窗 ──
+  // ── 渲染：服务器详细弹窗 ──
+  function renderServerDetailModal() {
+    const { server, group } = detailModal;
+    if (!server) return null;
+
+    const status = serverStatusMeta(server.status);
+    const auth = buildAuthSyncSummary(server);
+    const { online, max } = buildPlayerSummary(server);
+    const isViewing = tokenPanel.serverId === server.id && !tokenPanel.loading;
+
+    return (
+      <Modal
+        open={detailModal.open}
+        title={`服务器详情 — ${server.name}`}
+        onClose={closeServerDetailModal}
+        footer={<button className="btn btn-primary" onClick={closeServerDetailModal}>关闭</button>}
+      >
+        <FormSectionCard
+          icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></svg>}
+          title="基本信息"
+        >
+          <div className="detail-grid">
+            <span className="detail-label">名称</span><span className="detail-value">{server.name}</span>
+            <span className="detail-label">地址</span><span className="detail-value steam-id">{server.ip}:{server.port}</span>
+            <span className="detail-label">状态</span>
+            <span className="detail-value">
+              <span className={`status-pill ${status.className}`}>{status.label}</span>
+            </span>
+            <span className="detail-label">当前人数</span>
+            <span className="detail-value">
+              {online} / {max}
+              <button className="action-btn" style={{ marginLeft: 8 }} onClick={() => { closeServerDetailModal(); handleViewPlayers(server); }}>查看玩家</button>
+            </span>
+            <span className="detail-label">备注</span><span className="detail-value">{server.note || '—'}</span>
+          </div>
+        </FormSectionCard>
+
+        <FormSectionCard
+          icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>}
+          title="访问限制"
+        >
+          <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.8 }}>
+            {buildAccessSummary(server, group)}
+          </div>
+        </FormSectionCard>
+
+        <FormSectionCard
+          icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" /><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" /></svg>}
+          title="授权同步"
+        >
+          <div className="detail-grid">
+            <span className="detail-label">连接</span>
+            <span className="detail-value">
+              <span className={`status-pill ${auth.connected ? 'pill-online' : 'pill-offline'}`}>
+                {auth.connected ? '已连接' : '未连接'}
+              </span>
+            </span>
+            <span className="detail-label">同步进度</span>
+            <span className="detail-value">
+              <span className={`status-pill ${auth.lag ? 'pill-warning' : 'pill-online'}`}>
+                {auth.lag ? `落后 ${auth.pending}` : '已追平'}
+              </span>
+            </span>
+            <span className="detail-label">版本</span><span className="detail-value">{auth.version} / {auth.latest}</span>
+            <span className="detail-label">上次同步</span><span className="detail-value">{auth.lastSyncText}</span>
+          </div>
+        </FormSectionCard>
+
+        {canManageToken ? (
+          <FormSectionCard
+            icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" /></svg>}
+            title="Token 令牌"
+          >
+            <div className="form-hint mb-12">
+              插件通过 identify 自动领取，无需手动配置；仅在服务器被其它插件实例占用时重置以解除绑定。
+            </div>
+            <div className="token-display">
+              <span className={`token-text ${isViewing && tokenPanel.token ? 'revealed' : ''}`}>
+                {isViewing && tokenPanel.token ? tokenPanel.token : maskReportToken(server.report_token)}
+              </span>
+              <button className="token-btn" onClick={() => handleViewReportToken(server)}>
+                {isViewing ? '隐藏' : '查看'}
+              </button>
+              {isViewing && tokenPanel.token ? (
+                <button className="token-btn token-btn-copy" onClick={handleCopyReportToken}>复制</button>
+              ) : null}
+              <button className="token-btn token-btn-danger" onClick={() => handleResetReportToken(server)}>重置</button>
+            </div>
+            {tokenPanel.error ? <div className="text-accent mt-8">{tokenPanel.error}</div> : null}
+          </FormSectionCard>
+        ) : null}
+      </Modal>
+    );
+  }
+
   function renderServerModal() {
     const currentGroup = selectedGroupId ? groups.find((g) => g.id === selectedGroupId) : null;
     return (
@@ -948,30 +1060,8 @@ export function CommunityPage() {
     );
   }
 
-  // ── 渲染：Token 列 ──
-  function renderTokenCell(server) {
-    const isViewing = tokenPanel.serverId === server.id && !tokenPanel.loading;
-    return (
-      <div className="token-display">
-        <span className={`token-text ${isViewing && tokenPanel.token ? 'revealed' : ''}`}>
-          {isViewing && tokenPanel.token ? tokenPanel.token : '••••••••••••'}
-        </span>
-        {canManageToken ? (
-          <>
-            <button className="token-btn" onClick={() => handleViewReportToken(server)}>
-              {isViewing ? '隐藏' : '查看'}
-            </button>
-            {isViewing && tokenPanel.token ? (
-              <button className="token-btn token-btn-copy" onClick={handleCopyReportToken}>复制</button>
-            ) : null}
-          </>
-        ) : null}
-      </div>
-    );
-  }
-
   // ── 渲染：服务器行操作 ──
-  function renderServerActions(server) {
+  function renderServerActions(server, group) {
     return (
       <div className="action-btn-group">
         <button className="action-btn" onClick={() => handleViewPlayers(server)}>
@@ -984,6 +1074,10 @@ export function CommunityPage() {
             服务器控制
           </button>
         ) : null}
+        <button className="action-btn" onClick={() => openServerDetailModal(server, group)}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></svg>
+          详细
+        </button>
         {canMutate ? (
           <>
             <button className="action-btn action-btn-accent" onClick={() => openEditServerModal(server.id, server)}>
@@ -1004,7 +1098,7 @@ export function CommunityPage() {
     <div id="community" className="content-section active">
       <div className="breadcrumb"><span>核心管理</span><span className="sep">›</span><span className="current">社区组管理</span></div>
       <div className="page-header">
-        <div><div className="page-title">社区与服务器管理</div><div className="page-sub">管理您旗下各个游戏社区的服务器节点、Token 令牌与配置信息。</div></div>
+        <div><div className="page-title">社区与服务器管理</div><div className="page-sub">管理您旗下各个游戏社区的服务器节点与配置信息。</div></div>
         {canMutate ? <button className="btn btn-primary" onClick={openCreateGroupModal}>创建社区组</button> : null}
       </div>
 
@@ -1051,7 +1145,6 @@ export function CommunityPage() {
           <div className="card-body p-0">
             <CommunityServerTable
               group={group}
-              renderTokenCell={renderTokenCell}
               renderServerActions={renderServerActions}
             />
           </div>
@@ -1076,6 +1169,9 @@ export function CommunityPage() {
 
       {/* 社区访问限制设置弹窗 */}
       {renderCommunityAccessModal()}
+
+      {/* 服务器详细弹窗 */}
+      {renderServerDetailModal()}
 
       {/* 服务器编辑弹窗 */}
       {renderServerModal()}

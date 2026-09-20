@@ -1873,6 +1873,8 @@
 .token-btn:hover { color: var(--accent); }
 .token-btn-copy { color: var(--teal); }
 .token-btn-copy:hover { color: var(--accent); }
+.token-btn-danger { color: var(--danger-text, #e5484d); }
+.token-btn-danger:hover { color: var(--accent); }
 .checkbox-group { display: flex; gap: 10px; align-items: center; }
 .checkbox-group label { margin-bottom: 0; cursor: pointer; }
 

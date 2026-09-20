@@ -31,6 +31,9 @@ pub(crate) struct PluginAccessCheckBody {
 pub(crate) struct PluginAccessSnapshotBody {
     report_token: String,
     port: i32,
+    /// 可选：插件上次收到的快照版本。命中时后端省略 item，仅返回 unchanged=true。
+    #[serde(default)]
+    etag: Option<String>,
 }
 
 pub(crate) async fn check_plugin_access(
@@ -116,6 +119,8 @@ pub(crate) async fn plugin_access_snapshot(
         Some(snapshot) => snapshot,
         None => return Err(StatusCode::SERVICE_UNAVAILABLE),
     };
+    // etag 增量：插件回传的版本与当前快照一致时跳过全量传输。
+    // 先校验服务器归属（snapshot_for_plugin 会检查 token+port），再决定是否省略 item。
     let item = access_snapshot_service::snapshot_for_plugin(
         &snapshot,
         &body.report_token,
@@ -123,6 +128,20 @@ pub(crate) async fn plugin_access_snapshot(
         Utc::now(),
     )
     .map_err(invalid_request_status)?;
+
+    let unchanged = body
+        .etag
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some_and(|value| value == snapshot.version);
+
+    if unchanged {
+        return Ok(Json(serde_json::json!({
+            "unchanged": true,
+            "version": snapshot.version,
+        })));
+    }
 
     Ok(Json(serde_json::json!({ "item": item })))
 }

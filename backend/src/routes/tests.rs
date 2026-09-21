@@ -3953,3 +3953,92 @@ async fn qq_chat_list_and_send_requires_binding() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn access_record_writes_plugin_local_decision() {
+    with_test_app(async |db, config| {
+        let community_id = Uuid::new_v4();
+        sqlx::query(r#"INSERT INTO communities (id, name) VALUES ($1, '本地自治社区')"#)
+            .bind(community_id)
+            .execute(&db.pool)
+            .await?;
+        sqlx::query(
+            r#"INSERT INTO servers (id, community_id, name, ip, port, rcon_password, report_token, status, players)
+               VALUES ($1, $2, '本地自治服', '127.0.0.1', 27016, 'secret', 'access-token-record', 'online', $3)"#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(community_id)
+        .bind(Vec::<String>::new())
+        .execute(&db.pool)
+        .await?;
+
+        let app = test_app(config, db.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/plugin/access/record")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "report_token": "access-token-record",
+                            "port": 27016,
+                            "steam_id64": "76561198000000077",
+                            "player": "本地玩家",
+                            "ip_address": "10.0.0.1",
+                            "allowed": false,
+                            "access_method": "banned",
+                            "failure_code": "banned",
+                            "reject_reason": "测试封禁"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let row: (String, bool, String, Option<String>) = sqlx::query_as(
+            r#"SELECT steam_id64, allowed, access_method, reject_reason
+               FROM player_access_logs WHERE steam_id64 = '76561198000000077'"#,
+        )
+        .fetch_one(&db.pool)
+        .await?;
+        assert_eq!(row.0, "76561198000000077");
+        assert!(!row.1);
+        assert_eq!(row.2, "banned");
+        assert_eq!(row.3.as_deref(), Some("测试封禁"));
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn access_record_rejects_unknown_token() {
+    with_test_app(async |db, config| {
+        let app = test_app(config, db);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/plugin/access/record")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "report_token": "no-such-token",
+                            "port": 27016,
+                            "steam_id64": "76561198000000078",
+                            "allowed": true
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        Ok(())
+    })
+    .await;
+}

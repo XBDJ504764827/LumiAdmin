@@ -145,8 +145,13 @@ LumiAdmin/
 
 ## 进服准入规则
 
-游戏服务器插件在玩家进服时调用 `POST /api/plugin/access/check`，后端按以下顺序判定，
-所有判定都以玩家账号（SteamID64）为准：
+游戏服务器插件在玩家进服时做判定，所有判定都以玩家账号（SteamID64）为准。
+当前插件已切换为 **LumiAuth 本地自治（Data Plane）**：玩家进服时插件同步读取
+本地 SQLite 快照裁决（零网络等待），**不再逐个玩家调用 `/api/plugin/access/check`**；
+该接口仅保留用于后台对账/兼容。插件本地裁决完成后再调用
+`POST /api/plugin/access/record` 上报结果，供后台「进服监控」展示。
+
+后端判定顺序（`access/check`，用于对账/兼容）：
 
 1. **封禁拦截**：账号自身或上报 IP 命中有效封禁 → 直接拒绝，白名单不可豁免；
 2. **中高风险账号拦截**（服务器级开关 `servers.risk_block_enabled`，默认开启）：
@@ -162,9 +167,10 @@ LumiAdmin/
 > `require_force` / `deny`=高风险；进服检查只统计封禁类信号，不统计白名单拒绝次数等
 > 次要信号。命中明细写入进服日志的拒绝原因（玩家侧只看到统一提示）。
 >
-> 该判定需要实时查询数据库：后端降级到访问快照（`snapshot_fallback`）或快照内置的插件
-> 本地判定时，只校验快照中的封禁 / 白名单 / 进服模式，不包含中高风险拦截。
+> 插件本地裁决只校验快照中的封禁 / 白名单 / 进服模式，不包含中高风险拦截。
 > 关闭某台服务器的中高风险拦截后，该服务器行为与改造前一致。
+>
+> 进服日志（`player_access_logs`）写入失败会记录 `warn` 日志，避免静默断流。
 
 ---
 
@@ -428,7 +434,8 @@ LumiBot 侧需配置 `LUMIADMIN_URL` 与 `LUMIADMIN_QQ_TOKEN`（与
 | POST | `/api/plugin/bans` | 插件提交封禁 |
 | POST | `/api/plugin/bans/poll` | 轮询活跃封禁 |
 | POST | `/api/plugin/bans/check` | 检查玩家封禁状态 |
-| POST | `/api/plugin/access/check` | 检查玩家进服权限 |
+| POST | `/api/plugin/access/check` | 检查玩家进服权限（对账/兼容） |
+| POST | `/api/plugin/access/record` | 插件上报本地进服裁决结果 |
 | POST | `/api/plugin/access/snapshot` | 获取权限快照 |
 
 ### 玩家信息 API

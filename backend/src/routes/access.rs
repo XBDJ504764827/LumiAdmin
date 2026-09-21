@@ -8,6 +8,7 @@ use serde::Deserialize;
 
 use crate::routes::{
     current_operator, forbidden, internal_error, invalid_request, invalid_request_status, AppCtx,
+    AppError,
 };
 use crate::services::{
     access_log_service, access_service, access_snapshot_service, community_service,
@@ -83,7 +84,7 @@ pub(crate) async fn check_plugin_access(
                 .as_deref()
                 .or(Some(result.message.as_str()))
         };
-        let _ = access_log_service::create_access_log(
+        if let Err(e) = access_log_service::create_access_log(
             &ctx.db,
             &body.steam_id64,
             body.player.as_deref(),
@@ -100,10 +101,99 @@ pub(crate) async fn check_plugin_access(
             result.rating,
             result.steam_level,
         )
-        .await;
+        .await
+        {
+            tracing::warn!(
+                error = %e,
+                steam_id64 = %body.steam_id64,
+                server_port = server.port,
+                "写入进服日志失败（access/check）"
+            );
+        }
     }
 
     Ok(Json(serde_json::json!({ "result": result })))
+}
+
+/// 游戏插件本地裁决结果上报。
+///
+/// LumiAuth 本地自治（Data Plane）后，进服主链路由插件读取本地快照同步裁决，
+/// 不再逐个玩家调用 `/api/plugin/access/check`。插件在本地裁决完成后调用本接口
+/// 上报结果，供管理后台「进服监控」展示（成功与拒绝原因）。
+#[derive(Deserialize)]
+pub(crate) struct PluginAccessRecordBody {
+    report_token: String,
+    port: i32,
+    steam_id64: String,
+    ip_address: Option<String>,
+    player: Option<String>,
+    /// 是否放行
+    allowed: bool,
+    /// 进服方式（access_method 字符串，如 whitelist / banned / risk_blocked 等）
+    access_method: Option<String>,
+    /// 失败码（可选，如 banned / whitelist_rejected 等）
+    failure_code: Option<String>,
+    /// 拒绝原因（可选，拒绝时展示）
+    reject_reason: Option<String>,
+    rating: Option<i32>,
+    steam_level: Option<i32>,
+}
+
+pub(crate) async fn record_plugin_access(
+    State(ctx): State<AppCtx>,
+    Json(body): Json<PluginAccessRecordBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let server = ctx
+        .server_config_cache
+        .get_by_token_port(&ctx.db, &body.report_token, body.port)
+        .await
+        .map_err(AppError::internal)?
+        .ok_or_else(|| AppError::bad_request(anyhow::anyhow!("服务器令牌或端口不匹配")))?;
+
+    let community_name = community_service::find_group_name(&ctx.db, server.community_id)
+        .await
+        .ok();
+    let access_method_str = body
+        .access_method
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(if body.allowed {
+            "unrestricted"
+        } else {
+            "unknown"
+        });
+    let access_method = access_log_service::AccessMethod::from_str(access_method_str);
+
+    access_log_service::create_access_log(
+        &ctx.db,
+        &body.steam_id64,
+        body.player.as_deref(),
+        body.ip_address.as_deref(),
+        server.id,
+        &server.name,
+        server.port,
+        server.community_id,
+        community_name.as_deref(),
+        body.allowed,
+        &access_method,
+        body.failure_code.as_deref(),
+        body.reject_reason.as_deref(),
+        body.rating,
+        body.steam_level,
+    )
+    .await
+    .map_err(|e| {
+        tracing::warn!(
+            error = %e,
+            steam_id64 = %body.steam_id64,
+            server_port = server.port,
+            "写入进服日志失败（access/record）"
+        );
+        AppError::internal(e)
+    })?;
+
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 pub(crate) async fn plugin_access_snapshot(

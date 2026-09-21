@@ -224,6 +224,10 @@ pub fn router(
             post(access::check_plugin_access),
         )
         .route(
+            "/api/plugin/access/record",
+            post(access::record_plugin_access),
+        )
+        .route(
             "/api/plugin/access/snapshot",
             post(access::plugin_access_snapshot),
         )

@@ -245,6 +245,16 @@ pub fn list_endpoints() -> Vec<EndpointDoc> {
             roles: &["game-server"],
         },
         EndpointDoc {
+            module: "插件准入",
+            tone: "info",
+            name: "插件进服结果上报",
+            method: "POST",
+            endpoint: "/api/plugin/access/record",
+            description: "LumiAuth 本地自治后，插件本地裁决完成即上报进服结果，供「进服监控」展示成功与拒绝原因",
+            auth_required: false,
+            roles: &["game-server"],
+        },
+        EndpointDoc {
             module: "白名单管理",
             tone: "online",
             name: "后台白名单列表",

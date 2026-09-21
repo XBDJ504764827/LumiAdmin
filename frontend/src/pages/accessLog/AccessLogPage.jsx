@@ -229,10 +229,12 @@ export function AccessLogPage() {
                     <td data-label="服务器">{item.server_name} :{item.server_port}</td>
                     <td data-label="社区组">{item.community_name || '-'}</td>
                     <td data-label="进服方式"><StatusPill kind={methodKind(item.access_method)}>{methodLabel(item.access_method)}</StatusPill></td>
-                    <td data-label="失败原因" style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.reject_reason || ''}>
-                      {item.failure_code
-                        ? (FAILURE_CODE_MAP[item.failure_code] || item.failure_code)
-                        : (item.reject_reason || '-')}
+                    <td data-label="失败原因" style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.allowed ? '' : (item.reject_reason || '')}>
+                      {item.allowed
+                        ? '-'
+                        : (item.failure_code
+                          ? (FAILURE_CODE_MAP[item.failure_code] || item.failure_code)
+                          : (item.reject_reason || '-'))}
                     </td>
                     <td data-label="Rating">{item.rating ?? '-'}</td>
                     <td data-label="Steam 等级">{item.steam_level ?? '-'}</td>

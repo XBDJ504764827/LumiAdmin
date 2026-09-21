@@ -164,6 +164,9 @@ pub(crate) async fn record_plugin_access(
             "unknown"
         });
     let access_method = access_log_service::AccessMethod::from_str(access_method_str);
+    // 空字符串归一为 NULL，避免成功记录里出现空的失败原因
+    let failure_code = crate::services::normalize_optional_text(body.failure_code.as_deref());
+    let reject_reason = crate::services::normalize_optional_text(body.reject_reason.as_deref());
 
     access_log_service::create_access_log(
         &ctx.db,
@@ -177,8 +180,8 @@ pub(crate) async fn record_plugin_access(
         community_name.as_deref(),
         body.allowed,
         &access_method,
-        body.failure_code.as_deref(),
-        body.reject_reason.as_deref(),
+        failure_code.as_deref(),
+        reject_reason.as_deref(),
         body.rating,
         body.steam_level,
     )

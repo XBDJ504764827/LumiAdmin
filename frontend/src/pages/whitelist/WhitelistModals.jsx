@@ -112,11 +112,11 @@ function friendlyReasonMessage(message) {
   });
 }
 
-// 风险原因按来源分组展示
+// 风险原因按来源分组展示（other 排除已知前缀，避免重复渲染）
 const REASON_GROUPS = [
   { key: 'self', title: '当前账号风险', match: (code) => code.startsWith('self_') },
   { key: 'linked', title: '关联账号风险', match: (code) => code.startsWith('linked_') },
-  { key: 'other', title: '其他提示', match: () => true },
+  { key: 'other', title: '其他提示', match: (code) => !code.startsWith('self_') && !code.startsWith('linked_') },
 ];
 
 function severityTone(severity) {

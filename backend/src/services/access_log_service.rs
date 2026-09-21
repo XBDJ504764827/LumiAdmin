@@ -36,6 +36,8 @@ pub enum AccessMethod {
     RiskBlocked,
     /// 快照回退（服务降级）
     SnapshotFallback,
+    /// 未知/无法识别的方式（避免误记为 unrestricted）
+    Unknown,
 }
 
 impl AccessMethod {
@@ -53,6 +55,7 @@ impl AccessMethod {
             AccessMethod::CustomRuleRejected => "custom_rule_rejected",
             AccessMethod::RiskBlocked => "risk_blocked",
             AccessMethod::SnapshotFallback => "snapshot_fallback",
+            AccessMethod::Unknown => "unknown",
         }
     }
 
@@ -70,7 +73,7 @@ impl AccessMethod {
             "custom_rule_rejected" => AccessMethod::CustomRuleRejected,
             "risk_blocked" => AccessMethod::RiskBlocked,
             "snapshot_fallback" => AccessMethod::SnapshotFallback,
-            _ => AccessMethod::Unrestricted,
+            _ => AccessMethod::Unknown,
         }
     }
 }

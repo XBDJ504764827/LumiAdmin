@@ -36,6 +36,8 @@ pub(crate) struct IssueQqCodeBody {
 #[derive(serde::Deserialize)]
 pub(crate) struct QqBindStatusQuery {
     steam_input: String,
+    /// 可选 Steam 登录令牌：出示且与被查询账号一致时才返回绑定者昵称
+    steam_token: Option<String>,
 }
 
 /// QQ 绑定校验（供 LumiBot 私聊收到验证码后调用）
@@ -325,6 +327,7 @@ pub(crate) async fn issue_whitelist_qq_code(
         "ttl_seconds": issued.ttl_seconds,
         "bot_name": issued.bot_name,
         "bot_qq": issued.bot_qq,
+        "enabled": true,
     })))
 }
 
@@ -345,6 +348,21 @@ pub(crate) async fn whitelist_qq_bind_status(
         .resolve(input)
         .await
         .map_err(invalid_request)?;
+
+    // 仅当调用者出示有效的 Steam 登录令牌、且与被查询账号一致时，
+    // 才返回绑定者的 QQ 昵称；否则只返回是否绑定与引导信息，避免任意探测他人隐私。
+    let owns_identity = match query
+        .steam_token
+        .as_deref()
+        .filter(|t| !t.trim().is_empty())
+    {
+        Some(token) => crate::routes::steam_auth::verify_steam_session(&ctx.db, token)
+            .await
+            .map(|verified| verified == identity.steamid64)
+            .unwrap_or(false),
+        None => false,
+    };
+
     let binding = whitelist_qq_service::find_binding_by_steamid64(&ctx.db, &identity.steamid64)
         .await
         .map_err(invalid_request)?;
@@ -355,8 +373,17 @@ pub(crate) async fn whitelist_qq_bind_status(
     Ok(Json(serde_json::json!({
         "steamid64": identity.steamid64,
         "bound": binding.is_some(),
-        "qq_username": binding.as_ref().and_then(|b| b.qq_username.clone()),
-        "verified_at": binding.as_ref().map(|b| b.verified_at),
+        "enabled": config.enabled,
+        "qq_username": if owns_identity {
+            binding.as_ref().and_then(|b| b.qq_username.clone())
+        } else {
+            None
+        },
+        "verified_at": if owns_identity {
+            binding.as_ref().map(|b| b.verified_at)
+        } else {
+            None
+        },
         "bot_name": config.bot_name,
         "bot_qq": config.bot_qq,
     })))
@@ -1001,27 +1028,36 @@ pub(crate) async fn qq_pending_all(
 
     let whitelist_result = whitelist_service::list_whitelist(&ctx.db, &query).await;
 
-    // 格式化白名单申请
-    let whitelist_items: Vec<serde_json::Value> = whitelist_result
-        .map(|r| r.items)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|item| {
-            serde_json::json!({
-                "type": "whitelist",
-                "steamid": item.steamid,
-                "nickname": item.nickname,
-                "steam_persona_name": item.steam_persona_name,
-                "applied_at": item.applied_at,
-            })
-        })
-        .collect();
+    // 格式化白名单申请；DB 失败时记录错误而非静默返回空
+    let (whitelist_items, whitelist_total): (Vec<serde_json::Value>, i64) = match whitelist_result {
+        Ok(result) => {
+            let total = result.total;
+            let items = result
+                .items
+                .into_iter()
+                .map(|item| {
+                    serde_json::json!({
+                        "type": "whitelist",
+                        "steamid": item.steamid,
+                        "nickname": item.nickname,
+                        "steam_persona_name": item.steam_persona_name,
+                        "applied_at": item.applied_at,
+                    })
+                })
+                .collect();
+            (items, total)
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "QQ 集成：获取待审核白名单失败");
+            (Vec::new(), 0)
+        }
+    };
 
     Ok(Json(serde_json::json!({
         "whitelist": whitelist_items,
         "counts": {
-            "whitelist": whitelist_items.len(),
-            "total": whitelist_items.len(),
+            "whitelist": whitelist_total,
+            "total": whitelist_total,
         }
     })))
 }

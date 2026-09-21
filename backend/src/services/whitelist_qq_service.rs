@@ -174,14 +174,22 @@ pub async fn issue_code(
         );
     }
 
-    // 作废该 Steam 之前未消费的验证码
+    // 作废旧码 + 写入新码放在同一事务并加 Steam 级 advisory lock，
+    // 与「单活跃码」唯一约束配合，避免并发签发留下多条活跃码或唯一冲突。
+    let mut tx = db.pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("qq-code-steam:{steamid64}"))
+        .execute(&mut *tx)
+        .await
+        .context("获取验证码签发锁失败")?;
+
     sqlx::query(
         r#"UPDATE whitelist_qq_verify_codes
            SET consumed_at = now()
            WHERE steamid64 = $1 AND consumed_at IS NULL"#,
     )
     .bind(steamid64)
-    .execute(&db.pool)
+    .execute(&mut *tx)
     .await
     .context("作废旧验证码失败")?;
 
@@ -201,10 +209,11 @@ pub async fn issue_code(
         .bind(&code)
         .bind(expires_at)
         .bind(created_ip)
-        .execute(&db.pool)
+        .execute(&mut *tx)
         .await;
         match result {
             Ok(_) => {
+                tx.commit().await?;
                 return Ok(IssuedCode {
                     code,
                     expires_at,
@@ -215,15 +224,20 @@ pub async fn issue_code(
             }
             Err(e) => {
                 if let Some(sqlx_err) = e.as_database_error() {
-                    if sqlx_err.is_unique_violation() {
+                    // 仅验证码本身重复时重试；活跃码唯一约束冲突不应发生（已持锁作废旧码）
+                    if sqlx_err.is_unique_violation()
+                        && !sqlx_err.constraint().unwrap_or("").contains("one_active")
+                    {
                         last_err = Some(anyhow::anyhow!("验证码冲突，请重试"));
                         continue;
                     }
                 }
+                tx.rollback().await.ok();
                 return Err(e).context("写入验证码失败");
             }
         }
     }
+    tx.rollback().await.ok();
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("生成验证码失败，请重试")))
 }
 
@@ -307,6 +321,41 @@ pub async fn verify_and_bind(
 
     let mut tx = db.pool.begin().await?;
 
+    // 并发安全：对 Steam 与 QQ 各取事务级 advisory lock，
+    // 串行化「同一 Steam 的重复绑定」与「同一 QQ 的上限校验」，
+    // 避免 TOCTOU 突破 max_bindings 或静默覆盖已有绑定。
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("qq-bind-steam:{steamid64}"))
+        .execute(&mut *tx)
+        .await
+        .context("获取 Steam 绑定锁失败")?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("qq-bind-openid:{qq_openid}"))
+        .execute(&mut *tx)
+        .await
+        .context("获取 QQ 绑定锁失败")?;
+
+    // 拿到锁后复查：若已被并发绑定为其他 QQ，则拒绝覆盖
+    let locked_binding: Option<(String,)> =
+        sqlx::query_as("SELECT qq_openid FROM steam_qq_bindings WHERE steamid64 = $1")
+            .bind(&steamid64)
+            .fetch_optional(&mut *tx)
+            .await
+            .context("复查 Steam 绑定失败")?;
+    if let Some((existing_openid,)) = locked_binding {
+        tx.rollback().await.ok();
+        if existing_openid == qq_openid {
+            mark_code_consumed(db, code_id, qq_openid).await?;
+            invalidate_codes_for_steam(db, &steamid64).await?;
+            return Ok(BindOutcome::Bound {
+                steamid64,
+                qq_openid: qq_openid.to_string(),
+                already: true,
+            });
+        }
+        anyhow::bail!("该 Steam 账号已绑定其他 QQ，如需换绑请联系管理员解绑");
+    }
+
     // 原子消费验证码
     let consumed = sqlx::query(
         r#"UPDATE whitelist_qq_verify_codes
@@ -324,7 +373,7 @@ pub async fn verify_and_bind(
         return Ok(BindOutcome::Consumed);
     }
 
-    // 校验该 QQ 绑定数量上限
+    // 校验该 QQ 绑定数量上限（持锁后统计，避免并发突破）
     let bound_count: i64 =
         sqlx::query_scalar(r#"SELECT COUNT(*) FROM steam_qq_bindings WHERE qq_openid = $1"#)
             .bind(qq_openid)
@@ -341,13 +390,7 @@ pub async fn verify_and_bind(
     sqlx::query(
         r#"INSERT INTO steam_qq_bindings
              (id, steamid64, qq_openid, qq_group_id, qq_username, qq_scene)
-           VALUES ($1, $2, $3, NULL, $4, 'c2c')
-           ON CONFLICT (steamid64) DO UPDATE
-           SET qq_openid = EXCLUDED.qq_openid,
-               qq_username = EXCLUDED.qq_username,
-               qq_scene = 'c2c',
-               verified_at = now(),
-               updated_at = now()"#,
+           VALUES ($1, $2, $3, NULL, $4, 'c2c')"#,
     )
     .bind(Uuid::new_v4())
     .bind(&steamid64)
@@ -715,6 +758,42 @@ mod tests {
                 .await
                 .unwrap();
             assert!(matches!(outcome, BindOutcome::LimitReached { max: 2 }));
+            Ok(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_binds_respect_qq_limit() {
+        with_test_db(async |db| {
+            // 上限 1，两个不同 Steam 并发用同一 QQ 绑定：只有一个能成功
+            update_config(&db, true, "CNGOKZBOT", "3889010779", 1, 300, "tester")
+                .await
+                .unwrap();
+
+            let issued_a = issue_code(&db, "76561198000000051", None).await.unwrap();
+            let issued_b = issue_code(&db, "76561198000000052", None).await.unwrap();
+
+            let (out_a, out_b) = tokio::join!(
+                verify_and_bind(&db, &issued_a.code, "qq-concurrent", None),
+                verify_and_bind(&db, &issued_b.code, "qq-concurrent", None),
+            );
+            let out_a = out_a.unwrap();
+            let out_b = out_b.unwrap();
+
+            let bound_count = [&out_a, &out_b]
+                .iter()
+                .filter(|outcome| matches!(outcome, BindOutcome::Bound { .. }))
+                .count();
+            assert_eq!(bound_count, 1, "并发绑定同一 QQ 只应成功一次");
+            let limit_count = [&out_a, &out_b]
+                .iter()
+                .filter(|outcome| matches!(outcome, BindOutcome::LimitReached { .. }))
+                .count();
+            assert_eq!(limit_count, 1, "另一个应为超过上限");
+
+            let total: i64 = count_bindings_for_qq(&db, "qq-concurrent").await.unwrap();
+            assert_eq!(total, 1);
             Ok(())
         })
         .await;

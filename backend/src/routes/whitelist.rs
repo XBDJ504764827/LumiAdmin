@@ -528,7 +528,12 @@ pub(crate) async fn get_qq_binding(
     headers: HeaderMap,
     Path(steamid64): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let _actor = current_operator(&ctx, &headers).await?;
+    let actor = current_operator(&ctx, &headers).await?;
+    // 聊天记录含玩家私聊内容，仅 developer/admin 可读；其余审核角色只能看到绑定摘要。
+    let can_view_chat = permission_service::can_manage_whitelist_manually(&actor);
+    if !permission_service::can_review_whitelist(&actor) {
+        return Err(AppError::forbidden());
+    }
     let binding = whitelist_qq_service::find_binding_by_steamid64(&ctx.db, &steamid64)
         .await
         .map_err(AppError::internal)?;
@@ -548,9 +553,13 @@ pub(crate) async fn get_qq_binding(
             .collect::<Vec<_>>(),
         None => Vec::new(),
     };
-    let chat_messages = whitelist_qq_service::list_chat_messages(&ctx.db, &steamid64, 50)
-        .await
-        .map_err(AppError::internal)?;
+    let chat_messages = if can_view_chat {
+        whitelist_qq_service::list_chat_messages(&ctx.db, &steamid64, 50)
+            .await
+            .map_err(AppError::internal)?
+    } else {
+        Vec::new()
+    };
     Ok(Json(serde_json::json!({
         "binding": binding,
         "qq_binding_count": qq_count,
@@ -629,7 +638,11 @@ pub(crate) async fn list_qq_chat(
     headers: HeaderMap,
     Path(steamid64): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let _actor = current_operator(&ctx, &headers).await?;
+    let actor = current_operator(&ctx, &headers).await?;
+    // 玩家私聊记录属敏感信息，仅 developer/admin 可读
+    if !permission_service::can_manage_whitelist_manually(&actor) {
+        return Err(AppError::forbidden());
+    }
     let messages = whitelist_qq_service::list_chat_messages(&ctx.db, &steamid64, 100)
         .await
         .map_err(AppError::internal)?;

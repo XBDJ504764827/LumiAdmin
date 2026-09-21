@@ -64,9 +64,12 @@ export function PublicApplyPage() {
   const [submitting, setSubmitting] = useState(false);
   // 是否已成功提交（提交后展示独立成功页，三个步骤全部打勾）
   const [submitted, setSubmitted] = useState(false);
+  // QQ 绑定是否启用（关闭时跳过第二步，避免流程卡死）
+  const [qqBindingEnabled, setQqBindingEnabled] = useState(true);
 
   // 记录当前步骤：0 已提交完成，1 Steam 验证，2 QQ 绑定，3 填写理由
-  const step = submitted ? 0 : (!confirmedSteamId ? 1 : (!qqBound ? 2 : 3));
+  // QQ 绑定功能关闭时不需要第二步。
+  const step = submitted ? 0 : (!confirmedSteamId ? 1 : (qqBindingEnabled && !qqBound ? 2 : 3));
 
   // ——————————————————————————————————————————————————————————————
   // Steam 回调：获取已验证会话
@@ -161,7 +164,9 @@ export function PublicApplyPage() {
   const refreshBindStatus = useCallback(async () => {
     if (!confirmedSteamId) return null;
     try {
-      const data = await publicApi.qqBindStatus(confirmedSteamId);
+      const data = await publicApi.qqBindStatus(confirmedSteamId, steamVerified ? steamToken : undefined);
+      // 后端回传 QQ 绑定是否启用：关闭时跳过第二步，避免流程卡死
+      if (typeof data.enabled === 'boolean') setQqBindingEnabled(data.enabled);
       if (data.bound) {
         setQqBound(true);
         setQqUserName(data.qq_username || '');
@@ -174,7 +179,7 @@ export function PublicApplyPage() {
       // 静默失败，下一轮再试
       return null;
     }
-  }, [confirmedSteamId]);
+  }, [confirmedSteamId, steamVerified, steamToken]);
 
   const issueCode = useCallback(async () => {
     if (!confirmedSteamId) return;
@@ -202,7 +207,8 @@ export function PublicApplyPage() {
     if (autoIssueRef.current) return;
     autoIssueRef.current = true;
     refreshBindStatus().then((data) => {
-      if (!data?.bound) issueCode();
+      // 功能关闭（enabled=false）时不生成验证码，refreshBindStatus 已令 step 跳到第三步
+      if (data && !data.bound && data.enabled !== false) issueCode();
     });
   }, [step, qqBound, refreshBindStatus, issueCode]);
 
@@ -278,6 +284,13 @@ export function PublicApplyPage() {
     setAuthError('');
     setQqError('');
     setSubmitted(false);
+    // 重置自动生成验证码标记，保证第二次申请能自动进入绑定流程
+    autoIssueRef.current = false;
+    qqBoundRef.current = false;
+    setCodeRemaining(0);
+    setCopied(false);
+    setQqLoading(false);
+    setSubmitting(false);
   }
 
   // ——————————————————————————————————————————————————————————————

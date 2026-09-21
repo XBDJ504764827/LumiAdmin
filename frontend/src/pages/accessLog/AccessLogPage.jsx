@@ -23,6 +23,7 @@ const ACCESS_METHOD_MAP = {
   cs_prime_rejected: { label: '非CS优先账户', kind: 'danger' },
   custom_rule_rejected: { label: '规则拒绝', kind: 'danger' },
   risk_blocked: { label: '中高风险拦截', kind: 'danger' },
+  unknown: { label: '未知', kind: 'default' },
 };
 
 const FAILURE_CODE_MAP = {
@@ -38,6 +39,8 @@ const FAILURE_CODE_MAP = {
   profile_fetch_failed: '无法获取玩家资料',
   prime_verification_failed: '无法验证 CS 优先账户',
   snapshot_unavailable: '服务降级',
+  rules_unavailable: '本地规则不可用',
+  no_steamid: '无法获取 SteamID',
 };
 
 function methodLabel(method) {

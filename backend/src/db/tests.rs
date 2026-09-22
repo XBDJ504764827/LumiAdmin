@@ -1358,7 +1358,6 @@ async fn migrate_adds_server_access_control_fields_and_cache_table() {
                      AND table_name = 'servers'
                       AND column_name IN (
                          'access_restriction_enabled',
-                         'cs_prime_enabled',
                          'min_rating',
                          'min_steam_level',
                          'risk_block_enabled',
@@ -1373,7 +1372,6 @@ async fn migrate_adds_server_access_control_fields_and_cache_table() {
                 server_columns,
                 vec![
                     "access_restriction_enabled".to_string(),
-                    "cs_prime_enabled".to_string(),
                     "min_rating".to_string(),
                     "min_steam_level".to_string(),
                     "risk_block_enabled".to_string(),

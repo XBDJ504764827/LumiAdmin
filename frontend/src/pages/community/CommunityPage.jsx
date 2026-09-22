@@ -683,13 +683,6 @@ export function CommunityPage() {
               </div>
             </div>
           ) : null}
-          <div className="toggle-row">
-            <div>
-              <div className="toggle-label">CS优先账户</div>
-              <div className="toggle-desc">开启后，Steam 账号为 CS 优先账户（Prime）的玩家可进入</div>
-            </div>
-            <ToggleSwitch checked={communityAccessForm.cs_prime_enabled} onChange={(v) => setCommunityAccessForm((prev) => ({ ...prev, cs_prime_enabled: v }))} />
-          </div>
         </FormSectionCard>
       </Modal>
     );
@@ -852,7 +845,7 @@ export function CommunityPage() {
           <div className="toggle-row">
             <div>
               <div className="toggle-label">自定义设置</div>
-              <div className="toggle-desc">开启后使用此服务器独立的限制值，关闭则继承社区统一设置{currentGroup ? `（Rating ≥ ${currentGroup.min_rating}，Steam 等级 ≥ ${currentGroup.min_steam_level}${currentGroup.cs_prime_enabled ? '，CS优先' : ''}）` : ''}</div>
+              <div className="toggle-desc">开启后使用此服务器独立的限制值，关闭则继承社区统一设置{currentGroup ? `（Rating ≥ ${currentGroup.min_rating}，Steam 等级 ≥ ${currentGroup.min_steam_level}）` : ''}</div>
             </div>
             <ToggleSwitch checked={serverForm.use_custom_access} onChange={(v) => handleServerFieldChange('use_custom_access', v)} />
           </div>
@@ -886,13 +879,6 @@ export function CommunityPage() {
                   <div className="toggle-desc">白名单玩家可进入此服务器</div>
                 </div>
                 <ToggleSwitch checked={serverForm.whitelist_mode_enabled} onChange={(v) => handleServerFieldChange('whitelist_mode_enabled', v)} />
-              </div>
-              <div className="toggle-row">
-                <div>
-                  <div className="toggle-label">CS优先账户</div>
-                  <div className="toggle-desc">CS 优先账户（Prime）玩家可进入</div>
-                </div>
-                <ToggleSwitch checked={serverForm.cs_prime_enabled} onChange={(v) => handleServerFieldChange('cs_prime_enabled', v)} />
               </div>
             </>
           ) : null}
@@ -1121,13 +1107,12 @@ export function CommunityPage() {
               <div className="card-title" style={{ fontSize: 16 }}>{group.name}</div>
               <div className="card-sub">
                 包含 {group.servers.length} 个游戏服务器节点
-                {(group.min_rating > 0 || group.min_steam_level > 0 || group.whitelist_mode_enabled || group.cs_prime_enabled) ? (
+                {(group.min_rating > 0 || group.min_steam_level > 0 || group.whitelist_mode_enabled) ? (
                   <span style={{ marginLeft: 8, opacity: 0.7 }}>
                     统一限制：
                     {[
                       group.whitelist_mode_enabled ? '白名单' : null,
                       (group.min_rating > 0 || group.min_steam_level > 0) ? `Rating ≥ ${group.min_rating}，Steam 等级 ≥ ${group.min_steam_level}` : null,
-                      group.cs_prime_enabled ? 'CS优先账户' : null,
                     ].filter(Boolean).join(' / ')}
                   </span>
                 ) : null}

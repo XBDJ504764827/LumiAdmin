@@ -22,6 +22,10 @@ pub struct AccessSnapshot {
     pub bans: Vec<SnapshotBan>,
     pub whitelist: Vec<SnapshotWhitelistEntry>,
     pub access_profiles: Vec<SnapshotAccessProfile>,
+    /// 与「当前有效封禁账号」关联过的 IP 集合，用于本地中高风险拦截。
+    /// 仅存 IP 字符串，不含账号信息，规模可控（去重后通常几百条）。
+    #[serde(default)]
+    pub risk_ips: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,12 +39,11 @@ pub struct SnapshotServer {
     pub min_rating: i32,
     pub min_steam_level: i32,
     pub whitelist_mode_enabled: bool,
-    pub cs_prime_enabled: bool,
+    pub risk_block_enabled: bool,
     pub use_custom_access: bool,
     pub community_whitelist_mode_enabled: bool,
     pub community_min_rating: i32,
     pub community_min_steam_level: i32,
-    pub community_cs_prime_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,7 +75,6 @@ pub struct SnapshotAccessInput {
     pub port: i32,
     pub steam_id64: String,
     pub ip_address: Option<String>,
-    pub is_cs_prime: Option<bool>,
     pub now: DateTime<Utc>,
 }
 
@@ -94,11 +96,12 @@ pub async fn refresh_snapshot(
     store: &SnapshotStore,
 ) -> anyhow::Result<AccessSnapshot> {
     let now = Utc::now();
-    let (servers, bans, whitelist, access_profiles) = tokio::try_join!(
+    let (servers, bans, whitelist, access_profiles, risk_ips) = tokio::try_join!(
         load_snapshot_servers(db),
         load_snapshot_bans(db),
         load_snapshot_whitelist(db),
         load_snapshot_access_profiles(db),
+        load_snapshot_risk_ips(db),
     )?;
     let snapshot = with_version(AccessSnapshot {
         version: String::new(),
@@ -108,6 +111,7 @@ pub async fn refresh_snapshot(
         bans,
         whitelist,
         access_profiles,
+        risk_ips,
     });
     store.write_snapshot(&snapshot).await?;
     info!(version = %snapshot.version, "access snapshot refreshed");
@@ -135,10 +139,9 @@ pub async fn shutdown_flush(db: &Database, store: &SnapshotStore) {
 async fn load_snapshot_servers(db: &Database) -> anyhow::Result<Vec<SnapshotServer>> {
     sqlx::query_as::<_, SnapshotServerRow>(
         r#"SELECT s.id, s.community_id, s.name, s.port, s.report_token, s.access_restriction_enabled,
-                  s.min_rating, s.min_steam_level, s.whitelist_mode_enabled, s.cs_prime_enabled,
+                  s.min_rating, s.min_steam_level, s.whitelist_mode_enabled, s.risk_block_enabled,
                   s.use_custom_access, c.whitelist_mode_enabled AS community_whitelist_mode_enabled,
-                  c.min_rating AS community_min_rating, c.min_steam_level AS community_min_steam_level,
-                  c.cs_prime_enabled AS community_cs_prime_enabled
+                  c.min_rating AS community_min_rating, c.min_steam_level AS community_min_steam_level
            FROM servers s
            JOIN communities c ON c.id = s.community_id
            WHERE s.report_token IS NOT NULL AND s.report_token <> ''"#,
@@ -189,6 +192,45 @@ async fn load_snapshot_access_profiles(
     .context("加载玩家访问资料快照失败")
 }
 
+/// 收集与「当前有效封禁账号」关联过的 IP 集合，供本地中高风险拦截使用。
+///
+/// 判定口径与后端风险档案的同 IP 关联一致：只要某 IP 曾被一个当前有效封禁的
+/// 账号使用过（来自进服记录 / 在线玩家 / 封禁记录），该 IP 即进入集合。
+/// 为控制快照体积，仅取最近使用的若干条并去重。
+async fn load_snapshot_risk_ips(db: &Database) -> anyhow::Result<Vec<String>> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        r#"WITH active_banned AS (
+             SELECT DISTINCT steam_id AS steam FROM ban_records
+             WHERE status = 'active' AND (expires_at IS NULL OR expires_at > now())
+           ),
+           banned_ips AS (
+             SELECT ip_address AS ip FROM ban_records
+             WHERE status = 'active' AND (expires_at IS NULL OR expires_at > now())
+               AND ip_address IS NOT NULL AND btrim(ip_address) <> ''
+           ),
+           linked_ips AS (
+             SELECT ip_address AS ip FROM player_access_logs
+             WHERE steam_id64 IN (SELECT steam FROM active_banned)
+               AND ip_address IS NOT NULL AND btrim(ip_address) <> ''
+             UNION
+             SELECT ip AS ip FROM server_online_players
+             WHERE steam_id64 IN (SELECT steam FROM active_banned)
+               AND ip IS NOT NULL AND btrim(ip) <> ''
+           )
+           SELECT DISTINCT ip FROM (
+             SELECT ip FROM linked_ips
+             UNION
+             SELECT ip FROM banned_ips
+           ) AS all_ips
+           WHERE ip ~ '^[0-9a-fA-F:.]+$'
+           LIMIT 5000"#,
+    )
+    .fetch_all(&db.pool)
+    .await
+    .context("加载中高风险关联 IP 快照失败")?;
+    Ok(rows.into_iter().map(|(ip,)| ip).collect())
+}
+
 #[derive(Debug, sqlx::FromRow)]
 struct SnapshotServerRow {
     id: Uuid,
@@ -200,12 +242,11 @@ struct SnapshotServerRow {
     min_rating: i32,
     min_steam_level: i32,
     whitelist_mode_enabled: bool,
-    cs_prime_enabled: bool,
+    risk_block_enabled: bool,
     use_custom_access: bool,
     community_whitelist_mode_enabled: bool,
     community_min_rating: i32,
     community_min_steam_level: i32,
-    community_cs_prime_enabled: bool,
 }
 
 impl From<SnapshotServerRow> for SnapshotServer {
@@ -220,12 +261,11 @@ impl From<SnapshotServerRow> for SnapshotServer {
             min_rating: row.min_rating,
             min_steam_level: row.min_steam_level,
             whitelist_mode_enabled: row.whitelist_mode_enabled,
-            cs_prime_enabled: row.cs_prime_enabled,
+            risk_block_enabled: row.risk_block_enabled,
             use_custom_access: row.use_custom_access,
             community_whitelist_mode_enabled: row.community_whitelist_mode_enabled,
             community_min_rating: row.community_min_rating,
             community_min_steam_level: row.community_min_steam_level,
-            community_cs_prime_enabled: row.community_cs_prime_enabled,
         }
     }
 }
@@ -399,6 +439,9 @@ pub struct PluginAccessSnapshot {
     pub bans: Vec<SnapshotBan>,
     pub whitelist: Vec<SnapshotWhitelistEntry>,
     pub access_profiles: Vec<SnapshotAccessProfile>,
+    /// 中高风险拦截用：与「当前有效封禁账号」关联过的 IP 集合。
+    /// 玩家未持白名单且当前 IP 命中此集合时，视为同 IP 关联中高风险，需拦截。
+    pub risk_ips: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -408,7 +451,8 @@ pub struct PluginSnapshotServer {
     pub min_rating: i32,
     pub min_steam_level: i32,
     pub whitelist_mode_enabled: bool,
-    pub cs_prime_enabled: bool,
+    /// 中高风险账号拦截开关（封禁类风险，需白名单豁免）
+    pub risk_block_enabled: bool,
 }
 
 pub fn snapshot_for_plugin(
@@ -432,7 +476,6 @@ pub fn snapshot_for_plugin(
     let eff_rating = effective_min_rating(server);
     let eff_steam_level = effective_min_steam_level(server);
     let eff_whitelist = effective_whitelist_mode_enabled(server);
-    let eff_cs_prime = effective_cs_prime_enabled(server);
 
     Ok(PluginAccessSnapshot {
         version: snapshot.version.clone(),
@@ -446,11 +489,12 @@ pub fn snapshot_for_plugin(
             min_rating: eff_rating,
             min_steam_level: eff_steam_level,
             whitelist_mode_enabled: eff_whitelist,
-            cs_prime_enabled: eff_cs_prime,
+            risk_block_enabled: server.risk_block_enabled,
         },
         bans: snapshot.bans.clone(),
         whitelist: snapshot.whitelist.clone(),
         access_profiles: snapshot.access_profiles.clone(),
+        risk_ips: snapshot.risk_ips.clone(),
     })
 }
 
@@ -535,21 +579,25 @@ pub fn evaluate_access_snapshot(
 
     let has_restriction = effective_restriction_enabled(server);
     let has_whitelist = effective_whitelist_mode_enabled(server);
-    let has_cs_prime = effective_cs_prime_enabled(server);
-
-    // 都没开 → 无限制放行
-    if !has_whitelist && !has_restriction && !has_cs_prime {
-        return allow("允许进入服务器。");
-    }
-
     let whitelist_approved = snapshot
         .whitelist
         .iter()
         .any(|entry| entry.steam_id64 == input.steam_id64);
 
-    // 开启的模式之间为 OR：满足任意一种即可进入
-    if has_cs_prime && input.is_cs_prime == Some(true) {
-        return allow("已确认 CS 优先账户，允许进入服务器。");
+    // 中高风险拦截：未持白名单且当前 IP 与有效封禁账号关联 → 拦截
+    if server.risk_block_enabled
+        && !(has_whitelist && whitelist_approved)
+        && input
+            .ip_address
+            .as_deref()
+            .is_some_and(|ip| snapshot.risk_ips.iter().any(|risk_ip| risk_ip == ip))
+    {
+        return reject("检测到你的网络环境存在风险，暂时无法进入该服务器。");
+    }
+
+    // 都没开 → 无限制放行
+    if !has_whitelist && !has_restriction {
+        return allow("允许进入服务器。");
     }
 
     if has_restriction {
@@ -570,12 +618,8 @@ pub fn evaluate_access_snapshot(
         return allow("已通过白名单审核，允许进入服务器。");
     }
 
-    if has_whitelist && !has_restriction && !has_cs_prime {
+    if has_whitelist && !has_restriction {
         return reject("你的白名单状态无法确认，请稍后再试。");
-    }
-
-    if has_cs_prime && !has_whitelist && !has_restriction {
-        return reject("当前服务器要求 CS 优先账户才能进入。");
     }
 
     reject("你的资料未满足服务器进入要求。")
@@ -613,14 +657,6 @@ fn effective_whitelist_mode_enabled(server: &SnapshotServer) -> bool {
     }
 }
 
-fn effective_cs_prime_enabled(server: &SnapshotServer) -> bool {
-    if server.use_custom_access {
-        server.cs_prime_enabled
-    } else {
-        server.community_cs_prime_enabled
-    }
-}
-
 fn allow(message: &str) -> SnapshotAccessDecision {
     SnapshotAccessDecision {
         allowed: true,
@@ -654,18 +690,18 @@ mod tests {
                 min_rating: 0,
                 min_steam_level: 0,
                 whitelist_mode_enabled: true,
-                cs_prime_enabled: false,
+                risk_block_enabled: false,
                 use_custom_access: true,
                 community_whitelist_mode_enabled: false,
                 community_min_rating: 0,
                 community_min_steam_level: 0,
-                community_cs_prime_enabled: false,
             }],
             bans: Vec::new(),
             whitelist: vec![SnapshotWhitelistEntry {
                 steam_id64: "76561198000000001".to_string(),
             }],
             access_profiles: Vec::new(),
+            risk_ips: Vec::new(),
         }
     }
 
@@ -675,7 +711,6 @@ mod tests {
             port: 27015,
             steam_id64: steam_id64.to_string(),
             ip_address: Some("203.0.113.10".to_string()),
-            is_cs_prime: None,
             now,
         }
     }
@@ -726,6 +761,45 @@ mod tests {
 
         assert!(!decision.allowed);
         assert_eq!(decision.message, "你已被封禁：违规");
+    }
+
+    #[test]
+    fn snapshot_risk_block_rejects_linked_ip_without_whitelist() {
+        let now = Utc::now();
+        let mut snapshot = base_snapshot(now);
+        snapshot.risk_ips = vec!["203.0.113.10".to_string()];
+        snapshot.servers[0].risk_block_enabled = true;
+        let decision = evaluate_access_snapshot(&snapshot, &input(now, "76561198000000002"));
+
+        assert!(!decision.allowed);
+        assert_eq!(
+            decision.message,
+            "检测到你的网络环境存在风险，暂时无法进入该服务器。"
+        );
+    }
+
+    #[test]
+    fn snapshot_risk_block_allows_whitelisted_player() {
+        let now = Utc::now();
+        let mut snapshot = base_snapshot(now);
+        snapshot.risk_ips = vec!["203.0.113.10".to_string()];
+        snapshot.servers[0].risk_block_enabled = true;
+        let decision = evaluate_access_snapshot(&snapshot, &input(now, "76561198000000001"));
+
+        assert!(decision.allowed);
+        assert_eq!(decision.message, "已通过白名单审核，允许进入服务器。");
+    }
+
+    #[test]
+    fn snapshot_risk_block_inactive_when_disabled() {
+        let now = Utc::now();
+        let mut snapshot = base_snapshot(now);
+        snapshot.risk_ips = vec!["203.0.113.10".to_string()];
+        snapshot.servers[0].risk_block_enabled = false;
+        let decision = evaluate_access_snapshot(&snapshot, &input(now, "76561198000000002"));
+
+        assert!(!decision.allowed);
+        assert_eq!(decision.message, "你的白名单状态无法确认，请稍后再试。");
     }
 
     #[tokio::test]
@@ -833,12 +907,11 @@ mod tests {
             min_rating: 0,
             min_steam_level: 0,
             whitelist_mode_enabled: false,
-            cs_prime_enabled: false,
+            risk_block_enabled: false,
             use_custom_access: true,
             community_whitelist_mode_enabled: false,
             community_min_rating: 0,
             community_min_steam_level: 0,
-            community_cs_prime_enabled: false,
         });
 
         let plugin_snapshot = snapshot_for_plugin(&snapshot, "token", 27015, now).unwrap();

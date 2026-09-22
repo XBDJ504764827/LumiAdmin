@@ -19,14 +19,12 @@ pub struct CachedServerConfig {
     pub min_rating: i32,
     pub min_steam_level: i32,
     pub whitelist_mode_enabled: bool,
-    pub cs_prime_enabled: bool,
     /// 中高风险（封禁类风险信号）账号拦截：开启后需持有白名单才可进入
     pub risk_block_enabled: bool,
     pub use_custom_access: bool,
     pub community_whitelist_mode_enabled: bool,
     pub community_min_rating: i32,
     pub community_min_steam_level: i32,
-    pub community_cs_prime_enabled: bool,
 }
 
 impl CachedServerConfig {
@@ -61,14 +59,6 @@ impl CachedServerConfig {
             self.community_whitelist_mode_enabled
         }
     }
-
-    pub fn effective_cs_prime_enabled(&self) -> bool {
-        if self.use_custom_access {
-            self.cs_prime_enabled
-        } else {
-            self.community_cs_prime_enabled
-        }
-    }
 }
 
 type ServerConfigRow = (
@@ -84,10 +74,8 @@ type ServerConfigRow = (
     bool,
     bool,
     bool,
-    bool,
     i32,
     i32,
-    bool,
 );
 
 fn map_server_config_row(
@@ -101,13 +89,11 @@ fn map_server_config_row(
         min_rating,
         min_steam_level,
         whitelist_mode_enabled,
-        cs_prime_enabled,
         risk_block_enabled,
         use_custom_access,
         community_whitelist_mode_enabled,
         community_min_rating,
         community_min_level,
-        community_cs_prime_enabled,
     ): ServerConfigRow,
 ) -> CachedServerConfig {
     CachedServerConfig {
@@ -120,20 +106,18 @@ fn map_server_config_row(
         min_rating,
         min_steam_level,
         whitelist_mode_enabled,
-        cs_prime_enabled,
         risk_block_enabled,
         use_custom_access,
         community_whitelist_mode_enabled,
         community_min_rating,
         community_min_steam_level: community_min_level,
-        community_cs_prime_enabled,
     }
 }
 
 const SERVER_CONFIG_SELECT: &str = r#"SELECT s.id, s.community_id, s.name, s.port, s.report_token,
               s.access_restriction_enabled, s.min_rating, s.min_steam_level, s.whitelist_mode_enabled,
-              s.cs_prime_enabled, s.risk_block_enabled, s.use_custom_access, c.whitelist_mode_enabled, c.min_rating,
-              c.min_steam_level, c.cs_prime_enabled
+              s.risk_block_enabled, s.use_custom_access, c.whitelist_mode_enabled, c.min_rating,
+              c.min_steam_level
        FROM servers s
        JOIN communities c ON c.id = s.community_id"#;
 

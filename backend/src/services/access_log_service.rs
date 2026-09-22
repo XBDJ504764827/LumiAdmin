@@ -17,8 +17,6 @@ pub enum AccessMethod {
     Whitelist,
     /// Rating/Steam 等级限制通过
     Restriction,
-    /// CS 优先账户通过
-    CsPrime,
     /// 自定义权限规则通过
     CustomRule,
     // ---- 进服失败 ----
@@ -28,8 +26,6 @@ pub enum AccessMethod {
     WhitelistRejected,
     /// Rating/Steam 等级不足
     RestrictionRejected,
-    /// 非 CS 优先账户
-    CsPrimeRejected,
     /// 自定义权限规则拒绝
     CustomRuleRejected,
     /// 中高风险账号拦截（无白名单）
@@ -46,12 +42,10 @@ impl AccessMethod {
             AccessMethod::Unrestricted => "unrestricted",
             AccessMethod::Whitelist => "whitelist",
             AccessMethod::Restriction => "restriction",
-            AccessMethod::CsPrime => "cs_prime",
             AccessMethod::CustomRule => "custom_rule",
             AccessMethod::Banned => "banned",
             AccessMethod::WhitelistRejected => "whitelist_rejected",
             AccessMethod::RestrictionRejected => "restriction_rejected",
-            AccessMethod::CsPrimeRejected => "cs_prime_rejected",
             AccessMethod::CustomRuleRejected => "custom_rule_rejected",
             AccessMethod::RiskBlocked => "risk_blocked",
             AccessMethod::SnapshotFallback => "snapshot_fallback",
@@ -64,12 +58,10 @@ impl AccessMethod {
             "unrestricted" => AccessMethod::Unrestricted,
             "whitelist" => AccessMethod::Whitelist,
             "restriction" => AccessMethod::Restriction,
-            "cs_prime" => AccessMethod::CsPrime,
             "custom_rule" => AccessMethod::CustomRule,
             "banned" => AccessMethod::Banned,
             "whitelist_rejected" => AccessMethod::WhitelistRejected,
             "restriction_rejected" => AccessMethod::RestrictionRejected,
-            "cs_prime_rejected" => AccessMethod::CsPrimeRejected,
             "custom_rule_rejected" => AccessMethod::CustomRuleRejected,
             "risk_blocked" => AccessMethod::RiskBlocked,
             "snapshot_fallback" => AccessMethod::SnapshotFallback,

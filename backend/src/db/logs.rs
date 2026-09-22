@@ -140,9 +140,10 @@ impl Database {
             r#"ALTER TABLE communities ADD COLUMN IF NOT EXISTS min_rating INTEGER NOT NULL DEFAULT 0"#,
             r#"ALTER TABLE communities ADD COLUMN IF NOT EXISTS min_steam_level INTEGER NOT NULL DEFAULT 0"#,
             r#"ALTER TABLE communities ADD COLUMN IF NOT EXISTS whitelist_mode_enabled BOOLEAN NOT NULL DEFAULT false"#,
+            // 历史遗留列：CS 优先账户已下线，仅保留以兼容旧 SQL 迁移；最终由 20260924000000 删除
             r#"ALTER TABLE communities ADD COLUMN IF NOT EXISTS cs_prime_enabled BOOLEAN NOT NULL DEFAULT false"#,
-            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS use_custom_access BOOLEAN NOT NULL DEFAULT false"#,
             r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS cs_prime_enabled BOOLEAN NOT NULL DEFAULT false"#,
+            r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS use_custom_access BOOLEAN NOT NULL DEFAULT false"#,
         ];
         for sql in community_alters {
             sqlx::query(sql).execute(&self.pool).await?;

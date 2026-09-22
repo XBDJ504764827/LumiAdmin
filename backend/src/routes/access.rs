@@ -23,9 +23,6 @@ pub(crate) struct PluginAccessCheckBody {
     ip_address: Option<String>,
     player: Option<String>,
     server_port: Option<i32>,
-    /// 游戏插件上报：玩家是否为 CS 优先账户（Prime）。缺失表示插件暂未确认。
-    #[serde(default)]
-    is_cs_prime: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,7 +53,6 @@ pub(crate) async fn check_plugin_access(
             ip_address: body.ip_address.clone(),
             player: body.player.clone(),
             server_port: body.server_port,
-            is_cs_prime: body.is_cs_prime,
         },
     )
     .await
@@ -196,7 +192,25 @@ pub(crate) async fn record_plugin_access(
         AppError::internal(e)
     })?;
 
+    spawn_profile_refresh(&ctx, &body.steam_id64);
+
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// 进服记录上报时异步刷新玩家准入资料（rating + Steam 等级）。
+///
+/// 本地裁决不再逐玩家在线复核，快照 access_profiles 的唯一写入链路是
+/// player_access_cache；这里用 tokio spawn 保证 record 响应不被外部 API 延迟阻塞，
+/// 抓取成功后下一次快照刷新即会把该玩家带入 access_profiles，实现「首次拒绝、
+/// 下次进服放行」的自愈。
+fn spawn_profile_refresh(ctx: &AppCtx, steam_id64: &str) {
+    let db = ctx.db.clone();
+    let config = ctx.config.clone();
+    let gokz_cache = ctx.gokz_cache.clone();
+    let steam_id64 = steam_id64.to_string();
+    tokio::spawn(async move {
+        access_service::refresh_player_profile(&db, &config, &steam_id64, &gokz_cache).await;
+    });
 }
 
 pub(crate) async fn plugin_access_snapshot(

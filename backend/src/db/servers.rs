@@ -14,6 +14,7 @@ impl Database {
             r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS min_rating INTEGER NOT NULL DEFAULT 0"#,
             r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS min_steam_level INTEGER NOT NULL DEFAULT 0"#,
             r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS whitelist_mode_enabled BOOLEAN NOT NULL DEFAULT false"#,
+            // 历史遗留列：CS 优先账户已下线，仅保留以兼容旧 SQL 迁移；最终由 20260924000000 删除
             r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS cs_prime_enabled BOOLEAN NOT NULL DEFAULT false"#,
             // 中高风险账号拦截：存在封禁类风险信号的账号需持有白名单才可进入（默认开启）
             r#"ALTER TABLE servers ADD COLUMN IF NOT EXISTS risk_block_enabled BOOLEAN NOT NULL DEFAULT true"#,

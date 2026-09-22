@@ -27,7 +27,6 @@ pub struct ServerItem {
     pub min_rating: i32,
     pub min_steam_level: i32,
     pub whitelist_mode_enabled: bool,
-    pub cs_prime_enabled: bool,
     /// 中高风险账号拦截（需白名单才可进入）
     pub risk_block_enabled: bool,
     pub use_custom_access: bool,
@@ -50,7 +49,6 @@ pub struct CommunityGroup {
     pub whitelist_mode_enabled: bool,
     pub min_rating: i32,
     pub min_steam_level: i32,
-    pub cs_prime_enabled: bool,
     pub servers: Vec<ServerItem>,
 }
 
@@ -76,8 +74,6 @@ pub struct ServerInput {
     pub min_steam_level: i32,
     #[serde(default)]
     pub whitelist_mode_enabled: bool,
-    #[serde(default)]
-    pub cs_prime_enabled: bool,
     /// 中高风险账号拦截；缺省视为开启（与数据库默认值一致）
     #[serde(default = "default_risk_block_enabled")]
     pub risk_block_enabled: bool,
@@ -101,8 +97,6 @@ pub struct UpdateCommunityAccessInput {
     pub whitelist_mode_enabled: bool,
     pub min_rating: i32,
     pub min_steam_level: i32,
-    #[serde(default)]
-    pub cs_prime_enabled: bool,
 }
 
 #[derive(Deserialize)]
@@ -209,7 +203,6 @@ struct CommunityRow {
     community_whitelist_mode_enabled: Option<bool>,
     community_min_rating: Option<i32>,
     community_min_steam_level: Option<i32>,
-    community_cs_prime_enabled: Option<bool>,
     server_id: Option<Uuid>,
     server_name: Option<String>,
     ip: Option<String>,
@@ -225,7 +218,6 @@ struct CommunityRow {
     min_rating: Option<i32>,
     min_steam_level: Option<i32>,
     whitelist_mode_enabled: Option<bool>,
-    cs_prime_enabled: Option<bool>,
     risk_block_enabled: Option<bool>,
     use_custom_access: Option<bool>,
 }
@@ -247,7 +239,6 @@ struct ServerDetailRow {
     min_rating: i32,
     min_steam_level: i32,
     whitelist_mode_enabled: bool,
-    cs_prime_enabled: bool,
     risk_block_enabled: bool,
     use_custom_access: bool,
 }
@@ -309,7 +300,6 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
             c.whitelist_mode_enabled AS community_whitelist_mode_enabled,
             c.min_rating AS community_min_rating,
             c.min_steam_level AS community_min_steam_level,
-            c.cs_prime_enabled AS community_cs_prime_enabled,
             s.id AS server_id,
             s.name AS server_name,
             s.ip,
@@ -325,7 +315,6 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
             s.min_rating,
             s.min_steam_level,
             s.whitelist_mode_enabled,
-            s.cs_prime_enabled,
             s.risk_block_enabled,
             s.use_custom_access
         FROM communities c
@@ -363,7 +352,6 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
                     whitelist_mode_enabled: row.community_whitelist_mode_enabled.unwrap_or(false),
                     min_rating: row.community_min_rating.unwrap_or(0),
                     min_steam_level: row.community_min_steam_level.unwrap_or(0),
-                    cs_prime_enabled: row.community_cs_prime_enabled.unwrap_or(false),
                     servers: Vec::new(),
                 });
                 index
@@ -417,7 +405,6 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
                 min_rating: row.min_rating.unwrap_or(0),
                 min_steam_level: row.min_steam_level.unwrap_or(0),
                 whitelist_mode_enabled: row.whitelist_mode_enabled.unwrap_or(false),
-                cs_prime_enabled: row.cs_prime_enabled.unwrap_or(false),
                 risk_block_enabled: row.risk_block_enabled.unwrap_or(true),
                 use_custom_access: row.use_custom_access.unwrap_or(false),
                 auth_connection,
@@ -452,7 +439,6 @@ pub async fn create_group(
         whitelist_mode_enabled: false,
         min_rating: 0,
         min_steam_level: 0,
-        cs_prime_enabled: false,
         servers: Vec::new(),
     })
 }
@@ -490,10 +476,10 @@ pub async fn create_server(
         r#"
         INSERT INTO servers (
             id, community_id, name, ip, port, rcon_password, report_token, note, status, players, last_tested_at,
-            access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled, cs_prime_enabled,
+            access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled,
             risk_block_enabled, max_players, use_custom_access
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'online', $9, now(), $10, $11, $12, $13, $14, $15, $16, $17)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'online', $9, now(), $10, $11, $12, $13, $14, $15, $16)
         "#,
     )
     .bind(id)
@@ -509,7 +495,6 @@ pub async fn create_server(
     .bind(input.min_rating)
     .bind(input.min_steam_level)
     .bind(input.whitelist_mode_enabled)
-    .bind(input.cs_prime_enabled)
     .bind(input.risk_block_enabled)
     .bind(input.max_players)
     .bind(input.use_custom_access)
@@ -541,7 +526,6 @@ pub async fn create_server(
         min_rating: input.min_rating,
         min_steam_level: input.min_steam_level,
         whitelist_mode_enabled: input.whitelist_mode_enabled,
-        cs_prime_enabled: input.cs_prime_enabled,
         risk_block_enabled: input.risk_block_enabled,
         use_custom_access: input.use_custom_access,
         auth_connection,
@@ -582,9 +566,9 @@ pub async fn update_server(
 
     // 单服访问配置变更若实际变化，给该服下一条 server.config.update 事件（同事务）。
     // 先读旧值用于变更比对。
-    let old: Option<(bool, i32, i32, bool, bool, bool, bool)> = sqlx::query_as(
+    let old: Option<(bool, i32, i32, bool, bool, bool)> = sqlx::query_as(
         r#"SELECT access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled,
-                  cs_prime_enabled, risk_block_enabled, use_custom_access
+                  risk_block_enabled, use_custom_access
            FROM servers WHERE id = $1"#,
     )
     .bind(server_id)
@@ -596,9 +580,8 @@ pub async fn update_server(
                 || o.1 != input.min_rating
                 || o.2 != input.min_steam_level
                 || o.3 != input.whitelist_mode_enabled
-                || o.4 != input.cs_prime_enabled
-                || o.5 != input.risk_block_enabled
-                || o.6 != input.use_custom_access
+                || o.4 != input.risk_block_enabled
+                || o.5 != input.use_custom_access
         })
         .unwrap_or(false);
 
@@ -611,11 +594,11 @@ pub async fn update_server(
                 report_token = COALESCE($6, report_token), note = $7,
                 status = 'online', players = $8, last_tested_at = now(),
                 access_restriction_enabled = $9, min_rating = $10, min_steam_level = $11, whitelist_mode_enabled = $12,
-                cs_prime_enabled = $13, risk_block_enabled = $14, max_players = $15, use_custom_access = $16,
+                risk_block_enabled = $13, max_players = $14, use_custom_access = $15,
                 plugin_instance_id = CASE WHEN ip <> $3 OR port <> $4 THEN NULL ELSE plugin_instance_id END
             WHERE id = $1
             RETURNING id, name, ip, port, report_token, note, status, players, max_players, last_tested_at, last_reported_at,
-                      access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled, cs_prime_enabled,
+                      access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled,
                       risk_block_enabled, use_custom_access
             "#,
         )
@@ -631,7 +614,6 @@ pub async fn update_server(
         .bind(input.min_rating)
         .bind(input.min_steam_level)
         .bind(input.whitelist_mode_enabled)
-        .bind(input.cs_prime_enabled)
         .bind(input.risk_block_enabled)
         .bind(input.max_players)
         .bind(input.use_custom_access)
@@ -644,11 +626,11 @@ pub async fn update_server(
             SET name = $2, ip = $3, port = $4,
                 report_token = COALESCE($5, report_token), note = $6,
                 access_restriction_enabled = $7, min_rating = $8, min_steam_level = $9, whitelist_mode_enabled = $10,
-                cs_prime_enabled = $11, risk_block_enabled = $12, max_players = $13, use_custom_access = $14,
+                risk_block_enabled = $11, max_players = $12, use_custom_access = $13,
                 plugin_instance_id = CASE WHEN ip <> $3 OR port <> $4 THEN NULL ELSE plugin_instance_id END
             WHERE id = $1
             RETURNING id, name, ip, port, report_token, note, status, players, max_players, last_tested_at, last_reported_at,
-                      access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled, cs_prime_enabled,
+                      access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled,
                       risk_block_enabled, use_custom_access
             "#,
         )
@@ -662,7 +644,6 @@ pub async fn update_server(
         .bind(input.min_rating)
         .bind(input.min_steam_level)
         .bind(input.whitelist_mode_enabled)
-        .bind(input.cs_prime_enabled)
         .bind(input.risk_block_enabled)
         .bind(input.max_players)
         .bind(input.use_custom_access)
@@ -682,7 +663,6 @@ pub async fn update_server(
                 "min_rating": input.min_rating,
                 "min_steam_level": input.min_steam_level,
                 "whitelist_mode_enabled": input.whitelist_mode_enabled,
-                "cs_prime_enabled": input.cs_prime_enabled,
                 "risk_block_enabled": input.risk_block_enabled,
                 "use_custom_access": input.use_custom_access,
             }),
@@ -717,7 +697,6 @@ pub async fn update_server(
         min_rating: row.min_rating,
         min_steam_level: row.min_steam_level,
         whitelist_mode_enabled: row.whitelist_mode_enabled,
-        cs_prime_enabled: row.cs_prime_enabled,
         risk_block_enabled: row.risk_block_enabled,
         use_custom_access: row.use_custom_access,
         auth_connection,
@@ -757,13 +736,12 @@ pub async fn update_community_access(
 
     let mut tx = db.pool.begin().await?;
     sqlx::query(
-        r#"UPDATE communities SET whitelist_mode_enabled = $2, min_rating = $3, min_steam_level = $4, cs_prime_enabled = $5 WHERE id = $1"#,
+        r#"UPDATE communities SET whitelist_mode_enabled = $2, min_rating = $3, min_steam_level = $4 WHERE id = $1"#,
     )
     .bind(community_id)
     .bind(input.whitelist_mode_enabled)
     .bind(input.min_rating)
     .bind(input.min_steam_level)
-    .bind(input.cs_prime_enabled)
     .execute(&mut *tx)
     .await?;
 
@@ -784,7 +762,6 @@ pub async fn update_community_access(
                 "whitelist_mode_enabled": input.whitelist_mode_enabled,
                 "min_rating": input.min_rating,
                 "min_steam_level": input.min_steam_level,
-                "cs_prime_enabled": input.cs_prime_enabled,
             }),
         )
         .await?;
@@ -1579,7 +1556,6 @@ mod tests {
             min_rating: 0,
             min_steam_level: 0,
             whitelist_mode_enabled: false,
-            cs_prime_enabled: false,
             risk_block_enabled: true,
             use_custom_access: false,
             max_players: 0,
@@ -1617,7 +1593,6 @@ mod tests {
             min_rating: 0,
             min_steam_level: 0,
             whitelist_mode_enabled: false,
-            cs_prime_enabled: false,
             risk_block_enabled: true,
             use_custom_access: false,
             max_players: 0,

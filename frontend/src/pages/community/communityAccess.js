@@ -3,7 +3,6 @@ export const emptyAccessConfig = {
   min_rating: '0',
   min_steam_level: '0',
   whitelist_mode_enabled: false,
-  cs_prime_enabled: false,
   risk_block_enabled: true,
   use_custom_access: false,
 };
@@ -12,7 +11,6 @@ export const emptyCommunityAccessConfig = {
   whitelist_mode_enabled: false,
   min_rating: '0',
   min_steam_level: '0',
-  cs_prime_enabled: false,
 };
 
 export function validateAccessConfig(form) {
@@ -51,7 +49,6 @@ export function buildServerPayloadWithAccess(form) {
     min_rating: Number(form.min_rating),
     min_steam_level: Number(form.min_steam_level),
     whitelist_mode_enabled: Boolean(form.whitelist_mode_enabled),
-    cs_prime_enabled: Boolean(form.cs_prime_enabled),
     risk_block_enabled: form.risk_block_enabled !== false,
     max_players: maxPlayers,
     use_custom_access: Boolean(form.use_custom_access),
@@ -66,7 +63,6 @@ export function buildCommunityAccessPayload(form) {
     whitelist_mode_enabled: Boolean(form.whitelist_mode_enabled),
     min_rating: Number(form.min_rating),
     min_steam_level: Number(form.min_steam_level),
-    cs_prime_enabled: Boolean(form.cs_prime_enabled),
   };
 }
 
@@ -76,7 +72,6 @@ export function fillAccessConfigFromServer(server) {
     min_rating: String(server.min_rating ?? 0),
     min_steam_level: String(server.min_steam_level ?? 0),
     whitelist_mode_enabled: Boolean(server.whitelist_mode_enabled),
-    cs_prime_enabled: Boolean(server.cs_prime_enabled),
     // 后端默认开启：字段缺失时按开启处理，避免旧数据被静默关闭
     risk_block_enabled: server.risk_block_enabled !== false,
     use_custom_access: Boolean(server.use_custom_access),
@@ -88,7 +83,6 @@ export function fillCommunityAccessConfig(group) {
     whitelist_mode_enabled: Boolean(group.whitelist_mode_enabled),
     min_rating: String(group.min_rating ?? 0),
     min_steam_level: String(group.min_steam_level ?? 0),
-    cs_prime_enabled: Boolean(group.cs_prime_enabled),
   };
 }
 
@@ -101,14 +95,12 @@ export function buildAccessSummary(server, group) {
   const custom = Boolean(server.use_custom_access);
   const hasRestriction = custom ? Boolean(server.access_restriction_enabled) : (group?.min_rating > 0 || group?.min_steam_level > 0);
   const hasWhitelist = custom ? Boolean(server.whitelist_mode_enabled) : Boolean(group?.whitelist_mode_enabled);
-  const hasCsPrime = custom ? Boolean(server.cs_prime_enabled) : Boolean(group?.cs_prime_enabled);
   const minRating = custom ? (server.min_rating ?? 0) : (group?.min_rating ?? 0);
   const minSteamLevel = custom ? (server.min_steam_level ?? 0) : (group?.min_steam_level ?? 0);
   const source = custom ? '' : '（社区）';
   const restrictionText = `rating ≥ ${minRating}，Steam 等级 ≥ ${minSteamLevel}${source}`;
 
   const modes = [];
-  if (hasCsPrime) modes.push('CS优先账户');
   if (hasRestriction) modes.push(restrictionText);
   if (hasWhitelist) modes.push('白名单');
 
@@ -117,10 +109,9 @@ export function buildAccessSummary(server, group) {
   if (modes.length === 0) return riskNote ? `无限制 · ${riskNote}` : '无限制';
   if (modes.length === 1) {
     if (hasWhitelist) return riskNote ? `白名单模式 · ${riskNote}` : '白名单模式';
-    if (hasCsPrime) return `CS优先账户${source}${riskNote ? ` · ${riskNote}` : ''}`;
     return `限制：${restrictionText}${riskNote ? ` · ${riskNote}` : ''}`;
   }
-  if (hasWhitelist && hasRestriction && !hasCsPrime) {
+  if (hasWhitelist && hasRestriction) {
     return `满足限制即可进；不满足需通过白名单（${restrictionText}）${riskNote ? ` · ${riskNote}` : ''}`;
   }
   return `${modes.join(' 或 ')}${riskNote ? ` · ${riskNote}` : ''}`;

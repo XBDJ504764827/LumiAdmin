@@ -32,8 +32,6 @@ pub struct AccessCheckInput {
     pub ip_address: Option<String>,
     pub player: Option<String>,
     pub server_port: Option<i32>,
-    /// 游戏插件上报的 CS 优先账户状态；`None` 表示插件暂未确认
-    pub is_cs_prime: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -134,7 +132,6 @@ pub async fn check_access(
                     port: input.port,
                     steam_id64,
                     ip_address: input.ip_address,
-                    is_cs_prime: input.is_cs_prime,
                     now: Utc::now(),
                 },
             );
@@ -204,7 +201,6 @@ async fn check_access_live(
     // 2. 检查服务器访问模式（开启的模式之间为 OR：满足任意一种即可进入）
     let effective_restriction = server.effective_access_restriction_enabled();
     let effective_whitelist = server.effective_whitelist_mode_enabled();
-    let effective_cs_prime = server.effective_cs_prime_enabled();
     let risk_block_enabled = server.risk_block_enabled;
 
     // 白名单状态：白名单模式需要它判定准入；中高风险拦截把它作为唯一的豁免条件，
@@ -217,7 +213,7 @@ async fn check_access_live(
 
     // 2.1 中高风险账号拦截：账号存在封禁类风险信号（自身有效封禁、同 IP 关联账号
     // 有效封禁）时为中/高风险，需持有白名单才可进入。该开关独立于上方进服模式，
-    // 因此必须放在「无限制放行」与「CS 优先账户放行」之前。
+    // 因此必须放在「无限制放行」之前。
     if risk_block_enabled && !whitelist_approved {
         if let Some(risk) = player_risk_service::evaluate_ban_risk_for_access(
             db,
@@ -233,34 +229,13 @@ async fn check_access_live(
     }
 
     // 都没开 → 无限制放行
-    if !effective_whitelist && !effective_restriction && !effective_cs_prime {
+    if !effective_whitelist && !effective_restriction {
         return Ok(allow_with_data(
             "允许进入服务器。",
             "unrestricted",
             None,
             None,
         ));
-    }
-
-    // CS 优先账户：由游戏插件通过 Steam GameServer API 查询后上报
-    // 优先账户检查必须在进入限制之前执行，确保优先账号直接放行
-    if effective_cs_prime {
-        match input.is_cs_prime {
-            Some(true) => {
-                return Ok(allow_with_data(
-                    "已确认 CS 优先账户，允许进入服务器。",
-                    "cs_prime",
-                    None,
-                    None,
-                ));
-            }
-            Some(false) => {
-                // 非优先账号，继续后续检查（可能还有白名单/进入限制）
-            }
-            None => {
-                // 插件未上报时，保守处理：不直接拒绝，继续后续检查
-            }
-        }
     }
 
     // 进入限制（rating / steam level）
@@ -284,7 +259,7 @@ async fn check_access_live(
             }
             None => {
                 // 仅开启进入限制且资料拉取失败时，给出可重试提示；组合模式下仍按组合拒绝文案处理。
-                if !effective_whitelist && !effective_cs_prime {
+                if !effective_whitelist {
                     return Ok(reject_with_method(
                         "无法验证您的进入资格，请稍后再试。",
                         "restriction_rejected",
@@ -309,17 +284,10 @@ async fn check_access_live(
 
     // 均未满足：按启用模式组合返回拒绝原因
     let whitelist_failed = effective_whitelist && !whitelist_approved;
-    let cs_prime_failed = effective_cs_prime && input.is_cs_prime != Some(true);
-    let cs_prime_failure_code = cs_prime_failed.then(|| match input.is_cs_prime {
-        Some(false) => "not_cs_prime".to_string(),
-        _ => "prime_verification_failed".to_string(),
-    });
     Ok(reject_access_modes(
         whitelist_failed,
         restriction_failed,
-        cs_prime_failed,
         restriction_failure_code,
-        cs_prime_failure_code,
     ))
 }
 
@@ -376,92 +344,37 @@ fn evaluate_restriction(
 fn reject_access_modes(
     whitelist_failed: bool,
     restriction_failed: bool,
-    cs_prime_failed: bool,
     restriction_failure_code: Option<String>,
-    cs_prime_failure_code: Option<String>,
 ) -> AccessCheckResult {
-    if cs_prime_failure_code.as_deref() == Some("prime_verification_failed") {
-        let mut audit_reasons = Vec::new();
-        if whitelist_failed {
-            audit_reasons.push("白名单未通过");
-        }
-        if restriction_failed {
-            audit_reasons.push(match restriction_failure_code.as_deref() {
-                Some("low_rating") => "Rating 未达标",
-                Some("low_steam_level") => "Steam 等级未达标",
-                Some("profile_fetch_failed") => "Rating/Steam 等级资料获取失败",
-                _ => "进入限制未通过",
-            });
-        }
-        audit_reasons.push("CS 优先账户状态无法验证");
-
-        let audit_message = format!("准入条件未满足：{}", audit_reasons.join("；"));
-        let player_message = format!("{audit_message}\n请稍后再试。");
-        let mut result = reject_with_method(
-            &player_message,
-            "cs_prime_rejected",
-            "prime_verification_failed",
-        );
-        result.audit_message = Some(audit_message);
-        return result;
-    }
-
-    let message = match (whitelist_failed, restriction_failed, cs_prime_failed) {
-        (true, false, false) => {
+    let message = match (whitelist_failed, restriction_failed) {
+        (true, false) => {
             "当前服务器开启了白名单验证\n请前往以下地址进行申请\nhttps://zzzxbdjbans.cngokz.com/public/apply\n如有疑问加入Q群275164688寻求帮助"
         }
-        (false, true, false) => {
+        (false, true) => {
             "当前服务器开启了进入限制\n您的账号未达到最低进入要求\n如有疑问加入Q群275164688寻求帮助"
         }
-        (false, false, true) => {
-            "您的账号非CS优先账户无法进入服务器\n如有疑问加入Q群275164688寻求帮助"
-        }
-        (true, true, false) => {
+        (true, true) => {
             "您的账号未达到服务器最低进入要求并且没有获取白名单资格\n请前往以下地址获取白名单，如有疑问加入Q群275164688寻求帮助\nhttps://zzzxbdjbans.cngokz.com/public/apply"
         }
-        (true, false, true) => {
-            "您的账号CS为非优先账号并且没有获取白名单资格\n请前往以下地址获取白名单，如有疑问加入Q群275164688寻求帮助\nhttps://zzzxbdjbans.cngokz.com/public/apply"
-        }
-        (false, true, true) => {
-            "您的账号CS为非优先账号并且未达到最低进入要求被阻止进入服务器\n如有疑问加入Q群275164688寻求帮助"
-        }
-        (true, true, true) => {
-            "您的账号CS为非优先账号并且未达到最低进入要求并且没有获取白名单资格\n请前往以下地址获取资格如有疑问加入Q群275164688寻求帮助\nhttps://zzzxbdjbans.cngokz.com/public/apply"
-        }
-        (false, false, false) => "您无法进入服务器。",
+        (false, false) => "您无法进入服务器。",
     };
 
-    let (access_method, failure_code) =
-        match (whitelist_failed, restriction_failed, cs_prime_failed) {
-            (true, false, false) => ("whitelist_rejected", "not_whitelisted"),
-            (false, true, false) => (
-                "restriction_rejected",
-                restriction_failure_code
-                    .as_deref()
-                    .unwrap_or("restriction_rejected"),
-            ),
-            (false, false, true) => ("cs_prime_rejected", "not_cs_prime"),
-            (true, true, false) => (
-                "restriction_rejected",
-                restriction_failure_code
-                    .as_deref()
-                    .unwrap_or("restriction_rejected"),
-            ),
-            (true, false, true) => ("whitelist_rejected", "not_whitelisted"),
-            (false, true, true) => (
-                "restriction_rejected",
-                restriction_failure_code
-                    .as_deref()
-                    .unwrap_or("restriction_rejected"),
-            ),
-            (true, true, true) => (
-                "restriction_rejected",
-                restriction_failure_code
-                    .as_deref()
-                    .unwrap_or("restriction_rejected"),
-            ),
-            (false, false, false) => ("access_rejected", "access_rejected"),
-        };
+    let (access_method, failure_code) = match (whitelist_failed, restriction_failed) {
+        (true, false) => ("whitelist_rejected", "not_whitelisted"),
+        (false, true) => (
+            "restriction_rejected",
+            restriction_failure_code
+                .as_deref()
+                .unwrap_or("restriction_rejected"),
+        ),
+        (true, true) => (
+            "restriction_rejected",
+            restriction_failure_code
+                .as_deref()
+                .unwrap_or("restriction_rejected"),
+        ),
+        (false, false) => ("access_rejected", "access_rejected"),
+    };
 
     reject_with_method(message, access_method, failure_code)
 }
@@ -550,6 +463,45 @@ async fn load_player_profile(
     };
     write_cache(db, steam_id64, &profile).await?;
     Ok(Some(profile))
+}
+
+/// 异步刷新玩家准入资料（rating + Steam 等级）并写入 `player_access_cache`。
+///
+/// 供进服记录上报（access/record）触发：LumiAuth 本地裁决不再逐玩家在线复核，
+/// 快照 `access_profiles` 的数据源（player_access_cache, rating_source=scoped_max）
+/// 只能靠这条链路写入。抓取失败仅告警，不影响调用方。
+pub async fn refresh_player_profile(
+    db: &Database,
+    config: &Config,
+    steam_id64: &str,
+    gokz_cache: &GokzCacheManager,
+) {
+    let steam_id64 = match normalize_steamid64(steam_id64) {
+        Ok(value) => value,
+        Err(error) => {
+            warn!(%error, steamid64 = %steam_id64, "进服资料刷新：SteamID 无效");
+            return;
+        }
+    };
+    if read_cache(db, &steam_id64)
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|cached| cached.expires_at > Utc::now())
+    {
+        return;
+    }
+    match fetch_player_profile(config, &steam_id64, gokz_cache).await {
+        Ok(Some(profile)) => {
+            if let Err(error) = write_cache(db, &steam_id64, &profile).await {
+                warn!(%error, steamid64 = %steam_id64, "进服资料刷新：写入缓存失败");
+            }
+        }
+        Ok(None) => {}
+        Err(error) => {
+            warn!(%error, steamid64 = %steam_id64, "进服资料刷新：拉取失败");
+        }
+    }
 }
 
 async fn read_cache(
@@ -838,13 +790,11 @@ mod tests {
             min_rating,
             min_steam_level,
             whitelist_mode_enabled: false,
-            cs_prime_enabled: false,
             risk_block_enabled: false,
             use_custom_access: true,
             community_whitelist_mode_enabled: false,
             community_min_rating: 0,
             community_min_steam_level: 0,
-            community_cs_prime_enabled: false,
         }
     }
 
@@ -896,85 +846,27 @@ mod tests {
 
     #[test]
     fn reject_access_modes_covers_mode_combinations() {
-        assert!(reject_access_modes(true, false, false, None, None)
+        assert!(reject_access_modes(true, false, None)
             .message
             .contains("当前服务器开启了白名单验证"));
         assert!(
-            reject_access_modes(false, true, false, Some("low_rating".to_string()), None)
+            reject_access_modes(false, true, Some("low_rating".to_string()))
                 .message
                 .contains("当前服务器开启了进入限制")
         );
         assert!(
-            reject_access_modes(false, false, true, None, Some("not_cs_prime".to_string()))
-                .message
-                .contains("非CS优先账户")
-        );
-        assert!(
-            reject_access_modes(true, true, false, Some("low_rating".to_string()), None)
+            reject_access_modes(true, true, Some("low_rating".to_string()))
                 .message
                 .contains("没有获取白名单资格")
         );
-        assert!(
-            reject_access_modes(true, false, true, None, Some("not_cs_prime".to_string()))
-                .message
-                .contains("CS为非优先账号并且没有获取白名单资格")
-        );
-        assert!(reject_access_modes(
-            false,
-            true,
-            true,
-            Some("low_steam_level".to_string()),
-            Some("not_cs_prime".to_string())
-        )
-        .message
-        .contains("未达到最低进入要求被阻止进入服务器"));
-        assert!(reject_access_modes(
-            true,
-            true,
-            true,
-            Some("low_rating".to_string()),
-            Some("not_cs_prime".to_string())
-        )
-        .message
-        .contains("没有获取白名单资格"));
-
-        let unknown_prime = reject_access_modes(
-            false,
-            false,
-            true,
-            None,
-            Some("prime_verification_failed".to_string()),
-        );
+        // 白名单未通过 + 门槛不足，失败码取门槛原因
+        let combined = reject_access_modes(true, true, Some("low_steam_level".to_string()));
         assert_eq!(
-            unknown_prime.failure_code.as_deref(),
-            Some("prime_verification_failed")
+            combined.access_method.as_deref(),
+            Some("restriction_rejected")
         );
-        assert!(unknown_prime
-            .message
-            .contains("准入条件未满足：CS 优先账户状态无法验证"));
-        assert_eq!(
-            unknown_prime.audit_message.as_deref(),
-            Some("准入条件未满足：CS 优先账户状态无法验证")
-        );
-
-        let combined_unknown_prime = reject_access_modes(
-            true,
-            true,
-            true,
-            Some("low_rating".to_string()),
-            Some("prime_verification_failed".to_string()),
-        );
-        assert_eq!(
-            combined_unknown_prime.audit_message.as_deref(),
-            Some("准入条件未满足：白名单未通过；Rating 未达标；CS 优先账户状态无法验证")
-        );
-        let plugin_result = serde_json::to_value(&combined_unknown_prime).unwrap();
-        assert!(plugin_result.get("audit_message").is_none());
-        assert!(plugin_result["message"]
-            .as_str()
-            .unwrap()
-            .contains("白名单未通过；Rating 未达标；CS 优先账户状态无法验证"));
-        assert!(combined_unknown_prime.message.len() < 256);
+        assert_eq!(combined.failure_code.as_deref(), Some("low_steam_level"));
+        assert!(combined.message.len() < 256);
     }
 
     fn ban_risk(

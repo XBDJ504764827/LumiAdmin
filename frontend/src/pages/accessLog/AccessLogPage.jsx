@@ -34,6 +34,8 @@ const FAILURE_CODE_MAP = {
   custom_rule_rejected: '自定义规则拒绝',
   risk_blocked: '中高风险账号拦截',
   profile_fetch_failed: '无法获取玩家资料',
+  profile_missing: '资料未验证',
+  restriction_rejected: '进入限制未通过',
   snapshot_unavailable: '服务降级',
   rules_unavailable: '本地规则不可用',
   no_steamid: '无法获取 SteamID',

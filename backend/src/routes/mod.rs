@@ -321,6 +321,10 @@ pub fn router(
             get(player_detail::player_report),
         )
         .route(
+            "/api/player-detail/:steamid64/access-profile/refresh",
+            post(player_detail::refresh_player_access_profile),
+        )
+        .route(
             "/api/player-detail/:steamid64/linked-accounts/batch",
             post(player_detail::linked_account_batch_action),
         )

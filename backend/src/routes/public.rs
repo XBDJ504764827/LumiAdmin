@@ -665,46 +665,62 @@ pub(crate) async fn get_gokz_player_stats(
             Json(serde_json::json!({ "error": "无效的 scope 参数" })),
         ));
     }
+    let scope = params.scope.to_uppercase();
 
-    // 尝试从缓存获取
-    if let Some(stats) = ctx.gokz_cache.get(&steamid64).await {
-        let mode_stats = match params.scope.to_uppercase().as_str() {
-            "KZT" => &stats.kzt,
-            "SKZ" => &stats.skz,
-            "VNL" => &stats.vnl,
-            "OVR" => &stats.ovr,
-            _ => &None,
-        };
-        let mut obj = serde_json::Map::new();
-        obj.insert(
-            params.scope.to_uppercase(),
-            serde_json::to_value(mode_stats).unwrap_or(serde_json::Value::Null),
-        );
-        return Ok(Json(serde_json::Value::Object(obj)));
+    // 尝试从缓存获取；缓存行存在但缺少该 scope（历史单 scope 写入）时补拉并合并
+    let cached = ctx.gokz_cache.get(&steamid64).await;
+    if let Some(stats) = &cached {
+        if gokz_mode_stats(stats, &params.scope).is_some() {
+            return Ok(Json(gokz_scope_response(&params.scope, stats)));
+        }
     }
 
-    // 缓存未命中，从 gokz.top 获取
+    // 缓存未命中（或缺少该 scope），从 gokz.top 获取
     let data = fetch_gokz_scope(&steamid64, &params.scope).await;
 
-    // 如果获取成功，写入缓存
+    // 获取成功则合并写回缓存（保留已有 scope 数据，避免单 scope 覆盖丢数据）
     if let Some(mode_stats) = &data {
-        let mut stats = GokzStats::default();
-        match params.scope.to_uppercase().as_str() {
-            "KZT" => stats.kzt = Some(mode_stats.clone()),
-            "SKZ" => stats.skz = Some(mode_stats.clone()),
-            "VNL" => stats.vnl = Some(mode_stats.clone()),
-            "OVR" => stats.ovr = Some(mode_stats.clone()),
-            _ => {}
-        }
+        let mut stats = cached.clone().unwrap_or_default();
+        set_gokz_mode_stats(&mut stats, &params.scope, Some(mode_stats.clone()));
         ctx.gokz_cache.set(&steamid64, &stats).await;
+    } else if let Some(stats) = &cached {
+        // 拉取失败：沿用旧缓存内容
+        return Ok(Json(gokz_scope_response(&params.scope, stats)));
     }
 
     let mut obj = serde_json::Map::new();
     obj.insert(
-        params.scope.to_uppercase(),
+        scope,
         serde_json::to_value(&data).unwrap_or(serde_json::Value::Null),
     );
     Ok(Json(serde_json::Value::Object(obj)))
+}
+
+fn gokz_mode_stats<'a>(stats: &'a GokzStats, scope: &str) -> &'a Option<GokzModeStats> {
+    match scope.to_uppercase().as_str() {
+        "KZT" => &stats.kzt,
+        "SKZ" => &stats.skz,
+        "VNL" => &stats.vnl,
+        _ => &stats.ovr,
+    }
+}
+
+fn set_gokz_mode_stats(stats: &mut GokzStats, scope: &str, value: Option<GokzModeStats>) {
+    match scope.to_uppercase().as_str() {
+        "KZT" => stats.kzt = value,
+        "SKZ" => stats.skz = value,
+        "VNL" => stats.vnl = value,
+        _ => stats.ovr = value,
+    }
+}
+
+fn gokz_scope_response(scope: &str, stats: &GokzStats) -> serde_json::Value {
+    let mut obj = serde_json::Map::new();
+    obj.insert(
+        scope.to_uppercase(),
+        serde_json::to_value(gokz_mode_stats(stats, scope)).unwrap_or(serde_json::Value::Null),
+    );
+    serde_json::Value::Object(obj)
 }
 
 #[derive(serde::Deserialize)]

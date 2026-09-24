@@ -4,9 +4,7 @@ use crate::{
     http_client,
     services::{
         access_cache::{ActiveBanCache, WhitelistCache},
-        access_snapshot_service,
-        gokz_cache::GokzCacheManager,
-        player_risk_service, plugin_ban_service, server_config_cache,
+        access_snapshot_service, player_risk_service, plugin_ban_service, server_config_cache,
     },
 };
 use chrono::{DateTime, Duration, Utc};
@@ -15,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration as StdDuration;
+use tokio::sync::Semaphore;
 use tokio::time::timeout;
 use tracing::warn;
 
@@ -52,16 +51,16 @@ pub struct AccessCheckResult {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
-struct PlayerAccessCacheRow {
-    rating: i32,
-    steam_level: i32,
+pub(crate) struct PlayerAccessCacheRow {
+    pub(crate) rating: i32,
+    pub(crate) steam_level: i32,
     expires_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
-struct PlayerAccessProfile {
-    rating: i32,
-    steam_level: i32,
+pub(crate) struct PlayerAccessProfile {
+    pub(crate) rating: i32,
+    pub(crate) steam_level: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -99,7 +98,6 @@ pub async fn check_access(
     server_cache: &Arc<server_config_cache::ServerConfigCache>,
     ban_cache: &ActiveBanCache,
     wl_cache: &WhitelistCache,
-    gokz_cache: &GokzCacheManager,
     input: AccessCheckInput,
 ) -> anyhow::Result<AccessCheckResult> {
     let steam_id64 = normalize_steamid64(&input.steam_id64)?;
@@ -111,7 +109,6 @@ pub async fn check_access(
         server_cache,
         ban_cache,
         wl_cache,
-        gokz_cache,
     )
     .await
     {
@@ -149,7 +146,6 @@ async fn check_access_live(
     server_cache: &Arc<server_config_cache::ServerConfigCache>,
     ban_cache: &ActiveBanCache,
     wl_cache: &WhitelistCache,
-    gokz_cache: &GokzCacheManager,
 ) -> anyhow::Result<AccessCheckResult> {
     // 使用缓存获取服务器配置
     let server = server_cache
@@ -243,7 +239,7 @@ async fn check_access_live(
     let mut restriction_failed = false;
     let mut restriction_failure_code: Option<String> = None;
     if effective_restriction {
-        match load_player_profile(db, config, steam_id64, gokz_cache).await? {
+        match load_player_profile(db, config, steam_id64).await? {
             Some(profile) => {
                 let result = evaluate_restriction(&server, &profile)?;
                 if result.allowed {
@@ -447,7 +443,6 @@ async fn load_player_profile(
     db: &Database,
     config: &Config,
     steam_id64: &str,
-    gokz_cache: &GokzCacheManager,
 ) -> anyhow::Result<Option<PlayerAccessProfile>> {
     if let Some(cached) = read_cache(db, steam_id64).await? {
         if cached.expires_at > Utc::now() {
@@ -458,7 +453,7 @@ async fn load_player_profile(
         }
     }
 
-    let Some(profile) = fetch_player_profile(config, steam_id64, gokz_cache).await? else {
+    let Some(profile) = fetch_player_profile(config, steam_id64).await? else {
         return Ok(None);
     };
     write_cache(db, steam_id64, &profile).await?;
@@ -469,13 +464,9 @@ async fn load_player_profile(
 ///
 /// 供进服记录上报（access/record）触发：LumiAuth 本地裁决不再逐玩家在线复核，
 /// 快照 `access_profiles` 的数据源（player_access_cache, rating_source=scoped_max）
-/// 只能靠这条链路写入。抓取失败仅告警，不影响调用方。
-pub async fn refresh_player_profile(
-    db: &Database,
-    config: &Config,
-    steam_id64: &str,
-    gokz_cache: &GokzCacheManager,
-) {
+/// 只能靠这条链路写入。缓存未过期时直接跳过；限制类拒绝记录走
+/// `force_refresh_player_profile` 强制复核。抓取失败仅告警，不影响调用方。
+pub async fn refresh_player_profile(db: &Database, config: &Config, steam_id64: &str) {
     let steam_id64 = match normalize_steamid64(steam_id64) {
         Ok(value) => value,
         Err(error) => {
@@ -491,7 +482,7 @@ pub async fn refresh_player_profile(
     {
         return;
     }
-    match fetch_player_profile(config, &steam_id64, gokz_cache).await {
+    match fetch_player_profile(config, &steam_id64).await {
         Ok(Some(profile)) => {
             if let Err(error) = write_cache(db, &steam_id64, &profile).await {
                 warn!(%error, steamid64 = %steam_id64, "进服资料刷新：写入缓存失败");
@@ -504,7 +495,78 @@ pub async fn refresh_player_profile(
     }
 }
 
-async fn read_cache(
+/// 限制类拒绝记录强制复核的按玩家节流（10 分钟）。
+static PROFILE_FORCE_REFRESH_AT: OnceLock<Mutex<HashMap<String, std::time::Instant>>> =
+    OnceLock::new();
+const PROFILE_FORCE_REFRESH_THROTTLE: StdDuration = StdDuration::from_secs(600);
+
+/// 判断失败码是否属于进服限制类：插件本地裁决以这些码拒绝时，
+/// 需要触发强制复核进服资料（拒绝驱动的自愈链路）。
+pub fn is_restriction_failure_code(failure_code: Option<&str>) -> bool {
+    matches!(
+        failure_code,
+        Some("restriction_rejected")
+            | Some("low_rating")
+            | Some("low_steam_level")
+            | Some("profile_missing")
+            | Some("profile_fetch_failed")
+    )
+}
+
+/// 强制刷新玩家准入资料：绕过「缓存未过期即跳过」，供限制类拒绝记录与管理员手动操作触发。
+///
+/// 自愈链路：插件本地拒绝（如快照里的旧 rating 低于门槛）→ record 上报 → 这里重拉
+/// 外部 API 并覆盖 `player_access_cache`（rating_source=scoped_max）→ 后端立即重建快照
+/// → 玩家下次进服即拿到新鲜资料。按玩家 10 分钟节流，避免多台服务器重复上报时
+/// 打爆外部 API；管理员手动刷新可传 `ignore_throttle` 绕过。
+/// 返回是否实际重新拉取并写入了资料。
+pub async fn force_refresh_player_profile(
+    db: &Database,
+    config: &Config,
+    steam_id64: &str,
+    ignore_throttle: bool,
+) -> anyhow::Result<bool> {
+    let steam_id64 = match normalize_steamid64(steam_id64) {
+        Ok(value) => value,
+        Err(error) => {
+            warn!(%error, steamid64 = %steam_id64, "进服资料强刷：SteamID 无效");
+            return Ok(false);
+        }
+    };
+    if !ignore_throttle {
+        let throttle = PROFILE_FORCE_REFRESH_AT.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut entries = throttle
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        entries.retain(|_, at| at.elapsed() < PROFILE_FORCE_REFRESH_THROTTLE);
+        if entries
+            .get(&steam_id64)
+            .is_some_and(|at| at.elapsed() < PROFILE_FORCE_REFRESH_THROTTLE)
+        {
+            return Ok(false);
+        }
+        entries.insert(steam_id64.clone(), std::time::Instant::now());
+    }
+    match fetch_player_profile(config, &steam_id64).await? {
+        Some(profile) => {
+            write_cache(db, &steam_id64, &profile).await?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
+/// 清除玩家进服资料缓存（scoped_max 行），供管理员手动强制复核。
+pub async fn clear_player_access_profile(db: &Database, steam_id64: &str) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM player_access_cache WHERE steamid64 = $1 AND rating_source = $2")
+        .bind(steam_id64)
+        .bind(ACCESS_RATING_SOURCE)
+        .execute(&db.pool)
+        .await?;
+    Ok(())
+}
+
+pub(crate) async fn read_cache(
     db: &Database,
     steam_id64: &str,
 ) -> anyhow::Result<Option<PlayerAccessCacheRow>> {
@@ -543,16 +605,71 @@ async fn write_cache(
     Ok(())
 }
 
+/// 外部资料拉取的全局限流闸：并发上限 + 每分钟全局配额。
+static PROFILE_FETCH_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
+static PROFILE_FETCH_RATE_WINDOW: OnceLock<Mutex<(std::time::Instant, u32)>> = OnceLock::new();
+/// 并发上限：同一时刻最多 8 个玩家资料在外部拉取。
+const PROFILE_FETCH_MAX_CONCURRENCY: usize = 8;
+/// 每分钟配额：拒绝风暴（如集中重连/调门槛）时把外部拉取压到最多 60 个玩家/分钟，
+/// 拿不到配额的拉取本轮跳过，玩家下次进服上报会再次触发（每次拉取 ≤ 6 个外部请求）。
+const PROFILE_FETCH_MAX_PER_MINUTE: u32 = 60;
+const PROFILE_FETCH_WINDOW_SECS: u64 = 60;
+const PROFILE_FETCH_SLOT_WAIT: StdDuration = StdDuration::from_secs(10);
+
+/// 申请一次外部资料拉取的配额；None 表示配额已满，本轮跳过（稍后触发时重试）。
+async fn acquire_profile_fetch_slot(
+    steam_id64: &str,
+) -> Option<tokio::sync::SemaphorePermit<'static>> {
+    let rate = PROFILE_FETCH_RATE_WINDOW.get_or_init(|| Mutex::new((std::time::Instant::now(), 0)));
+    {
+        let mut window = rate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if window.0.elapsed() >= StdDuration::from_secs(PROFILE_FETCH_WINDOW_SECS) {
+            *window = (std::time::Instant::now(), 0);
+        }
+        if window.1 >= PROFILE_FETCH_MAX_PER_MINUTE {
+            warn!(steam_id64, "外部资料拉取每分钟配额已满，本轮跳过");
+            return None;
+        }
+        window.1 += 1;
+    }
+
+    let gate = PROFILE_FETCH_SEMAPHORE
+        .get_or_init(|| Arc::new(Semaphore::new(PROFILE_FETCH_MAX_CONCURRENCY)));
+    match timeout(PROFILE_FETCH_SLOT_WAIT, gate.acquire()).await {
+        Ok(Ok(permit)) => Some(permit),
+        _ => {
+            warn!(steam_id64, "外部资料拉取并发已满，本轮跳过");
+            None
+        }
+    }
+}
+
+/// 实时拉取玩家准入资料。
+///
+/// 进服判定与公开页的 `gokz_stats` 展示缓存彻底解耦：rating 一律从 gokz.top 实时
+/// 拉取 4 个 scope 取最大值（任意模式达标即可进）。避免展示缓存的旧值/单 scope
+/// partial 行污染进服判定。
+///
+/// 正常进服不会走到这里（插件读本地快照裁决，快照来自 24h 的 `player_access_cache`）；
+/// 本函数仅在缓存过期刷新 / 限制类拒绝强刷 / 管理员手动刷新时被调用，且受全局限流闸
+/// （并发上限 + 每分钟配额）保护，避免拒绝风暴打爆 steamchina / gokz.top。
 async fn fetch_player_profile(
     config: &Config,
     steam_id64: &str,
-    gokz_cache: &GokzCacheManager,
 ) -> anyhow::Result<Option<PlayerAccessProfile>> {
     let has_level_key = config.steamchina_level_key.is_some() || config.steam_web_key.is_some();
     if !has_level_key {
         warn!(steam_id64, "缺少 Steam API Key，进入限制将放行");
         return Ok(None);
     }
+
+    let Some(_permit) = acquire_profile_fetch_slot(steam_id64).await else {
+        warn!(
+            steam_id64,
+            "外部资料拉取限流配额已满，本轮跳过（下次触发时重试）"
+        );
+        return Ok(None);
+    };
 
     let steam_level = timeout(
         StdDuration::from_secs(10),
@@ -561,23 +678,13 @@ async fn fetch_player_profile(
     .await
     .ok()
     .flatten();
-    let rating = gokz_cache.get(steam_id64).await.and_then(|stats| {
-        [stats.kzt, stats.skz, stats.vnl, stats.ovr]
-            .into_iter()
-            .filter_map(|mode| mode.and_then(|value| value.rating))
-            .max_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|value| value.trunc() as i32)
-    });
-    let rating = match rating {
-        Some(value) => Some(value),
-        None => timeout(
-            StdDuration::from_secs(10),
-            fetch_best_gokz_rating(steam_id64),
-        )
-        .await
-        .ok()
-        .flatten(),
-    };
+    let rating = timeout(
+        StdDuration::from_secs(10),
+        fetch_best_gokz_rating(steam_id64),
+    )
+    .await
+    .ok()
+    .flatten();
     let steam_level = match steam_level {
         Some(level) => Some(level),
         None => {
@@ -596,7 +703,7 @@ async fn fetch_player_profile(
                 steam_id64,
                 rating_found = rating.is_some(),
                 steam_level_found = steam_level.is_some(),
-                "玩家准入资料不完整，进入限制将降级到快照"
+                "玩家准入资料不完整，未写入进服资料缓存"
             );
             Ok(None)
         }
@@ -718,8 +825,12 @@ fn reject_with_method(message: &str, access_method: &str, failure_code: &str) ->
     }
 }
 
-/// 查询 Steam 等级：优先 steamchina，失败用 steampowered
+/// 查询 Steam 等级：优先 steamchina，失败用 steampowered。
+///
+/// steamchina 返回 0 时用备用源复核：0 可能是误报（真实等级非 0 被当成 0），
+/// 也可能是新账号的真实等级，因此备用源不可用时仍采信 steamchina 的 0。
 async fn fetch_steam_level(config: &Config, steam_id64: &str) -> Option<i32> {
+    let mut china_zero = false;
     // 主：steamchina
     if let Some(ref china_key) = config.steamchina_level_key {
         let url = format!(
@@ -729,8 +840,12 @@ async fn fetch_steam_level(config: &Config, steam_id64: &str) -> Option<i32> {
             Ok(response) if response.status().is_success() => {
                 match response.json::<SteamLevelEnvelope>().await {
                     Ok(body) => {
-                        if body.response.player_level.is_some() {
-                            return body.response.player_level;
+                        if let Some(level) = body.response.player_level {
+                            if level > 0 || config.steam_web_key.is_none() {
+                                return Some(level);
+                            }
+                            china_zero = true;
+                            warn!(steam_id64, "steamchina 返回等级 0，使用备用源复核");
                         }
                     }
                     Err(error) => {
@@ -772,6 +887,10 @@ async fn fetch_steam_level(config: &Config, steam_id64: &str) -> Option<i32> {
         }
     }
 
+    // steamchina 报 0 且备用源未能给出结果：采信 0
+    if china_zero {
+        return Some(0);
+    }
     None
 }
 
@@ -940,6 +1059,23 @@ mod tests {
             Some(1500)
         );
         assert_eq!(best_gokz_rating([None, None, None]), None);
+    }
+
+    #[test]
+    fn is_restriction_failure_code_covers_restriction_class() {
+        for code in [
+            "restriction_rejected",
+            "low_rating",
+            "low_steam_level",
+            "profile_missing",
+            "profile_fetch_failed",
+        ] {
+            assert!(is_restriction_failure_code(Some(code)));
+        }
+        assert!(!is_restriction_failure_code(Some("banned")));
+        assert!(!is_restriction_failure_code(Some("not_whitelisted")));
+        assert!(!is_restriction_failure_code(Some("risk_blocked")));
+        assert!(!is_restriction_failure_code(None));
     }
 
     #[test]

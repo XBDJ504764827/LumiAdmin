@@ -45,6 +45,7 @@ export const api = {
   createPlayerTag: (token, body) => request('/api/player-detail/tags', { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   deletePlayerTag: (token, tagId) => request(`/api/player-detail/tags/${tagId}`, { method: 'DELETE', headers: withAuth(token) }),
   playerReport: (token, steamid64) => request(`/api/player-detail/${encodeURIComponent(steamid64)}/report`, { headers: withAuth(token) }),
+  refreshPlayerAccessProfile: (token, steamid64) => request(`/api/player-detail/${encodeURIComponent(steamid64)}/access-profile/refresh`, { method: 'POST', headers: withAuth(token), body: JSON.stringify({}) }),
   linkedAccountsBatch: (token, steamid64, body) => request(`/api/player-detail/${encodeURIComponent(steamid64)}/linked-accounts/batch`, { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   downloadPlayerEvidence: (token, steamid64, sourceType, fileId) => request(`/api/player-detail/${encodeURIComponent(steamid64)}/evidence/${encodeURIComponent(sourceType)}/${fileId}/download`, { headers: withAuth(token) }),
   playerInternalNoteHistory: (token, steamid64) => request(`/api/player-detail/internal/${encodeURIComponent(steamid64)}/history`, { headers: withAuth(token) }),

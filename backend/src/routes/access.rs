@@ -45,7 +45,6 @@ pub(crate) async fn check_plugin_access(
         &ctx.server_config_cache,
         &ctx.active_ban_cache,
         &ctx.whitelist_cache,
-        &ctx.gokz_cache,
         access_service::AccessCheckInput {
             report_token: body.report_token.clone(),
             port: body.port,
@@ -192,7 +191,12 @@ pub(crate) async fn record_plugin_access(
         AppError::internal(e)
     })?;
 
-    spawn_profile_refresh(&ctx, &body.steam_id64);
+    spawn_restriction_profile_refresh(
+        &ctx,
+        &body.steam_id64,
+        !body.allowed,
+        failure_code.as_deref(),
+    );
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -200,16 +204,44 @@ pub(crate) async fn record_plugin_access(
 /// 进服记录上报时异步刷新玩家准入资料（rating + Steam 等级）。
 ///
 /// 本地裁决不再逐玩家在线复核，快照 access_profiles 的唯一写入链路是
-/// player_access_cache；这里用 tokio spawn 保证 record 响应不被外部 API 延迟阻塞，
-/// 抓取成功后下一次快照刷新即会把该玩家带入 access_profiles，实现「首次拒绝、
-/// 下次进服放行」的自愈。
-fn spawn_profile_refresh(ctx: &AppCtx, steam_id64: &str) {
+/// player_access_cache；这里用 tokio spawn 保证 record 响应不被外部 API 延迟阻塞。
+/// 限制类拒绝走强制复核（绕过缓存有效期），成功写入后立即重建快照，
+/// 让插件在下一次快照拉取内拿到新鲜资料，实现「拒绝一次、重进即过」的自愈。
+fn spawn_restriction_profile_refresh(
+    ctx: &AppCtx,
+    steam_id64: &str,
+    denied: bool,
+    failure_code: Option<&str>,
+) {
+    if denied && access_service::is_restriction_failure_code(failure_code) {
+        let db = ctx.db.clone();
+        let config = ctx.config.clone();
+        let snapshot_store = ctx.access_snapshot.clone();
+        let steam_id64 = steam_id64.to_string();
+        tokio::spawn(async move {
+            match access_service::force_refresh_player_profile(&db, &config, &steam_id64, false)
+                .await
+            {
+                Ok(true) => {
+                    access_snapshot_service::request_immediate_snapshot_refresh(db, snapshot_store);
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        steamid64 = %steam_id64,
+                        "拒绝后强制刷新进服资料失败"
+                    );
+                }
+            }
+        });
+        return;
+    }
     let db = ctx.db.clone();
     let config = ctx.config.clone();
-    let gokz_cache = ctx.gokz_cache.clone();
     let steam_id64 = steam_id64.to_string();
     tokio::spawn(async move {
-        access_service::refresh_player_profile(&db, &config, &steam_id64, &gokz_cache).await;
+        access_service::refresh_player_profile(&db, &config, &steam_id64).await;
     });
 }
 

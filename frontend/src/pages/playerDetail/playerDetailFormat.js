@@ -47,6 +47,7 @@ const FAILURE_CODE_LABELS = {
   risk_blocked: '中高风险账号拦截',
   linked_ip_banned: '同 IP 关联封禁',
   profile_fetch_failed: '无法获取玩家资料',
+  profile_missing: '资料未验证',
   snapshot_unavailable: '访问控制服务不可用',
 };
 

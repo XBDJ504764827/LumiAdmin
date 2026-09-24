@@ -9,7 +9,8 @@ use uuid::Uuid;
 
 use crate::routes::{current_operator, forbidden, invalid_request, AppCtx};
 use crate::services::{
-    log_service, permission_service, player_detail_service, rate_limit_service::extract_client_ip,
+    access_service, access_snapshot_service, log_service, permission_service,
+    player_detail_service, rate_limit_service::extract_client_ip,
 };
 
 #[derive(Deserialize)]
@@ -53,6 +54,53 @@ struct InvestigationReport {
     generated_at: chrono::DateTime<chrono::Utc>,
     generated_by: String,
     player: player_detail_service::PlayerDetail,
+}
+
+/// 管理员手动刷新玩家进服资料（rating + Steam 等级）。
+///
+/// 清除 `player_access_cache`（scoped_max）旧行后立即重拉外部 API，绕过拒绝强刷的
+/// 按玩家节流；成功写入后触发一次立即快照重建。误拒玩家的秒级修复入口。
+pub(crate) async fn refresh_player_access_profile(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Path(steamid64): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let actor = current_operator(&ctx, &headers).await?;
+    if !permission_service::can_view_audit_logs(&actor) {
+        return Err(forbidden());
+    }
+
+    if let Err(error) = access_service::clear_player_access_profile(&ctx.db, &steamid64).await {
+        tracing::warn!(%error, steamid64 = %steamid64, "清除进服资料缓存失败");
+        return Err(invalid_request(error));
+    }
+
+    let refreshed =
+        match access_service::force_refresh_player_profile(&ctx.db, &ctx.config, &steamid64, true)
+            .await
+        {
+            Ok(refreshed) => refreshed,
+            Err(error) => {
+                tracing::warn!(%error, steamid64 = %steamid64, "管理员刷新进服资料失败");
+                false
+            }
+        };
+    if refreshed {
+        access_snapshot_service::request_immediate_snapshot_refresh(
+            ctx.db.clone(),
+            ctx.access_snapshot.clone(),
+        );
+    }
+
+    let profile = access_service::read_cache(&ctx.db, &steamid64)
+        .await
+        .ok()
+        .flatten();
+    Ok(Json(serde_json::json!({
+        "refreshed": refreshed,
+        "rating": profile.as_ref().map(|profile| profile.rating),
+        "steam_level": profile.as_ref().map(|profile| profile.steam_level),
+    })))
 }
 
 pub(crate) async fn get_player_detail(

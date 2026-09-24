@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration as StdDuration;
+use tokio::sync::Semaphore;
 use tokio::time::timeout;
 use tracing::warn;
 
@@ -608,11 +609,57 @@ async fn write_cache(
     Ok(())
 }
 
+/// 外部资料拉取的全局限流闸：并发上限 + 每分钟全局配额。
+static PROFILE_FETCH_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
+static PROFILE_FETCH_RATE_WINDOW: OnceLock<Mutex<(std::time::Instant, u32)>> = OnceLock::new();
+/// 并发上限：同一时刻最多 8 个玩家资料在外部拉取。
+const PROFILE_FETCH_MAX_CONCURRENCY: usize = 8;
+/// 每分钟配额：拒绝风暴（如集中重连/调门槛）时把外部拉取压到最多 60 个玩家/分钟，
+/// 拿不到配额的拉取本轮跳过，玩家下次进服上报会再次触发（每次拉取 ≤ 6 个外部请求）。
+const PROFILE_FETCH_MAX_PER_MINUTE: u32 = 60;
+const PROFILE_FETCH_WINDOW_SECS: u64 = 60;
+const PROFILE_FETCH_SLOT_WAIT: StdDuration = StdDuration::from_secs(10);
+
+/// 申请一次外部资料拉取的配额；None 表示配额已满，本轮跳过（稍后触发时重试）。
+async fn acquire_profile_fetch_slot(
+    steam_id64: &str,
+) -> Option<tokio::sync::SemaphorePermit<'static>> {
+    let rate =
+        PROFILE_FETCH_RATE_WINDOW.get_or_init(|| Mutex::new((std::time::Instant::now(), 0)));
+    {
+        let mut window = rate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if window.0.elapsed() >= StdDuration::from_secs(PROFILE_FETCH_WINDOW_SECS) {
+            *window = (std::time::Instant::now(), 0);
+        }
+        if window.1 >= PROFILE_FETCH_MAX_PER_MINUTE {
+            warn!(steam_id64, "外部资料拉取每分钟配额已满，本轮跳过");
+            return None;
+        }
+        window.1 += 1;
+    }
+
+    let gate = PROFILE_FETCH_SEMAPHORE
+        .get_or_init(|| Arc::new(Semaphore::new(PROFILE_FETCH_MAX_CONCURRENCY)));
+    match timeout(PROFILE_FETCH_SLOT_WAIT, gate.acquire()).await {
+        Ok(Ok(permit)) => Some(permit),
+        _ => {
+            warn!(steam_id64, "外部资料拉取并发已满，本轮跳过");
+            None
+        }
+    }
+}
+
 /// 实时拉取玩家准入资料。
 ///
 /// 进服判定与公开页的 `gokz_stats` 展示缓存彻底解耦：rating 一律从 gokz.top 实时
 /// 拉取 4 个 scope 取最大值（任意模式达标即可进）。避免展示缓存的旧值/单 scope
 /// partial 行污染进服判定。
+///
+/// 正常进服不会走到这里（插件读本地快照裁决，快照来自 24h 的 `player_access_cache`）；
+/// 本函数仅在缓存过期刷新 / 限制类拒绝强刷 / 管理员手动刷新时被调用，且受全局限流闸
+/// （并发上限 + 每分钟配额）保护，避免拒绝风暴打爆 steamchina / gokz.top。
 async fn fetch_player_profile(
     config: &Config,
     steam_id64: &str,
@@ -622,6 +669,11 @@ async fn fetch_player_profile(
         warn!(steam_id64, "缺少 Steam API Key，进入限制将放行");
         return Ok(None);
     }
+
+    let Some(_permit) = acquire_profile_fetch_slot(steam_id64).await else {
+        warn!(steam_id64, "外部资料拉取限流配额已满，本轮跳过（下次触发时重试）");
+        return Ok(None);
+    };
 
     let steam_level = timeout(
         StdDuration::from_secs(10),

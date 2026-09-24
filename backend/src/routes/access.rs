@@ -191,7 +191,12 @@ pub(crate) async fn record_plugin_access(
         AppError::internal(e)
     })?;
 
-    spawn_restriction_profile_refresh(&ctx, &body.steam_id64, !body.allowed, failure_code.as_deref());
+    spawn_restriction_profile_refresh(
+        &ctx,
+        &body.steam_id64,
+        !body.allowed,
+        failure_code.as_deref(),
+    );
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -218,10 +223,7 @@ fn spawn_restriction_profile_refresh(
                 .await
             {
                 Ok(true) => {
-                    access_snapshot_service::request_immediate_snapshot_refresh(
-                        db,
-                        snapshot_store,
-                    );
+                    access_snapshot_service::request_immediate_snapshot_refresh(db, snapshot_store);
                 }
                 Ok(false) => {}
                 Err(error) => {

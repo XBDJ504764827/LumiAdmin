@@ -75,20 +75,16 @@ pub(crate) async fn refresh_player_access_profile(
         return Err(invalid_request(error));
     }
 
-    let refreshed = match access_service::force_refresh_player_profile(
-        &ctx.db,
-        &ctx.config,
-        &steamid64,
-        true,
-    )
-    .await
-    {
-        Ok(refreshed) => refreshed,
-        Err(error) => {
-            tracing::warn!(%error, steamid64 = %steamid64, "管理员刷新进服资料失败");
-            false
-        }
-    };
+    let refreshed =
+        match access_service::force_refresh_player_profile(&ctx.db, &ctx.config, &steamid64, true)
+            .await
+        {
+            Ok(refreshed) => refreshed,
+            Err(error) => {
+                tracing::warn!(%error, steamid64 = %steamid64, "管理员刷新进服资料失败");
+                false
+            }
+        };
     if refreshed {
         access_snapshot_service::request_immediate_snapshot_refresh(
             ctx.db.clone(),

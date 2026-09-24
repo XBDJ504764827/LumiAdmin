@@ -466,11 +466,7 @@ async fn load_player_profile(
 /// 快照 `access_profiles` 的数据源（player_access_cache, rating_source=scoped_max）
 /// 只能靠这条链路写入。缓存未过期时直接跳过；限制类拒绝记录走
 /// `force_refresh_player_profile` 强制复核。抓取失败仅告警，不影响调用方。
-pub async fn refresh_player_profile(
-    db: &Database,
-    config: &Config,
-    steam_id64: &str,
-) {
+pub async fn refresh_player_profile(db: &Database, config: &Config, steam_id64: &str) {
     let steam_id64 = match normalize_steamid64(steam_id64) {
         Ok(value) => value,
         Err(error) => {
@@ -624,12 +620,9 @@ const PROFILE_FETCH_SLOT_WAIT: StdDuration = StdDuration::from_secs(10);
 async fn acquire_profile_fetch_slot(
     steam_id64: &str,
 ) -> Option<tokio::sync::SemaphorePermit<'static>> {
-    let rate =
-        PROFILE_FETCH_RATE_WINDOW.get_or_init(|| Mutex::new((std::time::Instant::now(), 0)));
+    let rate = PROFILE_FETCH_RATE_WINDOW.get_or_init(|| Mutex::new((std::time::Instant::now(), 0)));
     {
-        let mut window = rate
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut window = rate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if window.0.elapsed() >= StdDuration::from_secs(PROFILE_FETCH_WINDOW_SECS) {
             *window = (std::time::Instant::now(), 0);
         }
@@ -671,7 +664,10 @@ async fn fetch_player_profile(
     }
 
     let Some(_permit) = acquire_profile_fetch_slot(steam_id64).await else {
-        warn!(steam_id64, "外部资料拉取限流配额已满，本轮跳过（下次触发时重试）");
+        warn!(
+            steam_id64,
+            "外部资料拉取限流配额已满，本轮跳过（下次触发时重试）"
+        );
         return Ok(None);
     };
 

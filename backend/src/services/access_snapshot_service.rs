@@ -6,12 +6,20 @@ use anyhow::Context;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex, OnceLock},
+    time::Instant,
+};
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
 const SNAPSHOT_TTL_HOURS: i64 = 24;
+/// 强制触发的立即快照重建之间的最小间隔（去抖）。
+const FORCED_REBUILD_MIN_INTERVAL_SECS: u64 = 60;
+
+static LAST_FORCED_REBUILD: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessSnapshot {
@@ -116,6 +124,31 @@ pub async fn refresh_snapshot(
     store.write_snapshot(&snapshot).await?;
     info!(version = %snapshot.version, "access snapshot refreshed");
     Ok(snapshot)
+}
+
+/// 立即重建一次访问快照（带去抖）。
+///
+/// 供「拒绝驱动的进服资料强刷」触发：玩家资料写入 `player_access_cache` 后，
+/// 等待写入落定即重建快照，让插件在下一次快照拉取（默认 30s）内拿到新鲜资料，
+/// 而不必等下一个 5 分钟定时周期。短时间大量拒绝时按 60 秒去抖，避免反复全量重建。
+pub fn request_immediate_snapshot_refresh(db: Database, store: SnapshotStore) {
+    let gate = LAST_FORCED_REBUILD.get_or_init(|| Mutex::new(None));
+    {
+        let mut last = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(at) = *last {
+            if at.elapsed() < std::time::Duration::from_secs(FORCED_REBUILD_MIN_INTERVAL_SECS) {
+                return;
+            }
+        }
+        *last = Some(Instant::now());
+    }
+    tokio::spawn(async move {
+        // 稍等 DB 写入落定，随后立即重建
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        if let Err(error) = refresh_snapshot(&db, &store).await {
+            warn!(%error, "immediate access snapshot refresh failed");
+        }
+    });
 }
 
 /// 优雅关闭时最后刷写一次快照：即使数据库不可达，也延长现有快照的有效期，

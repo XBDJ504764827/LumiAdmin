@@ -735,6 +735,27 @@ export function PlayerDetailPage() {
     return ()=>{c=true;};
   },[detail?.profile?.steamid64,token]);
 
+  // 强制刷新进服资料（rating / steam 等级）：误拒玩家的秒级修复入口
+  const [profileRefreshing, setProfileRefreshing] = useState(false);
+  async function refreshAccessProfile() {
+    const steamid64 = detail?.profile?.steamid64;
+    if (!steamid64 || profileRefreshing) return;
+    setProfileRefreshing(true);
+    try {
+      const r = await api.refreshPlayerAccessProfile(token, steamid64);
+      if (r.refreshed) {
+        toast({ title: `进服资料已刷新：Rating ${r.rating ?? '-'}，Steam 等级 ${r.steam_level ?? '-'}` });
+        refreshDetail();
+      } else {
+        toast({ title: '资料刷新失败', message: '外部数据暂时不可用，请稍后重试', tone: 'warning' });
+      }
+    } catch (e) {
+      toast({ title: '资料刷新失败', message: e.message, tone: 'danger' });
+    } finally {
+      setProfileRefreshing(false);
+    }
+  }
+
   useEffect(()=>{
     function closeOnOutsideClick(event) {
       if(searchWrapRef.current&&!searchWrapRef.current.contains(event.target)) {
@@ -778,6 +799,7 @@ export function PlayerDetailPage() {
     <div className="breadcrumb"><span>核心管理</span><span className="sep">›</span><span className="current">玩家全息档案</span></div>
     <div className="page-header"><div><div className="page-title">玩家详情</div><div className="page-sub">集中查看身份、风险、封禁、进服和工单记录。</div></div><div style={{ display: 'flex', gap: 8 }}>
       {detail && canCreateBan && <button type="button" className="btn btn-danger" onClick={() => setBanFormOpen(true)}>发起封禁</button>}
+      {detail && <button type="button" className="btn btn-outline" onClick={refreshAccessProfile} disabled={profileRefreshing}>{profileRefreshing ? '刷新资料中...' : '刷新进服资料'}</button>}
       {detail && <button type="button" className="btn btn-outline" onClick={exportReport}>导出调查报告</button>}
     </div></div>
 

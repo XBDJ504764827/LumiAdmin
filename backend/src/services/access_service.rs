@@ -460,6 +460,60 @@ async fn load_player_profile(
     Ok(Some(profile))
 }
 
+/// 单玩家资料点查（供插件缺资料时同步直取，配合进服 3s 宽限）。
+///
+/// 缓存命中直接返回；缺失/过期则做一次有界同步拉取（Steam 等级与 GOKZ 并发、
+/// 各 2s 超时，取号配额 0.5s），拿到即写缓存并返回；拿不到返回 `None`。
+/// 调用方在 `None` 时按零容忍拒绝，但会补一次异步强刷留给下次进服。
+pub(crate) async fn fetch_player_profile_bounded(
+    db: &Database,
+    config: &Config,
+    steam_id64: &str,
+) -> anyhow::Result<Option<(PlayerAccessProfile, DateTime<Utc>)>> {
+    let steam_id64 = normalize_steamid64(steam_id64)?;
+    if let Some(cached) = read_cache(db, &steam_id64).await? {
+        if cached.expires_at > Utc::now() {
+            return Ok(Some((
+                PlayerAccessProfile {
+                    rating: cached.rating,
+                    steam_level: cached.steam_level,
+                },
+                cached.expires_at,
+            )));
+        }
+    }
+    let slot = timeout(
+        StdDuration::from_millis(500),
+        acquire_profile_fetch_slot(&steam_id64),
+    )
+    .await
+    .ok()
+    .flatten();
+    let Some(_permit) = slot else {
+        return Ok(None);
+    };
+    let (steam_level, rating) = futures::join!(
+        timeout(
+            StdDuration::from_secs(2),
+            fetch_steam_level(config, &steam_id64)
+        ),
+        timeout(
+            StdDuration::from_secs(2),
+            fetch_best_gokz_rating(&steam_id64)
+        ),
+    );
+    let (Some(steam_level), Some(rating)) = (steam_level.ok().flatten(), rating.ok().flatten())
+    else {
+        return Ok(None);
+    };
+    let profile = PlayerAccessProfile {
+        rating,
+        steam_level,
+    };
+    write_cache(db, &steam_id64, &profile).await?;
+    Ok(Some((profile, Utc::now() + Duration::hours(24))))
+}
+
 /// 异步刷新玩家准入资料（rating + Steam 等级）并写入 `player_access_cache`。
 ///
 /// 供进服记录上报（access/record）触发：LumiAuth 本地裁决不再逐玩家在线复核，

@@ -49,6 +49,8 @@ pub struct Config {
     pub server_config_cache_refresh_interval_secs: u64,
     // 访问控制快照兜底刷新：NOTIFY 即时重建是主链路，这里只是断线兜底，默认 60s
     pub access_snapshot_refresh_interval_secs: u64,
+    // 快照是否携带全量玩家资料：兼容期默认 true，下版切瘦快照后改默认 false
+    pub access_snapshot_include_profiles: bool,
     // 进服记录清理
     pub access_log_cleanup_interval_secs: u64,
     pub access_log_retention_days: i64,
@@ -227,6 +229,7 @@ impl Config {
                 "ACCESS_SNAPSHOT_REFRESH_INTERVAL_SECS",
                 60,
             ),
+            access_snapshot_include_profiles: env_bool("ACCESS_SNAPSHOT_INCLUDE_PROFILES", true),
             // 进服记录清理：默认每天清理一次，保留 90 天
             access_log_cleanup_interval_secs: env_u64("ACCESS_LOG_CLEANUP_INTERVAL_SECS", 86400),
             access_log_retention_days: std::env::var("ACCESS_LOG_RETENTION_DAYS")

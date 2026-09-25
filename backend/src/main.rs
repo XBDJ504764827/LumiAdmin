@@ -38,8 +38,10 @@ async fn main() -> anyhow::Result<()> {
     db.migrate().await?;
     db.seed(&config).await?;
     services::player_api_service::start_dispatch_loop(db.clone());
-    let access_snapshot =
-        services::access_snapshot_service::SnapshotStore::new("runtime/access_snapshot.json");
+    let access_snapshot = services::access_snapshot_service::SnapshotStore::new(
+        "runtime/access_snapshot.json",
+        config.access_snapshot_include_profiles,
+    );
     services::access_snapshot_service::start_refresh_loop(
         db.clone(),
         access_snapshot.clone(),

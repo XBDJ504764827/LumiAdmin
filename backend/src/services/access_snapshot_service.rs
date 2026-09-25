@@ -106,11 +106,12 @@ pub async fn refresh_snapshot(
     store: &SnapshotStore,
 ) -> anyhow::Result<AccessSnapshot> {
     let now = Utc::now();
+    let include_profiles = store.include_profiles();
     let (servers, bans, whitelist, access_profiles, risk_ips) = tokio::try_join!(
         load_snapshot_servers(db),
         load_snapshot_bans(db),
         load_snapshot_whitelist(db),
-        load_snapshot_access_profiles(db),
+        load_snapshot_access_profiles(db, include_profiles),
         load_snapshot_risk_ips(db),
     )?;
     let snapshot = with_version(AccessSnapshot {
@@ -212,9 +213,15 @@ async fn load_snapshot_whitelist(db: &Database) -> anyhow::Result<Vec<SnapshotWh
     .context("加载白名单快照失败")
 }
 
+/// 瘦快照兼容期：`include_profiles=false` 时跳过全量资料查询，
+/// 资料改由插件按需点查（`POST /api/plugin/access/profile`）。
 async fn load_snapshot_access_profiles(
     db: &Database,
+    include_profiles: bool,
 ) -> anyhow::Result<Vec<SnapshotAccessProfile>> {
+    if !include_profiles {
+        return Ok(Vec::new());
+    }
     sqlx::query_as::<_, SnapshotAccessProfileRow>(
         r#"SELECT steamid64, rating, steam_level, expires_at
            FROM player_access_cache
@@ -362,14 +369,20 @@ impl From<SnapshotAccessProfileRow> for SnapshotAccessProfile {
 pub struct SnapshotStore {
     path: PathBuf,
     current: Arc<RwLock<Option<AccessSnapshot>>>,
+    include_profiles: bool,
 }
 
 impl SnapshotStore {
-    pub fn new(path: impl Into<PathBuf>) -> Self {
+    pub fn new(path: impl Into<PathBuf>, include_profiles: bool) -> Self {
         Self {
             path: path.into(),
             current: Arc::new(RwLock::new(None)),
+            include_profiles,
         }
+    }
+
+    pub fn include_profiles(&self) -> bool {
+        self.include_profiles
     }
 
     pub async fn read_snapshot(&self) -> anyhow::Result<Option<AccessSnapshot>> {
@@ -845,7 +858,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("manger-snapshot-test-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("access_snapshot.json");
-        let store = SnapshotStore::new(path.clone());
+        let store = SnapshotStore::new(path.clone(), true);
         let now = Utc::now();
         let snapshot = base_snapshot(now);
 
@@ -877,7 +890,7 @@ mod tests {
         let path = std::env::temp_dir()
             .join(format!("manger-missing-snapshot-{}", Uuid::new_v4()))
             .join("access_snapshot.json");
-        let store = SnapshotStore::new(path);
+        let store = SnapshotStore::new(path, true);
 
         assert!(store.read_snapshot().await.unwrap().is_none());
     }

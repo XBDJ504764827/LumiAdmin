@@ -245,6 +245,53 @@ fn spawn_restriction_profile_refresh(
     });
 }
 
+/// 单玩家进服资料点查（插件缺资料时的同步直取，配合进服 3s 宽限）。
+///
+/// 命中缓存或有界拉取成功即返回资料；拿不到返回 404，插件按零容忍踢出。
+/// 404 的同时补一次异步强刷：本次进不去的玩家重进时缓存大概率已就绪。
+#[derive(Deserialize)]
+pub(crate) struct PluginAccessProfileBody {
+    report_token: String,
+    port: i32,
+    steam_id64: String,
+}
+
+pub(crate) async fn plugin_access_profile(
+    State(ctx): State<AppCtx>,
+    Json(body): Json<PluginAccessProfileBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let _server = ctx
+        .server_config_cache
+        .get_by_token_port(&ctx.db, &body.report_token, body.port)
+        .await
+        .map_err(AppError::internal)?
+        .ok_or_else(|| AppError::bad_request(anyhow::anyhow!("服务器令牌或端口不匹配")))?;
+
+    let steam_id64 = body.steam_id64.trim().to_string();
+    match access_service::fetch_player_profile_bounded(&ctx.db, &ctx.config, &steam_id64).await {
+        Ok(Some((profile, expires_at))) => Ok(Json(serde_json::json!({
+            "ok": true,
+            "item": {
+                "steam_id64": steam_id64,
+                "rating": profile.rating,
+                "steam_level": profile.steam_level,
+                "expires_at_unix": expires_at.timestamp(),
+            }
+        }))),
+        Ok(None) => {
+            let db = ctx.db.clone();
+            let config = ctx.config.clone();
+            tokio::spawn(async move {
+                let _ =
+                    access_service::force_refresh_player_profile(&db, &config, &steam_id64, false)
+                        .await;
+            });
+            Err(AppError::not_found("玩家进服资料暂不可用"))
+        }
+        Err(error) => Err(AppError::bad_request(error)),
+    }
+}
+
 pub(crate) async fn plugin_access_snapshot(
     State(ctx): State<AppCtx>,
     Json(body): Json<PluginAccessSnapshotBody>,

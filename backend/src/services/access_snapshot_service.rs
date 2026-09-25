@@ -17,7 +17,9 @@ use uuid::Uuid;
 
 const SNAPSHOT_TTL_HOURS: i64 = 24;
 /// 强制触发的立即快照重建之间的最小间隔（去抖）。
-const FORCED_REBUILD_MIN_INTERVAL_SECS: u64 = 60;
+/// 拒绝驱动的资料强刷写入后会触发一次立即重建：10s 去抖保证连续拒绝能快速追平，
+/// 全量重建本身只有 5 条查询，配合 3s 落定等待不会打爆 DB。
+const FORCED_REBUILD_MIN_INTERVAL_SECS: u64 = 10;
 
 static LAST_FORCED_REBUILD: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
 
@@ -104,11 +106,12 @@ pub async fn refresh_snapshot(
     store: &SnapshotStore,
 ) -> anyhow::Result<AccessSnapshot> {
     let now = Utc::now();
+    let include_profiles = store.include_profiles();
     let (servers, bans, whitelist, access_profiles, risk_ips) = tokio::try_join!(
         load_snapshot_servers(db),
         load_snapshot_bans(db),
         load_snapshot_whitelist(db),
-        load_snapshot_access_profiles(db),
+        load_snapshot_access_profiles(db, include_profiles),
         load_snapshot_risk_ips(db),
     )?;
     let snapshot = with_version(AccessSnapshot {
@@ -210,9 +213,15 @@ async fn load_snapshot_whitelist(db: &Database) -> anyhow::Result<Vec<SnapshotWh
     .context("加载白名单快照失败")
 }
 
+/// 瘦快照兼容期：`include_profiles=false` 时跳过全量资料查询，
+/// 资料改由插件按需点查（`POST /api/plugin/access/profile`）。
 async fn load_snapshot_access_profiles(
     db: &Database,
+    include_profiles: bool,
 ) -> anyhow::Result<Vec<SnapshotAccessProfile>> {
+    if !include_profiles {
+        return Ok(Vec::new());
+    }
     sqlx::query_as::<_, SnapshotAccessProfileRow>(
         r#"SELECT steamid64, rating, steam_level, expires_at
            FROM player_access_cache
@@ -360,14 +369,20 @@ impl From<SnapshotAccessProfileRow> for SnapshotAccessProfile {
 pub struct SnapshotStore {
     path: PathBuf,
     current: Arc<RwLock<Option<AccessSnapshot>>>,
+    include_profiles: bool,
 }
 
 impl SnapshotStore {
-    pub fn new(path: impl Into<PathBuf>) -> Self {
+    pub fn new(path: impl Into<PathBuf>, include_profiles: bool) -> Self {
         Self {
             path: path.into(),
             current: Arc::new(RwLock::new(None)),
+            include_profiles,
         }
+    }
+
+    pub fn include_profiles(&self) -> bool {
+        self.include_profiles
     }
 
     pub async fn read_snapshot(&self) -> anyhow::Result<Option<AccessSnapshot>> {
@@ -405,12 +420,15 @@ impl SnapshotStore {
     }
 }
 
-pub fn start_refresh_loop(db: Database, store: SnapshotStore) {
+pub fn start_refresh_loop(db: Database, store: SnapshotStore, interval_secs: u64) {
+    // NOTIFY 是快照即时重建的主链路（资料/白名单/封禁/配置变更毫秒级触发），
+    // 这里的固定周期只是断线兜底，默认 60s，保证通知丢失时最多 1 分钟追平。
+    let interval_secs = interval_secs.max(15);
     observability_service::register_task(
         "access_snapshot_refresh",
         "访问控制快照刷新",
         "缓存",
-        Some(300),
+        Some(interval_secs),
         true,
     );
     super::task_runtime::spawn_persistent("access_snapshot_refresh", move || {
@@ -427,7 +445,7 @@ pub fn start_refresh_loop(db: Database, store: SnapshotStore) {
                 warn!(%error, "initial access snapshot refresh failed");
             }
 
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
             loop {
                 interval.tick().await;
                 if let Err(error) = observability_service::observe_task(
@@ -840,7 +858,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("manger-snapshot-test-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("access_snapshot.json");
-        let store = SnapshotStore::new(path.clone());
+        let store = SnapshotStore::new(path.clone(), true);
         let now = Utc::now();
         let snapshot = base_snapshot(now);
 
@@ -872,7 +890,7 @@ mod tests {
         let path = std::env::temp_dir()
             .join(format!("manger-missing-snapshot-{}", Uuid::new_v4()))
             .join("access_snapshot.json");
-        let store = SnapshotStore::new(path);
+        let store = SnapshotStore::new(path, true);
 
         assert!(store.read_snapshot().await.unwrap().is_none());
     }

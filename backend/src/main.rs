@@ -38,9 +38,15 @@ async fn main() -> anyhow::Result<()> {
     db.migrate().await?;
     db.seed(&config).await?;
     services::player_api_service::start_dispatch_loop(db.clone());
-    let access_snapshot =
-        services::access_snapshot_service::SnapshotStore::new("runtime/access_snapshot.json");
-    services::access_snapshot_service::start_refresh_loop(db.clone(), access_snapshot.clone());
+    let access_snapshot = services::access_snapshot_service::SnapshotStore::new(
+        "runtime/access_snapshot.json",
+        config.access_snapshot_include_profiles,
+    );
+    services::access_snapshot_service::start_refresh_loop(
+        db.clone(),
+        access_snapshot.clone(),
+        config.access_snapshot_refresh_interval_secs,
+    );
     // 启动封禁过期检查循环
     services::ban_expiry_service::start_expiry_loop(
         db.clone(),

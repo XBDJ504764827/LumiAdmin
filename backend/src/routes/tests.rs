@@ -27,6 +27,7 @@ use uuid::Uuid;
 fn test_snapshot_store() -> SnapshotStore {
     SnapshotStore::new(
         std::env::temp_dir().join(format!("manger-test-snapshot-{}.json", Uuid::new_v4())),
+        true,
     )
 }
 

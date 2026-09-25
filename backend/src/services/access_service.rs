@@ -460,6 +460,60 @@ async fn load_player_profile(
     Ok(Some(profile))
 }
 
+/// 单玩家资料点查（供插件缺资料时同步直取，配合进服 3s 宽限）。
+///
+/// 缓存命中直接返回；缺失/过期则做一次有界同步拉取（Steam 等级与 GOKZ 并发、
+/// 各 2s 超时，取号配额 0.5s），拿到即写缓存并返回；拿不到返回 `None`。
+/// 调用方在 `None` 时按零容忍拒绝，但会补一次异步强刷留给下次进服。
+pub(crate) async fn fetch_player_profile_bounded(
+    db: &Database,
+    config: &Config,
+    steam_id64: &str,
+) -> anyhow::Result<Option<(PlayerAccessProfile, DateTime<Utc>)>> {
+    let steam_id64 = normalize_steamid64(steam_id64)?;
+    if let Some(cached) = read_cache(db, &steam_id64).await? {
+        if cached.expires_at > Utc::now() {
+            return Ok(Some((
+                PlayerAccessProfile {
+                    rating: cached.rating,
+                    steam_level: cached.steam_level,
+                },
+                cached.expires_at,
+            )));
+        }
+    }
+    let slot = timeout(
+        StdDuration::from_millis(500),
+        acquire_profile_fetch_slot(&steam_id64),
+    )
+    .await
+    .ok()
+    .flatten();
+    let Some(_permit) = slot else {
+        return Ok(None);
+    };
+    let (steam_level, rating) = futures::join!(
+        timeout(
+            StdDuration::from_secs(2),
+            fetch_steam_level(config, &steam_id64)
+        ),
+        timeout(
+            StdDuration::from_secs(2),
+            fetch_best_gokz_rating(&steam_id64)
+        ),
+    );
+    let (Some(steam_level), Some(rating)) = (steam_level.ok().flatten(), rating.ok().flatten())
+    else {
+        return Ok(None);
+    };
+    let profile = PlayerAccessProfile {
+        rating,
+        steam_level,
+    };
+    write_cache(db, &steam_id64, &profile).await?;
+    Ok(Some((profile, Utc::now() + Duration::hours(24))))
+}
+
 /// 异步刷新玩家准入资料（rating + Steam 等级）并写入 `player_access_cache`。
 ///
 /// 供进服记录上报（access/record）触发：LumiAuth 本地裁决不再逐玩家在线复核，
@@ -495,10 +549,12 @@ pub async fn refresh_player_profile(db: &Database, config: &Config, steam_id64: 
     }
 }
 
-/// 限制类拒绝记录强制复核的按玩家节流（10 分钟）。
+/// 限制类拒绝记录强制复核的按玩家节流（3 分钟）。
+/// 首次强刷若因外部限流/超时失败，玩家下次重进（通常 1-3 分钟内）即可再次触发，
+/// 避免旧的 10 分钟窗口把“刚达标的玩家”挡在门外太久；全局每分钟配额仍保护外部 API。
 static PROFILE_FORCE_REFRESH_AT: OnceLock<Mutex<HashMap<String, std::time::Instant>>> =
     OnceLock::new();
-const PROFILE_FORCE_REFRESH_THROTTLE: StdDuration = StdDuration::from_secs(600);
+const PROFILE_FORCE_REFRESH_THROTTLE: StdDuration = StdDuration::from_secs(180);
 
 /// 判断失败码是否属于进服限制类：插件本地裁决以这些码拒绝时，
 /// 需要触发强制复核进服资料（拒绝驱动的自愈链路）。
@@ -517,7 +573,7 @@ pub fn is_restriction_failure_code(failure_code: Option<&str>) -> bool {
 ///
 /// 自愈链路：插件本地拒绝（如快照里的旧 rating 低于门槛）→ record 上报 → 这里重拉
 /// 外部 API 并覆盖 `player_access_cache`（rating_source=scoped_max）→ 后端立即重建快照
-/// → 玩家下次进服即拿到新鲜资料。按玩家 10 分钟节流，避免多台服务器重复上报时
+/// → 玩家下次进服即拿到新鲜资料。按玩家 3 分钟节流，避免多台服务器重复上报时
 /// 打爆外部 API；管理员手动刷新可传 `ignore_throttle` 绕过。
 /// 返回是否实际重新拉取并写入了资料。
 pub async fn force_refresh_player_profile(

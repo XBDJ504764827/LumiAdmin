@@ -255,6 +255,16 @@ pub fn list_endpoints() -> Vec<EndpointDoc> {
             roles: &["game-server"],
         },
         EndpointDoc {
+            module: "插件准入",
+            tone: "info",
+            name: "插件单玩家资料点查",
+            method: "POST",
+            endpoint: "/api/plugin/access/profile",
+            description: "插件缺资料时同步直取单玩家 Rating/Steam 等级（有界拉取约 2s），拿不到返回 404，插件按零容忍踢出",
+            auth_required: false,
+            roles: &["game-server"],
+        },
+        EndpointDoc {
             module: "白名单管理",
             tone: "online",
             name: "后台白名单列表",

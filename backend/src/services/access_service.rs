@@ -208,8 +208,8 @@ async fn check_access_live(
     };
 
     // 2.1 中高风险账号拦截：账号存在封禁类风险信号（自身有效封禁、同 IP 关联账号
-    // 有效封禁）时为中/高风险，需持有白名单才可进入。该开关独立于上方进服模式，
-    // 因此必须放在「无限制放行」之前。
+    // 有效封禁、同 QQ 关联账号有效封禁）时为中/高风险，需持有白名单才可进入。
+    // 该开关独立于上方进服模式，因此必须放在「无限制放行」之前。
     if risk_block_enabled && !whitelist_approved {
         if let Some(risk) = player_risk_service::evaluate_ban_risk_for_access(
             db,
@@ -299,10 +299,14 @@ fn reject_access_risk(risk: &player_risk_service::AccessBanRisk) -> AccessCheckR
 }
 
 /// 失败原因代码：纯「同 IP 关联封禁」保留既有代码，便于沿用历史筛选口径；
-/// 涉及账号自身封禁信号时归入通用的中高风险拦截。
+/// 纯「同 QQ 关联封禁」使用新代码 `linked_qq_banned`，便于区分拦截来源；
+/// 涉及账号自身封禁信号或混合关联时归入通用的中高风险拦截。
 fn risk_failure_code(risk: &player_risk_service::AccessBanRisk) -> &'static str {
-    if risk.codes.iter().all(|code| code.starts_with("linked_ip_")) {
+    if !risk.codes.is_empty() && risk.codes.iter().all(|code| code.starts_with("linked_ip_")) {
         "linked_ip_banned"
+    } else if !risk.codes.is_empty() && risk.codes.iter().all(|code| code.starts_with("linked_qq_"))
+    {
+        "linked_qq_banned"
     } else {
         "risk_blocked"
     }
@@ -1090,6 +1094,22 @@ mod tests {
         let mixed = reject_access_risk(&ban_risk(
             &["self_active_global_ban", "linked_ip_global_ban"],
             player_risk_service::RiskAction::Deny,
+        ));
+        assert_eq!(mixed.failure_code.as_deref(), Some("risk_blocked"));
+    }
+
+    #[test]
+    fn reject_access_risk_maps_qq_linked_ban_to_qq_failure_code() {
+        let qq_only = reject_access_risk(&ban_risk(
+            &["linked_qq_local_ban"],
+            player_risk_service::RiskAction::RequireForce,
+        ));
+        assert_eq!(qq_only.failure_code.as_deref(), Some("linked_qq_banned"));
+
+        // IP 与 QQ 混合关联时归入通用拦截，便于审计区分
+        let mixed = reject_access_risk(&ban_risk(
+            &["linked_ip_local_ban", "linked_qq_local_ban"],
+            player_risk_service::RiskAction::RequireForce,
         ));
         assert_eq!(mixed.failure_code.as_deref(), Some("risk_blocked"));
     }

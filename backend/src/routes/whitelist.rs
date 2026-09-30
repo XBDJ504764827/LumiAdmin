@@ -567,11 +567,8 @@ pub(crate) async fn get_qq_binding(
             risk_ids.push(steamid64.clone());
         }
         // 批量查询：本地有效封禁 / 全球有效封禁 / 白名单拒绝次数
-        let (local_bans, global_bans, rejected): (
-            Vec<(String,)>,
-            Vec<(String,)>,
-            Vec<(String, i64)>,
-        ) = tokio::try_join!(
+        // （各分支已有明确的 query_as 泛型标注，元组类型由编译器推导，避免冗长注解触发 clippy）
+        let (local_bans, global_bans, rejected) = tokio::try_join!(
             async {
                 sqlx::query_as::<_, (String,)>(
                     r#"SELECT DISTINCT steam_id FROM ban_records

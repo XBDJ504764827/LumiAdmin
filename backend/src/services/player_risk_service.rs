@@ -316,12 +316,16 @@ pub async fn build_player_risk_profile(
     let summary = risk_summary(
         &action,
         &reasons,
-        linked_account_count,
-        linked_banned_account_count,
-        linked_global_banned_account_count,
-        qq_linked_account_count,
-        qq_linked_banned_account_count,
-        qq_linked_global_banned_account_count,
+        LinkedRiskCounts {
+            total: linked_account_count,
+            local_banned: linked_banned_account_count,
+            global_banned: linked_global_banned_account_count,
+        },
+        LinkedRiskCounts {
+            total: qq_linked_account_count,
+            local_banned: qq_linked_banned_account_count,
+            global_banned: qq_linked_global_banned_account_count,
+        },
     );
     let recommendation = risk_recommendation(&action).to_string();
 
@@ -1146,15 +1150,18 @@ fn classify_severity(reasons: &[RiskReason]) -> RiskSeverity {
     }
 }
 
+/// 同一路关联来源（同 IP / 同 QQ）的账号风险计数，用于风险文案汇总。
+struct LinkedRiskCounts {
+    total: usize,
+    local_banned: usize,
+    global_banned: usize,
+}
+
 fn risk_summary(
     action: &RiskAction,
     reasons: &[RiskReason],
-    linked_account_count: usize,
-    linked_banned_account_count: usize,
-    linked_global_banned_account_count: usize,
-    qq_linked_account_count: usize,
-    qq_linked_banned_account_count: usize,
-    qq_linked_global_banned_account_count: usize,
+    ip: LinkedRiskCounts,
+    qq: LinkedRiskCounts,
 ) -> String {
     if reasons.is_empty() {
         return "未发现本地封禁、全球封禁或同 IP / 同 QQ 高风险关联。".to_string();
@@ -1162,7 +1169,13 @@ fn risk_summary(
     match action {
         RiskAction::Deny => "当前账号存在有效本地/全球封禁，必须填写理由后强制通过。".to_string(),
         RiskAction::RequireForce => format!(
-            "发现高风险关联：同 IP 账号 {linked_account_count} 个（本地封禁 {linked_banned_account_count} 个，全球封禁 {linked_global_banned_account_count} 个）；同 QQ 账号 {qq_linked_account_count} 个（本地封禁 {qq_linked_banned_account_count} 个，全球封禁 {qq_linked_global_banned_account_count} 个）。"
+            "发现高风险关联：同 IP 账号 {} 个（本地封禁 {} 个，全球封禁 {} 个）；同 QQ 账号 {} 个（本地封禁 {} 个，全球封禁 {} 个）。",
+            ip.total,
+            ip.local_banned,
+            ip.global_banned,
+            qq.total,
+            qq.local_banned,
+            qq.global_banned,
         ),
         RiskAction::Warn => "发现历史风险，需要管理员核对并填写备注。".to_string(),
         RiskAction::Allow => "仅发现低风险提示。".to_string(),

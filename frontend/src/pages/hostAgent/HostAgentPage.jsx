@@ -5,7 +5,7 @@ import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
 import { MetricCard } from '../../shared/MetricCard.jsx';
 import { TableLoading, TableError } from '../../shared/TableState.jsx';
-import { downloadHostAgentFile, normalizeSetupResponse } from './hostAgent.js';
+import { downloadHostAgentFile, normalizeSetupResponse, MOCK_POWER_LOGS, POWER_LOG_RESULT_META } from './hostAgent.js';
 import { HeartbeatTrendChart, PowerTaskTrendChart } from './HostAgentCharts.jsx';
 
 // 演示数据：监控接口未上线前用于预览页面设计，接入真实上报后删除。
@@ -89,6 +89,49 @@ export function HostAgentPage() {
       <div className="dash-charts-grid">
         <HeartbeatTrendChart />
         <PowerTaskTrendChart />
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <div>
+            <div className="card-title">电源操作记录</div>
+            <div className="card-sub">与操作日志页同源（演示数据，接入真实日志后替换）</div>
+          </div>
+        </div>
+        <div className="card-body">
+          <div className="table-responsive">
+            <table className="data-table mobile-card-table">
+              <thead>
+                <tr>
+                  <th>操作人</th>
+                  <th>模块</th>
+                  <th>操作动作</th>
+                  <th>目标详情</th>
+                  <th>操作IP</th>
+                  <th>操作时间</th>
+                </tr>
+              </thead>
+              <tbody>
+                {MOCK_POWER_LOGS.map((log) => {
+                  const result = POWER_LOG_RESULT_META[log.result];
+                  return (
+                    <tr key={log.id}>
+                      <td className="fw-600 mobile-card-primary" data-label="操作人">{log.operator}</td>
+                      <td data-label="模块"><span className="status-pill pill-danger">{log.module}</span></td>
+                      <td data-label="操作动作">
+                        {log.action}
+                        <span className={`status-pill ${result.className}`} style={{ marginLeft: 6 }}>{result.label}</span>
+                      </td>
+                      <td data-label="目标详情">{log.target}</td>
+                      <td data-label="操作IP">{log.ip}</td>
+                      <td data-label="操作时间">{log.time}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
       <div className="lower-grid ops-lower-grid">

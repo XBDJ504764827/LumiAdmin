@@ -6,6 +6,7 @@ import { useToast } from '../../shared/Toast.jsx';
 import { MetricCard } from '../../shared/MetricCard.jsx';
 import { TableLoading, TableError } from '../../shared/TableState.jsx';
 import { downloadHostAgentFile, normalizeSetupResponse } from './hostAgent.js';
+import { HeartbeatTrendChart, PowerTaskTrendChart } from './HostAgentCharts.jsx';
 
 // 演示数据：监控接口未上线前用于预览页面设计，接入真实上报后删除。
 const MOCK_HOSTS = [
@@ -83,6 +84,11 @@ export function HostAgentPage() {
         <MetricCard label="受管实例" value={stats.instances} badge={`${stats.hosts} 台宿主机`} />
         <MetricCard label="在线 Agent" value={`${stats.online}/${stats.hosts}`} badge={offline ? `${offline} 台离线` : '全部在线'} accent={offline > 0} />
         <MetricCard label="待执行任务" value={stats.pendingJobs} badge={stats.pendingJobs ? '有任务排队' : '队列为空'} accent={stats.pendingJobs > 0} />
+      </div>
+
+      <div className="dash-charts-grid">
+        <HeartbeatTrendChart />
+        <PowerTaskTrendChart />
       </div>
 
       <div className="lower-grid ops-lower-grid">

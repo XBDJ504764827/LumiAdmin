@@ -169,6 +169,10 @@ function OverviewTab({detail, globalBans}) {
   const linkedLocalBans = count(summary.linked_banned_account_count);
   const linkedGlobalBans = count(summary.linked_global_banned_account_count);
   const linkedRiskBans = linkedLocalBans + linkedGlobalBans;
+  const qqLinkedCount = count(riskProfile?.qq_linked_account_count);
+  const qqLocalBans = count(riskProfile?.qq_linked_banned_account_count);
+  const qqGlobalBans = count(riskProfile?.qq_linked_global_banned_account_count);
+  const qqRiskBans = qqLocalBans + qqGlobalBans;
   const activeGlobalCount = countActiveGlobalBans(globalBans || []);
 
   return <>
@@ -188,6 +192,10 @@ function OverviewTab({detail, globalBans}) {
             <div className="player-insight-item">
               <span className={`player-insight-dot ${linkedRiskBans>0?'danger':'default'}`}></span>
               <div><strong>IP 关联</strong><p>{summary.linked_account_count>0?`共发现 ${summary.linked_account_count} 个同 IP 账号，其中本地封禁 ${linkedLocalBans} 个、全球封禁 ${linkedGlobalBans} 个。`:'暂无同 IP 关联账号。'}</p></div>
+            </div>
+            <div className="player-insight-item">
+              <span className={`player-insight-dot ${qqRiskBans>0?'danger':'default'}`}></span>
+              <div><strong>QQ 关联</strong><p>{riskProfile?.qq_openid?`已绑定 QQ，同 QQ 账号 ${qqLinkedCount} 个，其中本地封禁 ${qqLocalBans} 个、全球封禁 ${qqGlobalBans} 个。`:'该账号尚未绑定 QQ。'}</p></div>
             </div>
             <div className="player-insight-item">
               <span className={`player-insight-dot ${riskProfile?.action==='deny'||riskProfile?.action==='require_force'?'danger':riskProfile?.action==='warn'?'warning':'success'}`}></span>
@@ -431,6 +439,7 @@ function OverviewStrip({detail, globalBans}) {
   const summary = detail.summary || {};
   const risk = detail.risk_profile;
   const linkedRiskBans = count(summary.linked_banned_account_count) + count(summary.linked_global_banned_account_count);
+  const qqRiskBans = count(risk?.qq_linked_banned_account_count) + count(risk?.qq_linked_global_banned_account_count);
   const activeGlobal = countActiveGlobalBans(globalBans || []);
   const items = [
     { label:'进服成功', value:count(summary.access_success_count), tone:'success' },
@@ -438,6 +447,7 @@ function OverviewStrip({detail, globalBans}) {
     { label:'本地封禁', value:count(summary.active_ban_count), tone:count(summary.active_ban_count)>0?'danger':'success' },
     { label:'全球封禁', value:activeGlobal, tone:activeGlobal>0?'danger':'default' },
     { label:'同 IP 账号', value:count(summary.linked_account_count), tone:linkedRiskBans>0?'warning':'default' },
+    { label:'同 QQ 账号', value:count(risk?.qq_linked_account_count), tone:qqRiskBans>0?'danger':count(risk?.qq_linked_account_count)>0?'warning':'default' },
     { label:'风险等级', value:risk?.action==='deny'||risk?.action==='require_force'?'高':risk?.action==='warn'?'中':'低', tone:risk?.action==='deny'||risk?.action==='require_force'?'danger':risk?.action==='warn'?'warning':'success' },
     { label:'证据文件', value:count(summary.evidence_file_count), tone:'default' },
   ];
@@ -533,6 +543,38 @@ function NetworkTab({detail, token}) {
     finally { setActing(false); }
   }
   return <>
+    <div className="card"><div className="card-header"><div><div className="card-title">同 QQ 关联账号</div><div className="card-sub">同一 QQ openid 下绑定的其他 Steam 账号。任一账号存在封禁/白名单拒绝记录时，该 QQ 即为高风险 QQ。</div></div></div><div className="card-body">
+      {(() => {
+        const riskProfile = detail.risk_profile;
+        const qqAccounts = riskProfile?.qq_linked_accounts || [];
+        if (!riskProfile?.qq_openid) return <Empty>该账号尚未绑定 QQ，暂无同 QQ 关联。</Empty>;
+        if (qqAccounts.length === 0) return <Empty>已绑定 QQ，同 QQ 下暂无其他 Steam 账号。</Empty>;
+        const qqLb = qqAccounts.filter((a) => a.has_active_local_ban).length;
+        const qqGb = qqAccounts.filter((a) => a.has_active_global_ban).length;
+        const qqRejected = qqAccounts.reduce((sum, a) => sum + (a.rejected_whitelist_count || 0), 0);
+        return <>
+          <div className="player-table-sub" style={{ marginBottom: 8 }}>
+            已绑定 QQ · 同 QQ 账号 {qqAccounts.length} 个
+            {(qqLb + qqGb + qqRejected) > 0 ? <span style={{ color: 'var(--danger-text)', fontWeight: 600 }}> · ⚠ 高风险 QQ（本地封禁 {qqLb} · 全球封禁 {qqGb} · 白名单被拒 {qqRejected} 次）</span> : <span> · 暂无封禁/拒绝记录</span>}
+          </div>
+          <div className="table-responsive"><table className="data-table player-record-table mobile-card-table"><thead><tr><th>账号</th><th>关联方式</th><th>风险标记</th><th>最近出现</th></tr></thead><tbody>
+            {qqAccounts.map((account) => (
+              <tr key={account.steamid64} className={account.has_active_local_ban || account.has_active_global_ban ? 'row-access-denied' : undefined}>
+                <td data-label="账号" className="mobile-card-primary"><span style={{ fontWeight: 600 }}>{account.player_name || '(未知玩家)'}</span> <code className="steam-id" style={{ fontSize: '11px' }}>{account.steamid64}</code></td>
+                <td data-label="关联方式"><StatusPill kind="default">同QQ绑定</StatusPill></td>
+                <td data-label="风险标记"><div className="linked-account-pills">
+                  {account.has_active_local_ban && <StatusPill kind="danger">本地封禁</StatusPill>}
+                  {account.has_active_global_ban && <StatusPill kind="danger">全球封禁</StatusPill>}
+                  {(account.rejected_whitelist_count || 0) > 0 && <StatusPill kind="warning">白名单被拒 {account.rejected_whitelist_count} 次</StatusPill>}
+                  {!account.has_active_local_ban && !account.has_active_global_ban && !(account.rejected_whitelist_count > 0) && <StatusPill kind="default">无风险标记</StatusPill>}
+                </div></td>
+                <td data-label="最近出现" style={{ fontFamily: 'var(--mono)', fontSize: '12px' }}>{account.last_seen_at ? formatChinaDateTime(account.last_seen_at, { seconds: false }) : '-'}</td>
+              </tr>
+            ))}
+          </tbody></table></div>
+        </>;
+      })()}
+    </div></div>
     <div className="card"><div className="card-header"><div><div className="card-title">账号 / IP 关系图</div><div className="card-sub">节点表示账号，连线标签表示共享 IP。勾选关联账号后可批量标记。</div></div></div>
       <div className="player-relation-graph">
         <div className="player-relation-center">
@@ -641,7 +683,7 @@ const TABS = [
   {key:'timeline',label:'时间线'},
   {key:'access',label:'进服'},
   {key:'status',label:'封禁/白名单'},
-  {key:'network',label:'IP 关联'},
+  {key:'network',label:'IP / QQ 关联'},
   {key:'behavior',label:'工单'},
   {key:'audit',label:'审计'},
 ];

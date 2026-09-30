@@ -91,11 +91,18 @@ function RiskChip({ tone = 'default', children }) {
 
 function accountStatusChips(account) {
   const chips = [];
+  if (account.via_qq) chips.push(<RiskChip key="qq" tone="default">同QQ</RiskChip>);
   if (account.has_active_global_ban) chips.push(<RiskChip key="global" tone="danger">全球封禁</RiskChip>);
   if (account.has_active_local_ban) chips.push(<RiskChip key="local" tone="danger">本地封禁</RiskChip>);
   if (account.rejected_whitelist_count > 0) chips.push(<RiskChip key="rejected" tone="warning">白名单被拒 {account.rejected_whitelist_count} 次</RiskChip>);
-  if (chips.length === 0) chips.push(<RiskChip key="clean" tone="default">无风险标记</RiskChip>);
+  if (chips.length === 0 || (chips.length === 1 && account.via_qq)) chips.push(<RiskChip key="clean" tone="default">无风险标记</RiskChip>);
   return chips;
+}
+
+function accountLinkLabel(account) {
+  if (account.via_qq) return '同QQ绑定';
+  const sharedIps = account.shared_ips || [];
+  return sharedIps.length > 0 ? `共享IP：${sharedIps.join('、')}` : '共享IP：未知';
 }
 
 // 消息中可能内嵌 RFC3339 时间戳（历史数据），统一替换为本地可读时间
@@ -115,7 +122,9 @@ function friendlyReasonMessage(message) {
 // 风险原因按来源分组展示（other 排除已知前缀，避免重复渲染）
 const REASON_GROUPS = [
   { key: 'self', title: '当前账号风险', match: (code) => code.startsWith('self_') },
-  { key: 'linked', title: '关联账号风险', match: (code) => code.startsWith('linked_') },
+  { key: 'linked_qq', title: '同 QQ 关联风险', match: (code) => code.startsWith('linked_qq_') },
+  { key: 'linked_ip', title: '同 IP 关联风险', match: (code) => code.startsWith('linked_ip_') },
+  { key: 'linked', title: '关联账号风险', match: (code) => code.startsWith('linked_') && !code.startsWith('linked_qq_') && !code.startsWith('linked_ip_') },
   { key: 'other', title: '其他提示', match: (code) => !code.startsWith('self_') && !code.startsWith('linked_') },
 ];
 
@@ -145,7 +154,7 @@ function RiskReasonItem({ reason, accountName }) {
   );
 }
 
-// 关联账号风险明细：把命中风险的关联账号逐条列出，明确“是哪个账号、因何、共享哪个 IP”。
+// 关联账号风险明细：把命中风险的关联账号逐条列出，明确“是哪个账号、因何、经由哪种关联”。
 // 相比聚合文案（只带首个账号/IP），逐条展示可避免管理员误判。
 function LinkedAccountRiskCard({ account, reasons }) {
   // 与该账号相关的风险原因（后端会把关联账号的 steamid64 写入 reason）
@@ -153,6 +162,7 @@ function LinkedAccountRiskCard({ account, reasons }) {
   const tone = account.has_active_global_ban || account.has_active_local_ban ? 'danger' : 'warning';
   const chips = accountStatusChips(account);
   const sharedIps = account.shared_ips || [];
+  const isQq = Boolean(account.via_qq);
 
   return (
     <div className={`whitelist-linked-risk-card risk-severity-${tone}`}>
@@ -168,9 +178,11 @@ function LinkedAccountRiskCard({ account, reasons }) {
         <div className="whitelist-linked-risk-field">
           <span className="whitelist-linked-risk-label">关联方式</span>
           <span className="whitelist-linked-risk-value">
-            {sharedIps.length > 0
-              ? sharedIps.map((ip) => <code key={ip} className="whitelist-linked-risk-ip">{ip}</code>)
-              : <span className="text-muted-light">共享 IP 未知</span>}
+            {isQq
+              ? <span>同 QQ 绑定{account.qq_openid ? <code className="whitelist-linked-risk-ip" style={{ marginLeft: 6 }}>{String(account.qq_openid).length > 8 ? `${String(account.qq_openid).slice(0, 4)}****${String(account.qq_openid).slice(-4)}` : '****'}</code> : null}</span>
+              : (sharedIps.length > 0
+                ? sharedIps.map((ip) => <code key={ip} className="whitelist-linked-risk-ip">{ip}</code>)
+                : <span className="text-muted-light">共享 IP 未知</span>)}
           </span>
         </div>
         {account.last_seen_at ? (
@@ -206,9 +218,11 @@ function flaggedLinkedAccounts(accounts) {
     });
 }
 
-// 用连线图展示当前玩家与各关联账号之间的关系，线上的标签即关联依据（共享 IP）
+// 用连线图展示当前玩家与各关联账号之间的关系，线上的标签即关联依据（共享 IP / 同 QQ 绑定）
 function RiskLinkGraph({ profile, mainName }) {
-  const accounts = profile.linked_accounts || [];
+  const ipAccounts = profile.linked_accounts || [];
+  const qqAccounts = profile.qq_linked_accounts || [];
+  const accounts = [...qqAccounts, ...ipAccounts];
   const visible = accounts.slice(0, RISK_GRAPH_LIMIT);
   const more = accounts.length - visible.length;
   if (visible.length === 0) return null;
@@ -239,8 +253,8 @@ function RiskLinkGraph({ profile, mainName }) {
         <div key={account.steamid64} className="risk-graph-row">
           <div className="risk-graph-stub" />
           <div className="risk-graph-arm">
-            <span className="risk-graph-ip" title="关联方式（共享 IP）">
-              共享IP：{account.shared_ips?.length ? account.shared_ips.join('、') : '未知'}
+            <span className="risk-graph-ip" title={account.via_qq ? '关联方式（同 QQ 绑定）' : '关联方式（共享 IP）'}>
+              {accountLinkLabel(account)}
             </span>
           </div>
           <div className="risk-graph-node">
@@ -265,7 +279,11 @@ function RiskProfilePanel({ profile, mainName }) {
   const tone = riskTone(profile);
   const reasons = profile.reasons || [];
   const linkedAccounts = profile.linked_accounts || [];
-  const flaggedAccounts = flaggedLinkedAccounts(linkedAccounts);
+  const qqLinkedAccounts = profile.qq_linked_accounts || [];
+  const allLinkedAccounts = [...qqLinkedAccounts, ...linkedAccounts];
+  const flaggedAccounts = flaggedLinkedAccounts(allLinkedAccounts);
+  const flaggedQqAccounts = flaggedLinkedAccounts(qqLinkedAccounts);
+  const flaggedIpAccounts = flaggedLinkedAccounts(linkedAccounts);
   return (
     <div className={`whitelist-risk-panel ${tone}`}>
       <div className="whitelist-risk-panel-head">
@@ -273,18 +291,34 @@ function RiskProfilePanel({ profile, mainName }) {
         <strong>{riskActionLabel(profile.action)}</strong>
       </div>
       <div className="whitelist-risk-summary">{profile.summary}</div>
-      {linkedAccounts.length > 0 ? (
+      {profile.qq_openid ? (
+        <div className="whitelist-risk-qq-line" style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6 }}>
+          绑定 QQ：<code>{String(profile.qq_openid).length > 8 ? `${String(profile.qq_openid).slice(0, 4)}****${String(profile.qq_openid).slice(-4)}` : '****'}</code>
+          {qqLinkedAccounts.length > 0 ? <span> · 同 QQ 账号 {qqLinkedAccounts.length} 个</span> : <span> · 无同 QQ 关联账号</span>}
+        </div>
+      ) : null}
+      {allLinkedAccounts.length > 0 ? (
         <div className="whitelist-risk-section">
           <div className="whitelist-risk-section-title">关联账号</div>
           <RiskLinkGraph profile={profile} mainName={mainName} />
         </div>
       ) : null}
-      {flaggedAccounts.length > 0 ? (
+      {flaggedQqAccounts.length > 0 ? (
         <div className="whitelist-risk-section">
-          <div className="whitelist-risk-section-title">关联账号风险明细</div>
+          <div className="whitelist-risk-section-title">同 QQ 关联账号风险明细</div>
           <div className="whitelist-linked-risk-list">
-            {flaggedAccounts.map((account) => (
-              <LinkedAccountRiskCard key={account.steamid64} account={account} reasons={reasons} />
+            {flaggedQqAccounts.map((account) => (
+              <LinkedAccountRiskCard key={`qq-${account.steamid64}`} account={account} reasons={reasons} />
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {flaggedIpAccounts.length > 0 ? (
+        <div className="whitelist-risk-section">
+          <div className="whitelist-risk-section-title">同 IP 关联账号风险明细</div>
+          <div className="whitelist-linked-risk-list">
+            {flaggedIpAccounts.map((account) => (
+              <LinkedAccountRiskCard key={`ip-${account.steamid64}`} account={account} reasons={reasons} />
             ))}
           </div>
         </div>
@@ -299,7 +333,7 @@ function RiskProfilePanel({ profile, mainName }) {
               // 关联账号风险已在上方按账号逐条展示，这里仅保留无法归属到已展示账号的项，
               // 避免同一风险重复展示造成干扰；被截断未展示的账号仍会保留在此。
               const shownIds = new Set(flaggedAccounts.map((account) => account.steamid64));
-              const visibleReasons = group.key === 'linked'
+              const visibleReasons = group.key.startsWith('linked')
                 ? groupReasons.filter((reason) => !reason.steamid64 || !shownIds.has(reason.steamid64))
                 : groupReasons;
               if (visibleReasons.length === 0) return null;
@@ -311,7 +345,7 @@ function RiskProfilePanel({ profile, mainName }) {
                   </div>
                   <div className="whitelist-risk-reason-list">
                     {visibleReasons.map((reason, index) => {
-                      const account = (profile.linked_accounts || []).find((a) => a.steamid64 === reason.steamid64);
+                      const account = allLinkedAccounts.find((a) => a.steamid64 === reason.steamid64);
                       return (
                         <RiskReasonItem
                           key={`${reason.code}-${index}`}

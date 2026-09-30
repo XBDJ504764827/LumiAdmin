@@ -47,6 +47,14 @@ export function QqBindingPanel({ steamid64, compact = false }) {
 
   const binding = data?.binding;
   const messages = data?.chat_messages || [];
+  const siblings = data?.sibling_bindings || [];
+  const siblingRisks = data?.sibling_risks || {};
+  const isRisky = (r) => r && (r.has_active_local_ban || r.has_active_global_ban || (r.rejected_whitelist_count || 0) > 0);
+  const riskySiblings = siblings.filter((s) => isRisky(siblingRisks[s.steamid64]));
+  // QQ 高风险看的是“该 QQ 下任意 Steam”（含当前账号自身），自身封禁同样会让 QQ 变高风险
+  const selfRisk = siblingRisks[steamid64];
+  const isSelfRisky = isRisky(selfRisk);
+  const riskyTotal = riskySiblings.length + (isSelfRisky ? 1 : 0);
 
   async function handleSend() {
     if (sending) return;
@@ -96,6 +104,26 @@ export function QqBindingPanel({ steamid64, compact = false }) {
           <div>QQ 昵称：{binding.qq_username || '-'}</div>
           <div>绑定时间：{formatChinaDateTime(binding.verified_at)}</div>
           <div>同 QQ 绑定数：{data?.qq_binding_count ?? 1}</div>
+          {riskyTotal > 0 ? (
+            <div style={{ padding: '8px 10px', borderRadius: 8, background: 'var(--danger-bg, #fef2f2)', border: '1px solid var(--danger-border, #fecaca)', color: 'var(--danger-text, #b91c1c)' }}>
+              ⚠ 该 QQ 为高风险 QQ：同 QQ 账号中有 {riskyTotal} 个存在封禁/白名单拒绝记录
+              <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {isSelfRisky ? (
+                  <span key={steamid64}><code>{steamid64}</code>（当前账号）：{(() => { const tags = []; if (selfRisk.has_active_local_ban) tags.push('本地封禁'); if (selfRisk.has_active_global_ban) tags.push('全球封禁'); if ((selfRisk.rejected_whitelist_count || 0) > 0) tags.push(`白名单被拒 ${selfRisk.rejected_whitelist_count} 次`); return tags.join('、') || '有风险标记'; })()}</span>
+                ) : null}
+                {riskySiblings.map((s) => {
+                  const r = siblingRisks[s.steamid64] || {};
+                  const tags = [];
+                  if (r.has_active_local_ban) tags.push('本地封禁');
+                  if (r.has_active_global_ban) tags.push('全球封禁');
+                  if ((r.rejected_whitelist_count || 0) > 0) tags.push(`白名单被拒 ${r.rejected_whitelist_count} 次`);
+                  return <span key={s.steamid64}><code>{s.steamid64}</code>{s.qq_username ? `（${s.qq_username}）` : ''}：{tags.join('、') || '有风险标记'}</span>;
+                })}
+              </div>
+            </div>
+          ) : (siblings.length > 0 ? (
+            <div className="text-muted-light fs-12">同 QQ 其他账号（{siblings.length} 个）暂无封禁/拒绝记录。</div>
+          ) : null)}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
             {canManage ? <button className="action-btn action-btn-accent" type="button" onClick={() => setChatOpen((v) => !v)}>{chatOpen ? '收起聊天' : '私聊玩家'}</button> : null}
             {canManage ? <button className="action-btn action-btn-danger" type="button" onClick={handleUnbind}>解绑</button> : null}

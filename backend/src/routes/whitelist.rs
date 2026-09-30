@@ -543,7 +543,10 @@ pub(crate) async fn get_qq_binding(
             .map_err(AppError::internal)?,
         None => 0,
     };
-    // 同 QQ 绑定的其他 Steam，供管理员排查多开
+    // 同 QQ 绑定的其他 Steam，供管理员排查多开；
+    // 同时附带同 QQ 下每个账号的风险标记（含当前账号自身：QQ 高风险判定看的是
+    // “该 QQ 下任意 Steam”，自身封禁同样会让 QQ 变高风险），
+    // 便于一眼看出该 QQ 是否为高风险 QQ。
     let sibling_bindings = match binding.as_ref() {
         Some(b) => whitelist_qq_service::find_bindings_by_openid(&ctx.db, &b.qq_openid)
             .await
@@ -552,6 +555,77 @@ pub(crate) async fn get_qq_binding(
             .filter(|item| item.steamid64 != steamid64)
             .collect::<Vec<_>>(),
         None => Vec::new(),
+    };
+    let sibling_risks = if binding.is_none() {
+        serde_json::json!({})
+    } else {
+        let mut risk_ids: Vec<String> = sibling_bindings
+            .iter()
+            .map(|item| item.steamid64.clone())
+            .collect();
+        if !risk_ids.iter().any(|id| id == &steamid64) {
+            risk_ids.push(steamid64.clone());
+        }
+        // 批量查询：本地有效封禁 / 全球有效封禁 / 白名单拒绝次数
+        let (local_bans, global_bans, rejected): (
+            Vec<(String,)>,
+            Vec<(String,)>,
+            Vec<(String, i64)>,
+        ) = tokio::try_join!(
+            async {
+                sqlx::query_as::<_, (String,)>(
+                    r#"SELECT DISTINCT steam_id FROM ban_records
+                       WHERE steam_id = ANY($1) AND status = 'active'
+                         AND (expires_at IS NULL OR expires_at > now())"#,
+                )
+                .bind(&risk_ids)
+                .fetch_all(&ctx.db.pool)
+                .await
+                .map_err(|e| AppError::internal(e.into()))
+            },
+            async {
+                sqlx::query_as::<_, (String,)>(
+                    r#"SELECT DISTINCT steam_id64 FROM global_bans
+                       WHERE steam_id64 = ANY($1)
+                         AND is_expired = false AND manual_unbanned = false"#,
+                )
+                .bind(&risk_ids)
+                .fetch_all(&ctx.db.pool)
+                .await
+                .map_err(|e| AppError::internal(e.into()))
+            },
+            async {
+                sqlx::query_as::<_, (String, i64)>(
+                    r#"SELECT steamid64, COUNT(*) FROM whitelist_requests
+                       WHERE steamid64 = ANY($1) AND status = 'rejected'
+                       GROUP BY steamid64"#,
+                )
+                .bind(&risk_ids)
+                .fetch_all(&ctx.db.pool)
+                .await
+                .map_err(|e| AppError::internal(e.into()))
+            },
+        )?;
+        let local_set: std::collections::HashSet<&str> =
+            local_bans.iter().map(|(id,)| id.as_str()).collect();
+        let global_set: std::collections::HashSet<&str> =
+            global_bans.iter().map(|(id,)| id.as_str()).collect();
+        let rejected_map: std::collections::HashMap<&str, i64> = rejected
+            .iter()
+            .map(|(id, count)| (id.as_str(), *count))
+            .collect();
+        let mut map = serde_json::Map::new();
+        for id in &risk_ids {
+            map.insert(
+                id.clone(),
+                serde_json::json!({
+                    "has_active_local_ban": local_set.contains(id.as_str()),
+                    "has_active_global_ban": global_set.contains(id.as_str()),
+                    "rejected_whitelist_count": rejected_map.get(id.as_str()).copied().unwrap_or(0),
+                }),
+            );
+        }
+        serde_json::Value::Object(map)
     };
     let chat_messages = if can_view_chat {
         whitelist_qq_service::list_chat_messages(&ctx.db, &steamid64, 50)
@@ -564,6 +638,7 @@ pub(crate) async fn get_qq_binding(
         "binding": binding,
         "qq_binding_count": qq_count,
         "sibling_bindings": sibling_bindings,
+        "sibling_risks": sibling_risks,
         "chat_messages": chat_messages,
     })))
 }

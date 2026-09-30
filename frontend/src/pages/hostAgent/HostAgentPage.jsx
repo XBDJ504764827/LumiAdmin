@@ -105,7 +105,7 @@ export function HostAgentPage() {
       </Card>
 
       <Card title="安装与设置" subtitle="在游戏服宿主机上执行，约 1 分钟完成">
-        <ol>
+        <ol style={{ margin: '0 0 12px', paddingLeft: 20, fontSize: 13, color: 'var(--text2)', lineHeight: 1.7 }}>
           <li>从上方下载 <code style={{ fontSize: 12, background: 'var(--surface2)', padding: '2px 6px', borderRadius: 4 }}>install.sh</code> 传到宿主机（或直接在宿主机上执行第 2 步的一键命令）。</li>
           <li>按实际填写下面三个参数，点击复制后在宿主机上 <span className="fw-600">sudo 执行</span>。</li>
           <li>执行后用 <code style={{ fontSize: 12, background: 'var(--surface2)', padding: '2px 6px', borderRadius: 4 }}>journalctl -u lumi-host-agent -f</code> 确认 Agent 已启动。</li>
@@ -133,7 +133,7 @@ export function HostAgentPage() {
       </Card>
 
       <Card title="待开发" subtitle="电源控制闭环后续上线">
-        <ul>
+        <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: 'var(--text2)', lineHeight: 1.7 }}>
           <li>宿主机在线状态与实例清单展示</li>
           <li>服务器电源操作：重启 / 开机 / 关机（含任务状态与审计）</li>
           <li>Agent 口令签发与轮换</li>

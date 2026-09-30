@@ -52,6 +52,8 @@ import {
   RESTART_EMPTY_TEXT,
   RESTART_FINAL_TEXT,
   RESTART_HAS_PLAYERS_TEXT,
+  FORCE_RESTART_CONFIRM_TEXT,
+  FORCE_RESTART_FINAL_TEXT,
   buildStartConfirmText,
   buildStopConfirmText,
   buildStopFinalText,
@@ -562,7 +564,8 @@ export function CommunityPage() {
     const needsCountdown =
       powerModal.step === 'final' &&
       ((powerModal.action === POWER_ACTION.restart && restartVariant(powerModal.server) === 'empty') ||
-        powerModal.action === POWER_ACTION.stop);
+        powerModal.action === POWER_ACTION.stop ||
+        powerModal.action === POWER_ACTION.forceRestart);
     if (!needsCountdown) return undefined;
     if (powerModal.countdown <= 0) return undefined;
     const timer = window.setTimeout(() => {
@@ -581,7 +584,7 @@ export function CommunityPage() {
       closePowerModal();
       return;
     }
-    if (step === 'confirm' && (action === POWER_ACTION.stop || (action === POWER_ACTION.restart && restartVariant(server) === 'empty'))) {
+    if (step === 'confirm' && (action === POWER_ACTION.stop || action === POWER_ACTION.forceRestart || (action === POWER_ACTION.restart && restartVariant(server) === 'empty'))) {
       setPowerModal((prev) => ({ ...prev, step: 'final', countdown: POWER_COUNTDOWN_SECS }));
       return;
     }
@@ -1315,6 +1318,13 @@ export function CommunityPage() {
                 <span className="rcon-cmd-name">关闭服务器</span>
                 <span className="rcon-cmd-desc">{powerAvailability(rconModal.server).stop.enabled ? '两次确认，第二次强制阅读 5 秒' : '关机状态不可用'}</span>
               </button>
+              <button
+                className="rcon-cmd-btn rcon-cmd-btn--danger"
+                onClick={() => openPowerModal(rconModal.server, POWER_ACTION.forceRestart)}
+              >
+                <span className="rcon-cmd-name">强制重启服务器<span className="rcon-cmd-badge">⚠ 高影响</span></span>
+                <span className="rcon-cmd-desc">有玩家也可执行，两次确认并强制阅读 5 秒</span>
+              </button>
             </div>
           </div>
         ) : null}
@@ -1378,7 +1388,7 @@ export function CommunityPage() {
       {powerModal.open && powerModal.server ? (
         <Modal
           open
-          title={powerModal.action === POWER_ACTION.restart ? `重启服务器 — ${powerModal.server.name}` : powerModal.action === POWER_ACTION.start ? `开启服务器 — ${powerModal.server.name}` : `关闭服务器 — ${powerModal.server.name}`}
+          title={powerModal.action === POWER_ACTION.restart ? `重启服务器 — ${powerModal.server.name}` : powerModal.action === POWER_ACTION.forceRestart ? `强制重启服务器 — ${powerModal.server.name}` : powerModal.action === POWER_ACTION.start ? `开启服务器 — ${powerModal.server.name}` : `关闭服务器 — ${powerModal.server.name}`}
           onClose={closePowerModal}
           footer={(
             <>
@@ -1392,6 +1402,14 @@ export function CommunityPage() {
               {powerModal.action === POWER_ACTION.restart && restartVariant(powerModal.server) === 'empty' && powerModal.step === 'final' ? (
                 <button className="btn btn-primary" disabled={powerModal.countdown > 0} onClick={handlePowerConfirm}>
                   {countdownLabel('确认重启', powerModal.countdown)}
+                </button>
+              ) : null}
+              {powerModal.action === POWER_ACTION.forceRestart && powerModal.step === 'confirm' ? (
+                <button className="btn btn-primary" onClick={handlePowerConfirm}>确认强制重启</button>
+              ) : null}
+              {powerModal.action === POWER_ACTION.forceRestart && powerModal.step === 'final' ? (
+                <button className="btn btn-primary" disabled={powerModal.countdown > 0} onClick={handlePowerConfirm}>
+                  {countdownLabel('确认强制重启', powerModal.countdown)}
                 </button>
               ) : null}
               {powerModal.action === POWER_ACTION.start ? (
@@ -1416,6 +1434,12 @@ export function CommunityPage() {
           ) : null}
           {powerModal.action === POWER_ACTION.restart && restartVariant(powerModal.server) === 'empty' && powerModal.step === 'final' ? (
             <div className="info-box danger">{RESTART_FINAL_TEXT}</div>
+          ) : null}
+          {powerModal.action === POWER_ACTION.forceRestart && powerModal.step === 'confirm' ? (
+            <div className="info-box warning">{FORCE_RESTART_CONFIRM_TEXT}</div>
+          ) : null}
+          {powerModal.action === POWER_ACTION.forceRestart && powerModal.step === 'final' ? (
+            <div className="info-box danger">{FORCE_RESTART_FINAL_TEXT}</div>
           ) : null}
           {powerModal.action === POWER_ACTION.start ? (
             <div className="info-box info">{buildStartConfirmText(powerModal.server.name)}</div>

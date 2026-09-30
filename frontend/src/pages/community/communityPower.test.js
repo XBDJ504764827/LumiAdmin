@@ -11,6 +11,8 @@ import {
   RESTART_EMPTY_TEXT,
   RESTART_FINAL_TEXT,
   RESTART_HAS_PLAYERS_TEXT,
+  FORCE_RESTART_CONFIRM_TEXT,
+  FORCE_RESTART_FINAL_TEXT,
   serverPlayerCount,
 } from './communityPower.js';
 
@@ -35,11 +37,14 @@ test('restartVariant 按服内人数区分两种二次确认', () => {
   assert.ok(RESTART_HAS_PLAYERS_TEXT.includes('存在玩家无法进行重启'));
   assert.ok(RESTART_EMPTY_TEXT.includes('确认服务器内没有玩家后再继续下一步'));
   assert.ok(RESTART_FINAL_TEXT.includes('强制阅读 5 秒后才可执行'));
+  assert.ok(FORCE_RESTART_CONFIRM_TEXT.includes('无视服内玩家'));
+  assert.ok(FORCE_RESTART_FINAL_TEXT.includes('强制阅读 5 秒后才可执行'));
 });
 
-test('powerAvailability 开关机互斥置灰', () => {
+test('powerAvailability 开关机互斥置灰，强制重启常亮', () => {
   const on = powerAvailability({ status: 'online' });
   assert.equal(on.restart.enabled, true);
+  assert.equal(on.forceRestart.enabled, true);
   assert.equal(on.start.enabled, false);
   assert.equal(on.stop.enabled, true);
 

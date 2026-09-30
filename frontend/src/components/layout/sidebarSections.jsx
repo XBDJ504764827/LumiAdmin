@@ -70,6 +70,7 @@ export function sidebarSections(role) {
       items: [
         ...(canUseAdminTools ? [{ path: '/dashboard', label: '仪表盘', icon: icons.grid }] : []),
         { path: '/community', label: '社区组管理', icon: icons.community },
+        ...(canUseAdminTools ? [{ path: '/host-agent', label: 'Agent控制', icon: icons.ops }] : []),
         { path: '/whitelist', label: '白名单管理', icon: icons.whitelist, pendingKey: 'whitelist' },
         { path: '/ban', label: '封禁管理', icon: icons.ban },
         { path: '/player-detail', label: '玩家详情', icon: icons.playerDetail },

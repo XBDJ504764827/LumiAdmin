@@ -128,6 +128,8 @@ export const api = {
   notificationUnreadCount: (token) => request('/api/notifications/unread-count', { headers: withAuth(token) }),
   markNotificationRead: (token, id) => request(`/api/notifications/${id}/read`, { method: 'POST', headers: withAuth(token) }),
   markAllNotificationsRead: (token) => request('/api/notifications/read-all', { method: 'POST', headers: withAuth(token) }),
+  // Host agent （宿主机 Agent 文件托管下发）
+  hostAgentSetup: (token) => request('/api/host-agent/setup', { headers: withAuth(token) }),
 };
 
 export function useAppApi() {

@@ -4,7 +4,6 @@ import { useAsync } from '../../shared/useAsync.js';
 import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
 import { Card } from '../../shared/Card.jsx';
-import { PageHeader } from '../../shared/PageHeader.jsx';
 import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 import {
   buildInstallCommand,
@@ -54,12 +53,11 @@ export function HostAgentPage() {
   }
 
   return (
-    <div>
-      <PageHeader
-        breadcrumb="系统功能 / 主机 Agent"
-        title="Agent控制"
-        subtitle="宿主机 Agent 下载与设置（一台宿主机跑一个 Agent，管理本机全部 LGSM 实例）"
-      />
+    <div id="host-agent" className="content-section active">
+      <div className="breadcrumb"><span>核心管理</span><span className="sep">›</span><span className="current">Agent控制</span></div>
+      <div className="page-header">
+        <div><div className="page-title">Agent控制</div><div className="page-sub">宿主机 Agent 下载与设置（一台宿主机跑一个 Agent，管理本机全部 LGSM 实例）。</div></div>
+      </div>
 
       <Card title="Agent 下载" subtitle="安装包由本站直接托管下发，不走 GitHub">
         {setupState.loading ? <TableLoading /> : null}
@@ -69,7 +67,7 @@ export function HostAgentPage() {
         {setup && setup.files.length === 0 ? <TableEmpty message="暂无可下载文件。" /> : null}
         {setup && setup.files.length > 0 ? (
           <div className="table-responsive">
-            <table className="data-table">
+            <table className="data-table mobile-card-table">
               <thead>
                 <tr>
                   <th>文件</th>
@@ -81,10 +79,10 @@ export function HostAgentPage() {
               <tbody>
                 {setup.files.map((file) => (
                   <tr key={file.name}>
-                    <td className="fw-600 steam-id">{file.name}</td>
-                    <td>{file.description}</td>
-                    <td>{file.available ? formatBytes(file.sizeBytes) : <span className="text-muted-light">—</span>}</td>
-                    <td className="text-right">
+                    <td className="fw-600 steam-id mobile-card-primary" data-label="文件">{file.name}</td>
+                    <td data-label="说明">{file.description}</td>
+                    <td data-label="大小">{file.available ? formatBytes(file.sizeBytes) : <span className="text-muted-light">—</span>}</td>
+                    <td className="text-right mobile-card-actions" data-label="操作">
                       {file.available ? (
                         <button
                           className="btn btn-sm"

@@ -1,11 +1,5 @@
 const API_BASE = import.meta.env.VITE_API_BASE ?? '';
 
-export const HOST_AGENT_FILES = [
-  { name: 'install.sh', description: '一键安装脚本' },
-  { name: 'lumi-host-agent.service', description: 'systemd 单元模板' },
-  { name: 'lumi-server-agent-x86_64', description: '预编译二进制（待发布）' },
-];
-
 export function normalizeSetupResponse(payload) {
   const files = Array.isArray(payload?.files) ? payload.files : [];
   return {
@@ -17,23 +11,6 @@ export function normalizeSetupResponse(payload) {
       description: item.description ?? '',
     })),
   };
-}
-
-export function formatBytes(bytes = 0) {
-  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${bytes} B`;
-}
-
-export function buildInstallCommand({ backendUrl, lgsmDir, instances }) {
-  const url = (backendUrl || '').trim().replace(/\/+$/, '');
-  return [
-    'sudo bash install.sh',
-    `--url ${url || '<后端地址>'}`,
-    '--token <Agent口令>',
-    `--lgsm-dir ${lgsmDir?.trim() || '/home/steam/lgsm'}`,
-    `--instances ${instances?.trim() || 'csgoserver,csgo2server'}`,
-  ].join(' \\\n  ');
 }
 
 export function downloadUrl(filename) {

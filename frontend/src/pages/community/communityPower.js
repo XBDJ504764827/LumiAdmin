@@ -12,6 +12,8 @@ export const POWER_ACTION = Object.freeze({
 export const RESTART_HAS_PLAYERS_TEXT = '当前服务器内存在玩家无法进行重启服务器操作。';
 export const RESTART_EMPTY_TEXT =
   '当前指令将重启服务器，可能因为服务器延迟问题没有正确的显示出服务器内是否存在玩家，请您确认服务器内没有玩家后再继续下一步。';
+export const RESTART_FINAL_TEXT =
+  '请再次确认是否重启该服务器：重启将断开服内连接并重载地图与插件，强制阅读 5 秒后才可执行。';
 
 export function serverPlayerCount(server) {
   return server?.online_player_count ?? server?.players?.length ?? 0;

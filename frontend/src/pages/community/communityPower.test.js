@@ -9,6 +9,7 @@ import {
   powerAvailability,
   restartVariant,
   RESTART_EMPTY_TEXT,
+  RESTART_FINAL_TEXT,
   RESTART_HAS_PLAYERS_TEXT,
   serverPlayerCount,
 } from './communityPower.js';
@@ -33,6 +34,7 @@ test('restartVariant 按服内人数区分两种二次确认', () => {
   assert.equal(restartVariant({ players: [] }), 'empty');
   assert.ok(RESTART_HAS_PLAYERS_TEXT.includes('存在玩家无法进行重启'));
   assert.ok(RESTART_EMPTY_TEXT.includes('确认服务器内没有玩家后再继续下一步'));
+  assert.ok(RESTART_FINAL_TEXT.includes('强制阅读 5 秒后才可执行'));
 });
 
 test('powerAvailability 开关机互斥置灰', () => {

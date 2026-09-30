@@ -50,6 +50,7 @@ import {
   POWER_ACTION,
   POWER_COUNTDOWN_SECS,
   RESTART_EMPTY_TEXT,
+  RESTART_FINAL_TEXT,
   RESTART_HAS_PLAYERS_TEXT,
   buildStartConfirmText,
   buildStopConfirmText,
@@ -559,8 +560,9 @@ export function CommunityPage() {
     if (!powerModal.open) return undefined;
     if (powerModal.step !== 'confirm' && powerModal.step !== 'final') return undefined;
     const needsCountdown =
-      (powerModal.action === POWER_ACTION.restart && restartVariant(powerModal.server) === 'empty') ||
-      (powerModal.action === POWER_ACTION.stop && powerModal.step === 'final');
+      powerModal.step === 'final' &&
+      ((powerModal.action === POWER_ACTION.restart && restartVariant(powerModal.server) === 'empty') ||
+        powerModal.action === POWER_ACTION.stop);
     if (!needsCountdown) return undefined;
     if (powerModal.countdown <= 0) return undefined;
     const timer = window.setTimeout(() => {
@@ -579,7 +581,7 @@ export function CommunityPage() {
       closePowerModal();
       return;
     }
-    if (action === POWER_ACTION.stop && step === 'confirm') {
+    if (step === 'confirm' && (action === POWER_ACTION.stop || (action === POWER_ACTION.restart && restartVariant(server) === 'empty'))) {
       setPowerModal((prev) => ({ ...prev, step: 'final', countdown: POWER_COUNTDOWN_SECS }));
       return;
     }
@@ -1295,7 +1297,7 @@ export function CommunityPage() {
                 onClick={() => openPowerModal(rconModal.server, POWER_ACTION.restart)}
               >
                 <span className="rcon-cmd-name">重启服务器</span>
-                <span className="rcon-cmd-desc">有玩家时禁止，无玩家需阅读 5 秒确认</span>
+                <span className="rcon-cmd-desc">有玩家时禁止，无玩家时两次确认</span>
               </button>
               <button
                 className="rcon-cmd-btn"
@@ -1384,7 +1386,10 @@ export function CommunityPage() {
               {powerModal.action === POWER_ACTION.restart && restartVariant(powerModal.server) === 'has-players' ? (
                 <button className="btn btn-primary" onClick={handlePowerConfirm}>确认</button>
               ) : null}
-              {powerModal.action === POWER_ACTION.restart && restartVariant(powerModal.server) === 'empty' ? (
+              {powerModal.action === POWER_ACTION.restart && restartVariant(powerModal.server) === 'empty' && powerModal.step === 'confirm' ? (
+                <button className="btn btn-primary" onClick={handlePowerConfirm}>确认重启</button>
+              ) : null}
+              {powerModal.action === POWER_ACTION.restart && restartVariant(powerModal.server) === 'empty' && powerModal.step === 'final' ? (
                 <button className="btn btn-primary" disabled={powerModal.countdown > 0} onClick={handlePowerConfirm}>
                   {countdownLabel('确认重启', powerModal.countdown)}
                 </button>
@@ -1406,8 +1411,11 @@ export function CommunityPage() {
           {powerModal.action === POWER_ACTION.restart && restartVariant(powerModal.server) === 'has-players' ? (
             <div className="info-box danger">{RESTART_HAS_PLAYERS_TEXT}</div>
           ) : null}
-          {powerModal.action === POWER_ACTION.restart && restartVariant(powerModal.server) === 'empty' ? (
+          {powerModal.action === POWER_ACTION.restart && restartVariant(powerModal.server) === 'empty' && powerModal.step === 'confirm' ? (
             <div className="info-box warning">{RESTART_EMPTY_TEXT}</div>
+          ) : null}
+          {powerModal.action === POWER_ACTION.restart && restartVariant(powerModal.server) === 'empty' && powerModal.step === 'final' ? (
+            <div className="info-box danger">{RESTART_FINAL_TEXT}</div>
           ) : null}
           {powerModal.action === POWER_ACTION.start ? (
             <div className="info-box info">{buildStartConfirmText(powerModal.server.name)}</div>

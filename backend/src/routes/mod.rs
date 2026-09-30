@@ -9,6 +9,7 @@ pub mod dashboard_analytics;
 pub mod external_ban_api;
 pub mod external_server;
 pub mod global_ban;
+pub mod host_agent;
 pub mod misc;
 pub mod notification;
 pub mod ops;
@@ -201,6 +202,12 @@ pub fn router(
         .route(
             "/api/community/servers/:server_id/rcon",
             post(community::execute_rcon),
+        )
+        // -- host agent （宿主机 Agent 文件托管下发，电源控制待后续） --
+        .route("/api/host-agent/setup", get(host_agent::get_setup))
+        .route(
+            "/api/host-agent/download/:filename",
+            get(host_agent::download_file),
         )
         // -- plugin --
         .route(

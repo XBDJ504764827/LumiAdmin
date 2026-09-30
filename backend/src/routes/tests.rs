@@ -4043,3 +4043,127 @@ async fn access_record_rejects_unknown_token() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn host_agent_setup_lists_hosted_files_for_admin() {
+    with_test_app(async |_db, config| {
+        let token = create_session_for_user(&_db, "11111111-1111-1111-1111-111111111111").await?;
+        let app = test_app(config, _db.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/setup")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let files = payload["files"].as_array().expect("files 应为数组");
+        assert_eq!(files.len(), 3);
+        let install = files.iter().find(|f| f["name"] == "install.sh").unwrap();
+        assert_eq!(install["available"], true);
+        assert!(install["size_bytes"].as_u64().unwrap() > 0);
+        let binary = files
+            .iter()
+            .find(|f| f["name"] == "lumi-server-agent-x86_64")
+            .unwrap();
+        assert_eq!(binary["available"], false);
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn host_agent_setup_rejects_normal_user() {
+    with_test_app(async |_db, config| {
+        let token = create_session_for_user(&_db, "33333333-3333-3333-3333-333333333333").await?;
+        let app = test_app(config, _db.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/setup")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn host_agent_download_serves_install_script_as_attachment() {
+    with_test_app(async |_db, config| {
+        let token = create_session_for_user(&_db, "22222222-2222-2222-2222-222222222222").await?;
+        let app = test_app(config, _db.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/download/install.sh")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let disposition = response
+            .headers()
+            .get("content-disposition")
+            .expect("应有下载头")
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(disposition.contains("install.sh"));
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let content = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(content.contains("LumiServerAgent"));
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn host_agent_download_rejects_unknown_and_unpublished_binary() {
+    with_test_app(async |_db, config| {
+        let token = create_session_for_user(&_db, "11111111-1111-1111-1111-111111111111").await?;
+        let app = test_app(config, _db.clone());
+        let missing = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/download/evil.sh")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+        let binary = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/download/lumi-server-agent-x86_64")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(binary.status(), StatusCode::NOT_IMPLEMENTED);
+        Ok(())
+    })
+    .await;
+}

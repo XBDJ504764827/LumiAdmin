@@ -4,8 +4,35 @@ import { useAsync } from '../../shared/useAsync.js';
 import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
 import { MetricCard } from '../../shared/MetricCard.jsx';
-import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
+import { TableLoading, TableError } from '../../shared/TableState.jsx';
 import { downloadHostAgentFile, normalizeSetupResponse } from './hostAgent.js';
+
+// 演示数据：监控接口未上线前用于预览页面设计，接入真实上报后删除。
+const MOCK_HOSTS = [
+  {
+    hostname: 'game-01',
+    ip: '192.168.0.101',
+    instances: ['csgoserver', 'csgo2server', 'csgo3server'],
+    online: true,
+    lastSeen: '10 秒前',
+    version: '0.1.0',
+  },
+  {
+    hostname: 'game-02',
+    ip: '192.168.0.102',
+    instances: ['csgoserver'],
+    online: false,
+    lastSeen: '3 分钟前',
+    version: '0.1.0',
+  },
+];
+const MOCK_PENDING_JOBS = 1;
+
+function mockStats() {
+  const instances = MOCK_HOSTS.reduce((sum, host) => sum + host.instances.length, 0);
+  const online = MOCK_HOSTS.filter((host) => host.online).length;
+  return { hosts: MOCK_HOSTS.length, instances, online, pendingJobs: MOCK_PENDING_JOBS };
+}
 
 export function HostAgentPage() {
   const { session } = useAuth();
@@ -18,6 +45,9 @@ export function HostAgentPage() {
   const setupState = useAsync(() => api.hostAgentSetup(token), [token, refreshKey]);
   const setup = setupState.data ? normalizeSetupResponse(setupState.data) : null;
   const installFile = setup?.files.find((file) => file.name === 'install.sh');
+
+  const stats = mockStats();
+  const offline = stats.hosts - stats.online;
 
   async function handleDownloadInstall() {
     if (!installFile?.available) {
@@ -40,16 +70,19 @@ export function HostAgentPage() {
       <div className="breadcrumb"><span>核心管理</span><span className="sep">›</span><span className="current">Agent控制</span></div>
       <div className="page-header">
         <div><div className="page-title">Agent控制</div><div className="page-sub">宿主机 Agent 运行监控：一台宿主机跑一个 Agent，管理本机全部 LGSM 实例。</div></div>
-        <button className="btn btn-outline" onClick={() => setRefreshKey((v) => v + 1)} disabled={setupState.loading}>
-          {setupState.loading ? '刷新中...' : '刷新'}
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span className="status-pill pill-warning">演示数据</span>
+          <button className="btn btn-outline" onClick={() => setRefreshKey((v) => v + 1)} disabled={setupState.loading}>
+            {setupState.loading ? '刷新中...' : '刷新'}
+          </button>
+        </div>
       </div>
 
       <div className="metric-grid">
-        <MetricCard label="宿主机" value="—" badge="待接入" />
-        <MetricCard label="受管实例" value="—" badge="待接入" />
-        <MetricCard label="在线 Agent" value="—" badge="待接入" />
-        <MetricCard label="待执行任务" value="—" badge="待接入" />
+        <MetricCard label="宿主机" value={stats.hosts} badge={`${stats.online} 在线`} />
+        <MetricCard label="受管实例" value={stats.instances} badge={`${stats.hosts} 台宿主机`} />
+        <MetricCard label="在线 Agent" value={`${stats.online}/${stats.hosts}`} badge={offline ? `${offline} 台离线` : '全部在线'} accent={offline > 0} />
+        <MetricCard label="待执行任务" value={stats.pendingJobs} badge={stats.pendingJobs ? '有任务排队' : '队列为空'} accent={stats.pendingJobs > 0} />
       </div>
 
       <div className="lower-grid ops-lower-grid">
@@ -57,7 +90,7 @@ export function HostAgentPage() {
           <div className="card-header">
             <div>
               <div className="card-title">宿主机</div>
-              <div className="card-sub">Agent 上报接入后自动出现</div>
+              <div className="card-sub">共 {stats.hosts} 台，{stats.online} 台在线</div>
             </div>
           </div>
           <div className="card-body">
@@ -76,9 +109,24 @@ export function HostAgentPage() {
                   {!setupState.loading && setupState.error ? (
                     <TableError colSpan={4} message={setupState.error.message} />
                   ) : null}
-                  {!setupState.loading && !setupState.error ? (
-                    <TableEmpty colSpan={4} text="暂无宿主机接入，完成右侧快速上手后自动出现。" />
-                  ) : null}
+                  {!setupState.loading && !setupState.error && MOCK_HOSTS.map((host) => (
+                    <tr key={host.hostname}>
+                      <td className="fw-600 mobile-card-primary" data-label="宿主机">
+                        {host.hostname}
+                        <div className="text-muted-light" style={{ fontWeight: 400, fontSize: 12 }}>{host.ip} · v{host.version}</div>
+                      </td>
+                      <td data-label="受管实例">
+                        {host.instances.length} 个
+                        <div className="text-muted-light" style={{ fontSize: 12 }}>{host.instances.join('、')}</div>
+                      </td>
+                      <td data-label="状态">
+                        {host.online
+                          ? <span className="status-pill pill-online">在线</span>
+                          : <span className="status-pill pill-danger">离线</span>}
+                      </td>
+                      <td data-label="最近心跳">{host.lastSeen}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>

@@ -79,7 +79,7 @@ export function HostAgentPage() {
               <tbody>
                 {setup.files.map((file) => (
                   <tr key={file.name}>
-                    <td className="fw-600 steam-id mobile-card-primary" data-label="文件">{file.name}</td>
+                    <td className="fw-600 mobile-card-primary" data-label="文件">{file.name}</td>
                     <td data-label="说明">{file.description}</td>
                     <td data-label="大小">{file.available ? formatBytes(file.sizeBytes) : <span className="text-muted-light">—</span>}</td>
                     <td className="text-right mobile-card-actions" data-label="操作">
@@ -106,9 +106,9 @@ export function HostAgentPage() {
 
       <Card title="安装与设置" subtitle="在游戏服宿主机上执行，约 1 分钟完成">
         <ol>
-          <li>从上方下载 <span className="steam-id">install.sh</span> 传到宿主机（或直接在宿主机上执行第 2 步的一键命令）。</li>
+          <li>从上方下载 <code style={{ fontSize: 12, background: 'var(--surface2)', padding: '2px 6px', borderRadius: 4 }}>install.sh</code> 传到宿主机（或直接在宿主机上执行第 2 步的一键命令）。</li>
           <li>按实际填写下面三个参数，点击复制后在宿主机上 <span className="fw-600">sudo 执行</span>。</li>
-          <li>执行后用 <span className="steam-id">journalctl -u lumi-host-agent -f</span> 确认 Agent 已启动。</li>
+          <li>执行后用 <code style={{ fontSize: 12, background: 'var(--surface2)', padding: '2px 6px', borderRadius: 4 }}>journalctl -u lumi-host-agent -f</code> 确认 Agent 已启动。</li>
         </ol>
         <div className="form-group">
           <label>后端地址</label>
@@ -122,13 +122,13 @@ export function HostAgentPage() {
           <label>实例清单（逗号分隔）</label>
           <input className="form-control" value={instances} onChange={(e) => setInstances(e.target.value)} placeholder="csgoserver,csgo2server" />
         </div>
-        <pre className="detail-value mono" style={{ whiteSpace: 'pre-wrap', marginBottom: 8 }}>{installCommand}</pre>
+        <pre style={{ fontSize: 12.5, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px', overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all', marginBottom: 8 }}>{installCommand}</pre>
         <div style={{ display: 'flex', gap: 8 }}>
           <button className="btn btn-sm" onClick={() => handleCopy(installCommand, '安装命令')}>复制安装命令</button>
         </div>
         <div className="info-box warning" style={{ marginTop: 12 }}>
           Agent 口令签发功能待开发：执行时先将命令中的 `&lt;Agent口令&gt;` 替换为后续签发的口令；
-          配置文件写入 `/etc/lumi-agent.env`（权限 600），请勿泄露。
+          配置文件写入 <code style={{ fontSize: 12, background: 'var(--surface2)', padding: '2px 6px', borderRadius: 4 }}>/etc/lumi-agent.env</code>（权限 600），请勿泄露。
         </div>
       </Card>
 

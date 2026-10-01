@@ -7,7 +7,6 @@ import { MetricCard } from '../../shared/MetricCard.jsx';
 import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { downloadHostAgentFile, normalizeSetupResponse } from './hostAgent.js';
-import { HeartbeatTrendChart, PowerTaskTrendChart } from './HostAgentCharts.jsx';
 
 function normalizeAgents(payload) {
   const agents = Array.isArray(payload?.agents) ? payload.agents : [];
@@ -107,11 +106,6 @@ export function HostAgentPage() {
         <MetricCard label="待执行任务" value={overview.pending_jobs} badge={overview.pending_jobs ? '有任务排队' : '队列为空'} accent={overview.pending_jobs > 0} />
       </div>
 
-      <div className="dash-charts-grid">
-        <HeartbeatTrendChart />
-        <PowerTaskTrendChart />
-      </div>
-
       <div className="lower-grid ops-lower-grid">
         <div className="card">
           <div className="card-header">
@@ -173,8 +167,8 @@ export function HostAgentPage() {
           <div className="card-body">
             <ol style={{ margin: '0 0 12px', paddingLeft: 20, fontSize: 13, color: 'var(--text2)', lineHeight: 1.8 }}>
               <li>在下方签发安装口令（15 分钟有效，一次性），下载安装脚本传到宿主机。</li>
-              <li>按脚本头部注释填好后端地址、安装口令、LGSM 目录、实例清单，sudo 执行。</li>
-              <li>用 <code style={{ fontSize: 12, background: 'var(--surface2)', padding: '2px 6px', borderRadius: 4 }}>journalctl -u lumi-host-agent -f</code> 确认启动。</li>
+              <li>切换到 LGSM 属主用户（如 <code style={{ fontSize: 12, background: 'var(--surface2)', padding: '2px 6px', borderRadius: 4 }}>su - steam</code>，不要用 root），运行 <code style={{ fontSize: 12, background: 'var(--surface2)', padding: '2px 6px', borderRadius: 4 }}>bash install.sh</code> 按提示填写（实例支持逗号分隔多个）。</li>
+              <li>用 <code style={{ fontSize: 12, background: 'var(--surface2)', padding: '2px 6px', borderRadius: 4 }}>tail -f ~/lumi-agent/agent.log</code> 确认启动。</li>
               <li>回到本页查看宿主机上线。</li>
             </ol>
             <button

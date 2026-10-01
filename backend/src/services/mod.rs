@@ -21,6 +21,7 @@ pub mod external_server_service;
 pub mod global_ban_service;
 pub mod gokz_cache;
 pub mod hibernation_poll_service;
+pub mod host_power_service;
 pub mod log_retention_service;
 pub mod log_service;
 pub mod lumi_bot_service;

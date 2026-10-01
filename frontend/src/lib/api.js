@@ -135,6 +135,8 @@ export const api = {
   // Host agent （宿主机 Agent 文件托管下发）
   hostAgentSetup: (token) => request('/api/host-agent/setup', { headers: withAuth(token) }),
   hostAgentOverview: (token) => request('/api/host-agent/overview', { headers: withAuth(token) }),
+  updateHostAgent: (token, agentId, body) => request(`/api/host-agent/agents/${agentId}`, { method: 'PUT', headers: withAuth(token), body: JSON.stringify(body) }),
+  deleteHostAgent: (token, agentId) => request(`/api/host-agent/agents/${agentId}`, { method: 'DELETE', headers: withAuth(token) }),
 };
 
 export function useAppApi() {

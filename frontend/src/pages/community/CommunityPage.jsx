@@ -43,6 +43,7 @@ import {
   emptyCommunityAccessConfig,
   fillAccessConfigFromServer,
   fillCommunityAccessConfig,
+  suggestLgsmInstance,
 } from './communityAccess.js';
 import { serverStatusMeta } from '../../shared/serverStatus.js';
 import { onlinePlayerKey, buildKickCommand } from './onlinePlayers.js';
@@ -983,7 +984,25 @@ export function CommunityPage() {
             </div>
             <div className="form-group" style={{ flex: 1 }}>
               <label>LGSM 实例名</label>
-              <input type="text" className="form-control" placeholder="例如：csgoserver" value={serverForm.lgsm_instance} onChange={(e) => handleServerFieldChange('lgsm_instance', e.target.value)} />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input type="text" className="form-control" style={{ flex: 1, minWidth: 120 }} placeholder="例如：csgoserver" value={serverForm.lgsm_instance} onChange={(e) => handleServerFieldChange('lgsm_instance', e.target.value)} />
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
+                  title="按服务器名称自动推导（如 2服 → csgoserver-2）"
+                  onClick={() => {
+                    const suggested = suggestLgsmInstance(serverForm.name);
+                    if (suggested) {
+                      handleServerFieldChange('lgsm_instance', suggested);
+                    } else {
+                      toast({ title: '无法推导', message: '服务器名称中没有数字，请手动填写实例名。', tone: 'warning' });
+                    }
+                  }}
+                >
+                  自动填充
+                </button>
+              </div>
             </div>
           </div>
           <div className="form-hint">绑定后才能在服务器控制中使用重启 / 开机 / 关机；实例名以宿主机上 LGSM 脚本文件名为准。</div>

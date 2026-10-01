@@ -4,6 +4,8 @@ import { useAsync } from '../../shared/useAsync.js';
 import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
 import { MetricCard } from '../../shared/MetricCard.jsx';
+import { Modal } from '../../shared/Modal.jsx';
+import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { downloadHostAgentFile, normalizeSetupResponse } from './hostAgent.js';
@@ -13,16 +15,23 @@ function normalizeAgents(payload) {
   return agents.map((item) => ({
     id: item.id ?? '',
     hostname: item.hostname || '(未上报主机名)',
+    displayName: item.display_name || '',
     lgsmDir: item.lgsm_dir || '',
     instances: Array.isArray(item.instances) ? item.instances : [],
+    disabled: item.disabled === true,
     online: item.online === true,
     lastSeenAt: item.last_seen_at ?? null,
   }));
 }
 
+export function displayHostName(host) {
+  return host.displayName || host.hostname;
+}
+
 export function HostAgentPage() {
   const { session } = useAuth();
   const { toast } = useToast();
+  const { confirm, dialog } = useConfirmDialog();
   const token = session?.token ?? null;
   const isDeveloper = session?.role === 'developer';
 
@@ -30,6 +39,8 @@ export function HostAgentPage() {
   const [downloading, setDownloading] = useState(false);
   const [installToken, setInstallToken] = useState(null);
   const [issuing, setIssuing] = useState(false);
+  const [renameModal, setRenameModal] = useState({ open: false, agentId: null, name: '' });
+  const [acting, setActing] = useState(null);
 
   const setupState = useAsync(() => api.hostAgentSetup(token), [token, refreshKey]);
   const setup = setupState.data ? normalizeSetupResponse(setupState.data) : null;
@@ -89,6 +100,70 @@ export function HostAgentPage() {
     }
   }
 
+  function refresh() {
+    setRefreshKey((v) => v + 1);
+  }
+
+  async function handleToggleDisabled(host) {
+    const next = !host.disabled;
+    const confirmed = await confirm({
+      title: next ? '停用宿主机' : '启用宿主机',
+      message: next
+        ? `停用后「${displayHostName(host)}」不再领取电源任务，已下发任务不受影响，确定继续？`
+        : `确定重新启用「${displayHostName(host)}」？`,
+      confirmText: next ? '停用' : '启用',
+    });
+    if (!confirmed) return;
+    try {
+      setActing(host.id);
+      await api.updateHostAgent(token, host.id, { disabled: next });
+      toast({ title: next ? '已停用' : '已启用', message: displayHostName(host) });
+      refresh();
+    } catch (error) {
+      toast({ title: '操作失败', message: error.message, tone: 'danger' });
+    } finally {
+      setActing(null);
+    }
+  }
+
+  async function handleDeleteHost(host) {
+    const confirmed = await confirm({
+      title: '删除宿主机',
+      message: `确定删除「${displayHostName(host)}」？已绑定的服务器将自动解绑，历史任务保留，确定继续？`,
+      confirmText: '删除',
+    });
+    if (!confirmed) return;
+    try {
+      setActing(host.id);
+      await api.deleteHostAgent(token, host.id);
+      toast({ title: '已删除', message: displayHostName(host) });
+      refresh();
+    } catch (error) {
+      toast({ title: '删除失败', message: error.message, tone: 'danger' });
+    } finally {
+      setActing(null);
+    }
+  }
+
+  async function handleSaveRename() {
+    if (!renameModal.agentId) return;
+    if (renameModal.name.trim().length > 64) {
+      toast({ title: '保存失败', message: '备注名最多 64 个字符。', tone: 'danger' });
+      return;
+    }
+    try {
+      setActing(renameModal.agentId);
+      await api.updateHostAgent(token, renameModal.agentId, { display_name: renameModal.name.trim() });
+      toast({ title: '保存成功', message: '备注名已更新。' });
+      setRenameModal({ open: false, agentId: null, name: '' });
+      refresh();
+    } catch (error) {
+      toast({ title: '保存失败', message: error.message, tone: 'danger' });
+    } finally {
+      setActing(null);
+    }
+  }
+
   return (
     <div id="host-agent" className="content-section active">
       <div className="breadcrumb"><span>核心管理</span><span className="sep">›</span><span className="current">Agent控制</span></div>
@@ -111,7 +186,7 @@ export function HostAgentPage() {
           <div className="card-header">
             <div>
               <div className="card-title">宿主机</div>
-              <div className="card-sub">共 {overview.hosts} 台，{overview.online} 台在线</div>
+              <div className="card-sub">共 {overview.hosts} 台，{overview.online} 台在线（停用后不再下发任务）</div>
             </div>
           </div>
           <div className="card-body">
@@ -123,32 +198,62 @@ export function HostAgentPage() {
                     <th>受管实例</th>
                     <th>状态</th>
                     <th>最近心跳</th>
+                    {isDeveloper ? <th className="text-right">操作</th> : null}
                   </tr>
                 </thead>
                 <tbody>
-                  {loading ? <TableLoading colSpan={4} text="正在加载宿主机数据..." /> : null}
+                  {loading ? <TableLoading colSpan={isDeveloper ? 5 : 4} text="正在加载宿主机数据..." /> : null}
                   {!loading && loadError ? (
-                    <TableError colSpan={4} message={loadError.message} />
+                    <TableError colSpan={isDeveloper ? 5 : 4} message={loadError.message} />
                   ) : null}
                   {!loading && !loadError && agents.length === 0 ? (
-                    <TableEmpty colSpan={4} text="暂无宿主机接入，完成右侧快速上手后自动出现。" />
+                    <TableEmpty colSpan={isDeveloper ? 5 : 4} text="暂无宿主机接入，完成右侧快速上手后自动出现。" />
                   ) : null}
                   {!loading && !loadError && agents.map((host) => (
                     <tr key={host.id}>
                       <td className="fw-600 mobile-card-primary" data-label="宿主机">
-                        {host.hostname}
-                        {host.lgsmDir ? <div className="text-muted-light" style={{ fontWeight: 400, fontSize: 12 }}>{host.lgsmDir}</div> : null}
+                        {displayHostName(host)}
+                        <div className="text-muted-light" style={{ fontWeight: 400, fontSize: 12 }}>{host.hostname}{host.lgsmDir ? ` · ${host.lgsmDir}` : ''}</div>
                       </td>
                       <td data-label="受管实例">
                         {host.instances.length} 个
                         {host.instances.length ? <div className="text-muted-light" style={{ fontSize: 12 }}>{host.instances.join('、')}</div> : null}
                       </td>
                       <td data-label="状态">
-                        {host.online
-                          ? <span className="status-pill pill-online">在线</span>
-                          : <span className="status-pill pill-danger">离线</span>}
+                        {host.disabled
+                          ? <span className="status-pill pill-default">已停用</span>
+                          : host.online
+                            ? <span className="status-pill pill-online">在线</span>
+                            : <span className="status-pill pill-danger">离线</span>}
                       </td>
                       <td data-label="最近心跳">{host.lastSeenAt ? formatChinaDateTime(host.lastSeenAt) : <span className="text-muted-light">—</span>}</td>
+                      {isDeveloper ? (
+                        <td className="text-right mobile-card-actions" data-label="操作">
+                          <div className="action-btn-group" style={{ justifyContent: 'flex-end' }}>
+                            <button
+                              className="action-btn"
+                              disabled={acting === host.id}
+                              onClick={() => setRenameModal({ open: true, agentId: host.id, name: host.displayName })}
+                            >
+                              重命名
+                            </button>
+                            <button
+                              className="action-btn"
+                              disabled={acting === host.id}
+                              onClick={() => handleToggleDisabled(host)}
+                            >
+                              {host.disabled ? '启用' : '停用'}
+                            </button>
+                            <button
+                              className="action-btn action-btn-danger"
+                              disabled={acting === host.id}
+                              onClick={() => handleDeleteHost(host)}
+                            >
+                              删除
+                            </button>
+                          </div>
+                        </td>
+                      ) : null}
                     </tr>
                   ))}
                 </tbody>
@@ -207,6 +312,30 @@ export function HostAgentPage() {
           </div>
         </div>
       </div>
+
+      <Modal
+        open={renameModal.open}
+        title="重命名宿主机"
+        onClose={() => setRenameModal({ open: false, agentId: null, name: '' })}
+        footer={(
+          <>
+            <button className="btn btn-outline" onClick={() => setRenameModal({ open: false, agentId: null, name: '' })}>取消</button>
+            <button className="btn btn-primary" disabled={acting === renameModal.agentId} onClick={handleSaveRename}>保存</button>
+          </>
+        )}
+      >
+        <div className="form-group">
+          <label>备注名（最多 64 个字符，留空则显示上报主机名）</label>
+          <input
+            type="text"
+            className="form-control"
+            placeholder="例如：主服-电信"
+            value={renameModal.name}
+            onChange={(e) => setRenameModal((prev) => ({ ...prev, name: e.target.value }))}
+          />
+        </div>
+      </Modal>
+      {dialog}
     </div>
   );
 }

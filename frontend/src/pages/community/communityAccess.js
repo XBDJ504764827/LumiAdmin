@@ -125,3 +125,13 @@ export function buildAccessSummary(server, group) {
   }
   return `${modes.join(' 或 ')}${riskNote ? ` · ${riskNote}` : ''}`;
 }
+
+// 按“几服”命名惯例推导 LGSM 实例名：1服→csgoserver，N服→csgoserver-N；
+// 名中无数字时返回空串（不猜）。
+export function suggestLgsmInstance(serverName, base = 'csgoserver') {
+  const match = String(serverName ?? '').match(/(\d+)/);
+  if (!match) return '';
+  const num = Number.parseInt(match[1], 10);
+  if (!Number.isSafeInteger(num) || num < 1) return '';
+  return num === 1 ? base : `${base}-${num}`;
+}

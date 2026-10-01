@@ -1,0 +1,82 @@
+// 服务器电源操作（界面预览阶段）：变体判定、可用性、文案。
+// 下发执行尚未接入，确认后仅关闭弹窗；接入时替换 CommunityPage 中的占位 toast。
+
+export const POWER_COUNTDOWN_SECS = 5;
+
+export const POWER_ACTION = Object.freeze({
+  restart: 'restart',
+  forceRestart: 'force-restart',
+  start: 'start',
+  stop: 'stop',
+});
+
+export const RESTART_HAS_PLAYERS_TEXT = '当前服务器内存在玩家无法进行重启服务器操作。';
+export const RESTART_EMPTY_TEXT =
+  '当前指令将重启服务器，可能因为服务器延迟问题没有正确的显示出服务器内是否存在玩家，请您确认服务器内没有玩家后再继续下一步。';
+export const RESTART_FINAL_TEXT =
+  '请再次确认是否重启该服务器：重启将断开服内连接并重载地图与插件，强制阅读 5 秒后才可执行。';
+export const FORCE_RESTART_CONFIRM_TEXT =
+  '强制重启将无视服内玩家直接重启服务器，在线玩家将被强制断开；可能因为服务器延迟问题没有正确的显示出服务器内是否存在玩家，请谨慎操作。';
+export const FORCE_RESTART_FINAL_TEXT =
+  '请再次确认是否强制重启该服务器：执行后全部玩家立即断开并重载服务器，强制阅读 5 秒后才可执行。';
+
+export function serverPlayerCount(server) {
+  return server?.online_player_count ?? server?.players?.length ?? 0;
+}
+
+// 开机状态：进程在跑（在线或空服休眠）；其余视为关机/未启动。
+export function isPoweredOn(server) {
+  return server?.status === 'online' || server?.status === 'hibernating';
+}
+
+export function restartVariant(server) {
+  return serverPlayerCount(server) > 0 ? 'has-players' : 'empty';
+}
+
+export function powerAvailability(server) {
+  const poweredOn = isPoweredOn(server);
+  return {
+    restart: { enabled: true },
+    forceRestart: { enabled: true },
+    start: { enabled: !poweredOn, disabledReason: poweredOn ? '服务器为开机状态，无需开启' : '' },
+    stop: { enabled: poweredOn, disabledReason: poweredOn ? '' : '服务器为关机状态，无需关闭' },
+  };
+}
+
+export function buildStartConfirmText(serverName) {
+  return `即将向服务器「${serverName}」发送开机指令，开机后需要一定时间完成地图加载与插件初始化，确定继续？`;
+}
+
+export function buildStopConfirmText(serverName) {
+  return `即将向服务器「${serverName}」发送关机指令，在线玩家将被强制断开，确定继续？`;
+}
+
+export function buildStopFinalText() {
+  return '请再次确认：关机后该服务器将停止接受玩家进入，重启需要重新开机，强制阅读 5 秒后才可执行。';
+}
+
+export function countdownLabel(base, seconds) {
+  return seconds > 0 ? `${base}（${seconds}s）` : base;
+}
+
+export const POWER_ACTION_LABEL = Object.freeze({
+  restart: '重启服务器',
+  'force-restart': '强制重启服务器',
+  start: '开启服务器',
+  stop: '关闭服务器',
+});
+
+// 任务终态：成功 / 失败 / 超时；pending / running 继续轮询。
+export function isPowerJobTerminal(status) {
+  return status === 'success' || status === 'failed' || status === 'timeout';
+}
+
+export const POWER_JOB_STATUS_TEXT = Object.freeze({
+  success: '执行成功',
+  failed: '执行失败',
+  timeout: '执行超时',
+});
+
+// 轮询配置：LGSM 重启常需数十秒，2s 间隔、150s 上限。
+export const POWER_JOB_POLL_INTERVAL_MS = 2000;
+export const POWER_JOB_POLL_TIMEOUT_MS = 150000;

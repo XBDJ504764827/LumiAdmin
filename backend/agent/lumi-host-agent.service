@@ -1,0 +1,16 @@
+[Unit]
+Description=Lumi Server Agent - LGSM power control
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 运行用户必须与 LGSM 文件属主一致，否则无法执行 ./<instance>；按实际修改。
+User=steam
+EnvironmentFile=/etc/lumi-agent.env
+ExecStart=/usr/local/bin/lumi-server-agent
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

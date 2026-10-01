@@ -46,6 +46,26 @@ import {
 } from './communityAccess.js';
 import { serverStatusMeta } from '../../shared/serverStatus.js';
 import { onlinePlayerKey, buildKickCommand } from './onlinePlayers.js';
+import {
+  POWER_ACTION,
+  POWER_COUNTDOWN_SECS,
+  RESTART_EMPTY_TEXT,
+  RESTART_FINAL_TEXT,
+  RESTART_HAS_PLAYERS_TEXT,
+  FORCE_RESTART_CONFIRM_TEXT,
+  FORCE_RESTART_FINAL_TEXT,
+  buildStartConfirmText,
+  buildStopConfirmText,
+  buildStopFinalText,
+  countdownLabel,
+  isPowerJobTerminal,
+  powerAvailability,
+  restartVariant,
+  POWER_ACTION_LABEL,
+  POWER_JOB_POLL_INTERVAL_MS,
+  POWER_JOB_POLL_TIMEOUT_MS,
+  POWER_JOB_STATUS_TEXT,
+} from './communityPower.js';
 import { OnlinePlayerCard, ToggleSwitch, FormSectionCard, ServerRconFeedback } from './CommunityComponents.jsx';
 import { CommunityServerTable } from './CommunityServerTable.jsx';
 import { COMMAND_CATEGORIES } from '../rcon/RconPage.jsx';
@@ -61,6 +81,8 @@ const emptyServerForm = {
   report_token: '',
   note: '',
   max_players: '0',
+  host_agent_id: '',
+  lgsm_instance: '',
   ...emptyAccessConfig,
 };
 
@@ -91,7 +113,8 @@ export function CommunityPage() {
   const [groupError, setGroupError] = useState('');
   const [tokenPanel, setTokenPanel] = useState({ serverId: null, token: '', loading: false, error: '' });
   const [detailModal, setDetailModal] = useState({ open: false, server: null, group: null });
-  const [rconModal, setRconModal] = useState({ open: false, serverId: null, serverName: '', executing: '', customCommand: '' });
+  const [rconModal, setRconModal] = useState({ open: false, serverId: null, serverName: '', executing: '', customCommand: '', server: null });
+  const [powerModal, setPowerModal] = useState({ open: false, server: null, action: null, step: 'confirm', countdown: POWER_COUNTDOWN_SECS });
   const [savedReloadPlugins, setSavedReloadPlugins] = useState(() => readSavedReloadPluginOptions());
   const [detectedReloadPlugins, setDetectedReloadPlugins] = useState(() => readDetectedReloadPlugins());
   const [reloadPluginsModal, setReloadPluginsModal] = useState({
@@ -127,6 +150,16 @@ export function CommunityPage() {
   }, [token]);
 
   useEffect(() => { loadGroups(); }, [loadGroups]);
+
+  const [hostAgents, setHostAgents] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    api.hostAgents(token).then(
+      (response) => { if (!cancelled) setHostAgents(response?.agents ?? []); },
+      () => { if (!cancelled) setHostAgents([]); },
+    );
+    return () => { cancelled = true; };
+  }, [token]);
 
   useEffect(() => {
     if (!reloadConfirmModal.open || reloadConfirmModal.countdown <= 0) return undefined;
@@ -166,6 +199,8 @@ export function CommunityPage() {
       report_token: server.report_token ?? '',
       note: server.note ?? '',
       max_players: String(server.max_players ?? 0),
+      host_agent_id: server.host_agent_id ?? '',
+      lgsm_instance: server.lgsm_instance ?? '',
       ...fillAccessConfigFromServer(server),
     });
     setServerFeedback({
@@ -530,7 +565,99 @@ export function CommunityPage() {
 
   function openServerControlModal(server) {
     if (!canMutate) return;
-    setRconModal({ open: true, serverId: server.id, serverName: server.name, executing: '', customCommand: '' });
+    setRconModal({ open: true, serverId: server.id, serverName: server.name, executing: '', customCommand: '', server });
+  }
+
+  // ── 服务器电源：确认框 + 倒计时，下发后后台轮询任务终态 ──
+  function openPowerModal(server, action) {
+    setPowerModal({ open: true, server, action, step: 'confirm', countdown: POWER_COUNTDOWN_SECS });
+  }
+
+  function closePowerModal() {
+    setPowerModal({ open: false, server: null, action: null, step: 'confirm', countdown: POWER_COUNTDOWN_SECS });
+  }
+
+  useEffect(() => {
+    if (!powerModal.open) return undefined;
+    if (powerModal.step !== 'confirm' && powerModal.step !== 'final') return undefined;
+    const needsCountdown =
+      powerModal.step === 'final' &&
+      ((powerModal.action === POWER_ACTION.restart && restartVariant(powerModal.server) === 'empty') ||
+        powerModal.action === POWER_ACTION.stop ||
+        powerModal.action === POWER_ACTION.forceRestart);
+    if (!needsCountdown) return undefined;
+    if (powerModal.countdown <= 0) return undefined;
+    const timer = window.setTimeout(() => {
+      setPowerModal((prev) => ({ ...prev, countdown: Math.max(0, prev.countdown - 1) }));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [powerModal.open, powerModal.step, powerModal.countdown, powerModal.action, powerModal.server]);
+
+  function handlePowerConfirm() {
+    const { server, action, step } = powerModal;
+    if (!server || !action) {
+      closePowerModal();
+      return;
+    }
+    if (action === POWER_ACTION.restart && restartVariant(server) === 'has-players') {
+      closePowerModal();
+      return;
+    }
+    if (step === 'confirm' && (action === POWER_ACTION.stop || action === POWER_ACTION.forceRestart || (action === POWER_ACTION.restart && restartVariant(server) === 'empty'))) {
+      setPowerModal((prev) => ({ ...prev, step: 'final', countdown: POWER_COUNTDOWN_SECS }));
+      return;
+    }
+    // 界面预览：不下发任何指令，待电源闭环接入后替换为真实下发。
+    closePowerModal();
+    void dispatchPowerJob(server, action);
+  }
+
+  async function dispatchPowerJob(server, action) {
+    const label = POWER_ACTION_LABEL[action] ?? action;
+    let jobId = null;
+    try {
+      const response = await api.powerServer(token, server.id, { action });
+      jobId = response?.job?.id ?? null;
+    } catch (error) {
+      toast({ title: '下发失败', message: error.message, tone: 'danger' });
+      return;
+    }
+    if (!jobId) {
+      toast({ title: '下发失败', message: '后端未返回任务 ID。', tone: 'danger' });
+      return;
+    }
+    toast({ title: '指令已下发', message: `「${server.name}」${label}执行中，完成后通知结果。` });
+    pollPowerJob(server, jobId, label);
+  }
+
+  async function pollPowerJob(server, jobId, label) {
+    const deadline = Date.now() + POWER_JOB_POLL_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => { setTimeout(resolve, POWER_JOB_POLL_INTERVAL_MS); });
+      let jobs = [];
+      try {
+        const response = await api.powerJobs(token, server.id, 5);
+        jobs = response?.jobs ?? [];
+      } catch {
+        continue;
+      }
+      const job = jobs.find((item) => item.id === jobId);
+      if (job && isPowerJobTerminal(job.status)) {
+        const done = POWER_JOB_STATUS_TEXT[job.status] ?? job.status;
+        if (job.status === 'success') {
+          toast({ title: done, message: `「${server.name}」${label}已完成。` });
+        } else {
+          const output = (job.output ?? '').trim().slice(0, 200);
+          toast({
+            title: done,
+            message: `「${server.name}」${label}${done}。${output}`,
+            tone: 'danger',
+          });
+        }
+        return;
+      }
+    }
+    toast({ title: '等待超时', message: `「${server.name}」${label}超过预期未完成，请到 Agent 控制页查看。`, tone: 'warning' });
   }
 
   async function handleRconExecute(cmd) {
@@ -835,6 +962,31 @@ export function CommunityPage() {
             <label>备注</label>
             <input type="text" className="form-control" placeholder="备注（非必填）" value={serverForm.note} onChange={(e) => handleServerFieldChange('note', e.target.value)} />
           </div>
+        </FormSectionCard>
+
+        {/* 电源控制绑定 */}
+        <FormSectionCard
+          icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18.36 6.64a9 9 0 11-12.72 0" /><line x1="12" y1="2" x2="12" y2="12" /></svg>}
+          title="电源控制绑定"
+        >
+          <div className="form-row">
+            <div className="form-group" style={{ flex: 1 }}>
+              <label>宿主机 Agent</label>
+              <select className="form-control" value={serverForm.host_agent_id} onChange={(e) => handleServerFieldChange('host_agent_id', e.target.value)}>
+                <option value="">不绑定（无法使用电源操作）</option>
+                {hostAgents.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.hostname || agent.id}{agent.online ? '' : '（离线）'}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="form-group" style={{ flex: 1 }}>
+              <label>LGSM 实例名</label>
+              <input type="text" className="form-control" placeholder="例如：csgoserver" value={serverForm.lgsm_instance} onChange={(e) => handleServerFieldChange('lgsm_instance', e.target.value)} />
+            </div>
+          </div>
+          <div className="form-hint">绑定后才能在服务器控制中使用重启 / 开机 / 关机；实例名以宿主机上 LGSM 脚本文件名为准。</div>
         </FormSectionCard>
 
         {/* 访问限制 */}
@@ -1219,10 +1371,54 @@ export function CommunityPage() {
       <Modal
         open={rconModal.open}
         title={`服务器控制 — ${rconModal.serverName}`}
-        onClose={() => setRconModal({ open: false, serverId: null, serverName: '', executing: '', customCommand: '' })}
+        onClose={() => setRconModal({ open: false, serverId: null, serverName: '', executing: '', customCommand: '', server: null })}
         extraWide
-        footer={<button className="btn btn-primary" onClick={() => setRconModal({ open: false, serverId: null, serverName: '', executing: '', customCommand: '' })}>关闭</button>}
+        footer={<button className="btn btn-primary" onClick={() => setRconModal({ open: false, serverId: null, serverName: '', executing: '', customCommand: '', server: null })}>关闭</button>}
       >
+        {rconModal.server ? (
+          <div className="mb-20">
+            <div className="flex items-center gap-8 mb-12">
+              <span className="text-accent">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="20" height="20" aria-hidden="true">
+                  <path d="M18.36 6.64a9 9 0 11-12.72 0" /><line x1="12" y1="2" x2="12" y2="12" />
+                </svg>
+              </span>
+              <span className="fw-600 fs-14">服务器电源</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
+              <button
+                className="rcon-cmd-btn"
+                onClick={() => openPowerModal(rconModal.server, POWER_ACTION.restart)}
+              >
+                <span className="rcon-cmd-name">重启服务器</span>
+                <span className="rcon-cmd-desc">有玩家时禁止，无玩家时两次确认</span>
+              </button>
+              <button
+                className="rcon-cmd-btn"
+                disabled={!powerAvailability(rconModal.server).start.enabled}
+                onClick={() => openPowerModal(rconModal.server, POWER_ACTION.start)}
+              >
+                <span className="rcon-cmd-name">开启服务器</span>
+                <span className="rcon-cmd-desc">{powerAvailability(rconModal.server).start.enabled ? '仅关机状态可用' : '开机状态不可用'}</span>
+              </button>
+              <button
+                className="rcon-cmd-btn rcon-cmd-btn--danger"
+                disabled={!powerAvailability(rconModal.server).stop.enabled}
+                onClick={() => openPowerModal(rconModal.server, POWER_ACTION.stop)}
+              >
+                <span className="rcon-cmd-name">关闭服务器</span>
+                <span className="rcon-cmd-desc">{powerAvailability(rconModal.server).stop.enabled ? '两次确认，第二次强制阅读 5 秒' : '关机状态不可用'}</span>
+              </button>
+              <button
+                className="rcon-cmd-btn rcon-cmd-btn--danger"
+                onClick={() => openPowerModal(rconModal.server, POWER_ACTION.forceRestart)}
+              >
+                <span className="rcon-cmd-name">强制重启服务器<span className="rcon-cmd-badge">⚠ 高影响</span></span>
+                <span className="rcon-cmd-desc">有玩家也可执行，两次确认并强制阅读 5 秒</span>
+              </button>
+            </div>
+          </div>
+        ) : null}
         {COMMAND_CATEGORIES.map((cat) => (
           <div key={cat.name} className="mb-20">
             <div className="flex items-center gap-8 mb-12">
@@ -1279,6 +1475,74 @@ export function CommunityPage() {
           </div>
         </div>
       </Modal>
+      {/* 服务器电源二次确认 */}
+      {powerModal.open && powerModal.server ? (
+        <Modal
+          open
+          title={powerModal.action === POWER_ACTION.restart ? `重启服务器 — ${powerModal.server.name}` : powerModal.action === POWER_ACTION.forceRestart ? `强制重启服务器 — ${powerModal.server.name}` : powerModal.action === POWER_ACTION.start ? `开启服务器 — ${powerModal.server.name}` : `关闭服务器 — ${powerModal.server.name}`}
+          onClose={closePowerModal}
+          footer={(
+            <>
+              <button className="btn btn-outline" onClick={closePowerModal}>取消</button>
+              {powerModal.action === POWER_ACTION.restart && restartVariant(powerModal.server) === 'has-players' ? (
+                <button className="btn btn-primary" onClick={handlePowerConfirm}>确认</button>
+              ) : null}
+              {powerModal.action === POWER_ACTION.restart && restartVariant(powerModal.server) === 'empty' && powerModal.step === 'confirm' ? (
+                <button className="btn btn-primary" onClick={handlePowerConfirm}>确认重启</button>
+              ) : null}
+              {powerModal.action === POWER_ACTION.restart && restartVariant(powerModal.server) === 'empty' && powerModal.step === 'final' ? (
+                <button className="btn btn-primary" disabled={powerModal.countdown > 0} onClick={handlePowerConfirm}>
+                  {countdownLabel('确认重启', powerModal.countdown)}
+                </button>
+              ) : null}
+              {powerModal.action === POWER_ACTION.forceRestart && powerModal.step === 'confirm' ? (
+                <button className="btn btn-primary" onClick={handlePowerConfirm}>确认强制重启</button>
+              ) : null}
+              {powerModal.action === POWER_ACTION.forceRestart && powerModal.step === 'final' ? (
+                <button className="btn btn-primary" disabled={powerModal.countdown > 0} onClick={handlePowerConfirm}>
+                  {countdownLabel('确认强制重启', powerModal.countdown)}
+                </button>
+              ) : null}
+              {powerModal.action === POWER_ACTION.start ? (
+                <button className="btn btn-primary" onClick={handlePowerConfirm}>确认执行</button>
+              ) : null}
+              {powerModal.action === POWER_ACTION.stop && powerModal.step === 'confirm' ? (
+                <button className="btn btn-primary" onClick={handlePowerConfirm}>确认执行</button>
+              ) : null}
+              {powerModal.action === POWER_ACTION.stop && powerModal.step === 'final' ? (
+                <button className="btn btn-primary" disabled={powerModal.countdown > 0} onClick={handlePowerConfirm}>
+                  {countdownLabel('确认执行', powerModal.countdown)}
+                </button>
+              ) : null}
+            </>
+          )}
+        >
+          {powerModal.action === POWER_ACTION.restart && restartVariant(powerModal.server) === 'has-players' ? (
+            <div className="info-box danger">{RESTART_HAS_PLAYERS_TEXT}</div>
+          ) : null}
+          {powerModal.action === POWER_ACTION.restart && restartVariant(powerModal.server) === 'empty' && powerModal.step === 'confirm' ? (
+            <div className="info-box warning">{RESTART_EMPTY_TEXT}</div>
+          ) : null}
+          {powerModal.action === POWER_ACTION.restart && restartVariant(powerModal.server) === 'empty' && powerModal.step === 'final' ? (
+            <div className="info-box danger">{RESTART_FINAL_TEXT}</div>
+          ) : null}
+          {powerModal.action === POWER_ACTION.forceRestart && powerModal.step === 'confirm' ? (
+            <div className="info-box warning">{FORCE_RESTART_CONFIRM_TEXT}</div>
+          ) : null}
+          {powerModal.action === POWER_ACTION.forceRestart && powerModal.step === 'final' ? (
+            <div className="info-box danger">{FORCE_RESTART_FINAL_TEXT}</div>
+          ) : null}
+          {powerModal.action === POWER_ACTION.start ? (
+            <div className="info-box info">{buildStartConfirmText(powerModal.server.name)}</div>
+          ) : null}
+          {powerModal.action === POWER_ACTION.stop && powerModal.step === 'confirm' ? (
+            <div className="info-box warning">{buildStopConfirmText(powerModal.server.name)}</div>
+          ) : null}
+          {powerModal.action === POWER_ACTION.stop && powerModal.step === 'final' ? (
+            <div className="info-box danger">{buildStopFinalText()}</div>
+          ) : null}
+        </Modal>
+      ) : null}
       {dialog}
     </div>
   );

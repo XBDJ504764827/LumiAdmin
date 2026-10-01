@@ -9,6 +9,8 @@ pub mod dashboard_analytics;
 pub mod external_ban_api;
 pub mod external_server;
 pub mod global_ban;
+pub mod host_agent;
+pub mod host_power;
 pub mod misc;
 pub mod notification;
 pub mod ops;
@@ -201,6 +203,37 @@ pub fn router(
         .route(
             "/api/community/servers/:server_id/rcon",
             post(community::execute_rcon),
+        )
+        // -- host agent （宿主机 Agent 文件托管下发） --
+        .route("/api/host-agent/setup", get(host_agent::get_setup))
+        .route(
+            "/api/host-agent/download/:filename",
+            get(host_agent::download_file),
+        )
+        // -- host power （宿主机 Agent 电源控制：管理侧下发 + Agent 侧执行） --
+        .route(
+            "/api/host-agent/install-tokens",
+            post(host_power::create_install_token),
+        )
+        .route("/api/host-agent/agents", get(host_power::list_agents))
+        .route("/api/host-agent/overview", get(host_power::power_overview))
+        .route(
+            "/api/community/servers/:server_id/power",
+            post(host_power::power_server),
+        )
+        .route(
+            "/api/community/servers/:server_id/power/jobs",
+            get(host_power::list_power_jobs),
+        )
+        .route("/api/host-agent/register", post(host_power::register_agent))
+        .route(
+            "/api/host-agent/heartbeat",
+            post(host_power::agent_heartbeat),
+        )
+        .route("/api/host-agent/jobs/poll", post(host_power::poll_jobs))
+        .route(
+            "/api/host-agent/jobs/:job_id/result",
+            post(host_power::report_job_result),
         )
         // -- plugin --
         .route(

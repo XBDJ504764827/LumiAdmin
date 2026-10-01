@@ -1,0 +1,218 @@
+import { useState } from 'react';
+import { api } from '../../lib/api.js';
+import { useAsync } from '../../shared/useAsync.js';
+import { useAuth } from '../../state/store.js';
+import { useToast } from '../../shared/Toast.jsx';
+import { MetricCard } from '../../shared/MetricCard.jsx';
+import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
+import { formatChinaDateTime } from '../../shared/time.js';
+import { downloadHostAgentFile, normalizeSetupResponse } from './hostAgent.js';
+import { HeartbeatTrendChart, PowerTaskTrendChart } from './HostAgentCharts.jsx';
+
+function normalizeAgents(payload) {
+  const agents = Array.isArray(payload?.agents) ? payload.agents : [];
+  return agents.map((item) => ({
+    id: item.id ?? '',
+    hostname: item.hostname || '(未上报主机名)',
+    lgsmDir: item.lgsm_dir || '',
+    instances: Array.isArray(item.instances) ? item.instances : [],
+    online: item.online === true,
+    lastSeenAt: item.last_seen_at ?? null,
+  }));
+}
+
+export function HostAgentPage() {
+  const { session } = useAuth();
+  const { toast } = useToast();
+  const token = session?.token ?? null;
+  const isDeveloper = session?.role === 'developer';
+
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [downloading, setDownloading] = useState(false);
+  const [installToken, setInstallToken] = useState(null);
+  const [issuing, setIssuing] = useState(false);
+
+  const setupState = useAsync(() => api.hostAgentSetup(token), [token, refreshKey]);
+  const setup = setupState.data ? normalizeSetupResponse(setupState.data) : null;
+  const installFile = setup?.files.find((file) => file.name === 'install.sh');
+
+  const dataState = useAsync(async () => {
+    const [overviewRes, agentsRes] = await Promise.all([
+      api.hostAgentOverview(token),
+      api.hostAgents(token),
+    ]);
+    return {
+      overview: overviewRes?.overview ?? { hosts: 0, instances: 0, online: 0, pending_jobs: 0 },
+      agents: normalizeAgents(agentsRes),
+    };
+  }, [token, refreshKey]);
+  const overview = dataState.data?.overview ?? { hosts: 0, instances: 0, online: 0, pending_jobs: 0 };
+  const agents = dataState.data?.agents ?? [];
+  const offline = overview.hosts - overview.online;
+  const loading = setupState.loading || dataState.loading;
+  const loadError = setupState.error ?? dataState.error;
+
+  async function handleDownloadInstall() {
+    if (!installFile?.available) {
+      toast({ title: '暂不可下载', message: 'install.sh 待发布流程落地后提供', tone: 'warning' });
+      return;
+    }
+    try {
+      setDownloading(true);
+      await downloadHostAgentFile(token, 'install.sh');
+      toast({ title: '下载成功', message: 'install.sh', tone: 'success' });
+    } catch (error) {
+      toast({ title: '下载失败', message: error.message, tone: 'danger' });
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  async function handleIssueInstallToken() {
+    try {
+      setIssuing(true);
+      const response = await api.createHostInstallToken(token);
+      setInstallToken({ token: response?.token ?? '', expiresAt: response?.expires_at ?? '' });
+      toast({ title: '签发成功', message: '安装口令 15 分钟有效，仅显示一次，请立即复制。' });
+    } catch (error) {
+      toast({ title: '签发失败', message: error.message, tone: 'danger' });
+    } finally {
+      setIssuing(false);
+    }
+  }
+
+  async function handleCopy(text, label) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast({ title: '已复制', message: label, tone: 'success' });
+    } catch (error) {
+      toast({ title: '复制失败', message: error.message, tone: 'danger' });
+    }
+  }
+
+  return (
+    <div id="host-agent" className="content-section active">
+      <div className="breadcrumb"><span>核心管理</span><span className="sep">›</span><span className="current">Agent控制</span></div>
+      <div className="page-header">
+        <div><div className="page-title">Agent控制</div><div className="page-sub">宿主机 Agent 运行监控：一台宿主机跑一个 Agent，管理本机全部 LGSM 实例。</div></div>
+        <button className="btn btn-outline" onClick={() => setRefreshKey((v) => v + 1)} disabled={loading}>
+          {loading ? '刷新中...' : '刷新'}
+        </button>
+      </div>
+
+      <div className="metric-grid">
+        <MetricCard label="宿主机" value={overview.hosts} badge={`${overview.online} 在线`} />
+        <MetricCard label="受管实例" value={overview.instances} badge={`${overview.hosts} 台宿主机`} />
+        <MetricCard label="在线 Agent" value={`${overview.online}/${overview.hosts}`} badge={offline ? `${offline} 台离线` : '全部在线'} accent={offline > 0} />
+        <MetricCard label="待执行任务" value={overview.pending_jobs} badge={overview.pending_jobs ? '有任务排队' : '队列为空'} accent={overview.pending_jobs > 0} />
+      </div>
+
+      <div className="dash-charts-grid">
+        <HeartbeatTrendChart />
+        <PowerTaskTrendChart />
+      </div>
+
+      <div className="lower-grid ops-lower-grid">
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">宿主机</div>
+              <div className="card-sub">共 {overview.hosts} 台，{overview.online} 台在线</div>
+            </div>
+          </div>
+          <div className="card-body">
+            <div className="table-responsive">
+              <table className="data-table mobile-card-table">
+                <thead>
+                  <tr>
+                    <th>宿主机</th>
+                    <th>受管实例</th>
+                    <th>状态</th>
+                    <th>最近心跳</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading ? <TableLoading colSpan={4} text="正在加载宿主机数据..." /> : null}
+                  {!loading && loadError ? (
+                    <TableError colSpan={4} message={loadError.message} />
+                  ) : null}
+                  {!loading && !loadError && agents.length === 0 ? (
+                    <TableEmpty colSpan={4} text="暂无宿主机接入，完成右侧快速上手后自动出现。" />
+                  ) : null}
+                  {!loading && !loadError && agents.map((host) => (
+                    <tr key={host.id}>
+                      <td className="fw-600 mobile-card-primary" data-label="宿主机">
+                        {host.hostname}
+                        {host.lgsmDir ? <div className="text-muted-light" style={{ fontWeight: 400, fontSize: 12 }}>{host.lgsmDir}</div> : null}
+                      </td>
+                      <td data-label="受管实例">
+                        {host.instances.length} 个
+                        {host.instances.length ? <div className="text-muted-light" style={{ fontSize: 12 }}>{host.instances.join('、')}</div> : null}
+                      </td>
+                      <td data-label="状态">
+                        {host.online
+                          ? <span className="status-pill pill-online">在线</span>
+                          : <span className="status-pill pill-danger">离线</span>}
+                      </td>
+                      <td data-label="最近心跳">{host.lastSeenAt ? formatChinaDateTime(host.lastSeenAt) : <span className="text-muted-light">—</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">快速上手</div>
+              <div className="card-sub">约 1 分钟完成接入</div>
+            </div>
+          </div>
+          <div className="card-body">
+            <ol style={{ margin: '0 0 12px', paddingLeft: 20, fontSize: 13, color: 'var(--text2)', lineHeight: 1.8 }}>
+              <li>在下方签发安装口令（15 分钟有效，一次性），下载安装脚本传到宿主机。</li>
+              <li>按脚本头部注释填好后端地址、安装口令、LGSM 目录、实例清单，sudo 执行。</li>
+              <li>用 <code style={{ fontSize: 12, background: 'var(--surface2)', padding: '2px 6px', borderRadius: 4 }}>journalctl -u lumi-host-agent -f</code> 确认启动。</li>
+              <li>回到本页查看宿主机上线。</li>
+            </ol>
+            <button
+              className="btn btn-primary"
+              style={{ width: '100%' }}
+              disabled={downloading || !installFile?.available}
+              onClick={handleDownloadInstall}
+            >
+              {downloading ? '下载中...' : '下载 install.sh'}
+            </button>
+            {isDeveloper ? (
+              <div style={{ marginTop: 12 }}>
+                <button
+                  className="btn btn-outline"
+                  style={{ width: '100%' }}
+                  disabled={issuing}
+                  onClick={handleIssueInstallToken}
+                >
+                  {issuing ? '签发中...' : '签发安装口令（15 分钟有效）'}
+                </button>
+                {installToken ? (
+                  <div className="info-box warning" style={{ marginTop: 8 }}>
+                    <div style={{ marginBottom: 6 }}>口令仅显示一次，请立即复制{installToken.expiresAt ? `（过期 ${formatChinaDateTime(installToken.expiresAt)}）` : ''}：</div>
+                    <code style={{ fontSize: 12, background: 'var(--surface2)', padding: '2px 6px', borderRadius: 4, wordBreak: 'break-all' }}>{installToken.token}</code>
+                    <div style={{ marginTop: 8 }}>
+                      <button className="btn btn-sm" onClick={() => handleCopy(installToken.token, '安装口令')}>复制口令</button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="info-box warning" style={{ marginTop: 12 }}>
+                安装口令需 developer 签发，请联系开发管理员获取。
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

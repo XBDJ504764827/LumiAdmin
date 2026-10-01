@@ -55,6 +55,10 @@ export const api = {
   serverReportToken: (token, serverId) => request(`/api/community/servers/${serverId}/report-token`, { headers: withAuth(token) }),
   resetServerReportToken: (token, serverId) => request(`/api/community/servers/${serverId}/report-token/reset`, { method: 'POST', headers: withAuth(token), body: JSON.stringify({}) }),
   executeRcon: (token, serverId, body) => request(`/api/community/servers/${serverId}/rcon`, { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
+  powerServer: (token, serverId, body) => request(`/api/community/servers/${serverId}/power`, { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
+  powerJobs: (token, serverId, limit = 5) => request(`/api/community/servers/${serverId}/power/jobs${buildQueryString({ limit })}`, { headers: withAuth(token) }),
+  hostAgents: (token) => request('/api/host-agent/agents', { headers: withAuth(token) }),
+  createHostInstallToken: (token) => request('/api/host-agent/install-tokens', { method: 'POST', headers: withAuth(token), body: JSON.stringify({}) }),
   whitelist: (token, params = {}) => request(`/api/whitelist${buildQueryString(params)}`, { headers: withAuth(token) }),
   createManualWhitelist: (token, body) => request('/api/whitelist/manual', { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   approveWhitelist: (token, id, body = {}) => request(`/api/whitelist/${id}/approve`, { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
@@ -128,6 +132,9 @@ export const api = {
   notificationUnreadCount: (token) => request('/api/notifications/unread-count', { headers: withAuth(token) }),
   markNotificationRead: (token, id) => request(`/api/notifications/${id}/read`, { method: 'POST', headers: withAuth(token) }),
   markAllNotificationsRead: (token) => request('/api/notifications/read-all', { method: 'POST', headers: withAuth(token) }),
+  // Host agent （宿主机 Agent 文件托管下发）
+  hostAgentSetup: (token) => request('/api/host-agent/setup', { headers: withAuth(token) }),
+  hostAgentOverview: (token) => request('/api/host-agent/overview', { headers: withAuth(token) }),
 };
 
 export function useAppApi() {

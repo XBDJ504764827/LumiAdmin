@@ -39,6 +39,8 @@ test('buildServerPayloadWithAccess trims base fields and converts access values'
     risk_block_enabled: true,
     max_players: 32,
     use_custom_access: true,
+    host_agent_id: null,
+    lgsm_instance: null,
   });
 });
 
@@ -109,5 +111,30 @@ test('buildAccessSummary marks 中高风险拦截 independently of custom access
   assert.equal(
     buildAccessSummary({ use_custom_access: true, access_restriction_enabled: false, whitelist_mode_enabled: true, risk_block_enabled: true }),
     '白名单模式 · 中高风险拦截',
+  );
+});
+
+test('buildServerPayloadWithAccess 透传 Agent 绑定并校验实例名', () => {
+  const base = {
+    ...emptyAccessConfig,
+    name: 'A',
+    ip: '1.1.1.1',
+    port: '27015',
+    rcon_password: 'x',
+    report_token: '',
+    note: '',
+    max_players: '0',
+  };
+  const bound = buildServerPayloadWithAccess({ ...base, host_agent_id: '  agent-1 ', lgsm_instance: ' csgoserver ' });
+  assert.equal(bound.host_agent_id, 'agent-1');
+  assert.equal(bound.lgsm_instance, 'csgoserver');
+
+  assert.throws(
+    () => buildServerPayloadWithAccess({ ...base, host_agent_id: '', lgsm_instance: 'csgoserver' }),
+    /需先选择绑定的宿主机 Agent/,
+  );
+  assert.throws(
+    () => buildServerPayloadWithAccess({ ...base, host_agent_id: 'agent-1', lgsm_instance: 'a;reboot' }),
+    /实例名格式无效/,
   );
 });

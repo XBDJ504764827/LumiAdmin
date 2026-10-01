@@ -977,6 +977,8 @@
 }
 .dash-chart-dot-accent { background: var(--accent); }
 .dash-chart-dot-accent2 { background: var(--accent2); }
+.dash-chart-dot-teal { background: var(--teal); }
+.dash-chart-dot-danger { background: var(--danger-text); }
 
 /* 图例右侧补充统计（累计/峰值等） */
 .dash-chart-legend-meta {

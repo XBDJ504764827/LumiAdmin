@@ -4043,3 +4043,684 @@ async fn access_record_rejects_unknown_token() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn host_agent_setup_lists_hosted_files_for_admin() {
+    with_test_app(async |_db, config| {
+        let token = create_session_for_user(&_db, "11111111-1111-1111-1111-111111111111").await?;
+        let app = test_app(config, _db.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/setup")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let files = payload["files"].as_array().expect("files 应为数组");
+        assert_eq!(files.len(), 3);
+        let install = files.iter().find(|f| f["name"] == "install.sh").unwrap();
+        assert_eq!(install["available"], true);
+        assert!(install["size_bytes"].as_u64().unwrap() > 0);
+        let binary = files
+            .iter()
+            .find(|f| f["name"] == "lumi-server-agent-x86_64")
+            .unwrap();
+        assert_eq!(binary["available"], false);
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn host_agent_setup_rejects_normal_user() {
+    with_test_app(async |_db, config| {
+        let token = create_session_for_user(&_db, "33333333-3333-3333-3333-333333333333").await?;
+        let app = test_app(config, _db.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/setup")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn host_agent_download_serves_install_script_as_attachment() {
+    with_test_app(async |_db, config| {
+        let token = create_session_for_user(&_db, "22222222-2222-2222-2222-222222222222").await?;
+        let app = test_app(config, _db.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/download/install.sh")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let disposition = response
+            .headers()
+            .get("content-disposition")
+            .expect("应有下载头")
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(disposition.contains("install.sh"));
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let content = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(content.contains("LumiServerAgent"));
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn host_agent_download_rejects_unknown_and_unpublished_binary() {
+    with_test_app(async |_db, config| {
+        let token = create_session_for_user(&_db, "11111111-1111-1111-1111-111111111111").await?;
+        let app = test_app(config, _db.clone());
+        let missing = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/download/evil.sh")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+        let binary = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/download/lumi-server-agent-x86_64")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(binary.status(), StatusCode::NOT_IMPLEMENTED);
+        Ok(())
+    })
+    .await;
+}
+
+async fn host_power_issue_install_token(app: &TestApp, token: &Uuid) -> String {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/host-agent/install-tokens")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    payload["token"].as_str().unwrap().to_string()
+}
+
+async fn host_power_register_agent(app: &TestApp, install_token: &str) -> (Uuid, String) {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/host-agent/register")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "install_token": install_token,
+                        "hostname": "game-01",
+                        "lgsm_dir": "/home/steam/lgsm",
+                        "instances": ["csgoserver"],
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    (
+        Uuid::parse_str(payload["agent_id"].as_str().unwrap()).unwrap(),
+        payload["agent_token"].as_str().unwrap().to_string(),
+    )
+}
+
+async fn host_power_bind_server(db: &Database, server_id: Uuid, agent_id: Uuid) {
+    sqlx::query(
+        r#"UPDATE servers SET host_agent_id = $1, lgsm_instance = 'csgoserver' WHERE id = $2"#,
+    )
+    .bind(agent_id)
+    .bind(server_id)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn host_power_install_token_developer_only() {
+    with_test_app(async |db, config| {
+        let dev = create_session_for_user(&db, "22222222-2222-2222-2222-222222222222").await?;
+        let normal = create_session_for_user(&db, "33333333-3333-3333-3333-333333333333").await?;
+        let app = test_app(config, db.clone());
+
+        let token = host_power_issue_install_token(&app, &dev).await;
+        assert!(!token.is_empty());
+
+        let forbidden = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/host-agent/install-tokens")
+                    .header("authorization", format!("Bearer {normal}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn host_power_full_cycle_dispatch_poll_result() {
+    with_test_app(async |db, config| {
+        let dev = create_session_for_user(&db, "22222222-2222-2222-2222-222222222222").await?;
+        let app = test_app(config, db.clone());
+        let (_, server_id) = insert_community_with_server(&db, "电源服").await;
+
+        // 未绑定时下发应被拒绝
+        let unbound = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/community/servers/{server_id}/power"))
+                    .header("authorization", format!("Bearer {dev}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "action": "restart" }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unbound.status(), StatusCode::BAD_REQUEST);
+
+        let install_token = host_power_issue_install_token(&app, &dev).await;
+        let (agent_id, agent_token) = host_power_register_agent(&app, &install_token).await;
+        // 安装口令一次性：复用应失败
+        let reused = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/host-agent/register")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({ "install_token": install_token }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reused.status(), StatusCode::BAD_REQUEST);
+        host_power_bind_server(&db, server_id, agent_id).await;
+
+        // 心跳上线
+        let heartbeat = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/host-agent/heartbeat")
+                    .header("authorization", format!("Bearer {agent_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({ "hostname": "game-01", "instances": ["csgoserver"] }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(heartbeat.status(), StatusCode::OK);
+
+        // 下发重启
+        let dispatch = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/community/servers/{server_id}/power"))
+                    .header("authorization", format!("Bearer {dev}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "action": "restart" }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(dispatch.status(), StatusCode::OK);
+        let bytes = to_bytes(dispatch.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let job_id = payload["job"]["id"].as_str().unwrap().to_string();
+        assert_eq!(payload["job"]["status"], "pending");
+
+        // 并发下发应被拒绝（单 flight）
+        let conflict = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/community/servers/{server_id}/power"))
+                    .header("authorization", format!("Bearer {dev}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "action": "stop" }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(conflict.status(), StatusCode::BAD_REQUEST);
+
+        // Agent 领取
+        let poll = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/host-agent/jobs/poll")
+                    .header("authorization", format!("Bearer {agent_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "max": 5 }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(poll.status(), StatusCode::OK);
+        let bytes = to_bytes(poll.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let jobs = payload["jobs"].as_array().unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0]["job_id"], job_id);
+        assert_eq!(jobs[0]["instance"], "csgoserver");
+        assert_eq!(jobs[0]["action"], "restart");
+
+        // Agent 回写成功
+        let result = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/host-agent/jobs/{job_id}/result"))
+                    .header("authorization", format!("Bearer {agent_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({ "exit_code": 0, "output": "done", "timed_out": false }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.status(), StatusCode::OK);
+        let bytes = to_bytes(result.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["job"]["status"], "success");
+
+        // 管理侧可查到终态
+        let listed = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/api/community/servers/{server_id}/power/jobs?limit=5"
+                    ))
+                    .header("authorization", format!("Bearer {dev}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(listed.status(), StatusCode::OK);
+        let bytes = to_bytes(listed.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["jobs"][0]["status"], "success");
+
+        // 伪造口令领取应 401
+        let forged = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/host-agent/jobs/poll")
+                    .header("authorization", "Bearer forged-token")
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "max": 5 }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(forged.status(), StatusCode::UNAUTHORIZED);
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn host_power_force_restart_maps_to_restart_for_agent() {
+    with_test_app(async |db, config| {
+        let dev = create_session_for_user(&db, "22222222-2222-2222-2222-222222222222").await?;
+        let app = test_app(config, db.clone());
+        let (_, server_id) = insert_community_with_server(&db, "强制服").await;
+
+        let install_token = host_power_issue_install_token(&app, &dev).await;
+        let (agent_id, agent_token) = host_power_register_agent(&app, &install_token).await;
+        host_power_bind_server(&db, server_id, agent_id).await;
+
+        let dispatch = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/community/servers/{server_id}/power"))
+                    .header("authorization", format!("Bearer {dev}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "action": "force-restart" }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(dispatch.status(), StatusCode::OK);
+
+        let poll = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/host-agent/jobs/poll")
+                    .header("authorization", format!("Bearer {agent_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "max": 5 }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = to_bytes(poll.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let jobs = payload["jobs"].as_array().unwrap();
+        assert_eq!(jobs.len(), 1);
+        // Agent 侧只认 restart；force 语义保留在任务记录的 action 字段
+        assert_eq!(jobs[0]["action"], "restart");
+
+        let listed = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/api/community/servers/{server_id}/power/jobs?limit=5"
+                    ))
+                    .header("authorization", format!("Bearer {dev}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = to_bytes(listed.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["jobs"][0]["action"], "force-restart");
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn host_power_dangerous_actions_require_developer() {
+    with_test_app(async |db, config| {
+        let admin = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
+        let app = test_app(config, db.clone());
+        let (_, server_id) = insert_community_with_server(&db, "权限服").await;
+
+        for action in ["start", "stop", "force-restart"] {
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/api/community/servers/{server_id}/power"))
+                        .header("authorization", format!("Bearer {admin}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(json!({ "action": action }).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "动作：{action}");
+        }
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn host_power_overview_and_server_binding_fields() {
+    with_test_app(async |db, config| {
+        let dev = create_session_for_user(&db, "22222222-2222-2222-2222-222222222222").await?;
+        let app = test_app(config, db.clone());
+        let (_, server_id) = insert_community_with_server(&db, "绑定服").await;
+
+        let install_token = host_power_issue_install_token(&app, &dev).await;
+        let (agent_id, agent_token) = host_power_register_agent(&app, &install_token).await;
+        host_power_bind_server(&db, server_id, agent_id).await;
+
+        // 概览：1 宿主机 / 1 实例 / 在线 / 0 待执行
+        let overview = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/overview")
+                    .header("authorization", format!("Bearer {dev}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(overview.status(), StatusCode::OK);
+        let bytes = to_bytes(overview.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["overview"]["hosts"], 1);
+        assert_eq!(payload["overview"]["instances"], 1);
+        assert_eq!(payload["overview"]["online"], 1);
+        assert_eq!(payload["overview"]["pending_jobs"], 0);
+
+        // agents 列表带在线标记
+        let agents = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/agents")
+                    .header("authorization", format!("Bearer {dev}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = to_bytes(agents.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["agents"][0]["online"], true);
+        assert_eq!(payload["agents"][0]["hostname"], "game-01");
+
+        // 社区服列表带出绑定字段
+        let groups = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/community/servers")
+                    .header("authorization", format!("Bearer {dev}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = to_bytes(groups.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let found = payload["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|g| g["servers"].as_array().unwrap().clone())
+            .find(|s| s["id"] == server_id.to_string())
+            .unwrap();
+        assert_eq!(found["host_agent_id"], agent_id.to_string());
+        assert_eq!(found["lgsm_instance"], "csgoserver");
+
+        // 下发一个任务后 pending_jobs 变为 1
+        let _ = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/community/servers/{server_id}/power"))
+                    .header("authorization", format!("Bearer {dev}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "action": "restart" }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let overview = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/overview")
+                    .header("authorization", format!("Bearer {dev}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = to_bytes(overview.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["overview"]["pending_jobs"], 1);
+
+        // 绑定不存在的 Agent 应被拒绝（直接调服务层）
+        let bad = crate::services::community_service::update_server(
+            &db,
+            server_id,
+            crate::services::community_service::ServerInput {
+                name: "绑定服".to_string(),
+                ip: "127.0.0.1".to_string(),
+                port: 25575,
+                rcon_password: String::new(),
+                report_token: None,
+                note: None,
+                access_restriction_enabled: false,
+                min_rating: 0,
+                min_steam_level: 0,
+                whitelist_mode_enabled: false,
+                risk_block_enabled: true,
+                use_custom_access: false,
+                host_agent_id: Some(Uuid::new_v4()),
+                lgsm_instance: Some("csgoserver".to_string()),
+                max_players: 0,
+            },
+            crate::services::community_rcon::RconTimeouts {
+                connect_secs: 1,
+                io_secs: 1,
+            },
+        )
+        .await;
+        assert!(bad.is_err());
+        let _ = agent_token;
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn host_agent_download_accepts_agent_and_install_tokens() {
+    with_test_app(async |db, config| {
+        let dev = create_session_for_user(&db, "22222222-2222-2222-2222-222222222222").await?;
+        let app = test_app(config, db.clone());
+
+        let install_token = host_power_issue_install_token(&app, &dev).await;
+        let (_, agent_token) = host_power_register_agent(&app, &install_token).await;
+        // 注册消耗了第一枚安装口令，再签一枚专供下载
+        let download_token = host_power_issue_install_token(&app, &dev).await;
+
+        for bearer in [
+            format!("Bearer {agent_token}"),
+            format!("Bearer {download_token}"),
+        ] {
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri("/api/host-agent/download/install.sh")
+                        .header("authorization", bearer)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        // 无口令与伪造口令均 401
+        let missing = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/download/install.sh")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+        let forged = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/download/install.sh")
+                    .header("authorization", "Bearer no-such-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(forged.status(), StatusCode::UNAUTHORIZED);
+
+        // 管理员会话仍可下载；二进制未托管时 501
+        let binary = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/download/lumi-server-agent-x86_64")
+                    .header("authorization", format!("Bearer {dev}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(binary.status(), StatusCode::NOT_IMPLEMENTED);
+        Ok(())
+    })
+    .await;
+}

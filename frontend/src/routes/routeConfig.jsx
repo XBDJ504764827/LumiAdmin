@@ -23,6 +23,7 @@ const GlobalBanPage = lazy(() => import('../pages/globalBan/GlobalBanPage.jsx').
 const PlayerDetailPage = lazy(() => import('../pages/playerDetail/PlayerDetailPage.jsx').then(m => ({ default: m.PlayerDetailPage })));
 const AuditPage = lazy(() => import('../pages/audit/AuditPage.jsx').then(m => ({ default: m.AuditPage })));
 const NotificationPage = lazy(() => import('../pages/notifications/NotificationPage.jsx').then(m => ({ default: m.NotificationPage })));
+const HostAgentPage = lazy(() => import('../pages/hostAgent/HostAgentPage.jsx').then(m => ({ default: m.HostAgentPage })));
 const PublicApplyPage = lazy(() => import('../pages/public/PublicApplyPage.jsx').then(m => ({ default: m.PublicApplyPage })));
 const PublicWhitelistPage = lazy(() => import('../pages/public/PublicWhitelistPage.jsx').then(m => ({ default: m.PublicWhitelistPage })));
 const PublicBanPage = lazy(() => import('../pages/public/PublicBanPage.jsx').then(m => ({ default: m.PublicBanPage })));
@@ -62,6 +63,7 @@ export const protectedRoutes = [
   { path: '/player-api', element: <Lazy><PlayerApiPage /></Lazy>, roles: ROUTE_ROLES.admin, permission: 'player_api.manage' },
   { path: '/external-ban-api', element: <Lazy><ExternalBanApiPage /></Lazy>, roles: ROUTE_ROLES.admin, permission: 'ban.manage' },
   { path: '/external-servers', element: <Lazy><ExternalServerPage /></Lazy>, roles: ROUTE_ROLES.admin, permission: 'community.manage' },
+  { path: '/host-agent', element: <Lazy><HostAgentPage /></Lazy>, roles: ROUTE_ROLES.admin, permission: 'community.manage' },
 ];
 
 export const publicRoutes = [

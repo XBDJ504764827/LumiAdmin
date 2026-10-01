@@ -58,3 +58,25 @@ export function buildStopFinalText() {
 export function countdownLabel(base, seconds) {
   return seconds > 0 ? `${base}（${seconds}s）` : base;
 }
+
+export const POWER_ACTION_LABEL = Object.freeze({
+  restart: '重启服务器',
+  'force-restart': '强制重启服务器',
+  start: '开启服务器',
+  stop: '关闭服务器',
+});
+
+// 任务终态：成功 / 失败 / 超时；pending / running 继续轮询。
+export function isPowerJobTerminal(status) {
+  return status === 'success' || status === 'failed' || status === 'timeout';
+}
+
+export const POWER_JOB_STATUS_TEXT = Object.freeze({
+  success: '执行成功',
+  failed: '执行失败',
+  timeout: '执行超时',
+});
+
+// 轮询配置：LGSM 重启常需数十秒，2s 间隔、150s 上限。
+export const POWER_JOB_POLL_INTERVAL_MS = 2000;
+export const POWER_JOB_POLL_TIMEOUT_MS = 150000;

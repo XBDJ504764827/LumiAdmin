@@ -58,8 +58,13 @@ import {
   buildStopConfirmText,
   buildStopFinalText,
   countdownLabel,
+  isPowerJobTerminal,
   powerAvailability,
   restartVariant,
+  POWER_ACTION_LABEL,
+  POWER_JOB_POLL_INTERVAL_MS,
+  POWER_JOB_POLL_TIMEOUT_MS,
+  POWER_JOB_STATUS_TEXT,
 } from './communityPower.js';
 import { OnlinePlayerCard, ToggleSwitch, FormSectionCard, ServerRconFeedback } from './CommunityComponents.jsx';
 import { CommunityServerTable } from './CommunityServerTable.jsx';
@@ -549,7 +554,7 @@ export function CommunityPage() {
     setRconModal({ open: true, serverId: server.id, serverName: server.name, executing: '', customCommand: '', server });
   }
 
-  // ── 服务器电源（界面预览：只弹确认框与倒计时，不下发指令） ──
+  // ── 服务器电源：确认框 + 倒计时，下发后后台轮询任务终态 ──
   function openPowerModal(server, action) {
     setPowerModal({ open: true, server, action, step: 'confirm', countdown: POWER_COUNTDOWN_SECS });
   }
@@ -590,7 +595,55 @@ export function CommunityPage() {
     }
     // 界面预览：不下发任何指令，待电源闭环接入后替换为真实下发。
     closePowerModal();
-    toast({ title: '界面预览', message: '电源下发功能开发中，本次未发送任何指令。', tone: 'warning' });
+    void dispatchPowerJob(server, action);
+  }
+
+  async function dispatchPowerJob(server, action) {
+    const label = POWER_ACTION_LABEL[action] ?? action;
+    let jobId = null;
+    try {
+      const response = await api.powerServer(token, server.id, { action });
+      jobId = response?.job?.id ?? null;
+    } catch (error) {
+      toast({ title: '下发失败', message: error.message, tone: 'danger' });
+      return;
+    }
+    if (!jobId) {
+      toast({ title: '下发失败', message: '后端未返回任务 ID。', tone: 'danger' });
+      return;
+    }
+    toast({ title: '指令已下发', message: `「${server.name}」${label}执行中，完成后通知结果。` });
+    pollPowerJob(server, jobId, label);
+  }
+
+  async function pollPowerJob(server, jobId, label) {
+    const deadline = Date.now() + POWER_JOB_POLL_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => { setTimeout(resolve, POWER_JOB_POLL_INTERVAL_MS); });
+      let jobs = [];
+      try {
+        const response = await api.powerJobs(token, server.id, 5);
+        jobs = response?.jobs ?? [];
+      } catch {
+        continue;
+      }
+      const job = jobs.find((item) => item.id === jobId);
+      if (job && isPowerJobTerminal(job.status)) {
+        const done = POWER_JOB_STATUS_TEXT[job.status] ?? job.status;
+        if (job.status === 'success') {
+          toast({ title: done, message: `「${server.name}」${label}已完成。` });
+        } else {
+          const output = (job.output ?? '').trim().slice(0, 200);
+          toast({
+            title: done,
+            message: `「${server.name}」${label}${done}。${output}`,
+            tone: 'danger',
+          });
+        }
+        return;
+      }
+    }
+    toast({ title: '等待超时', message: `「${server.name}」${label}超过预期未完成，请到 Agent 控制页查看。`, tone: 'warning' });
   }
 
   async function handleRconExecute(cmd) {
@@ -1292,7 +1345,6 @@ export function CommunityPage() {
                 </svg>
               </span>
               <span className="fw-600 fs-14">服务器电源</span>
-              <span className="status-pill pill-warning">界面预览</span>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
               <button
@@ -1384,7 +1436,7 @@ export function CommunityPage() {
           </div>
         </div>
       </Modal>
-      {/* 服务器电源二次确认（界面预览：不下发指令） */}
+      {/* 服务器电源二次确认 */}
       {powerModal.open && powerModal.server ? (
         <Modal
           open

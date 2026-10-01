@@ -6,8 +6,11 @@ import {
   buildStopConfirmText,
   countdownLabel,
   isPoweredOn,
+  isPowerJobTerminal,
   powerAvailability,
   restartVariant,
+  POWER_ACTION_LABEL,
+  POWER_JOB_STATUS_TEXT,
   RESTART_EMPTY_TEXT,
   RESTART_FINAL_TEXT,
   RESTART_HAS_PLAYERS_TEXT,
@@ -63,4 +66,14 @@ test('countdownLabel 倒计时结束恢复原文字', () => {
   assert.equal(POWER_COUNTDOWN_SECS, 5);
   assert.equal(countdownLabel('确认重启', 5), '确认重启（5s）');
   assert.equal(countdownLabel('确认重启', 0), '确认重启');
+});
+
+test('任务终态判定与文案映射', () => {
+  assert.equal(isPowerJobTerminal('success'), true);
+  assert.equal(isPowerJobTerminal('failed'), true);
+  assert.equal(isPowerJobTerminal('timeout'), true);
+  assert.equal(isPowerJobTerminal('pending'), false);
+  assert.equal(isPowerJobTerminal('running'), false);
+  assert.equal(POWER_ACTION_LABEL['force-restart'], '强制重启服务器');
+  assert.equal(POWER_JOB_STATUS_TEXT.success, '执行成功');
 });

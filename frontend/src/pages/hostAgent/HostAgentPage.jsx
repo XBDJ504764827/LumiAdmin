@@ -9,6 +9,7 @@ import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { downloadHostAgentFile, normalizeSetupResponse } from './hostAgent.js';
+import { HeartbeatTrendChart, PowerTaskTrendChart } from './HostAgentCharts.jsx';
 
 function normalizeAgents(payload) {
   const agents = Array.isArray(payload?.agents) ? payload.agents : [];
@@ -179,6 +180,11 @@ export function HostAgentPage() {
         <MetricCard label="受管实例" value={overview.instances} badge={`${overview.hosts} 台宿主机`} />
         <MetricCard label="在线 Agent" value={`${overview.online}/${overview.hosts}`} badge={offline ? `${offline} 台离线` : '全部在线'} accent={offline > 0} />
         <MetricCard label="待执行任务" value={overview.pending_jobs} badge={overview.pending_jobs ? '有任务排队' : '队列为空'} accent={overview.pending_jobs > 0} />
+      </div>
+
+      <div className="dash-charts-grid">
+        <HeartbeatTrendChart />
+        <PowerTaskTrendChart />
       </div>
 
       <div className="lower-grid ops-lower-grid">

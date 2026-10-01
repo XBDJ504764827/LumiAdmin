@@ -7,12 +7,33 @@ use crate::db::Database;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::sync::OnceLock;
 use uuid::Uuid;
 
 pub(crate) const INSTALL_TOKEN_TTL_SECS: i64 = 15 * 60;
 pub(crate) const AGENT_ONLINE_SECS: i64 = 60;
 pub(crate) const JOB_OUTPUT_MAX_CHARS: usize = 8000;
 const JOB_TAKE_LIMIT_MAX: i64 = 10;
+
+fn ansi_regex() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new("\x1b\\[[0-9;?]*[ -/]*[@-~]").expect("ANSI 正则写死，应恒成立")
+    })
+}
+
+/// 清洗 LGSM 原生输出再入库：去掉 ANSI 颜色/清行动画，并把 `\r` 进度行
+/// （如 sending "quit": 1/2/3）折叠为最终状态，只保留可读行。
+pub(crate) fn sanitize_job_output(text: &str) -> String {
+    let ansi = ansi_regex();
+    text.split('\n')
+        .map(|line| line.rsplit('\r').next().unwrap_or(""))
+        .map(|line| ansi.replace_all(line, "").into_owned())
+        .map(|line| line.trim_end().to_string())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 pub(crate) const ACTION_RESTART: &str = "restart";
 pub(crate) const ACTION_FORCE_RESTART: &str = "force-restart";
@@ -425,14 +446,21 @@ pub async fn heartbeat(
 ) -> anyhow::Result<()> {
     let instances_json =
         serde_json::to_value(instances).unwrap_or(serde_json::Value::Array(vec![]));
+    let mut tx = db.pool.begin().await?;
     sqlx::query(
         r#"UPDATE host_agents SET hostname = $2, instances = $3, last_seen_at = now() WHERE id = $1"#,
     )
     .bind(agent_id)
     .bind(hostname.trim())
     .bind(&instances_json)
-    .execute(&db.pool)
+    .execute(&mut *tx)
     .await?;
+    // 心跳采样落库，供趋势图聚合；30 天 retention 由后台清理任务执行。
+    sqlx::query(r#"INSERT INTO agent_heartbeat_samples (agent_id) VALUES ($1)"#)
+        .bind(agent_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -479,8 +507,11 @@ pub async fn report_result(
     timed_out: bool,
 ) -> anyhow::Result<JobRow> {
     let output = output.map(|text| {
-        let clipped: String = text.chars().take(JOB_OUTPUT_MAX_CHARS).collect();
-        clipped
+        let cleaned = sanitize_job_output(&text);
+        cleaned
+            .chars()
+            .take(JOB_OUTPUT_MAX_CHARS)
+            .collect::<String>()
     });
     let status = if timed_out {
         "timeout"
@@ -540,4 +571,127 @@ pub async fn overview(db: &Database) -> anyhow::Result<PowerOverview> {
         online: online.0,
         pending_jobs: pending_jobs.0,
     })
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct PowerTrendPoint {
+    pub bucket: String,
+    pub restart: i64,
+    pub start: i64,
+    pub stop: i64,
+}
+
+/// 电源任务趋势：按天聚合（force 计入同类），供折线图使用。
+pub async fn power_trend(db: &Database, days: i64) -> anyhow::Result<Vec<PowerTrendPoint>> {
+    let days = days.clamp(1, 90);
+    let rows: Vec<PowerTrendPoint> = sqlx::query_as(
+        r#"SELECT to_char(created_at, 'MM-DD') AS bucket,
+                  COUNT(*) FILTER (WHERE action IN ('restart', 'force-restart')) AS restart,
+                  COUNT(*) FILTER (WHERE action IN ('start', 'force-start')) AS start,
+                  COUNT(*) FILTER (WHERE action = 'stop') AS stop
+           FROM power_jobs
+           WHERE created_at > now() - make_interval(days => $1)
+           GROUP BY 1 ORDER BY MIN(created_at)"#,
+    )
+    .bind(days as i32)
+    .fetch_all(&db.pool)
+    .await?;
+    Ok(rows)
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct HeartbeatTrendPoint {
+    pub bucket: String,
+    pub online: i64,
+    pub heartbeats: i64,
+}
+
+/// 心跳趋势：24h 按小时、7/30d 按天；online 为桶内有过心跳的不同 Agent 数。
+pub async fn heartbeat_trend(
+    db: &Database,
+    range: &str,
+) -> anyhow::Result<Vec<HeartbeatTrendPoint>> {
+    let (bucket_fmt, days) = match range {
+        "24h" => ("HH24:00", 1),
+        "30d" => ("MM-DD", 30),
+        _ => ("MM-DD", 7),
+    };
+    let rows: Vec<HeartbeatTrendPoint> = sqlx::query_as(
+        r#"SELECT to_char(created_at, $1) AS bucket,
+                  COUNT(DISTINCT agent_id) AS online,
+                  COUNT(*) AS heartbeats
+           FROM agent_heartbeat_samples
+           WHERE created_at > now() - make_interval(days => $2)
+           GROUP BY 1 ORDER BY MIN(created_at)"#,
+    )
+    .bind(bucket_fmt)
+    .bind(days)
+    .fetch_all(&db.pool)
+    .await?;
+    Ok(rows)
+}
+
+/// 启动心跳采样保留清理（每天一次，只留 30 天）。
+pub fn start_heartbeat_cleanup_loop(db: Database) {
+    crate::services::observability_service::register_task(
+        "host_heartbeat_cleanup",
+        "Agent 心跳采样清理",
+        "清理",
+        Some(86400),
+        true,
+    );
+    crate::services::task_runtime::spawn_persistent("host_heartbeat_cleanup", move || {
+        let db = db.clone();
+        async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(86400));
+            loop {
+                interval.tick().await;
+                if let Err(error) = crate::services::observability_service::observe_task(
+                    "host_heartbeat_cleanup",
+                    async {
+                        sqlx::query(
+                            r#"DELETE FROM agent_heartbeat_samples
+                               WHERE created_at < now() - interval '30 days'"#,
+                        )
+                        .execute(&db.pool)
+                        .await?;
+                        Ok::<(), anyhow::Error>(())
+                    },
+                    |_| "心跳采样清理完成".to_string(),
+                )
+                .await
+                {
+                    tracing::warn!(%error, "清理心跳采样失败");
+                }
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_removes_ansi_and_collapses_progress_lines() {
+        let raw = "\x1b[1m\x1b[K\x1b[0m .... \x1b[0m\x1b[0m Stopping csgoserver-12: \x1b[0m\n\
+                   \x1b[1mGraceful: sending \"quit\"\x1b[0m\rGraceful: sending \"quit\": 3\n\
+                   \x1b[32m  OK  \x1b[0m Stopping done ... \x1b[32mOK\x1b[0m\n";
+        let cleaned = sanitize_job_output(raw);
+        assert!(!cleaned.contains('\x1b'), "实际：{cleaned}");
+        assert!(!cleaned.contains('\r'), "实际：{cleaned}");
+        // 进度中间态被折叠，只留最终行
+        assert!(!cleaned.contains("sending \"quit\"\n"), "实际：{cleaned}");
+        assert!(cleaned.contains("sending \"quit\": 3"), "实际：{cleaned}");
+        assert!(cleaned.contains("OK"), "实际：{cleaned}");
+    }
+
+    #[test]
+    fn sanitize_keeps_plain_output_unchanged() {
+        let raw = "Stopping csgoserver: done\nStarting csgoserver: ok\n";
+        assert_eq!(
+            sanitize_job_output(raw),
+            "Stopping csgoserver: done\nStarting csgoserver: ok"
+        );
+    }
 }

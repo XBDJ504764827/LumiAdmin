@@ -217,6 +217,11 @@ pub fn router(
         )
         .route("/api/host-agent/agents", get(host_power::list_agents))
         .route("/api/host-agent/overview", get(host_power::power_overview))
+        .route("/api/host-agent/power-trend", get(host_power::power_trend))
+        .route(
+            "/api/host-agent/heartbeat-trend",
+            get(host_power::heartbeat_trend),
+        )
         .route(
             "/api/host-agent/agents/:agent_id",
             put(host_power::update_agent).delete(host_power::delete_agent),

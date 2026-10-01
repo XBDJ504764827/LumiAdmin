@@ -172,8 +172,8 @@ export function HostAgentPage() {
           </div>
           <div className="card-body">
             <ol style={{ margin: '0 0 12px', paddingLeft: 20, fontSize: 13, color: 'var(--text2)', lineHeight: 1.8 }}>
-              <li>下载安装脚本传到宿主机。</li>
-              <li>按脚本头部注释填好 4 个参数，sudo 执行。</li>
+              <li>在下方签发安装口令（15 分钟有效，一次性），下载安装脚本传到宿主机。</li>
+              <li>按脚本头部注释填好后端地址、安装口令、LGSM 目录、实例清单，sudo 执行。</li>
               <li>用 <code style={{ fontSize: 12, background: 'var(--surface2)', padding: '2px 6px', borderRadius: 4 }}>journalctl -u lumi-host-agent -f</code> 确认启动。</li>
               <li>回到本页查看宿主机上线。</li>
             </ol>

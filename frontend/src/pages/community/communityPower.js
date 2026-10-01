@@ -90,3 +90,17 @@ export const POWER_JOB_STATUS_TEXT = Object.freeze({
 // 轮询配置：LGSM 重启常需数十秒，2s 间隔、150s 上限。
 export const POWER_JOB_POLL_INTERVAL_MS = 2000;
 export const POWER_JOB_POLL_TIMEOUT_MS = 150000;
+
+// 去 ANSI 转义（与后端 sanitize_job_output 同规则，兜底历史脏数据展示）。
+export function stripAnsi(text) {
+  return String(text ?? '').replace(/\[[0-9;?]*[ -/]*[@-~]/g, '');
+}
+
+// 清洗执行回显：去 ANSI + 折叠 \r 进度行 + 去空行。
+export function cleanPowerOutput(text) {
+  return String(text ?? '')
+    .split('\n')
+    .map((line) => stripAnsi(line.split('\r').pop() ?? '').trimEnd())
+    .filter((line) => line.length > 0)
+    .join('\n');
+}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { Modal } from '../../shared/Modal.jsx';
@@ -60,6 +60,7 @@ import {
   buildStartConfirmText,
   buildStopConfirmText,
   buildStopFinalText,
+  cleanPowerOutput,
   countdownLabel,
   isPowerJobTerminal,
   powerAvailability,
@@ -117,8 +118,8 @@ export function CommunityPage() {
   const [tokenPanel, setTokenPanel] = useState({ serverId: null, token: '', loading: false, error: '' });
   const [detailModal, setDetailModal] = useState({ open: false, server: null, group: null });
   const [rconModal, setRconModal] = useState({ open: false, serverId: null, serverName: '', executing: '', customCommand: '', server: null });
-  const [powerModal, setPowerModal] = useState({ open: false, server: null, action: null, step: 'confirm', countdown: POWER_COUNTDOWN_SECS });
-  const [powerResult, setPowerResult] = useState({ open: false, serverName: '', actionLabel: '', status: '', output: '' });
+  const [powerModal, setPowerModal] = useState({ open: false, server: null, action: null, step: 'confirm', countdown: POWER_COUNTDOWN_SECS, result: null, elapsed: 0 });
+  const powerRunId = useRef(0);
   const [savedReloadPlugins, setSavedReloadPlugins] = useState(() => readSavedReloadPluginOptions());
   const [detectedReloadPlugins, setDetectedReloadPlugins] = useState(() => readDetectedReloadPlugins());
   const [reloadPluginsModal, setReloadPluginsModal] = useState({
@@ -572,13 +573,15 @@ export function CommunityPage() {
     setRconModal({ open: true, serverId: server.id, serverName: server.name, executing: '', customCommand: '', server });
   }
 
-  // ── 服务器电源：确认框 + 倒计时，下发后后台轮询任务终态 ──
+  // ── 服务器电源：确认框常驻，执行中显示状态，完成后回显输出，手动关闭 ──
   function openPowerModal(server, action) {
-    setPowerModal({ open: true, server, action, step: 'confirm', countdown: POWER_COUNTDOWN_SECS });
+    powerRunId.current += 1;
+    setPowerModal({ open: true, server, action, step: 'confirm', countdown: POWER_COUNTDOWN_SECS, result: null, elapsed: 0 });
   }
 
   function closePowerModal() {
-    setPowerModal({ open: false, server: null, action: null, step: 'confirm', countdown: POWER_COUNTDOWN_SECS });
+    powerRunId.current += 1;
+    setPowerModal({ open: false, server: null, action: null, step: 'confirm', countdown: POWER_COUNTDOWN_SECS, result: null, elapsed: 0 });
   }
 
   useEffect(() => {
@@ -598,6 +601,14 @@ export function CommunityPage() {
     return () => window.clearTimeout(timer);
   }, [powerModal.open, powerModal.step, powerModal.countdown, powerModal.action, powerModal.server]);
 
+  useEffect(() => {
+    if (!powerModal.open || powerModal.step !== 'running') return undefined;
+    const timer = window.setInterval(() => {
+      setPowerModal((prev) => (prev.open && prev.step === 'running' ? { ...prev, elapsed: prev.elapsed + 1 } : prev));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [powerModal.open, powerModal.step]);
+
   function handlePowerConfirm() {
     const { server, action, step } = powerModal;
     if (!server || !action) {
@@ -612,32 +623,39 @@ export function CommunityPage() {
       setPowerModal((prev) => ({ ...prev, step: 'final', countdown: POWER_COUNTDOWN_SECS }));
       return;
     }
-    closePowerModal();
-    void dispatchPowerJob(server, action);
+    // 最终确认：窗口不消失，切执行中，下发后轮询终态。
+    powerRunId.current += 1;
+    const runId = powerRunId.current;
+    setPowerModal((prev) => ({ ...prev, step: 'running', elapsed: 0, result: null }));
+    void dispatchPowerJob(server, action, runId);
   }
 
-  async function dispatchPowerJob(server, action) {
-    const label = POWER_ACTION_LABEL[action] ?? action;
+  async function dispatchPowerJob(server, action, runId) {
     let jobId = null;
     try {
       const response = await api.powerServer(token, server.id, { action });
       jobId = response?.job?.id ?? null;
     } catch (error) {
-      toast({ title: '下发失败', message: error.message, tone: 'danger' });
+      if (runId === powerRunId.current) {
+        setPowerModal((prev) => ({ ...prev, step: 'done', result: { status: 'failed', output: `下发失败：${error.message}` } }));
+      }
       return;
     }
     if (!jobId) {
-      toast({ title: '下发失败', message: '后端未返回任务 ID。', tone: 'danger' });
+      if (runId === powerRunId.current) {
+        setPowerModal((prev) => ({ ...prev, step: 'done', result: { status: 'failed', output: '下发失败：后端未返回任务 ID。' } }));
+      }
       return;
     }
-    toast({ title: '指令已下发', message: `「${server.name}」${label}执行中，完成后通知结果。` });
-    pollPowerJob(server, jobId, label);
+    pollPowerJob(server, jobId, runId);
   }
 
-  async function pollPowerJob(server, jobId, label) {
+  async function pollPowerJob(server, jobId, runId) {
     const deadline = Date.now() + POWER_JOB_POLL_TIMEOUT_MS;
     while (Date.now() < deadline) {
+      if (runId !== powerRunId.current) return;
       await new Promise((resolve) => { setTimeout(resolve, POWER_JOB_POLL_INTERVAL_MS); });
+      if (runId !== powerRunId.current) return;
       let jobs = [];
       try {
         const response = await api.powerJobs(token, server.id, 5);
@@ -647,23 +665,13 @@ export function CommunityPage() {
       }
       const job = jobs.find((item) => item.id === jobId);
       if (job && isPowerJobTerminal(job.status)) {
-        setPowerResult({
-          open: true,
-          serverName: server.name,
-          actionLabel: label,
-          status: job.status,
-          output: (job.output ?? '').trim(),
-        });
+        if (runId !== powerRunId.current) return;
+        setPowerModal((prev) => ({ ...prev, step: 'done', result: { status: job.status, output: (job.output ?? '').trim() } }));
         return;
       }
     }
-    setPowerResult({
-      open: true,
-      serverName: server.name,
-      actionLabel: label,
-      status: 'timeout',
-      output: '',
-    });
+    if (runId !== powerRunId.current) return;
+    setPowerModal((prev) => ({ ...prev, step: 'done', result: { status: 'timeout', output: '' } }));
   }
 
   async function handleRconExecute(cmd) {
@@ -1553,6 +1561,9 @@ export function CommunityPage() {
                   {countdownLabel('确认执行', powerModal.countdown)}
                 </button>
               ) : null}
+              {powerModal.step === 'running' || powerModal.step === 'done' ? (
+                <button className="btn btn-primary" onClick={closePowerModal}>关闭</button>
+              ) : null}
             </>
           )}
         >
@@ -1586,30 +1597,27 @@ export function CommunityPage() {
           {powerModal.action === POWER_ACTION.stop && powerModal.step === 'final' ? (
             <div className="info-box danger">{buildStopFinalText()}</div>
           ) : null}
-        </Modal>
-      ) : null}
-      {/* 电源执行结果回显：LGSM 原生输出，管理员据此判断是否真正成功 */}
-      {powerResult.open ? (
-        <Modal
-          open
-          title={`执行结果 — ${powerResult.serverName}`}
-          onClose={() => setPowerResult({ open: false, serverName: '', actionLabel: '', status: '', output: '' })}
-          footer={(
-            <button className="btn btn-primary" onClick={() => setPowerResult({ open: false, serverName: '', actionLabel: '', status: '', output: '' })}>关闭</button>
-          )}
-        >
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
-            <span className="fw-600">{powerResult.actionLabel}</span>
-            <span className={`status-pill ${powerResult.status === 'success' ? 'pill-online' : powerResult.status === 'timeout' ? 'pill-warning' : 'pill-danger'}`}>
-              {POWER_JOB_STATUS_TEXT[powerResult.status] ?? powerResult.status}
-            </span>
-          </div>
-          {powerResult.status === 'timeout' ? (
-            <div className="info-box warning" style={{ marginBottom: 12 }}>任务超过预期未完成，可能仍在执行，可到 Agent 控制页查看宿主机状态。</div>
+          {powerModal.step === 'running' ? (
+            <div className="loading-state">
+              <div className="loading-spinner" />
+              <span className="table-state-text">正在执行{POWER_ACTION_LABEL[powerModal.action] ?? ''}…已等待 {powerModal.elapsed}s，完成后在此显示回显。</span>
+            </div>
           ) : null}
-          <pre style={{ fontSize: 12.5, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px', overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0 }}>
-            {powerResult.output || '(Agent 未返回输出)'}
-          </pre>
+          {powerModal.step === 'done' && powerModal.result ? (
+            <>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+                <span className={`status-pill ${powerModal.result.status === 'success' ? 'pill-online' : powerModal.result.status === 'timeout' ? 'pill-warning' : 'pill-danger'}`}>
+                  {POWER_JOB_STATUS_TEXT[powerModal.result.status] ?? powerModal.result.status}
+                </span>
+              </div>
+              {powerModal.result.status === 'timeout' ? (
+                <div className="info-box warning" style={{ marginBottom: 12 }}>任务超过预期未完成，可能仍在执行，可到 Agent 控制页查看宿主机状态。</div>
+              ) : null}
+              <pre style={{ fontSize: 12.5, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px', overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0 }}>
+                {cleanPowerOutput(powerModal.result.output) || '(Agent 未返回输出)'}
+              </pre>
+            </>
+          ) : null}
         </Modal>
       ) : null}
       {dialog}

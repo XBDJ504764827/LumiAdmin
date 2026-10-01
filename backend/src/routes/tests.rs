@@ -4887,3 +4887,181 @@ async fn host_power_agent_disable_rename_delete() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn host_power_result_output_is_sanitized_on_write() {
+    with_test_app(async |db, config| {
+        let dev = create_session_for_user(&db, "22222222-2222-2222-2222-222222222222").await?;
+        let app = test_app(config, db.clone());
+        let (_, server_id) = insert_community_with_server(&db, "清洗服").await;
+
+        let install_token = host_power_issue_install_token(&app, &dev).await;
+        let (agent_id, agent_token) = host_power_register_agent(&app, &install_token).await;
+        host_power_bind_server(&db, server_id, agent_id).await;
+
+        let dispatch = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/community/servers/{server_id}/power"))
+                    .header("authorization", format!("Bearer {dev}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "action": "restart" }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = to_bytes(dispatch.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let job_id = payload["job"]["id"].as_str().unwrap().to_string();
+
+        // 回写带 ANSI 与 \r 进度的原生输出
+        let raw = "\u{1b}[1mStopping csgoserver:\u{1b}[0m\rStopping csgoserver: done\n\u{1b}[32m  OK  \u{1b}[0m\n";
+        let result = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/host-agent/jobs/{job_id}/result"))
+                    .header("authorization", format!("Bearer {agent_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "exit_code": 0, "output": raw, "timed_out": false }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.status(), StatusCode::OK);
+
+        let stored: (Option<String>,) =
+            sqlx::query_as(r#"SELECT output FROM power_jobs WHERE id = $1::uuid"#)
+                .bind(&job_id)
+                .fetch_one(&db.pool)
+                .await?;
+        let output = stored.0.unwrap();
+        assert!(!output.contains('\u{1b}'), "实际：{output}");
+        assert!(!output.contains('\r'), "实际：{output}");
+        assert!(output.contains("Stopping csgoserver: done"), "实际：{output}");
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn host_power_trends_aggregate_real_data() {
+    with_test_app(async |db, config| {
+        let dev = create_session_for_user(&db, "22222222-2222-2222-2222-222222222222").await?;
+        let app = test_app(config, db.clone());
+        let (_, server_id) = insert_community_with_server(&db, "趋势服").await;
+
+        let install_token = host_power_issue_install_token(&app, &dev).await;
+        let (agent_id, agent_token) = host_power_register_agent(&app, &install_token).await;
+        host_power_bind_server(&db, server_id, agent_id).await;
+
+        // 一次心跳 → 一条采样
+        let heartbeat = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/host-agent/heartbeat")
+                    .header("authorization", format!("Bearer {agent_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({ "hostname": "game-01", "instances": ["csgoserver"] }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(heartbeat.status(), StatusCode::OK);
+
+        // 完成一个重启任务（force-start 等同 start，需先完成 restart 避开单 flight）
+        for action in ["restart", "start"] {
+            let dispatch = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/api/community/servers/{server_id}/power"))
+                        .header("authorization", format!("Bearer {dev}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(json!({ "action": action }).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(dispatch.status(), StatusCode::OK);
+            let bytes = to_bytes(dispatch.into_body(), usize::MAX).await.unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let job_id = payload["job"]["id"].as_str().unwrap().to_string();
+            let poll = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/host-agent/jobs/poll")
+                        .header("authorization", format!("Bearer {agent_token}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(json!({ "max": 5 }).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(poll.status(), StatusCode::OK);
+            let result = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/api/host-agent/jobs/{job_id}/result"))
+                        .header("authorization", format!("Bearer {agent_token}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            json!({ "exit_code": 0, "output": "ok", "timed_out": false })
+                                .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.status(), StatusCode::OK);
+        }
+
+        let trend = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/power-trend?range=7d")
+                    .header("authorization", format!("Bearer {dev}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(trend.status(), StatusCode::OK);
+        let bytes = to_bytes(trend.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let items = payload["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["restart"], 1);
+        assert_eq!(items[0]["start"], 1);
+        assert_eq!(items[0]["stop"], 0);
+
+        let heartbeat_trend = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/heartbeat-trend?range=24h")
+                    .header("authorization", format!("Bearer {dev}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(heartbeat_trend.status(), StatusCode::OK);
+        let bytes = to_bytes(heartbeat_trend.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let items = payload["items"].as_array().unwrap();
+        assert!(!items.is_empty());
+        assert!(items[0]["heartbeats"].as_i64().unwrap() >= 1);
+        Ok(())
+    })
+    .await;
+}

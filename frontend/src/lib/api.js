@@ -137,6 +137,8 @@ export const api = {
   hostAgentOverview: (token) => request('/api/host-agent/overview', { headers: withAuth(token) }),
   updateHostAgent: (token, agentId, body) => request(`/api/host-agent/agents/${agentId}`, { method: 'PUT', headers: withAuth(token), body: JSON.stringify(body) }),
   deleteHostAgent: (token, agentId) => request(`/api/host-agent/agents/${agentId}`, { method: 'DELETE', headers: withAuth(token) }),
+  hostAgentPowerTrend: (token, range = '7d') => request(`/api/host-agent/power-trend${buildQueryString({ range })}`, { headers: withAuth(token) }),
+  hostAgentHeartbeatTrend: (token, range = '7d') => request(`/api/host-agent/heartbeat-trend${buildQueryString({ range })}`, { headers: withAuth(token) }),
 };
 
 export function useAppApi() {

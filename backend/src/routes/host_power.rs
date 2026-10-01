@@ -94,6 +94,46 @@ pub(crate) async fn power_overview(
     Ok(Json(serde_json::json!({ "overview": overview })))
 }
 
+#[derive(Deserialize)]
+pub(crate) struct TrendQuery {
+    pub range: Option<String>,
+}
+
+pub(crate) async fn power_trend(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Query(query): Query<TrendQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let actor = current_operator(&ctx, &headers).await?;
+    if !permission_service::can_manage_community_mutation(&actor) {
+        return Err(forbidden());
+    }
+    let days = match query.range.as_deref() {
+        Some("30d") => 30,
+        _ => 7,
+    };
+    let items = host_power_service::power_trend(&ctx.db, days)
+        .await
+        .map_err(invalid_request)?;
+    Ok(Json(serde_json::json!({ "items": items })))
+}
+
+pub(crate) async fn heartbeat_trend(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Query(query): Query<TrendQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let actor = current_operator(&ctx, &headers).await?;
+    if !permission_service::can_manage_community_mutation(&actor) {
+        return Err(forbidden());
+    }
+    let range = query.range.as_deref().unwrap_or("7d");
+    let items = host_power_service::heartbeat_trend(&ctx.db, range)
+        .await
+        .map_err(invalid_request)?;
+    Ok(Json(serde_json::json!({ "items": items })))
+}
+
 // ---------------------------------------------------------------------------
 // 管理侧：电源下发与任务查询
 // ---------------------------------------------------------------------------

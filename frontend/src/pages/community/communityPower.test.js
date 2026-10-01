@@ -4,11 +4,13 @@ import {
   POWER_COUNTDOWN_SECS,
   buildStartConfirmText,
   buildStopConfirmText,
+  cleanPowerOutput,
   countdownLabel,
   isPoweredOn,
   isPowerJobTerminal,
   powerAvailability,
   restartVariant,
+  stripAnsi,
   POWER_ACTION_LABEL,
   POWER_JOB_STATUS_TEXT,
   RESTART_EMPTY_TEXT,
@@ -84,4 +86,16 @@ test('任务终态判定与文案映射', () => {
   assert.equal(isPowerJobTerminal('running'), false);
   assert.equal(POWER_ACTION_LABEL['force-restart'], '强制重启服务器');
   assert.equal(POWER_JOB_STATUS_TEXT.success, '执行成功');
+});
+
+test('stripAnsi 去转义但保留正常方括号', () => {
+  assert.equal(stripAnsi('[32m  OK  [0m done'), '  OK   done');
+  assert.equal(stripAnsi('sending "quit": 3'), 'sending "quit": 3');
+  assert.equal(stripAnsi(null), '');
+});
+
+test('cleanPowerOutput 折叠进度行并去空行', () => {
+  const raw = '[1mStopping:[0m\rStopping: done\n[32m  OK  [0m\n\n';
+  assert.equal(cleanPowerOutput(raw), 'Stopping: done\n  OK');
+  assert.equal(cleanPowerOutput('plain\ntext'), 'plain\ntext');
 });

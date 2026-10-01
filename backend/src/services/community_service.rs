@@ -30,6 +30,12 @@ pub struct ServerItem {
     /// 中高风险账号拦截（需白名单才可进入）
     pub risk_block_enabled: bool,
     pub use_custom_access: bool,
+    /// 绑定的宿主机 Agent（电源下发用），未绑定则不可下发
+    #[serde(default)]
+    pub host_agent_id: Option<Uuid>,
+    /// 该服对应的 LGSM 实例名（如 csgoserver）
+    #[serde(default)]
+    pub lgsm_instance: Option<String>,
     /// 授权同步状态（LumiAuth Data Plane）：连接 / 版本 / 最新版本 / 待投递 / 上次同步
     #[serde(default)]
     pub auth_connection: String,
@@ -81,6 +87,12 @@ pub struct ServerInput {
     pub max_players: i32,
     #[serde(default)]
     pub use_custom_access: bool,
+    /// 绑定的宿主机 Agent ID（电源下发用）
+    #[serde(default)]
+    pub host_agent_id: Option<Uuid>,
+    /// 该服对应的 LGSM 实例名
+    #[serde(default)]
+    pub lgsm_instance: Option<String>,
 }
 
 fn default_risk_block_enabled() -> bool {
@@ -220,6 +232,8 @@ struct CommunityRow {
     whitelist_mode_enabled: Option<bool>,
     risk_block_enabled: Option<bool>,
     use_custom_access: Option<bool>,
+    host_agent_id: Option<Uuid>,
+    lgsm_instance: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -241,6 +255,8 @@ struct ServerDetailRow {
     whitelist_mode_enabled: bool,
     risk_block_enabled: bool,
     use_custom_access: bool,
+    host_agent_id: Option<Uuid>,
+    lgsm_instance: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -316,7 +332,9 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
             s.min_steam_level,
             s.whitelist_mode_enabled,
             s.risk_block_enabled,
-            s.use_custom_access
+            s.use_custom_access,
+            s.host_agent_id,
+            s.lgsm_instance
         FROM communities c
         LEFT JOIN servers s ON s.community_id = c.id
         LEFT JOIN LATERAL (
@@ -407,6 +425,8 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
                 whitelist_mode_enabled: row.whitelist_mode_enabled.unwrap_or(false),
                 risk_block_enabled: row.risk_block_enabled.unwrap_or(true),
                 use_custom_access: row.use_custom_access.unwrap_or(false),
+                host_agent_id: row.host_agent_id,
+                lgsm_instance: row.lgsm_instance,
                 auth_connection,
                 auth_version,
                 auth_latest_version,
@@ -464,6 +484,7 @@ pub async fn create_server(
     let report_token = super::normalize_optional_text(input.report_token.as_deref())
         .unwrap_or_else(generate_report_token);
     let note = super::normalize_optional_text(input.note.as_deref());
+    let lgsm_instance = super::normalize_optional_text(input.lgsm_instance.as_deref());
 
     anyhow::ensure!(!name.is_empty(), "服务器名称不能为空");
     anyhow::ensure!(!ip.is_empty(), "服务器 IP 不能为空");
@@ -471,15 +492,22 @@ pub async fn create_server(
     anyhow::ensure!(input.min_rating >= 0, "最低进入 rating 不能为负数");
     anyhow::ensure!(input.min_steam_level >= 0, "最低 Steam 等级不能为负数");
     anyhow::ensure!(input.max_players >= 0, "最大玩家数不能为负数");
+    if let Some(agent_id) = input.host_agent_id {
+        let exists: (i64,) = sqlx::query_as(r#"SELECT COUNT(*) FROM host_agents WHERE id = $1"#)
+            .bind(agent_id)
+            .fetch_one(&db.pool)
+            .await?;
+        anyhow::ensure!(exists.0 == 1, "绑定的 Agent 不存在");
+    }
 
     sqlx::query(
         r#"
         INSERT INTO servers (
             id, community_id, name, ip, port, rcon_password, report_token, note, status, players, last_tested_at,
             access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled,
-            risk_block_enabled, max_players, use_custom_access
+            risk_block_enabled, max_players, use_custom_access, host_agent_id, lgsm_instance
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'online', $9, now(), $10, $11, $12, $13, $14, $15, $16)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'online', $9, now(), $10, $11, $12, $13, $14, $15, $16, $17, $18)
         "#,
     )
     .bind(id)
@@ -498,6 +526,8 @@ pub async fn create_server(
     .bind(input.risk_block_enabled)
     .bind(input.max_players)
     .bind(input.use_custom_access)
+    .bind(input.host_agent_id)
+    .bind(lgsm_instance.clone())
     .execute(&db.pool)
     .await?;
 
@@ -528,6 +558,8 @@ pub async fn create_server(
         whitelist_mode_enabled: input.whitelist_mode_enabled,
         risk_block_enabled: input.risk_block_enabled,
         use_custom_access: input.use_custom_access,
+        host_agent_id: input.host_agent_id,
+        lgsm_instance,
         auth_connection,
         auth_version,
         auth_latest_version,
@@ -547,12 +579,20 @@ pub async fn update_server(
     let password = input.rcon_password.trim();
     let report_token = super::normalize_optional_text(input.report_token.as_deref());
     let note = super::normalize_optional_text(input.note.as_deref());
+    let lgsm_instance = super::normalize_optional_text(input.lgsm_instance.as_deref());
 
     anyhow::ensure!(!name.is_empty(), "服务器名称不能为空");
     anyhow::ensure!(!ip.is_empty(), "服务器 IP 不能为空");
     anyhow::ensure!(input.min_rating >= 0, "最低进入 rating 不能为负数");
     anyhow::ensure!(input.min_steam_level >= 0, "最低 Steam 等级不能为负数");
     anyhow::ensure!(input.max_players >= 0, "最大玩家数不能为负数");
+    if let Some(agent_id) = input.host_agent_id {
+        let exists: (i64,) = sqlx::query_as(r#"SELECT COUNT(*) FROM host_agents WHERE id = $1"#)
+            .bind(agent_id)
+            .fetch_one(&db.pool)
+            .await?;
+        anyhow::ensure!(exists.0 == 1, "绑定的 Agent 不存在");
+    }
 
     let changing_password = !password.is_empty();
     let players_for_status = if changing_password {
@@ -595,11 +635,12 @@ pub async fn update_server(
                 status = 'online', players = $8, last_tested_at = now(),
                 access_restriction_enabled = $9, min_rating = $10, min_steam_level = $11, whitelist_mode_enabled = $12,
                 risk_block_enabled = $13, max_players = $14, use_custom_access = $15,
+                host_agent_id = $16, lgsm_instance = $17,
                 plugin_instance_id = CASE WHEN ip <> $3 OR port <> $4 THEN NULL ELSE plugin_instance_id END
             WHERE id = $1
             RETURNING id, name, ip, port, report_token, note, status, players, max_players, last_tested_at, last_reported_at,
                       access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled,
-                      risk_block_enabled, use_custom_access
+                      risk_block_enabled, use_custom_access, host_agent_id, lgsm_instance
             "#,
         )
         .bind(server_id)
@@ -617,6 +658,8 @@ pub async fn update_server(
         .bind(input.risk_block_enabled)
         .bind(input.max_players)
         .bind(input.use_custom_access)
+        .bind(input.host_agent_id)
+        .bind(lgsm_instance.clone())
         .fetch_one(&mut *tx)
         .await?
     } else {
@@ -627,11 +670,12 @@ pub async fn update_server(
                 report_token = COALESCE($5, report_token), note = $6,
                 access_restriction_enabled = $7, min_rating = $8, min_steam_level = $9, whitelist_mode_enabled = $10,
                 risk_block_enabled = $11, max_players = $12, use_custom_access = $13,
+                host_agent_id = $14, lgsm_instance = $15,
                 plugin_instance_id = CASE WHEN ip <> $3 OR port <> $4 THEN NULL ELSE plugin_instance_id END
             WHERE id = $1
             RETURNING id, name, ip, port, report_token, note, status, players, max_players, last_tested_at, last_reported_at,
                       access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled,
-                      risk_block_enabled, use_custom_access
+                      risk_block_enabled, use_custom_access, host_agent_id, lgsm_instance
             "#,
         )
         .bind(server_id)
@@ -647,6 +691,8 @@ pub async fn update_server(
         .bind(input.risk_block_enabled)
         .bind(input.max_players)
         .bind(input.use_custom_access)
+        .bind(input.host_agent_id)
+        .bind(lgsm_instance.clone())
         .fetch_one(&mut *tx)
         .await?
     };
@@ -699,6 +745,8 @@ pub async fn update_server(
         whitelist_mode_enabled: row.whitelist_mode_enabled,
         risk_block_enabled: row.risk_block_enabled,
         use_custom_access: row.use_custom_access,
+        host_agent_id: row.host_agent_id,
+        lgsm_instance: row.lgsm_instance,
         auth_connection,
         auth_version,
         auth_latest_version,
@@ -1558,6 +1606,8 @@ mod tests {
             whitelist_mode_enabled: false,
             risk_block_enabled: true,
             use_custom_access: false,
+            host_agent_id: None,
+            lgsm_instance: None,
             max_players: 0,
         })
         .await
@@ -1595,6 +1645,8 @@ mod tests {
             whitelist_mode_enabled: false,
             risk_block_enabled: true,
             use_custom_access: false,
+            host_agent_id: None,
+            lgsm_instance: None,
             max_players: 0,
         })
         .await

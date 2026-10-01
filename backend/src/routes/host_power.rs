@@ -80,6 +80,20 @@ pub(crate) async fn list_agents(
     Ok(Json(serde_json::json!({ "agents": agents })))
 }
 
+pub(crate) async fn power_overview(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let actor = current_operator(&ctx, &headers).await?;
+    if !permission_service::can_manage_community_mutation(&actor) {
+        return Err(forbidden());
+    }
+    let overview = host_power_service::overview(&ctx.db)
+        .await
+        .map_err(invalid_request)?;
+    Ok(Json(serde_json::json!({ "overview": overview })))
+}
+
 // ---------------------------------------------------------------------------
 // 管理侧：电源下发与任务查询
 // ---------------------------------------------------------------------------

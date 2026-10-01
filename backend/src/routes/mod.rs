@@ -216,6 +216,7 @@ pub fn router(
             post(host_power::create_install_token),
         )
         .route("/api/host-agent/agents", get(host_power::list_agents))
+        .route("/api/host-agent/overview", get(host_power::power_overview))
         .route(
             "/api/community/servers/:server_id/power",
             post(host_power::power_server),

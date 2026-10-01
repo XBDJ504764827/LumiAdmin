@@ -4518,3 +4518,137 @@ async fn host_power_dangerous_actions_require_developer() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn host_power_overview_and_server_binding_fields() {
+    with_test_app(async |db, config| {
+        let dev = create_session_for_user(&db, "22222222-2222-2222-2222-222222222222").await?;
+        let app = test_app(config, db.clone());
+        let (_, server_id) = insert_community_with_server(&db, "绑定服").await;
+
+        let install_token = host_power_issue_install_token(&app, &dev).await;
+        let (agent_id, agent_token) = host_power_register_agent(&app, &install_token).await;
+        host_power_bind_server(&db, server_id, agent_id).await;
+
+        // 概览：1 宿主机 / 1 实例 / 在线 / 0 待执行
+        let overview = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/overview")
+                    .header("authorization", format!("Bearer {dev}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(overview.status(), StatusCode::OK);
+        let bytes = to_bytes(overview.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["overview"]["hosts"], 1);
+        assert_eq!(payload["overview"]["instances"], 1);
+        assert_eq!(payload["overview"]["online"], 1);
+        assert_eq!(payload["overview"]["pending_jobs"], 0);
+
+        // agents 列表带在线标记
+        let agents = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/agents")
+                    .header("authorization", format!("Bearer {dev}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = to_bytes(agents.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["agents"][0]["online"], true);
+        assert_eq!(payload["agents"][0]["hostname"], "game-01");
+
+        // 社区服列表带出绑定字段
+        let groups = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/community/servers")
+                    .header("authorization", format!("Bearer {dev}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = to_bytes(groups.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let found = payload["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|g| g["servers"].as_array().unwrap().clone())
+            .find(|s| s["id"] == server_id.to_string())
+            .unwrap();
+        assert_eq!(found["host_agent_id"], agent_id.to_string());
+        assert_eq!(found["lgsm_instance"], "csgoserver");
+
+        // 下发一个任务后 pending_jobs 变为 1
+        let _ = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/community/servers/{server_id}/power"))
+                    .header("authorization", format!("Bearer {dev}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "action": "restart" }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let overview = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/overview")
+                    .header("authorization", format!("Bearer {dev}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = to_bytes(overview.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["overview"]["pending_jobs"], 1);
+
+        // 绑定不存在的 Agent 应被拒绝（直接调服务层）
+        let bad = crate::services::community_service::update_server(
+            &db,
+            server_id,
+            crate::services::community_service::ServerInput {
+                name: "绑定服".to_string(),
+                ip: "127.0.0.1".to_string(),
+                port: 25575,
+                rcon_password: String::new(),
+                report_token: None,
+                note: None,
+                access_restriction_enabled: false,
+                min_rating: 0,
+                min_steam_level: 0,
+                whitelist_mode_enabled: false,
+                risk_block_enabled: true,
+                use_custom_access: false,
+                host_agent_id: Some(Uuid::new_v4()),
+                lgsm_instance: Some("csgoserver".to_string()),
+                max_players: 0,
+            },
+            crate::services::community_rcon::RconTimeouts {
+                connect_secs: 1,
+                io_secs: 1,
+            },
+        )
+        .await;
+        assert!(bad.is_err());
+        let _ = agent_token;
+        Ok(())
+    })
+    .await;
+}

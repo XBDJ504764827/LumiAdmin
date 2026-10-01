@@ -419,3 +419,37 @@ pub async fn report_result(
     .map_err(|_| anyhow::anyhow!("任务不存在或不属于该 Agent"))?;
     Ok(job)
 }
+
+#[derive(Debug, Serialize)]
+pub struct PowerOverview {
+    pub hosts: i64,
+    pub instances: i64,
+    pub online: i64,
+    pub pending_jobs: i64,
+}
+
+pub async fn overview(db: &Database) -> anyhow::Result<PowerOverview> {
+    let hosts: (i64,) = sqlx::query_as(r#"SELECT COUNT(*) FROM host_agents"#)
+        .fetch_one(&db.pool)
+        .await?;
+    let online: (i64,) = sqlx::query_as(
+        r#"SELECT COUNT(*) FROM host_agents
+           WHERE last_seen_at IS NOT NULL AND last_seen_at > now() - INTERVAL '60 seconds'"#,
+    )
+    .fetch_one(&db.pool)
+    .await?;
+    let instances: (Option<i64>,) =
+        sqlx::query_as(r#"SELECT SUM(jsonb_array_length(instances)) FROM host_agents"#)
+            .fetch_one(&db.pool)
+            .await?;
+    let pending_jobs: (i64,) =
+        sqlx::query_as(r#"SELECT COUNT(*) FROM power_jobs WHERE status IN ('pending', 'running')"#)
+            .fetch_one(&db.pool)
+            .await?;
+    Ok(PowerOverview {
+        hosts: hosts.0,
+        instances: instances.0.unwrap_or(0),
+        online: online.0,
+        pending_jobs: pending_jobs.0,
+    })
+}

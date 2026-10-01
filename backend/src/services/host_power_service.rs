@@ -63,8 +63,10 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 pub struct AgentRow {
     pub id: Uuid,
     pub hostname: String,
+    pub display_name: String,
     pub lgsm_dir: String,
     pub instances: serde_json::Value,
+    pub disabled: bool,
     pub last_seen_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
 }
@@ -73,8 +75,10 @@ pub struct AgentRow {
 pub struct AgentStatus {
     pub id: Uuid,
     pub hostname: String,
+    pub display_name: String,
     pub lgsm_dir: String,
     pub instances: serde_json::Value,
+    pub disabled: bool,
     pub online: bool,
     pub last_seen_at: Option<String>,
 }
@@ -138,7 +142,7 @@ pub async fn create_install_token(
 
 pub async fn list_agents(db: &Database) -> anyhow::Result<Vec<AgentStatus>> {
     let rows: Vec<AgentRow> = sqlx::query_as(
-        r#"SELECT id, hostname, lgsm_dir, instances, last_seen_at, created_at
+        r#"SELECT id, hostname, display_name, lgsm_dir, instances, disabled, last_seen_at, created_at
            FROM host_agents ORDER BY created_at ASC"#,
     )
     .fetch_all(&db.pool)
@@ -154,8 +158,10 @@ pub async fn list_agents(db: &Database) -> anyhow::Result<Vec<AgentStatus>> {
             AgentStatus {
                 id: row.id,
                 hostname: row.hostname,
+                display_name: row.display_name,
                 lgsm_dir: row.lgsm_dir,
                 instances: row.instances,
+                disabled: row.disabled,
                 online,
                 last_seen_at: row.last_seen_at.map(|v| v.to_rfc3339()),
             }
@@ -163,10 +169,59 @@ pub async fn list_agents(db: &Database) -> anyhow::Result<Vec<AgentStatus>> {
         .collect())
 }
 
+pub async fn update_agent(
+    db: &Database,
+    agent_id: Uuid,
+    display_name: Option<String>,
+    disabled: Option<bool>,
+) -> anyhow::Result<AgentStatus> {
+    if let Some(name) = display_name.as_deref() {
+        anyhow::ensure!(name.chars().count() <= 64, "备注名最多 64 个字符");
+    }
+    let row: AgentRow = sqlx::query_as(
+        r#"UPDATE host_agents
+           SET display_name = COALESCE($2, display_name),
+               disabled = COALESCE($3, disabled)
+           WHERE id = $1
+           RETURNING id, hostname, display_name, lgsm_dir, instances, disabled,
+                     last_seen_at, created_at"#,
+    )
+    .bind(agent_id)
+    .bind(display_name.map(|v| v.trim().to_string()))
+    .bind(disabled)
+    .fetch_optional(&db.pool)
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("Agent 不存在"))?;
+    let now = Utc::now();
+    Ok(AgentStatus {
+        id: row.id,
+        hostname: row.hostname,
+        display_name: row.display_name,
+        lgsm_dir: row.lgsm_dir,
+        instances: row.instances,
+        disabled: row.disabled,
+        online: row
+            .last_seen_at
+            .map(|seen| now.signed_duration_since(seen).num_seconds() <= AGENT_ONLINE_SECS)
+            .unwrap_or(false),
+        last_seen_at: row.last_seen_at.map(|v| v.to_rfc3339()),
+    })
+}
+
+pub async fn delete_agent(db: &Database, agent_id: Uuid) -> anyhow::Result<()> {
+    let result = sqlx::query(r#"DELETE FROM host_agents WHERE id = $1"#)
+        .bind(agent_id)
+        .execute(&db.pool)
+        .await?;
+    anyhow::ensure!(result.rows_affected() == 1, "Agent 不存在");
+    Ok(())
+}
+
 #[derive(sqlx::FromRow)]
 struct ServerBinding {
     host_agent_id: Option<Uuid>,
     lgsm_instance: Option<String>,
+    agent_disabled: Option<bool>,
 }
 
 pub async fn create_power_job(
@@ -181,15 +236,22 @@ pub async fn create_power_job(
         "action 只能为 restart/start/stop/force-restart"
     );
 
-    let binding: Option<ServerBinding> =
-        sqlx::query_as(r#"SELECT host_agent_id, lgsm_instance FROM servers WHERE id = $1"#)
-            .bind(server_id)
-            .fetch_optional(&db.pool)
-            .await?;
+    let binding: Option<ServerBinding> = sqlx::query_as(
+        r#"SELECT s.host_agent_id, s.lgsm_instance, h.disabled AS agent_disabled
+                           FROM servers s LEFT JOIN host_agents h ON h.id = s.host_agent_id
+                           WHERE s.id = $1"#,
+    )
+    .bind(server_id)
+    .fetch_optional(&db.pool)
+    .await?;
     let binding = binding.ok_or_else(|| anyhow::anyhow!("服务器不存在"))?;
     let agent_id = binding
         .host_agent_id
         .ok_or_else(|| anyhow::anyhow!("该服务器未绑定 Agent，无法下发电源指令"))?;
+    anyhow::ensure!(
+        !binding.agent_disabled.unwrap_or(false),
+        "该 Agent 已停用，无法下发电源指令"
+    );
     let instance = binding.lgsm_instance.unwrap_or_default();
     anyhow::ensure!(
         !instance.trim().is_empty(),
@@ -317,14 +379,17 @@ pub async fn authenticate_agent(db: &Database, token: &str) -> anyhow::Result<Ag
     struct AgentAuthRow {
         id: Uuid,
         hostname: String,
+        display_name: String,
         lgsm_dir: String,
         instances: serde_json::Value,
+        disabled: bool,
         last_seen_at: Option<DateTime<Utc>>,
         created_at: DateTime<Utc>,
         token_hash: String,
     }
     let rows: Vec<AgentAuthRow> = sqlx::query_as(
-        r#"SELECT id, hostname, lgsm_dir, instances, last_seen_at, created_at, token_hash
+        r#"SELECT id, hostname, display_name, lgsm_dir, instances, disabled,
+                  last_seen_at, created_at, token_hash
            FROM host_agents"#,
     )
     .fetch_all(&db.pool)
@@ -336,8 +401,10 @@ pub async fn authenticate_agent(db: &Database, token: &str) -> anyhow::Result<Ag
             matched = Some(AgentRow {
                 id: row.id,
                 hostname: row.hostname,
+                display_name: row.display_name,
                 lgsm_dir: row.lgsm_dir,
                 instances: row.instances,
+                disabled: row.disabled,
                 last_seen_at: row.last_seen_at,
                 created_at: row.created_at,
             });

@@ -240,10 +240,75 @@ pub(crate) async fn poll_jobs(
     Json(body): Json<PollJobsBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let agent = agent_operator(&ctx, &headers).await?;
+    if agent.disabled {
+        return Ok(Json(serde_json::json!({ "jobs": [] })));
+    }
     let jobs = host_power_service::poll_jobs(&ctx.db, agent.id, body.max)
         .await
         .map_err(invalid_request)?;
     Ok(Json(serde_json::json!({ "jobs": jobs })))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct UpdateAgentBody {
+    pub display_name: Option<String>,
+    pub disabled: Option<bool>,
+}
+
+pub(crate) async fn update_agent(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Path(agent_id): Path<Uuid>,
+    Json(body): Json<UpdateAgentBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let actor = current_operator(&ctx, &headers).await?;
+    if actor.role != "developer" {
+        return Err(forbidden());
+    }
+    let agent =
+        host_power_service::update_agent(&ctx.db, agent_id, body.display_name, body.disabled)
+            .await
+            .map_err(invalid_request)?;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "服务器控制",
+        "编辑宿主机Agent",
+        &format!("Agent {}（停用：{}）", agent_id, agent.disabled),
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
+    Ok(Json(serde_json::json!({ "agent": agent })))
+}
+
+pub(crate) async fn delete_agent(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Path(agent_id): Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+    let actor = current_operator(&ctx, &headers).await?;
+    if actor.role != "developer" {
+        return Err(forbidden());
+    }
+    host_power_service::delete_agent(&ctx.db, agent_id)
+        .await
+        .map_err(invalid_request)?;
+    if let Err(e) = log_service::create_log(
+        &ctx.db,
+        &actor.display_name,
+        "服务器控制",
+        "删除宿主机Agent",
+        &format!("Agent {}（已绑定的服务器自动解绑）", agent_id),
+        &extract_client_ip(&headers),
+    )
+    .await
+    {
+        tracing::warn!(%e, "日志写入失败");
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]

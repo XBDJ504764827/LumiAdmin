@@ -4724,3 +4724,119 @@ async fn host_agent_download_accepts_agent_and_install_tokens() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn host_power_agent_disable_rename_delete() {
+    with_test_app(async |db, config| {
+        let dev = create_session_for_user(&db, "22222222-2222-2222-2222-222222222222").await?;
+        let admin = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
+        let app = test_app(config, db.clone());
+        let (_, server_id) = insert_community_with_server(&db, "管控服").await;
+
+        let install_token = host_power_issue_install_token(&app, &dev).await;
+        let (agent_id, agent_token) = host_power_register_agent(&app, &install_token).await;
+        host_power_bind_server(&db, server_id, agent_id).await;
+
+        // admin 无权编辑
+        let forbidden = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/host-agent/agents/{agent_id}"))
+                    .header("authorization", format!("Bearer {admin}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "display_name": "主服" }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+        // 改名
+        let renamed = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/host-agent/agents/{agent_id}"))
+                    .header("authorization", format!("Bearer {dev}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({ "display_name": "主服-电信" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(renamed.status(), StatusCode::OK);
+        let bytes = to_bytes(renamed.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["agent"]["display_name"], "主服-电信");
+
+        // 停用后：下发被拒，领取为空
+        let disabled = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/host-agent/agents/{agent_id}"))
+                    .header("authorization", format!("Bearer {dev}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "disabled": true }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(disabled.status(), StatusCode::OK);
+
+        let dispatch = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/community/servers/{server_id}/power"))
+                    .header("authorization", format!("Bearer {dev}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "action": "restart" }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(dispatch.status(), StatusCode::BAD_REQUEST);
+
+        let poll = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/host-agent/jobs/poll")
+                    .header("authorization", format!("Bearer {agent_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "max": 5 }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = to_bytes(poll.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["jobs"].as_array().unwrap().len(), 0);
+
+        // 删除后服务器自动解绑
+        let deleted = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/host-agent/agents/{agent_id}"))
+                    .header("authorization", format!("Bearer {dev}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+        let binding: (Option<Uuid>,) =
+            sqlx::query_as(r#"SELECT host_agent_id FROM servers WHERE id = $1"#)
+                .bind(server_id)
+                .fetch_one(&db.pool)
+                .await?;
+        assert!(binding.0.is_none());
+        Ok(())
+    })
+    .await;
+}

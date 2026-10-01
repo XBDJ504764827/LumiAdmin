@@ -57,6 +57,14 @@ test('powerAvailability 开关机互斥置灰，强制重启常亮', () => {
   assert.ok(off.stop.disabledReason.includes('关机'));
 });
 
+test('休眠服允许开启（僵尸状态兜底），强制开通常亮', () => {
+  const hibernating = powerAvailability({ status: 'hibernating' });
+  assert.equal(hibernating.start.enabled, true);
+  assert.equal(hibernating.stop.enabled, true);
+  assert.equal(hibernating.forceStart.enabled, true);
+  assert.equal(powerAvailability({ status: 'offline' }).forceStart.enabled, true);
+});
+
 test('确认文案携带服务器名', () => {
   assert.ok(buildStartConfirmText('1服').includes('1服'));
   assert.ok(buildStopConfirmText('2服').includes('2服'));

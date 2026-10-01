@@ -1,5 +1,4 @@
-// 服务器电源操作（界面预览阶段）：变体判定、可用性、文案。
-// 下发执行尚未接入，确认后仅关闭弹窗；接入时替换 CommunityPage 中的占位 toast。
+// 服务器电源操作：确认框 + 倒计时，下发后轮询任务终态并回显执行输出。
 
 export const POWER_COUNTDOWN_SECS = 5;
 
@@ -7,6 +6,7 @@ export const POWER_ACTION = Object.freeze({
   restart: 'restart',
   forceRestart: 'force-restart',
   start: 'start',
+  forceStart: 'force-start',
   stop: 'stop',
 });
 
@@ -19,6 +19,10 @@ export const FORCE_RESTART_CONFIRM_TEXT =
   '强制重启将无视服内玩家直接重启服务器，在线玩家将被强制断开；可能因为服务器延迟问题没有正确的显示出服务器内是否存在玩家，请谨慎操作。';
 export const FORCE_RESTART_FINAL_TEXT =
   '请再次确认是否强制重启该服务器：执行后全部玩家立即断开并重载服务器，强制阅读 5 秒后才可执行。';
+export const FORCE_START_CONFIRM_TEXT =
+  '即将向服务器发送强制开机指令：即使状态显示异常也会执行，适用于进程已关但状态未刷新的情况，确定继续？';
+export const FORCE_START_FINAL_TEXT =
+  '请再次确认是否强制开机该服务器，强制阅读 5 秒后才可执行。';
 
 export function serverPlayerCount(server) {
   return server?.online_player_count ?? server?.players?.length ?? 0;
@@ -35,10 +39,15 @@ export function restartVariant(server) {
 
 export function powerAvailability(server) {
   const poweredOn = isPoweredOn(server);
+  // 开启：仅在线（明确在跑）时禁用；休眠/离线/未测试都可点——
+  // 休眠可能是僵尸状态（进程已死但上报残留），点开启无害（LGSM 会提示已在运行），
+  // 真正拿不准时还有强制开启兜底。
+  const startEnabled = server?.status !== 'online';
   return {
     restart: { enabled: true },
     forceRestart: { enabled: true },
-    start: { enabled: !poweredOn, disabledReason: poweredOn ? '服务器为开机状态，无需开启' : '' },
+    start: { enabled: startEnabled, disabledReason: startEnabled ? '' : '服务器在线，无需开启' },
+    forceStart: { enabled: true },
     stop: { enabled: poweredOn, disabledReason: poweredOn ? '' : '服务器为关机状态，无需关闭' },
   };
 }
@@ -63,6 +72,7 @@ export const POWER_ACTION_LABEL = Object.freeze({
   restart: '重启服务器',
   'force-restart': '强制重启服务器',
   start: '开启服务器',
+  'force-start': '强制开启服务器',
   stop: '关闭服务器',
 });
 

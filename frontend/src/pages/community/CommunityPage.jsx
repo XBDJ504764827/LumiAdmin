@@ -81,6 +81,8 @@ const emptyServerForm = {
   report_token: '',
   note: '',
   max_players: '0',
+  host_agent_id: '',
+  lgsm_instance: '',
   ...emptyAccessConfig,
 };
 
@@ -149,6 +151,16 @@ export function CommunityPage() {
 
   useEffect(() => { loadGroups(); }, [loadGroups]);
 
+  const [hostAgents, setHostAgents] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    api.hostAgents(token).then(
+      (response) => { if (!cancelled) setHostAgents(response?.agents ?? []); },
+      () => { if (!cancelled) setHostAgents([]); },
+    );
+    return () => { cancelled = true; };
+  }, [token]);
+
   useEffect(() => {
     if (!reloadConfirmModal.open || reloadConfirmModal.countdown <= 0) return undefined;
     const timer = window.setTimeout(() => {
@@ -187,6 +199,8 @@ export function CommunityPage() {
       report_token: server.report_token ?? '',
       note: server.note ?? '',
       max_players: String(server.max_players ?? 0),
+      host_agent_id: server.host_agent_id ?? '',
+      lgsm_instance: server.lgsm_instance ?? '',
       ...fillAccessConfigFromServer(server),
     });
     setServerFeedback({
@@ -948,6 +962,31 @@ export function CommunityPage() {
             <label>备注</label>
             <input type="text" className="form-control" placeholder="备注（非必填）" value={serverForm.note} onChange={(e) => handleServerFieldChange('note', e.target.value)} />
           </div>
+        </FormSectionCard>
+
+        {/* 电源控制绑定 */}
+        <FormSectionCard
+          icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18.36 6.64a9 9 0 11-12.72 0" /><line x1="12" y1="2" x2="12" y2="12" /></svg>}
+          title="电源控制绑定"
+        >
+          <div className="form-row">
+            <div className="form-group" style={{ flex: 1 }}>
+              <label>宿主机 Agent</label>
+              <select className="form-control" value={serverForm.host_agent_id} onChange={(e) => handleServerFieldChange('host_agent_id', e.target.value)}>
+                <option value="">不绑定（无法使用电源操作）</option>
+                {hostAgents.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.hostname || agent.id}{agent.online ? '' : '（离线）'}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="form-group" style={{ flex: 1 }}>
+              <label>LGSM 实例名</label>
+              <input type="text" className="form-control" placeholder="例如：csgoserver" value={serverForm.lgsm_instance} onChange={(e) => handleServerFieldChange('lgsm_instance', e.target.value)} />
+            </div>
+          </div>
+          <div className="form-hint">绑定后才能在服务器控制中使用重启 / 开机 / 关机；实例名以宿主机上 LGSM 脚本文件名为准。</div>
         </FormSectionCard>
 
         {/* 访问限制 */}

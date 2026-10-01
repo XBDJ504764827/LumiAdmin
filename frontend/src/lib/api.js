@@ -134,6 +134,7 @@ export const api = {
   markAllNotificationsRead: (token) => request('/api/notifications/read-all', { method: 'POST', headers: withAuth(token) }),
   // Host agent （宿主机 Agent 文件托管下发）
   hostAgentSetup: (token) => request('/api/host-agent/setup', { headers: withAuth(token) }),
+  hostAgentOverview: (token) => request('/api/host-agent/overview', { headers: withAuth(token) }),
 };
 
 export function useAppApi() {

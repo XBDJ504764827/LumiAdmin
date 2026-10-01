@@ -38,6 +38,13 @@ export function buildServerPayloadWithAccess(form) {
   const maxPlayers = Number(form.max_players);
   if (!Number.isInteger(maxPlayers) || maxPlayers < 0) throw new Error('最大玩家数不能为负数。');
 
+  const hostAgentId = (form.host_agent_id ?? '').trim() || null;
+  const lgsmInstance = (form.lgsm_instance ?? '').trim() || null;
+  if (lgsmInstance && !/^[A-Za-z0-9_-]{1,32}$/.test(lgsmInstance)) {
+    throw new Error('LGSM 实例名格式无效（仅允许字母、数字、下划线、中划线，1~32 位）。');
+  }
+  if (lgsmInstance && !hostAgentId) throw new Error('填写 LGSM 实例名前需先选择绑定的宿主机 Agent。');
+
   return {
     name: form.name.trim(),
     ip: form.ip.trim(),
@@ -52,6 +59,8 @@ export function buildServerPayloadWithAccess(form) {
     risk_block_enabled: form.risk_block_enabled !== false,
     max_players: maxPlayers,
     use_custom_access: Boolean(form.use_custom_access),
+    host_agent_id: hostAgentId,
+    lgsm_instance: lgsmInstance,
   };
 }
 

@@ -17,12 +17,16 @@ const JOB_TAKE_LIMIT_MAX: i64 = 10;
 pub(crate) const ACTION_RESTART: &str = "restart";
 pub(crate) const ACTION_FORCE_RESTART: &str = "force-restart";
 pub(crate) const ACTION_START: &str = "start";
+pub(crate) const ACTION_FORCE_START: &str = "force-start";
 pub(crate) const ACTION_STOP: &str = "stop";
 
-/// 下发给 Agent 执行的动作：强制重启在执行层等同于重启（强制体现在下发策略，不在执行）。
+/// 下发给 Agent 执行的动作：强制类在执行层等同于普通动作
+/// （强制体现在下发策略——跳过人数/状态检查，不在执行）。
 pub(crate) fn exec_action(action: &str) -> &'static str {
     if action == ACTION_FORCE_RESTART {
         ACTION_RESTART
+    } else if action == ACTION_FORCE_START {
+        ACTION_START
     } else {
         // 调用方已校验 action 合法，这里兜底原样返回
         match action {
@@ -36,7 +40,7 @@ pub(crate) fn exec_action(action: &str) -> &'static str {
 pub(crate) fn is_valid_action(action: &str) -> bool {
     matches!(
         action,
-        ACTION_RESTART | ACTION_FORCE_RESTART | ACTION_START | ACTION_STOP
+        ACTION_RESTART | ACTION_FORCE_RESTART | ACTION_START | ACTION_FORCE_START | ACTION_STOP
     )
 }
 

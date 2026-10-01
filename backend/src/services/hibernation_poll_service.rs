@@ -23,6 +23,10 @@ use uuid::Uuid;
 /// RCON 连接失败后的冷却时间：避免对已经宕机/关机的服务器反复 TCP 超时浪费资源
 const FAIL_COOLDOWN_SECS: u64 = 300;
 
+/// 连续失败达到该次数后判定服务器已关机/宕机，标记离线。
+/// 配合 300s 失败冷却，相当于至少 10 分钟不可达才标离线，避免网络抖动误伤空服。
+const OFFLINE_AFTER_CONSEC_FAILS: u32 = 3;
+
 /// 休眠兜底轮询配置
 #[derive(Debug, Clone)]
 pub struct HibernationPollConfig {
@@ -99,6 +103,8 @@ pub struct HibernationPoller {
     last_success: HashMap<Uuid, Instant>,
     /// 每台服务器上次失败时间（失败冷却，避免对故障服务器反复超时）
     last_fail: HashMap<Uuid, Instant>,
+    /// 每台服务器连续 RCON 失败次数；达到阈值则标记离线（进程已关）
+    consec_fails: HashMap<Uuid, u32>,
 }
 
 impl HibernationPoller {
@@ -108,6 +114,7 @@ impl HibernationPoller {
             config,
             last_success: HashMap::new(),
             last_fail: HashMap::new(),
+            consec_fails: HashMap::new(),
         }
     }
 
@@ -171,17 +178,56 @@ impl HibernationPoller {
             match result {
                 Ok(()) => {
                     self.last_success.insert(server_id, now);
+                    self.consec_fails.remove(&server_id);
                     success += 1;
                 }
                 Err(error) => {
                     self.last_fail.insert(server_id, now);
-                    tracing::warn!(server_id = %server_id, %error, "休眠服务器 RCON 兜底轮询失败（服务器可能已离线）");
+                    let fails = self.consec_fails.get(&server_id).copied().unwrap_or(0) + 1;
+                    if fails >= OFFLINE_AFTER_CONSEC_FAILS {
+                        self.consec_fails.remove(&server_id);
+                        match mark_server_offline(&self.db, server_id).await {
+                            Ok(()) => tracing::info!(
+                                server_id = %server_id,
+                                fails,
+                                "RCON 连续失败，服务器已标记离线"
+                            ),
+                            Err(mark_error) => tracing::warn!(
+                                server_id = %server_id,
+                                %mark_error,
+                                "标记服务器离线失败"
+                            ),
+                        }
+                    } else {
+                        self.consec_fails.insert(server_id, fails);
+                        tracing::warn!(server_id = %server_id, %error, "休眠服务器 RCON 兜底轮询失败（服务器可能已离线）");
+                    }
                 }
             }
         }
 
         Ok(success)
     }
+}
+
+/// RCON 连续失败后标记服务器离线：进程已关则幽灵玩家与休眠状态不再残留。
+/// 同步更新 last_reported_at（本次探测即一次新鲜观测，避免展示层又按过期判回休眠），
+/// 并立即清空在线快照（不等 5 分钟过期清理），让电源按钮与重启变体判定立刻正确。
+async fn mark_server_offline(db: &Database, server_id: Uuid) -> anyhow::Result<()> {
+    let mut tx = db.pool.begin().await?;
+    sqlx::query(
+        r#"UPDATE servers SET status = 'offline', players = ARRAY[]::TEXT[], last_reported_at = now()
+           WHERE id = $1"#,
+    )
+    .bind(server_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(r#"DELETE FROM server_online_players WHERE server_id = $1"#)
+        .bind(server_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 /// 通过 RCON 采集单台服务器状态并回写数据库。
@@ -613,6 +659,53 @@ players : 2 humans, 0 bots (16/0 max) (not hibernating)\n\
             assert_eq!(status, "online", "有玩家在线时状态应保持在线");
             assert!(players.contains(&".mONESY".to_string()));
             assert!(players.contains(&"灵活的小舌头".to_string()));
+
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+
+        test_util::drop_schema(&base_url, &schema).await;
+        result.unwrap();
+    }
+
+    #[tokio::test]
+    async fn poll_marks_server_offline_after_consecutive_rcon_failures() {
+        let config = Config::from_env();
+        let base_url = config.database_url.clone();
+        let schema = format!("test_{}", Uuid::new_v4().simple());
+        let scoped_url = schema_url(&base_url, &schema);
+        test_util::create_schema(&base_url, &schema).await;
+
+        let result = async {
+            let db = Database::connect_for_test(&scoped_url).await?;
+            db.migrate().await?;
+
+            // RCON 端口无监听（进程已关）：每次 poll 都连接拒绝。
+            // 生产环境是单个 poller 常驻累积；测试复用同一个 poller，
+            // 每次手动清掉 300s 失败冷却，模拟跨周期的连续失败。
+            let server_id = insert_hibernating_server(&db, "127.0.0.1:1", 200).await;
+            insert_active_session(&db, server_id).await;
+
+            let mut poller = HibernationPoller::new(db.clone(), test_config());
+            for _ in 0..2 {
+                poller.poll_once().await?;
+                poller.last_fail.clear();
+                let (status,): (String,) =
+                    sqlx::query_as("SELECT status FROM servers WHERE id = $1")
+                        .bind(server_id)
+                        .fetch_one(&db.pool)
+                        .await?;
+                assert_ne!(status, "offline", "未达阈值前不应标离线");
+            }
+
+            poller.poll_once().await?;
+            let (status, players): (String, Vec<String>) =
+                sqlx::query_as("SELECT status, players FROM servers WHERE id = $1")
+                    .bind(server_id)
+                    .fetch_one(&db.pool)
+                    .await?;
+            assert_eq!(status, "offline", "连续 3 次 RCON 失败后应标离线");
+            assert!(players.is_empty(), "标离线时幽灵玩家应一并清空");
 
             Ok::<(), anyhow::Error>(())
         }

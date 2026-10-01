@@ -5,6 +5,7 @@ import {
   buildServerPayloadWithAccess,
   emptyAccessConfig,
   fillAccessConfigFromServer,
+  suggestLgsmInstance,
   validateAccessConfig,
 } from './communityAccess.js';
 
@@ -137,4 +138,13 @@ test('buildServerPayloadWithAccess 透传 Agent 绑定并校验实例名', () =>
     () => buildServerPayloadWithAccess({ ...base, host_agent_id: 'agent-1', lgsm_instance: 'a;reboot' }),
     /实例名格式无效/,
   );
+});
+
+test('suggestLgsmInstance 按几服推导实例名', () => {
+  assert.equal(suggestLgsmInstance('1服'), 'csgoserver');
+  assert.equal(suggestLgsmInstance('2服'), 'csgoserver-2');
+  assert.equal(suggestLgsmInstance('10服（竞技）'), 'csgoserver-10');
+  assert.equal(suggestLgsmInstance('竞技服'), '');
+  assert.equal(suggestLgsmInstance(''), '');
+  assert.equal(suggestLgsmInstance(null), '');
 });

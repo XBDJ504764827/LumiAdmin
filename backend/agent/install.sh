@@ -87,8 +87,9 @@ prompt() {
 [[ -z "$INSTALL_TOKEN" ]] && prompt "网站签发的安装口令（15 分钟有效）" "" INSTALL_TOKEN
 [[ -z "$LGSM_DIR" ]] && prompt "LGSM 目录" "$HOME" LGSM_DIR
 if [[ -z "$INSTANCES" ]]; then
-  # 自动探测候选：LGSM 目录下一层可执行文件（排除常见非实例脚本）
-  candidates="$(find "$LGSM_DIR" -maxdepth 1 -type f -executable -printf '%f\n' 2>/dev/null | grep -v -E '^(linuxgsm\.sh|install\.sh|.*\.(sh|log|txt|md))$' | sort | tr '\n' ',' | sed 's/,$//')"
+  # 自动探测候选：LGSM 实例脚本本身不带后缀，只认无点号的可执行文件名
+  # （rcon_restart.py、linuxgsm.sh 这类带后缀的一律排除）
+  candidates="$(find "$LGSM_DIR" -maxdepth 1 -type f -executable -printf '%f\n' 2>/dev/null | grep -E '^[A-Za-z0-9_-]+$' | sort | tr '\n' ',' | sed 's/,$//')"
   if [[ -n "$candidates" ]]; then
     echo "探测到疑似实例：$candidates"
     prompt "实例清单（逗号分隔，回车沿用探测结果）" "$candidates" INSTANCES

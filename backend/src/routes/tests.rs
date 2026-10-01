@@ -4652,3 +4652,75 @@ async fn host_power_overview_and_server_binding_fields() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn host_agent_download_accepts_agent_and_install_tokens() {
+    with_test_app(async |db, config| {
+        let dev = create_session_for_user(&db, "22222222-2222-2222-2222-222222222222").await?;
+        let app = test_app(config, db.clone());
+
+        let install_token = host_power_issue_install_token(&app, &dev).await;
+        let (_, agent_token) = host_power_register_agent(&app, &install_token).await;
+        // 注册消耗了第一枚安装口令，再签一枚专供下载
+        let download_token = host_power_issue_install_token(&app, &dev).await;
+
+        for bearer in [
+            format!("Bearer {agent_token}"),
+            format!("Bearer {download_token}"),
+        ] {
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri("/api/host-agent/download/install.sh")
+                        .header("authorization", bearer)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        // 无口令与伪造口令均 401
+        let missing = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/download/install.sh")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+        let forged = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/download/install.sh")
+                    .header("authorization", "Bearer no-such-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(forged.status(), StatusCode::UNAUTHORIZED);
+
+        // 管理员会话仍可下载；二进制未托管时 501
+        let binary = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/host-agent/download/lumi-server-agent-x86_64")
+                    .header("authorization", format!("Bearer {dev}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(binary.status(), StatusCode::NOT_IMPLEMENTED);
+        Ok(())
+    })
+    .await;
+}

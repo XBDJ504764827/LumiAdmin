@@ -243,6 +243,23 @@ pub async fn list_server_jobs(
 // Agent 侧
 // ---------------------------------------------------------------------------
 
+/// 校验安装口令有效（存在、未使用、未过期），只读不消费；
+/// 供文件下载接口在安装阶段放行，消费只发生在注册时。
+pub async fn check_install_token_valid(db: &Database, token: &str) -> anyhow::Result<()> {
+    let token = token.trim();
+    anyhow::ensure!(!token.is_empty(), "安装口令不能为空");
+    let row: Option<(DateTime<Utc>, Option<DateTime<Utc>>)> = sqlx::query_as(
+        r#"SELECT expires_at, used_at FROM host_install_tokens WHERE token_hash = $1"#,
+    )
+    .bind(token_hash(token))
+    .fetch_optional(&db.pool)
+    .await?;
+    let (expires_at, used_at) = row.ok_or_else(|| anyhow::anyhow!("安装口令无效"))?;
+    anyhow::ensure!(used_at.is_none(), "安装口令已使用");
+    anyhow::ensure!(expires_at > Utc::now(), "安装口令已过期");
+    Ok(())
+}
+
 pub async fn register_agent(
     db: &Database,
     install_token: &str,

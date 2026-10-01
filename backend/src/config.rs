@@ -88,6 +88,9 @@ pub struct Config {
     pub lumi_bot_failed_max_age_secs: u64,
     // 管理后台地址（用于 QQ 通知中的“点击查看详情”链接）
     pub admin_web_url: Option<String>,
+    // 宿主机 Agent 预编译二进制在本机的磁盘路径（供下载接口托管；
+    // 未配置或文件不存在时二进制下载返回 501）
+    pub agent_binary_path: Option<String>,
 }
 
 impl Config {
@@ -284,6 +287,10 @@ impl Config {
             admin_web_url: std::env::var("ADMIN_WEB_URL")
                 .ok()
                 .map(|v| v.trim().trim_end_matches('/').to_string())
+                .filter(|v| !v.is_empty()),
+            agent_binary_path: std::env::var("AGENT_BINARY_PATH")
+                .ok()
+                .map(|v| v.trim().to_string())
                 .filter(|v| !v.is_empty()),
         };
 

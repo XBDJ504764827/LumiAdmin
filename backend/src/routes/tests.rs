@@ -4499,7 +4499,7 @@ async fn host_power_dangerous_actions_require_developer() {
         let app = test_app(config, db.clone());
         let (_, server_id) = insert_community_with_server(&db, "权限服").await;
 
-        for action in ["start", "stop", "force-restart"] {
+        for action in ["start", "stop", "force-restart", "force-start"] {
             let response = app
                 .oneshot(
                     Request::builder()
@@ -4514,6 +4514,53 @@ async fn host_power_dangerous_actions_require_developer() {
                 .unwrap();
             assert_eq!(response.status(), StatusCode::FORBIDDEN, "动作：{action}");
         }
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn host_power_force_start_maps_to_start_for_agent() {
+    with_test_app(async |db, config| {
+        let dev = create_session_for_user(&db, "22222222-2222-2222-2222-222222222222").await?;
+        let app = test_app(config, db.clone());
+        let (_, server_id) = insert_community_with_server(&db, "强制开机服").await;
+
+        let install_token = host_power_issue_install_token(&app, &dev).await;
+        let (agent_id, agent_token) = host_power_register_agent(&app, &install_token).await;
+        host_power_bind_server(&db, server_id, agent_id).await;
+
+        let dispatch = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/community/servers/{server_id}/power"))
+                    .header("authorization", format!("Bearer {dev}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "action": "force-start" }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(dispatch.status(), StatusCode::OK);
+
+        let poll = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/host-agent/jobs/poll")
+                    .header("authorization", format!("Bearer {agent_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "max": 5 }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = to_bytes(poll.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let jobs = payload["jobs"].as_array().unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0]["action"], "start");
         Ok(())
     })
     .await;

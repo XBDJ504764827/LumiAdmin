@@ -55,6 +55,8 @@ import {
   RESTART_HAS_PLAYERS_TEXT,
   FORCE_RESTART_CONFIRM_TEXT,
   FORCE_RESTART_FINAL_TEXT,
+  FORCE_START_CONFIRM_TEXT,
+  FORCE_START_FINAL_TEXT,
   buildStartConfirmText,
   buildStopConfirmText,
   buildStopFinalText,
@@ -116,6 +118,7 @@ export function CommunityPage() {
   const [detailModal, setDetailModal] = useState({ open: false, server: null, group: null });
   const [rconModal, setRconModal] = useState({ open: false, serverId: null, serverName: '', executing: '', customCommand: '', server: null });
   const [powerModal, setPowerModal] = useState({ open: false, server: null, action: null, step: 'confirm', countdown: POWER_COUNTDOWN_SECS });
+  const [powerResult, setPowerResult] = useState({ open: false, serverName: '', actionLabel: '', status: '', output: '' });
   const [savedReloadPlugins, setSavedReloadPlugins] = useState(() => readSavedReloadPluginOptions());
   const [detectedReloadPlugins, setDetectedReloadPlugins] = useState(() => readDetectedReloadPlugins());
   const [reloadPluginsModal, setReloadPluginsModal] = useState({
@@ -585,7 +588,8 @@ export function CommunityPage() {
       powerModal.step === 'final' &&
       ((powerModal.action === POWER_ACTION.restart && restartVariant(powerModal.server) === 'empty') ||
         powerModal.action === POWER_ACTION.stop ||
-        powerModal.action === POWER_ACTION.forceRestart);
+        powerModal.action === POWER_ACTION.forceRestart ||
+        powerModal.action === POWER_ACTION.forceStart);
     if (!needsCountdown) return undefined;
     if (powerModal.countdown <= 0) return undefined;
     const timer = window.setTimeout(() => {
@@ -604,11 +608,10 @@ export function CommunityPage() {
       closePowerModal();
       return;
     }
-    if (step === 'confirm' && (action === POWER_ACTION.stop || action === POWER_ACTION.forceRestart || (action === POWER_ACTION.restart && restartVariant(server) === 'empty'))) {
+    if (step === 'confirm' && (action === POWER_ACTION.stop || action === POWER_ACTION.forceRestart || action === POWER_ACTION.forceStart || (action === POWER_ACTION.restart && restartVariant(server) === 'empty'))) {
       setPowerModal((prev) => ({ ...prev, step: 'final', countdown: POWER_COUNTDOWN_SECS }));
       return;
     }
-    // 界面预览：不下发任何指令，待电源闭环接入后替换为真实下发。
     closePowerModal();
     void dispatchPowerJob(server, action);
   }
@@ -644,21 +647,23 @@ export function CommunityPage() {
       }
       const job = jobs.find((item) => item.id === jobId);
       if (job && isPowerJobTerminal(job.status)) {
-        const done = POWER_JOB_STATUS_TEXT[job.status] ?? job.status;
-        if (job.status === 'success') {
-          toast({ title: done, message: `「${server.name}」${label}已完成。` });
-        } else {
-          const output = (job.output ?? '').trim().slice(0, 200);
-          toast({
-            title: done,
-            message: `「${server.name}」${label}${done}。${output}`,
-            tone: 'danger',
-          });
-        }
+        setPowerResult({
+          open: true,
+          serverName: server.name,
+          actionLabel: label,
+          status: job.status,
+          output: (job.output ?? '').trim(),
+        });
         return;
       }
     }
-    toast({ title: '等待超时', message: `「${server.name}」${label}超过预期未完成，请到 Agent 控制页查看。`, tone: 'warning' });
+    setPowerResult({
+      open: true,
+      serverName: server.name,
+      actionLabel: label,
+      status: 'timeout',
+      output: '',
+    });
   }
 
   async function handleRconExecute(cmd) {
@@ -1418,7 +1423,14 @@ export function CommunityPage() {
                 onClick={() => openPowerModal(rconModal.server, POWER_ACTION.start)}
               >
                 <span className="rcon-cmd-name">开启服务器</span>
-                <span className="rcon-cmd-desc">{powerAvailability(rconModal.server).start.enabled ? '仅关机状态可用' : '开机状态不可用'}</span>
+                <span className="rcon-cmd-desc">{powerAvailability(rconModal.server).start.enabled ? '在线时不可用，休眠/离线可点' : '在线状态不可用'}</span>
+              </button>
+              <button
+                className="rcon-cmd-btn rcon-cmd-btn--danger"
+                onClick={() => openPowerModal(rconModal.server, POWER_ACTION.forceStart)}
+              >
+                <span className="rcon-cmd-name">强制开启服务器<span className="rcon-cmd-badge">⚠ 高影响</span></span>
+                <span className="rcon-cmd-desc">状态异常时兜底，两次确认并强制阅读 5 秒</span>
               </button>
               <button
                 className="rcon-cmd-btn rcon-cmd-btn--danger"
@@ -1498,7 +1510,7 @@ export function CommunityPage() {
       {powerModal.open && powerModal.server ? (
         <Modal
           open
-          title={powerModal.action === POWER_ACTION.restart ? `重启服务器 — ${powerModal.server.name}` : powerModal.action === POWER_ACTION.forceRestart ? `强制重启服务器 — ${powerModal.server.name}` : powerModal.action === POWER_ACTION.start ? `开启服务器 — ${powerModal.server.name}` : `关闭服务器 — ${powerModal.server.name}`}
+          title={powerModal.action === POWER_ACTION.restart ? `重启服务器 — ${powerModal.server.name}` : powerModal.action === POWER_ACTION.forceRestart ? `强制重启服务器 — ${powerModal.server.name}` : powerModal.action === POWER_ACTION.start ? `开启服务器 — ${powerModal.server.name}` : powerModal.action === POWER_ACTION.forceStart ? `强制开启服务器 — ${powerModal.server.name}` : `关闭服务器 — ${powerModal.server.name}`}
           onClose={closePowerModal}
           footer={(
             <>
@@ -1524,6 +1536,14 @@ export function CommunityPage() {
               ) : null}
               {powerModal.action === POWER_ACTION.start ? (
                 <button className="btn btn-primary" onClick={handlePowerConfirm}>确认执行</button>
+              ) : null}
+              {powerModal.action === POWER_ACTION.forceStart && powerModal.step === 'confirm' ? (
+                <button className="btn btn-primary" onClick={handlePowerConfirm}>确认强制开启</button>
+              ) : null}
+              {powerModal.action === POWER_ACTION.forceStart && powerModal.step === 'final' ? (
+                <button className="btn btn-primary" disabled={powerModal.countdown > 0} onClick={handlePowerConfirm}>
+                  {countdownLabel('确认强制开启', powerModal.countdown)}
+                </button>
               ) : null}
               {powerModal.action === POWER_ACTION.stop && powerModal.step === 'confirm' ? (
                 <button className="btn btn-primary" onClick={handlePowerConfirm}>确认执行</button>
@@ -1554,12 +1574,42 @@ export function CommunityPage() {
           {powerModal.action === POWER_ACTION.start ? (
             <div className="info-box info">{buildStartConfirmText(powerModal.server.name)}</div>
           ) : null}
+          {powerModal.action === POWER_ACTION.forceStart && powerModal.step === 'confirm' ? (
+            <div className="info-box warning">{FORCE_START_CONFIRM_TEXT}</div>
+          ) : null}
+          {powerModal.action === POWER_ACTION.forceStart && powerModal.step === 'final' ? (
+            <div className="info-box danger">{FORCE_START_FINAL_TEXT}</div>
+          ) : null}
           {powerModal.action === POWER_ACTION.stop && powerModal.step === 'confirm' ? (
             <div className="info-box warning">{buildStopConfirmText(powerModal.server.name)}</div>
           ) : null}
           {powerModal.action === POWER_ACTION.stop && powerModal.step === 'final' ? (
             <div className="info-box danger">{buildStopFinalText()}</div>
           ) : null}
+        </Modal>
+      ) : null}
+      {/* 电源执行结果回显：LGSM 原生输出，管理员据此判断是否真正成功 */}
+      {powerResult.open ? (
+        <Modal
+          open
+          title={`执行结果 — ${powerResult.serverName}`}
+          onClose={() => setPowerResult({ open: false, serverName: '', actionLabel: '', status: '', output: '' })}
+          footer={(
+            <button className="btn btn-primary" onClick={() => setPowerResult({ open: false, serverName: '', actionLabel: '', status: '', output: '' })}>关闭</button>
+          )}
+        >
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+            <span className="fw-600">{powerResult.actionLabel}</span>
+            <span className={`status-pill ${powerResult.status === 'success' ? 'pill-online' : powerResult.status === 'timeout' ? 'pill-warning' : 'pill-danger'}`}>
+              {POWER_JOB_STATUS_TEXT[powerResult.status] ?? powerResult.status}
+            </span>
+          </div>
+          {powerResult.status === 'timeout' ? (
+            <div className="info-box warning" style={{ marginBottom: 12 }}>任务超过预期未完成，可能仍在执行，可到 Agent 控制页查看宿主机状态。</div>
+          ) : null}
+          <pre style={{ fontSize: 12.5, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px', overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0 }}>
+            {powerResult.output || '(Agent 未返回输出)'}
+          </pre>
         </Modal>
       ) : null}
       {dialog}

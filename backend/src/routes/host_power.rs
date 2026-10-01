@@ -115,13 +115,16 @@ pub(crate) async fn power_server(
         if !permission_service::can_execute_rcon(&actor) {
             return Err(forbidden());
         }
-    } else if matches!(action.as_str(), "start" | "stop" | "force-restart") {
+    } else if matches!(
+        action.as_str(),
+        "start" | "stop" | "force-restart" | "force-start"
+    ) {
         if actor.role != "developer" {
             return Err(forbidden());
         }
     } else {
         return Err(invalid_request(anyhow::anyhow!(
-            "action 只能为 restart/start/stop/force-restart"
+            "action 只能为 restart/start/stop/force-restart/force-start"
         )));
     }
 
@@ -132,6 +135,7 @@ pub(crate) async fn power_server(
         "restart" => "重启服务器",
         "force-restart" => "强制重启服务器",
         "start" => "开启服务器",
+        "force-start" => "强制开启服务器",
         _ => "关闭服务器",
     };
     if let Err(e) = log_service::create_log(

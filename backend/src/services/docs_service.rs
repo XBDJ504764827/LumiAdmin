@@ -500,7 +500,7 @@ pub fn list_endpoints() -> Vec<EndpointDoc> {
             name: "下发电源任务",
             method: "POST",
             endpoint: "/api/community/servers/:server_id/power",
-            description: "下发 restart/start/stop/force-restart，单服同时只允许一个待执行任务",
+            description: "下发 restart/start/stop/force-restart/force-start，单服同时只允许一个待执行任务",
             auth_required: true,
             roles: &["admin", "developer"],
         },

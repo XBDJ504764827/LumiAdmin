@@ -265,6 +265,16 @@ pub fn list_endpoints() -> Vec<EndpointDoc> {
             roles: &["game-server"],
         },
         EndpointDoc {
+            module: "插件准入",
+            tone: "info",
+            name: "插件单玩家白名单实时点查",
+            method: "POST",
+            endpoint: "/api/plugin/access/whitelist/live",
+            description: "插件本地判白名单缺失时同步回源直查 DB（不读快照），已通过/有效封禁即时返回，配合进服宽限使用",
+            auth_required: false,
+            roles: &["game-server"],
+        },
+        EndpointDoc {
             module: "白名单管理",
             tone: "online",
             name: "后台白名单列表",

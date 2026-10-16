@@ -292,6 +292,77 @@ pub(crate) async fn plugin_access_profile(
     }
 }
 
+/// 单玩家白名单实时点查（插件本地判白名单缺失时的同步回源，配合进服宽限）。
+///
+/// 直查 DB（`whitelist_requests.status='approved'` + 有效封禁），不读快照文件，
+/// 因此比快照拉取新鲜一个数量级。查到已通过返回 `whitelisted=true`，插件直接
+/// 合并进本地白名单表；查到有效封禁返回 `banned=true`，插件立即踢出；
+/// 均未命中返回 `whitelisted=false, banned=false`，插件等宽限到期后按零容忍踢出。
+#[derive(Deserialize)]
+pub(crate) struct PluginWhitelistLiveBody {
+    report_token: String,
+    port: i32,
+    steam_id64: String,
+}
+
+pub(crate) async fn plugin_whitelist_live(
+    State(ctx): State<AppCtx>,
+    Json(body): Json<PluginWhitelistLiveBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let _server = ctx
+        .server_config_cache
+        .get_by_token_port(&ctx.db, &body.report_token, body.port)
+        .await
+        .map_err(AppError::internal)?
+        .ok_or_else(|| AppError::bad_request(anyhow::anyhow!("服务器令牌或端口不匹配")))?;
+
+    let steam_id64 = body.steam_id64.trim().to_string();
+    if steam_id64.len() != 17 || !steam_id64.chars().all(|ch| ch.is_ascii_digit()) {
+        return Err(AppError::bad_request(anyhow::anyhow!("SteamID64 不合法")));
+    }
+
+    let ban_reason: Option<String> = sqlx::query_scalar::<_, String>(
+        r#"SELECT reason FROM ban_records
+           WHERE status = 'active' AND steam_id = $1
+             AND (expires_at IS NULL OR expires_at > now())
+           ORDER BY created_at DESC LIMIT 1"#,
+    )
+    .bind(&steam_id64)
+    .fetch_optional(&ctx.db.pool)
+    .await
+    .map_err(|e| AppError::internal(e.into()))?;
+    if let Some(reason) = ban_reason {
+        return Ok(Json(serde_json::json!({
+            "ok": true,
+            "item": {
+                "steam_id64": steam_id64,
+                "whitelisted": false,
+                "banned": true,
+                "reason": reason,
+            }
+        })));
+    }
+
+    let whitelisted: bool = sqlx::query_scalar::<_, String>(
+        r#"SELECT steamid64 FROM whitelist_requests
+           WHERE steamid64 = $1 AND status = 'approved' LIMIT 1"#,
+    )
+    .bind(&steam_id64)
+    .fetch_optional(&ctx.db.pool)
+    .await
+    .map_err(|e| AppError::internal(e.into()))?
+    .is_some();
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "item": {
+            "steam_id64": steam_id64,
+            "whitelisted": whitelisted,
+            "banned": false,
+        }
+    })))
+}
+
 pub(crate) async fn plugin_access_snapshot(
     State(ctx): State<AppCtx>,
     Json(body): Json<PluginAccessSnapshotBody>,

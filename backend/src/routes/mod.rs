@@ -278,6 +278,10 @@ pub fn router(
             post(access::plugin_access_profile),
         )
         .route(
+            "/api/plugin/access/whitelist/live",
+            post(access::plugin_whitelist_live),
+        )
+        .route(
             "/api/plugin/server-status",
             post(plugin::report_server_status),
         )

@@ -480,6 +480,7 @@ pub async fn create_server(
     let id = Uuid::new_v4();
     let name = input.name.trim();
     let ip = input.ip.trim();
+    let node_id = super::game_node_service::ensure_node_for_ip(db, ip).await?;
     let password = input.rcon_password.trim();
     let report_token = super::normalize_optional_text(input.report_token.as_deref())
         .unwrap_or_else(generate_report_token);
@@ -505,9 +506,9 @@ pub async fn create_server(
         INSERT INTO servers (
             id, community_id, name, ip, port, rcon_password, report_token, note, status, players, last_tested_at,
             access_restriction_enabled, min_rating, min_steam_level, whitelist_mode_enabled,
-            risk_block_enabled, max_players, use_custom_access, host_agent_id, lgsm_instance
+            risk_block_enabled, max_players, use_custom_access, host_agent_id, lgsm_instance, node_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'online', $9, now(), $10, $11, $12, $13, $14, $15, $16, $17, $18)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'online', $9, now(), $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
         "#,
     )
     .bind(id)
@@ -528,6 +529,7 @@ pub async fn create_server(
     .bind(input.use_custom_access)
     .bind(input.host_agent_id)
     .bind(lgsm_instance.clone())
+    .bind(node_id)
     .execute(&db.pool)
     .await?;
 
@@ -594,6 +596,7 @@ pub async fn update_server(
         anyhow::ensure!(exists.0 == 1, "绑定的 Agent 不存在");
     }
 
+    let node_id = super::game_node_service::ensure_node_for_ip(db, ip).await?;
     let changing_password = !password.is_empty();
     let players_for_status = if changing_password {
         let tested =
@@ -635,7 +638,7 @@ pub async fn update_server(
                 status = 'online', players = $8, last_tested_at = now(),
                 access_restriction_enabled = $9, min_rating = $10, min_steam_level = $11, whitelist_mode_enabled = $12,
                 risk_block_enabled = $13, max_players = $14, use_custom_access = $15,
-                host_agent_id = $16, lgsm_instance = $17,
+                host_agent_id = $16, lgsm_instance = $17, node_id = $18,
                 plugin_instance_id = CASE WHEN ip <> $3 OR port <> $4 THEN NULL ELSE plugin_instance_id END
             WHERE id = $1
             RETURNING id, name, ip, port, report_token, note, status, players, max_players, last_tested_at, last_reported_at,
@@ -660,6 +663,7 @@ pub async fn update_server(
         .bind(input.use_custom_access)
         .bind(input.host_agent_id)
         .bind(lgsm_instance.clone())
+        .bind(node_id)
         .fetch_one(&mut *tx)
         .await?
     } else {
@@ -670,7 +674,7 @@ pub async fn update_server(
                 report_token = COALESCE($5, report_token), note = $6,
                 access_restriction_enabled = $7, min_rating = $8, min_steam_level = $9, whitelist_mode_enabled = $10,
                 risk_block_enabled = $11, max_players = $12, use_custom_access = $13,
-                host_agent_id = $14, lgsm_instance = $15,
+                host_agent_id = $14, lgsm_instance = $15, node_id = $16,
                 plugin_instance_id = CASE WHEN ip <> $3 OR port <> $4 THEN NULL ELSE plugin_instance_id END
             WHERE id = $1
             RETURNING id, name, ip, port, report_token, note, status, players, max_players, last_tested_at, last_reported_at,
@@ -693,14 +697,18 @@ pub async fn update_server(
         .bind(input.use_custom_access)
         .bind(input.host_agent_id)
         .bind(lgsm_instance.clone())
+        .bind(node_id)
         .fetch_one(&mut *tx)
         .await?
     };
 
     if changed {
+        let event_node_id =
+            super::game_node_service::node_for_server_tx(&mut tx, server_id).await?;
         super::auth_event_service::insert_event_tx(
             &mut tx,
             Some(server_id),
+            event_node_id,
             "server.config.update",
             serde_json::json!({
                 "scope": "server",
@@ -793,16 +801,19 @@ pub async fn update_community_access(
     .execute(&mut *tx)
     .await?;
 
-    // 社区级访问配置变更：给该社区下每服各下一条 server.config.update 事件
-    let server_ids: Vec<(Uuid,)> =
-        sqlx::query_as(r#"SELECT id FROM servers WHERE community_id = $1"#)
-            .bind(community_id)
-            .fetch_all(&mut *tx)
-            .await?;
-    for (server_id,) in &server_ids {
+    // 社区级访问配置变更：按节点各下一条 server.config.update 事件（同一台机器只发一次）
+    let node_ids: Vec<(Uuid,)> = sqlx::query_as(
+        r#"SELECT DISTINCT node_id FROM servers
+           WHERE community_id = $1 AND node_id IS NOT NULL"#,
+    )
+    .bind(community_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    for (node_id,) in &node_ids {
         super::auth_event_service::insert_event_tx(
             &mut tx,
-            Some(*server_id),
+            None,
+            Some(*node_id),
             "server.config.update",
             serde_json::json!({
                 "scope": "community",

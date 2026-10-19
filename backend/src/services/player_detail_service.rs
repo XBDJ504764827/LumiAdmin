@@ -4,6 +4,7 @@ use crate::{
         player_risk_service::{self, PlayerRiskProfile},
         r2_storage::R2Storage,
         steam_service::{ParsedSteamIdentity, SteamResolver},
+        whitelist_qq_service::{self, QqChatMessage, SteamQqBinding},
     },
 };
 use chrono::{DateTime, Utc};
@@ -32,7 +33,14 @@ pub struct PlayerDetail {
     pub evidence_files: Vec<EvidenceFile>,
     pub internal_profile: Option<PlayerInternalProfile>,
     pub internal_note_history: Vec<PlayerInternalNoteHistory>,
+    /// Steam ↔ QQ 绑定（联系方式）。未绑定时为 None。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qq_binding: Option<SteamQqBinding>,
     pub timeline: Vec<TimelineEvent>,
+    /// 时间线事件总数（截断前）。
+    pub timeline_total: usize,
+    /// 时间线是否因条数上限被截断。
+    pub timeline_truncated: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -42,6 +50,8 @@ pub struct PlayerProfile {
     pub steamid3: Option<String>,
     pub profile_url: Option<String>,
     pub display_name: Option<String>,
+    /// 最近一次白名单申请填写的联系方式（QQ/微信/邮箱等）。
+    pub contact: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -134,6 +144,8 @@ pub struct WhitelistRecord {
     pub steamid3: Option<String>,
     pub profile_url: Option<String>,
     pub contact: Option<String>,
+    /// 玩家填写的申请理由
+    pub reason: Option<String>,
     pub nickname: String,
     pub steam_persona_name: Option<String>,
     pub status: String,
@@ -374,15 +386,79 @@ pub struct TimelineEvent {
     pub status: Option<String>,
     pub source: Option<String>,
     pub related_id: Option<Uuid>,
+    /// 事件涉及的服务器（进入/退出/进服/封禁等）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_name: Option<String>,
+    /// 结构化补充信息，前端按 label/value 渲染
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub meta: Vec<TimelineMeta>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct TimelineMeta {
+    pub label: String,
+    pub value: String,
+}
+
+impl TimelineMeta {
+    fn new(label: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            value: value.into(),
+        }
+    }
+}
+
+/// 全球封禁（KZTimer 同步表）时间线所需字段。
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct GlobalBanTimelineRow {
+    id: Uuid,
+    kzt_ban_id: i32,
+    ban_type: String,
+    notes: Option<String>,
+    expires_on: Option<String>,
+    created_on: Option<String>,
+    is_expired: bool,
+    manual_unbanned: bool,
+    synced_at: DateTime<Utc>,
+}
+
+/// 异常记录（作弊/异常成绩）时间线所需字段。
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct AbnormalTimelineRow {
+    id: Uuid,
+    server_name: Option<String>,
+    server_port: Option<i32>,
+    map_name: String,
+    course: i32,
+    mode: String,
+    time_type: String,
+    teleports: i32,
+    run_time_seconds: f32,
+    threshold_seconds: f32,
+    status: String,
+    reviewed_by: Option<String>,
+    review_note: Option<String>,
+    reviewed_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+}
+
+/// 时间线最多返回的事件条数（超出后截断，前端提示可筛选/缩短时间范围）。
+const TIMELINE_LIMIT: usize = 500;
+
+/// 查询玩家完整档案。
+///
+/// `include_private_qq` 控制是否把 QQ 私聊记录并入时间线（私聊内容仅
+/// developer/admin 可见，与 `/api/whitelist/qq-binding/:steamid` 保持一致）。
 pub async fn get_player_detail(
     db: &Database,
     resolver: &SteamResolver,
     steam_input: &str,
+    include_private_qq: bool,
 ) -> anyhow::Result<PlayerDetail> {
     let steamid64 = resolve_player_input(db, resolver, steam_input).await?;
     let identity = resolver.resolve(&steamid64).await?;
+    let chat_steamid64 = steamid64.clone();
 
     // 并行查询互不依赖的数据
     let (
@@ -396,6 +472,10 @@ pub async fn get_player_detail(
         internal_note_history,
         risk_profile,
         gokz,
+        qq_binding,
+        qq_chat_messages,
+        global_bans,
+        abnormal_records,
     ) = tokio::try_join!(
         fetch_whitelist_records(db, &steamid64),
         fetch_ban_records(db, &steamid64),
@@ -407,6 +487,16 @@ pub async fn get_player_detail(
         fetch_internal_note_history(db, &steamid64),
         player_risk_service::build_player_risk_profile(db, &steamid64),
         async { Ok(fetch_gokz_stats(db, &steamid64).await) },
+        whitelist_qq_service::find_binding_by_steamid64(db, &steamid64),
+        async move {
+            if include_private_qq {
+                whitelist_qq_service::list_chat_messages(db, &chat_steamid64, 100).await
+            } else {
+                Ok(Vec::new())
+            }
+        },
+        fetch_global_ban_timeline(db, &steamid64),
+        fetch_abnormal_timeline(db, &steamid64),
     )?;
     // evidence_files 依赖 bans，需在第一批完成后执行
     let evidence_files = fetch_evidence_files(db, &bans).await?;
@@ -426,12 +516,19 @@ pub async fn get_player_detail(
     )?;
 
     let display_name = display_name(&whitelists, &bans, &online_records, &player_sessions);
+    let contact = whitelists
+        .iter()
+        .find_map(|item| item.contact.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
     let profile = PlayerProfile {
         steamid64: steamid64.clone(),
         steamid: identity.steamid,
         steamid3: identity.steamid3,
         profile_url: identity.profile_url,
         display_name,
+        contact,
     };
     let linked_ids: HashSet<&str> = ip_history
         .iter()
@@ -490,16 +587,21 @@ pub async fn get_player_detail(
         last_seen_at,
     };
 
-    let timeline = build_timeline(
-        &whitelists,
-        &bans,
-        &online_records,
-        &player_sessions,
-        &access_logs,
-        &admin_actions,
-        &audit_logs,
-        &evidence_files,
-    );
+    let (timeline, timeline_total, timeline_truncated) = build_timeline(TimelineSources {
+        whitelists: &whitelists,
+        bans: &bans,
+        online_records: &online_records,
+        player_sessions: &player_sessions,
+        access_logs: &access_logs,
+        admin_actions: &admin_actions,
+        audit_logs: &audit_logs,
+        evidence_files: &evidence_files,
+        internal_note_history: &internal_note_history,
+        qq_binding: qq_binding.as_ref(),
+        qq_chat_messages: &qq_chat_messages,
+        global_bans: &global_bans,
+        abnormal_records: &abnormal_records,
+    });
 
     Ok(PlayerDetail {
         profile,
@@ -518,7 +620,10 @@ pub async fn get_player_detail(
         evidence_files,
         internal_profile,
         internal_note_history,
+        qq_binding,
         timeline,
+        timeline_total,
+        timeline_truncated,
     })
 }
 
@@ -1377,6 +1482,7 @@ async fn fetch_whitelist_records(
 ) -> anyhow::Result<Vec<WhitelistRecord>> {
     let rows = sqlx::query_as::<_, WhitelistRecord>(
         r#"SELECT wr.id, wr.steamid64, wr.steamid, wr.steamid3, wr.profile_url, wr.contact,
+                  wr.reason,
                   wr.nickname, wr.steam_persona_name, wr.status, wr.source,
                   wr.applied_at,
                   wr.approved_at, COALESCE(approved_user.display_name, wr.approved_by) AS approved_by, wr.approval_reason,
@@ -2380,30 +2486,58 @@ fn is_active_ban(ban: &PlayerBanRecord) -> bool {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_timeline(
-    whitelists: &[WhitelistRecord],
-    bans: &[PlayerBanRecord],
-    online_records: &[OnlineRecord],
-    player_sessions: &[PlayerServerSession],
-    access_logs: &[PlayerAccessRecord],
-    admin_actions: &[AdminAction],
-    audit_logs: &[PlayerAuditLog],
-    evidence_files: &[EvidenceFile],
-) -> Vec<TimelineEvent> {
+struct TimelineSources<'a> {
+    whitelists: &'a [WhitelistRecord],
+    bans: &'a [PlayerBanRecord],
+    online_records: &'a [OnlineRecord],
+    player_sessions: &'a [PlayerServerSession],
+    access_logs: &'a [PlayerAccessRecord],
+    admin_actions: &'a [AdminAction],
+    audit_logs: &'a [PlayerAuditLog],
+    evidence_files: &'a [EvidenceFile],
+    internal_note_history: &'a [PlayerInternalNoteHistory],
+    qq_binding: Option<&'a SteamQqBinding>,
+    qq_chat_messages: &'a [QqChatMessage],
+    global_bans: &'a [GlobalBanTimelineRow],
+    abnormal_records: &'a [AbnormalTimelineRow],
+}
+
+/// 合并玩家相关的全部记录到一条时间线，按发生时间倒序。
+///
+/// 返回 `(事件列表, 截断前总数, 是否被截断)`。前端据此提示用户缩小时间范围。
+fn build_timeline(sources: TimelineSources<'_>) -> (Vec<TimelineEvent>, usize, bool) {
     let mut events = Vec::new();
 
-    for item in whitelists {
+    for item in sources.whitelists {
+        let mut meta = vec![TimelineMeta::new("昵称", &item.nickname)];
+        if let Some(contact) = item
+            .contact
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
+            meta.push(TimelineMeta::new("联系方式", contact));
+        }
+        if let Some(reason) = item
+            .reason
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
+            meta.push(TimelineMeta::new("申请理由", reason));
+        }
         events.push(TimelineEvent {
             event_type: "whitelist_applied".to_string(),
             category: "whitelist".to_string(),
             title: "提交白名单申请".to_string(),
-            description: Some(format!("昵称: {}", item.nickname)),
+            description: item.reason.clone(),
             occurred_at: item.applied_at,
-            actor: None,
+            actor: Some(item.nickname.clone()),
             status: Some(item.status.clone()),
             source: item.source.clone(),
             related_id: Some(item.id),
+            server_name: None,
+            meta,
         });
         if let Some(approved_at) = item.approved_at {
             events.push(TimelineEvent {
@@ -2416,6 +2550,8 @@ fn build_timeline(
                 status: Some("approved".to_string()),
                 source: item.source.clone(),
                 related_id: Some(item.id),
+                server_name: None,
+                meta: Vec::new(),
             });
         }
         if let Some(rejected_at) = item.rejected_at {
@@ -2429,6 +2565,8 @@ fn build_timeline(
                 status: Some("rejected".to_string()),
                 source: item.source.clone(),
                 related_id: Some(item.id),
+                server_name: None,
+                meta: Vec::new(),
             });
         }
         if let Some(revoked_at) = item.revoked_at {
@@ -2442,22 +2580,55 @@ fn build_timeline(
                 status: Some("revoked".to_string()),
                 source: item.source.clone(),
                 related_id: Some(item.id),
+                server_name: None,
+                meta: Vec::new(),
             });
         }
     }
 
-    for item in bans {
-        events.push(TimelineEvent {
-            event_type: "ban_created".to_string(),
-            category: "ban".to_string(),
-            title: "创建封禁".to_string(),
-            description: Some(item.reason.clone()),
-            occurred_at: item.created_at,
-            actor: Some(item.operator_name.clone()),
-            status: Some(item.status.clone()),
-            source: Some(item.source.clone()),
-            related_id: Some(item.id),
-        });
+    for item in sources.bans {
+        // 全球封禁同步生成的本地封禁与 global_ban 事件重复，只保留其解封事件。
+        if item.source != "global_ban" {
+            let mut meta = vec![
+                TimelineMeta::new(
+                    "封禁维度",
+                    if item.ban_type == "ip" {
+                        "账号 + IP"
+                    } else {
+                        "账号"
+                    },
+                ),
+                TimelineMeta::new("时长", duration_label(item.duration_minutes)),
+            ];
+            if let Some(expires_at) = item.expires_at {
+                meta.push(TimelineMeta::new(
+                    "到期时间",
+                    expires_at.format("%Y-%m-%d %H:%M:%S").to_string(),
+                ));
+            }
+            if let Some(ip) = item.ip_address.as_deref().filter(|v| !v.is_empty()) {
+                meta.push(TimelineMeta::new("关联 IP", ip));
+            }
+            let server_name = item.server_name.clone().or_else(|| {
+                match (item.server_port, item.server_name.as_deref()) {
+                    (Some(port), _) => Some(format!("端口 {port}")),
+                    _ => None,
+                }
+            });
+            events.push(TimelineEvent {
+                event_type: "ban_created".to_string(),
+                category: "ban".to_string(),
+                title: format!("创建封禁 · {}", duration_label(item.duration_minutes)),
+                description: Some(item.reason.clone()),
+                occurred_at: item.created_at,
+                actor: Some(item.operator_name.clone()),
+                status: Some(item.status.clone()),
+                source: Some(item.source.clone()),
+                related_id: Some(item.id),
+                server_name,
+                meta,
+            });
+        }
         if let Some(removed_at) = item.removed_at {
             events.push(TimelineEvent {
                 event_type: "ban_removed".to_string(),
@@ -2469,11 +2640,103 @@ fn build_timeline(
                 status: Some("inactive".to_string()),
                 source: Some(item.source.clone()),
                 related_id: Some(item.id),
+                server_name: item.server_name.clone(),
+                meta: Vec::new(),
             });
         }
     }
 
-    for item in online_records {
+    for item in sources.global_bans {
+        let created_at = item
+            .created_on
+            .as_deref()
+            .and_then(parse_kzt_timestamp)
+            .unwrap_or(item.synced_at);
+        let mut meta = vec![TimelineMeta::new("封禁类型", &item.ban_type)];
+        meta.push(TimelineMeta::new(
+            "到期时间",
+            match item.expires_on.as_deref() {
+                Some(value) if value.starts_with("9999") => "永久".to_string(),
+                Some(value) => value.to_string(),
+                None => "永久".to_string(),
+            },
+        ));
+        meta.push(TimelineMeta::new("KZTimer ID", item.kzt_ban_id.to_string()));
+        if item.is_expired {
+            meta.push(TimelineMeta::new("状态", "已过期"));
+        }
+        if item.manual_unbanned {
+            meta.push(TimelineMeta::new("本地处理", "管理员已解封"));
+        }
+        events.push(TimelineEvent {
+            event_type: "global_ban".to_string(),
+            category: "global_ban".to_string(),
+            title: "全球封禁（KZTimer）".to_string(),
+            description: item.notes.clone(),
+            occurred_at: created_at,
+            actor: Some("KZTimer Global".to_string()),
+            status: Some(if item.is_expired {
+                "inactive".to_string()
+            } else {
+                "active".to_string()
+            }),
+            source: Some("global_bans".to_string()),
+            related_id: Some(item.id),
+            server_name: None,
+            meta,
+        });
+    }
+
+    for item in sources.abnormal_records {
+        let mut meta = vec![
+            TimelineMeta::new("地图", &item.map_name),
+            TimelineMeta::new("模式", format!("{} / {}", item.mode, item.time_type)),
+            TimelineMeta::new("用时", format!("{:.2} 秒", item.run_time_seconds)),
+            TimelineMeta::new("阈值", format!("{:.2} 秒", item.threshold_seconds)),
+        ];
+        if item.course > 0 {
+            meta.push(TimelineMeta::new("关卡", item.course.to_string()));
+        }
+        if item.teleports > 0 {
+            meta.push(TimelineMeta::new("传送次数", item.teleports.to_string()));
+        }
+        if let Some(note) = item.review_note.as_deref().filter(|v| !v.is_empty()) {
+            meta.push(TimelineMeta::new("审核意见", note));
+        }
+        events.push(TimelineEvent {
+            event_type: "abnormal_record".to_string(),
+            category: "abnormal".to_string(),
+            title: format!("异常成绩 · {}", item.map_name),
+            description: Some(format!(
+                "{} / {} / {:.2}s（阈值 {:.2}s）",
+                item.mode, item.time_type, item.run_time_seconds, item.threshold_seconds
+            )),
+            occurred_at: item.created_at,
+            actor: Some(item.mode.clone()),
+            status: Some(item.status.clone()),
+            source: Some("abnormal_records".to_string()),
+            related_id: Some(item.id),
+            server_name: server_label(item.server_name.as_deref(), item.server_port),
+            meta,
+        });
+        if let Some(reviewed_at) = item.reviewed_at {
+            events.push(TimelineEvent {
+                event_type: "abnormal_reviewed".to_string(),
+                category: "abnormal".to_string(),
+                title: format!("异常成绩审核 · {}", abnormal_status_label(&item.status)),
+                description: item.review_note.clone(),
+                occurred_at: reviewed_at,
+                actor: item.reviewed_by.clone(),
+                status: Some(item.status.clone()),
+                source: Some("abnormal_records".to_string()),
+                related_id: Some(item.id),
+                server_name: None,
+                meta: Vec::new(),
+            });
+        }
+    }
+
+    for item in sources.online_records {
         events.push(TimelineEvent {
             event_type: "online_reported".to_string(),
             category: "online".to_string(),
@@ -2484,10 +2747,32 @@ fn build_timeline(
             status: Some("online".to_string()),
             source: Some("server_online_players".to_string()),
             related_id: Some(item.server_id),
+            server_name: Some(
+                server_label(Some(item.server_name.as_str()), Some(item.server_port))
+                    .unwrap_or_else(|| item.server_name.clone()),
+            ),
+            meta: vec![
+                TimelineMeta::new("地图", &item.current_map),
+                TimelineMeta::new("Ping", item.ping.to_string()),
+                TimelineMeta::new("IP", &item.ip),
+            ],
         });
     }
 
-    for item in player_sessions {
+    for item in sources.player_sessions {
+        let mut start_meta = vec![TimelineMeta::new("地图", &item.last_map)];
+        if let Some(ping) = item.last_ping {
+            start_meta.push(TimelineMeta::new("Ping", ping.to_string()));
+        }
+        start_meta.push(TimelineMeta::new("IP", &item.ip));
+        if let Some(community_name) = item
+            .community_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            start_meta.push(TimelineMeta::new("社区", community_name));
+        }
         events.push(TimelineEvent {
             event_type: "server_session_started".to_string(),
             category: "session".to_string(),
@@ -2503,7 +2788,7 @@ fn build_timeline(
                 }
             )),
             occurred_at: item.first_seen_at,
-            actor: None,
+            actor: item.player_name.clone(),
             status: Some(if item.left_at.is_some() {
                 "inactive".to_string()
             } else {
@@ -2511,23 +2796,50 @@ fn build_timeline(
             }),
             source: Some("player_server_sessions".to_string()),
             related_id: Some(item.id),
+            server_name: Some(
+                server_label(Some(item.server_name.as_str()), Some(item.server_port))
+                    .unwrap_or_else(|| item.server_name.clone()),
+            ),
+            meta: start_meta,
         });
         if let Some(left_at) = item.left_at {
+            let mut end_meta = vec![TimelineMeta::new(
+                "停留时长",
+                duration_label_from_seconds(item.duration_seconds),
+            )];
+            if let Some(detail) = item.end_detail.as_deref().filter(|v| !v.is_empty()) {
+                end_meta.push(TimelineMeta::new("详情", detail));
+            }
             events.push(TimelineEvent {
                 event_type: "server_session_left".to_string(),
                 category: "session".to_string(),
                 title: "退出服务器".to_string(),
-                description: Some(format!("{}:{}", item.server_name, item.server_port)),
+                description: item.end_detail.clone().or_else(|| item.end_reason.clone()),
                 occurred_at: left_at,
-                actor: None,
+                actor: item.player_name.clone(),
                 status: Some("inactive".to_string()),
                 source: item.end_reason.clone(),
                 related_id: Some(item.id),
+                server_name: Some(
+                    server_label(Some(item.server_name.as_str()), Some(item.server_port))
+                        .unwrap_or_else(|| item.server_name.clone()),
+                ),
+                meta: end_meta,
             });
         }
     }
 
-    for item in access_logs {
+    for item in sources.access_logs {
+        let mut meta = vec![TimelineMeta::new("判定方式", &item.access_method)];
+        if let Some(rating) = item.rating {
+            meta.push(TimelineMeta::new("Rating", rating.to_string()));
+        }
+        if let Some(level) = item.steam_level {
+            meta.push(TimelineMeta::new("Steam 等级", level.to_string()));
+        }
+        if let Some(ip) = item.ip_address.as_deref().filter(|v| !v.is_empty()) {
+            meta.push(TimelineMeta::new("IP", ip));
+        }
         events.push(TimelineEvent {
             event_type: if item.allowed {
                 "access_allowed".to_string()
@@ -2557,10 +2869,15 @@ fn build_timeline(
             status: Some(if item.allowed { "success" } else { "failed" }.to_string()),
             source: Some(item.access_method.clone()),
             related_id: Some(item.id),
+            server_name: Some(
+                server_label(Some(item.server_name.as_str()), Some(item.server_port))
+                    .unwrap_or_else(|| item.server_name.clone()),
+            ),
+            meta,
         });
     }
 
-    for item in admin_actions {
+    for item in sources.admin_actions {
         events.push(TimelineEvent {
             event_type: "admin_action".to_string(),
             category: "admin".to_string(),
@@ -2571,10 +2888,23 @@ fn build_timeline(
             status: None,
             source: Some("admin_logs".to_string()),
             related_id: None,
+            server_name: None,
+            meta: if item.ip_address.is_empty() {
+                Vec::new()
+            } else {
+                vec![TimelineMeta::new("操作 IP", &item.ip_address)]
+            },
         });
     }
 
-    for item in audit_logs {
+    for item in sources.audit_logs {
+        let mut meta = vec![TimelineMeta::new("操作", &item.operation)];
+        if let Some(reason) = item.reason.as_deref().filter(|v| !v.is_empty()) {
+            meta.push(TimelineMeta::new("理由", reason));
+        }
+        if let Some(minutes) = item.duration_minutes {
+            meta.push(TimelineMeta::new("时长", duration_label(minutes)));
+        }
         events.push(TimelineEvent {
             event_type: "audit_log".to_string(),
             category: "audit".to_string(),
@@ -2589,10 +2919,12 @@ fn build_timeline(
             status: Some(if item.success { "success" } else { "failed" }.to_string()),
             source: Some(item.source.clone()),
             related_id: Some(item.id),
+            server_name: server_label(item.server_name.as_deref(), item.server_port),
+            meta,
         });
     }
 
-    for item in evidence_files {
+    for item in sources.evidence_files {
         events.push(TimelineEvent {
             event_type: "evidence_uploaded".to_string(),
             category: "evidence".to_string(),
@@ -2603,10 +2935,219 @@ fn build_timeline(
             status: Some(item.category.clone()),
             source: Some(item.source_type.clone()),
             related_id: Some(item.id),
+            server_name: None,
+            meta: vec![TimelineMeta::new(
+                "文件大小",
+                format!("{:.1} MB", item.file_size as f64 / 1024.0 / 1024.0),
+            )],
         });
     }
 
-    events.sort_by_key(|b| std::cmp::Reverse(b.occurred_at));
-    events.truncate(250);
-    events
+    for item in sources.internal_note_history {
+        events.push(TimelineEvent {
+            event_type: "internal_note_updated".to_string(),
+            category: "internal".to_string(),
+            title: "更新内部备注".to_string(),
+            description: if item.note.trim().is_empty() {
+                Some("清空备注".to_string())
+            } else {
+                Some(item.note.clone())
+            },
+            occurred_at: item.changed_at,
+            actor: Some(item.changed_by_name.clone()),
+            status: None,
+            source: Some("player_internal_note_history".to_string()),
+            related_id: Some(item.id),
+            server_name: None,
+            meta: if item.tags.is_empty() {
+                Vec::new()
+            } else {
+                vec![TimelineMeta::new(
+                    "标签",
+                    item.tags
+                        .iter()
+                        .map(|tag| format!("#{tag}"))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                )]
+            },
+        });
+    }
+
+    if let Some(binding) = sources.qq_binding {
+        events.push(TimelineEvent {
+            event_type: "qq_bound".to_string(),
+            category: "qq".to_string(),
+            title: "绑定 QQ（联系方式）".to_string(),
+            description: binding.qq_username.clone(),
+            occurred_at: binding.verified_at,
+            actor: None,
+            status: Some("success".to_string()),
+            source: Some("steam_qq_bindings".to_string()),
+            related_id: Some(binding.id),
+            server_name: None,
+            meta: vec![
+                TimelineMeta::new(
+                    "QQ 昵称",
+                    binding
+                        .qq_username
+                        .clone()
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                TimelineMeta::new("绑定方式", binding.qq_scene.clone()),
+            ],
+        });
+    }
+
+    for item in sources.qq_chat_messages {
+        let from_admin = item.direction == "admin_to_player";
+        events.push(TimelineEvent {
+            event_type: "qq_chat".to_string(),
+            category: "qq".to_string(),
+            title: if from_admin {
+                "管理员私聊玩家".to_string()
+            } else {
+                "玩家私聊管理员".to_string()
+            },
+            description: Some(item.content.clone()),
+            occurred_at: item.created_at,
+            actor: item.operator_name.clone().or_else(|| {
+                if from_admin {
+                    None
+                } else {
+                    Some("玩家".to_string())
+                }
+            }),
+            status: Some(item.status.clone()),
+            source: Some("qq_chat_messages".to_string()),
+            related_id: Some(item.id),
+            server_name: None,
+            meta: Vec::new(),
+        });
+    }
+
+    events.sort_by_key(|event| std::cmp::Reverse(event.occurred_at));
+    let total = events.len();
+    let truncated = total > TIMELINE_LIMIT;
+    events.truncate(TIMELINE_LIMIT);
+    (events, total, truncated)
+}
+
+fn duration_label(minutes: i32) -> String {
+    if minutes <= 0 {
+        return "永久".to_string();
+    }
+    if minutes < 60 {
+        return format!("{minutes} 分钟");
+    }
+    if minutes % 1440 == 0 {
+        return format!("{} 天", minutes / 1440);
+    }
+    if minutes % 60 == 0 {
+        return format!("{} 小时", minutes / 60);
+    }
+    format!("{minutes} 分钟")
+}
+
+fn duration_label_from_seconds(seconds: i64) -> String {
+    if seconds <= 0 {
+        return "-".to_string();
+    }
+    let minutes = seconds / 60;
+    if minutes < 1 {
+        return format!("{seconds} 秒");
+    }
+    if minutes < 60 {
+        return format!("{minutes} 分钟");
+    }
+    let hours = minutes / 60;
+    let rest = minutes % 60;
+    if hours < 24 {
+        return if rest == 0 {
+            format!("{hours} 小时")
+        } else {
+            format!("{hours} 小时 {rest} 分钟")
+        };
+    }
+    let days = hours / 24;
+    let rest_hours = hours % 24;
+    if rest_hours == 0 {
+        format!("{days} 天")
+    } else {
+        format!("{days} 天 {rest_hours} 小时")
+    }
+}
+
+fn server_label(name: Option<&str>, port: Option<i32>) -> Option<String> {
+    let name = name.map(str::trim).filter(|value| !value.is_empty())?;
+    Some(match port {
+        Some(port) => format!("{name}:{port}"),
+        None => name.to_string(),
+    })
+}
+
+fn abnormal_status_label(status: &str) -> &str {
+    match status {
+        "pending" => "待审核",
+        "approved" => "已通过",
+        "rejected" => "已拒绝",
+        "banned" => "已封禁",
+        other => other,
+    }
+}
+
+/// 解析 KZTimer 返回的时间字符串（RFC3339 / 无时区 ISO8601）。
+fn parse_kzt_timestamp(value: &str) -> Option<DateTime<Utc>> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(value) {
+        return Some(parsed.with_timezone(&Utc));
+    }
+    let normalized = if value.ends_with('Z') {
+        value.to_string()
+    } else {
+        format!("{value}Z")
+    };
+    DateTime::parse_from_rfc3339(&normalized)
+        .ok()
+        .map(|parsed| parsed.with_timezone(&Utc))
+}
+
+async fn fetch_global_ban_timeline(
+    db: &Database,
+    steamid64: &str,
+) -> anyhow::Result<Vec<GlobalBanTimelineRow>> {
+    let rows = sqlx::query_as::<_, GlobalBanTimelineRow>(
+        r#"SELECT id, kzt_ban_id, ban_type, notes, expires_on, created_on,
+                  is_expired, manual_unbanned, synced_at
+           FROM global_bans
+           WHERE steam_id64 = $1
+           ORDER BY created_on DESC NULLS LAST, synced_at DESC
+           LIMIT 100"#,
+    )
+    .bind(steamid64)
+    .fetch_all(&db.pool)
+    .await?;
+    Ok(rows)
+}
+
+async fn fetch_abnormal_timeline(
+    db: &Database,
+    steamid64: &str,
+) -> anyhow::Result<Vec<AbnormalTimelineRow>> {
+    let rows = sqlx::query_as::<_, AbnormalTimelineRow>(
+        r#"SELECT id, server_name, server_port, map_name, course, mode, time_type,
+                  teleports, run_time_seconds, threshold_seconds, status,
+                  reviewed_by, review_note, reviewed_at, created_at
+           FROM abnormal_records
+           WHERE steam_id64 = $1
+           ORDER BY created_at DESC
+           LIMIT 100"#,
+    )
+    .bind(steamid64)
+    .fetch_all(&db.pool)
+    .await?;
+    Ok(rows)
 }

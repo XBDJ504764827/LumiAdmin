@@ -367,6 +367,22 @@ pub(crate) async fn plugin_access_snapshot(
     State(ctx): State<AppCtx>,
     Json(body): Json<PluginAccessSnapshotBody>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    // 先校验服务器归属（token+port），再解析它所属的游戏节点。
+    let server = crate::services::plugin_ban_service::ServerAuth::authenticate(
+        &ctx.db,
+        body.port,
+        &body.report_token,
+    )
+    .await
+    .map_err(|e| {
+        tracing::warn!(error = %e, "plugin access snapshot: server auth failed");
+        invalid_request_status(e)
+    })?;
+    let node_id = crate::services::game_node_service::resolve_or_assign_node(&ctx.db, server.id)
+        .await
+        .map_err(internal_error)?
+        .ok_or(StatusCode::PRECONDITION_FAILED)?;
+
     let snapshot = match ctx
         .access_snapshot
         .read_snapshot()
@@ -376,16 +392,11 @@ pub(crate) async fn plugin_access_snapshot(
         Some(snapshot) => snapshot,
         None => return Err(StatusCode::SERVICE_UNAVAILABLE),
     };
-    // etag 增量：插件回传的版本与当前快照一致时跳过全量传输。
-    // 先校验服务器归属（snapshot_for_plugin 会检查 token+port），再决定是否省略 item。
-    let item = access_snapshot_service::snapshot_for_plugin(
-        &snapshot,
-        &body.report_token,
-        body.port,
-        Utc::now(),
-    )
-    .map_err(invalid_request_status)?;
+    // 节点快照：该机器上所有服的规则 + 全局 bans/whitelist/profiles。
+    let item = access_snapshot_service::snapshot_for_node(&snapshot, node_id, Utc::now())
+        .map_err(invalid_request_status)?;
 
+    // etag 增量：插件回传的版本与当前快照一致时跳过全量传输。
     let unchanged = body
         .etag
         .as_deref()

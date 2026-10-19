@@ -41,8 +41,8 @@ pub fn start_expiry_loop(db: Database, interval_seconds: u64) {
 /// 处理所有已过期的封禁记录
 /// 返回解封的记录数量
 pub async fn process_expired_bans(db: &Database) -> anyhow::Result<usize> {
-    let expired: Vec<(uuid::Uuid, String)> = sqlx::query_as(
-        r#"SELECT id, steam_id FROM ban_records
+    let expired: Vec<(uuid::Uuid, String, Option<String>)> = sqlx::query_as(
+        r#"SELECT id, steam_id, ip_address FROM ban_records
            WHERE status = 'active'
              AND expires_at IS NOT NULL
              AND expires_at <= now()"#,
@@ -68,12 +68,13 @@ pub async fn process_expired_bans(db: &Database) -> anyhow::Result<usize> {
     .await?;
     let count = result.rows_affected() as usize;
 
-    for (ban_id, steam_id) in &expired {
+    for (ban_id, steam_id, ip_address) in &expired {
         if let Err(e) = super::auth_event_service::insert_event(
             db,
             None,
+            None,
             "ban.remove",
-            super::auth_event_service::ban_remove_payload(*ban_id, steam_id),
+            super::auth_event_service::ban_remove_payload(*ban_id, steam_id, ip_address.as_deref()),
         )
         .await
         {

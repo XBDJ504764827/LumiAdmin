@@ -940,12 +940,16 @@ fn parse_kzt_datetime(s: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
 /// 管理员手动解封全球封禁对应的本地封禁
 /// 设置 manual_unbanned=true（per-ban 标记），防止同一 KZTimer 封禁下次同步封回
 /// 同一玩家后续产生新的 KZTimer 封禁 ID 时仍会同步。
+/// 手动解除全球封禁对应的本地封禁。
+///
+/// 返回被解除的本地封禁 `(ban_id, steam_id)`（若原本就不存在活跃本地封禁则为 None），
+/// 调用方据此补发 `ban.remove` 事件并走 RCON 快车道，避免游戏服本地 SQLite 残留封禁。
 pub async fn manual_unban(
     db: &Database,
     ban_cache: &crate::services::access_cache::ActiveBanCache,
     kzt_ban_id: i64,
     operator: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<(Uuid, String, Option<String>)>> {
     // 查找本地 global_bans 记录
     let row: Option<(Option<Uuid>,)> =
         sqlx::query_as("SELECT local_ban_id FROM global_bans WHERE kzt_ban_id = $1")
@@ -956,16 +960,19 @@ pub async fn manual_unban(
     let (local_id,) = row.ok_or_else(|| anyhow::anyhow!("全球封禁记录不存在"))?;
 
     // 解除对应的 ban_records 记录
+    let mut removed: Option<(Uuid, String, Option<String>)> = None;
     if let Some(lid) = local_id {
-        sqlx::query(
+        let updated: Option<(Uuid, String, Option<String>)> = sqlx::query_as(
             r#"UPDATE ban_records
                SET status = 'inactive', removed_by = $2, removed_at = now()
-               WHERE id = $1 AND status = 'active' AND source = 'global_ban'"#,
+               WHERE id = $1 AND status = 'active' AND source = 'global_ban'
+               RETURNING id, steam_id, ip_address"#,
         )
         .bind(lid)
         .bind(operator)
-        .execute(&db.pool)
+        .fetch_optional(&db.pool)
         .await?;
+        removed = updated;
     }
 
     // 仅标记这一条全球封禁记录为 manual_unbanned=true（per-ban 标记）
@@ -978,7 +985,7 @@ pub async fn manual_unban(
     // 刷新封禁缓存
     ban_cache.refresh(db).await?;
 
-    Ok(())
+    Ok(removed)
 }
 
 /// 标记某条全球封禁记录为「管理员已解封」（供 ban_service 在解封 global_ban 来源封禁时调用）

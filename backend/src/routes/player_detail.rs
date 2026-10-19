@@ -113,10 +113,16 @@ pub(crate) async fn get_player_detail(
         return Err(forbidden());
     }
 
-    let detail =
-        player_detail_service::get_player_detail(&ctx.db, &ctx.steam_resolver, &query.steam_input)
-            .await
-            .map_err(invalid_request)?;
+    // QQ 私聊内容含玩家隐私，仅 developer/admin 可读（与 /api/whitelist/qq-binding 一致）。
+    let include_private_qq = permission_service::can_manage_whitelist_manually(&actor);
+    let detail = player_detail_service::get_player_detail(
+        &ctx.db,
+        &ctx.steam_resolver,
+        &query.steam_input,
+        include_private_qq,
+    )
+    .await
+    .map_err(invalid_request)?;
 
     Ok(Json(serde_json::json!({ "data": detail })))
 }
@@ -364,9 +370,16 @@ pub(crate) async fn player_report(
     if !permission_service::can_view_audit_logs(&actor) {
         return Err(forbidden());
     }
-    let player = player_detail_service::get_player_detail(&ctx.db, &ctx.steam_resolver, &steamid64)
-        .await
-        .map_err(invalid_request)?;
+    // 调查报告会导出为 JSON 文件，可能被转发/存档；私聊内容含玩家隐私，
+    // 因此报告只包含 developer/admin 可见范围内的数据（不含 QQ 私聊记录）。
+    let player = player_detail_service::get_player_detail(
+        &ctx.db,
+        &ctx.steam_resolver,
+        &steamid64,
+        permission_service::can_manage_whitelist_manually(&actor),
+    )
+    .await
+    .map_err(invalid_request)?;
     let report = InvestigationReport {
         generated_at: chrono::Utc::now(),
         generated_by: actor.display_name.clone(),

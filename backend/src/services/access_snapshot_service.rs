@@ -42,6 +42,9 @@ pub struct AccessSnapshot {
 pub struct SnapshotServer {
     pub id: Uuid,
     pub community_id: Uuid,
+    /// 所属游戏节点（同一台机器共享本地同步状态）
+    #[serde(default)]
+    pub node_id: Option<Uuid>,
     pub name: String,
     pub port: i32,
     pub report_token: String,
@@ -174,7 +177,7 @@ pub async fn shutdown_flush(db: &Database, store: &SnapshotStore) {
 
 async fn load_snapshot_servers(db: &Database) -> anyhow::Result<Vec<SnapshotServer>> {
     sqlx::query_as::<_, SnapshotServerRow>(
-        r#"SELECT s.id, s.community_id, s.name, s.port, s.report_token, s.access_restriction_enabled,
+        r#"SELECT s.id, s.community_id, s.node_id, s.name, s.port, s.report_token, s.access_restriction_enabled,
                   s.min_rating, s.min_steam_level, s.whitelist_mode_enabled, s.risk_block_enabled,
                   s.use_custom_access, c.whitelist_mode_enabled AS community_whitelist_mode_enabled,
                   c.min_rating AS community_min_rating, c.min_steam_level AS community_min_steam_level
@@ -277,6 +280,7 @@ async fn load_snapshot_risk_ips(db: &Database) -> anyhow::Result<Vec<String>> {
 struct SnapshotServerRow {
     id: Uuid,
     community_id: Uuid,
+    node_id: Option<Uuid>,
     name: String,
     port: i32,
     report_token: String,
@@ -296,6 +300,7 @@ impl From<SnapshotServerRow> for SnapshotServer {
         Self {
             id: row.id,
             community_id: row.community_id,
+            node_id: row.node_id,
             name: row.name,
             port: row.port,
             report_token: row.report_token,
@@ -479,6 +484,7 @@ pub struct SnapshotBanDecision {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize)]
 pub struct PluginAccessSnapshot {
     pub version: String,
@@ -506,6 +512,7 @@ pub struct PluginSnapshotServer {
     pub risk_block_enabled: bool,
 }
 
+#[allow(dead_code)]
 pub fn snapshot_for_plugin(
     snapshot: &AccessSnapshot,
     report_token: &str,
@@ -547,6 +554,64 @@ pub fn snapshot_for_plugin(
         access_profiles: snapshot.access_profiles.clone(),
         risk_ips: snapshot.risk_ips.clone(),
     })
+}
+
+/// 节点快照：一个游戏节点（同一台机器）上的所有服共享同一份。
+///
+/// 与 [`snapshot_for_plugin`] 的区别：
+/// - `servers` 是该节点下所有服的规则（插件按本进程端口选择自己那条），
+///   因此只需同步一次即可覆盖机器上的全部服务器；
+/// - 全局的 bans / whitelist / access_profiles / risk_ips 与单服快照一致。
+pub fn snapshot_for_node(
+    snapshot: &AccessSnapshot,
+    node_id: Uuid,
+    now: DateTime<Utc>,
+) -> anyhow::Result<PluginNodeSnapshot> {
+    if snapshot.expires_at <= now {
+        anyhow::bail!("访问控制快照已过期");
+    }
+    let servers: Vec<PluginSnapshotServer> = snapshot
+        .servers
+        .iter()
+        .filter(|server| server.node_id == Some(node_id))
+        .map(|server| PluginSnapshotServer {
+            port: server.port,
+            access_restriction_enabled: effective_restriction_enabled(server),
+            min_rating: effective_min_rating(server),
+            min_steam_level: effective_min_steam_level(server),
+            whitelist_mode_enabled: effective_whitelist_mode_enabled(server),
+            risk_block_enabled: server.risk_block_enabled,
+        })
+        .collect();
+    anyhow::ensure!(!servers.is_empty(), "该节点下没有可同步的服务器");
+    Ok(PluginNodeSnapshot {
+        version: snapshot.version.clone(),
+        generated_at: snapshot.generated_at,
+        expires_at: snapshot.expires_at,
+        generated_at_unix: snapshot.generated_at.timestamp(),
+        expires_at_unix: snapshot.expires_at.timestamp(),
+        node_id,
+        servers,
+        bans: snapshot.bans.clone(),
+        whitelist: snapshot.whitelist.clone(),
+        access_profiles: snapshot.access_profiles.clone(),
+        risk_ips: snapshot.risk_ips.clone(),
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginNodeSnapshot {
+    pub version: String,
+    pub generated_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub generated_at_unix: i64,
+    pub expires_at_unix: i64,
+    pub node_id: Uuid,
+    pub servers: Vec<PluginSnapshotServer>,
+    pub bans: Vec<SnapshotBan>,
+    pub whitelist: Vec<SnapshotWhitelistEntry>,
+    pub access_profiles: Vec<SnapshotAccessProfile>,
+    pub risk_ips: Vec<String>,
 }
 
 pub fn evaluate_ban_snapshot(
@@ -734,6 +799,7 @@ mod tests {
             servers: vec![SnapshotServer {
                 id: Uuid::new_v4(),
                 community_id: Uuid::new_v4(),
+                node_id: None,
                 name: "测试服".to_string(),
                 port: 27015,
                 report_token: "token".to_string(),
@@ -951,6 +1017,7 @@ mod tests {
         snapshot.servers.push(SnapshotServer {
             id: Uuid::new_v4(),
             community_id: Uuid::new_v4(),
+            node_id: None,
             name: "其他服".to_string(),
             port: 27016,
             report_token: "other-token".to_string(),

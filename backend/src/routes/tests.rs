@@ -3612,6 +3612,7 @@ async fn auth_events_poll_ack_snapshot_flow() {
         crate::services::auth_event_service::insert_event(
             &db,
             None,
+            None,
             "ban.add",
             crate::services::auth_event_service::ban_add_payload(
                 ban_id,

@@ -74,6 +74,7 @@ export function PublicBanPage() {
                 <th>玩家名称</th>
                 <th>Steam 标识符</th>
                 <th>所在服务器</th>
+                <th>操作人</th>
                 <th>封禁状态</th>
                 <th>封禁缘由</th>
               </tr>
@@ -84,6 +85,7 @@ export function PublicBanPage() {
                   <td className="fw-600 mobile-card-primary" data-label="玩家名称">{x.player}</td>
                   <td className="steam-id" data-label="Steam 标识符">{x.steam_id}</td>
                   <td className="text-muted" data-label="所在服务器">{x.server_name ?? '未记录'}</td>
+                  <td className="text-muted" data-label="操作人">{x.operator_name || '-'}</td>
                   <td data-label="封禁状态"><span className={`status-pill ${banStatusPill(x)}`}>{banStatusLabel(x)}</span></td>
                   <td data-label="封禁缘由" style={{ color: formatExpiry(x) === 'expired' ? 'var(--text3)' : 'var(--text2)', fontWeight: 500 }}>{x.reason}</td>
                 </tr>

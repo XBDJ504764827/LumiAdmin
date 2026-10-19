@@ -483,6 +483,7 @@ pub async fn create_manual_whitelist(
     let version = super::auth_event_service::insert_event(
         db,
         None,
+        None,
         "whitelist.add",
         super::auth_event_service::whitelist_add_payload(&row.steamid64, row.expires_at),
     )
@@ -506,6 +507,7 @@ pub async fn approve_whitelist(
     let item = approve_whitelist_tx(&mut tx, id, input).await?;
     super::auth_event_service::insert_event_tx(
         &mut tx,
+        None,
         None,
         "whitelist.add",
         super::auth_event_service::whitelist_add_payload(
@@ -689,6 +691,7 @@ pub async fn restore_whitelist(
     let _ = super::auth_event_service::insert_event(
         db,
         None,
+        None,
         "whitelist.add",
         super::auth_event_service::whitelist_add_payload(&row.steamid64, row.expires_at),
     )
@@ -729,6 +732,7 @@ pub async fn revoke_whitelist(
 
     super::auth_event_service::insert_event_tx(
         &mut tx,
+        None,
         None,
         "whitelist.remove",
         serde_json::json!({ "steamid64": steamid64 }),
@@ -892,6 +896,7 @@ async fn approve_existing_record(
 
     let version = super::auth_event_service::insert_event(
         db,
+        None,
         None,
         "whitelist.add",
         super::auth_event_service::whitelist_add_payload(&row.steamid64, row.expires_at),
@@ -1212,6 +1217,7 @@ pub async fn process_expired_whitelist(db: &Database) -> anyhow::Result<usize> {
     for (steamid64,) in &expired {
         if let Err(e) = super::auth_event_service::insert_event(
             db,
+            None,
             None,
             "whitelist.remove",
             serde_json::json!({ "steamid64": steamid64, "reason": "expired" }),

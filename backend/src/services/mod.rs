@@ -18,6 +18,7 @@ pub mod docs_service;
 pub mod external_api_service;
 pub mod external_ban_api_service;
 pub mod external_server_service;
+pub mod game_node_service;
 pub mod global_ban_service;
 pub mod gokz_cache;
 pub mod hibernation_poll_service;

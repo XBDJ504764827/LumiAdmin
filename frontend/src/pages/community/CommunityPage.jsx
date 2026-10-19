@@ -140,21 +140,32 @@ export function CommunityPage() {
     serverCount: 0,
     countdown: 0,
   });
-  const loadGroups = useCallback(async () => {
+  const loadGroups = useCallback(async (options = {}) => {
+    const silent = options.silent === true;
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       setError(null);
       const response = await api.servers(token);
       setGroups(response?.groups ?? []);
     } catch (loadError) {
       setError(loadError);
-      setGroups([]);
+      if (!silent) setGroups([]);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [token]);
 
   useEffect(() => { loadGroups(); }, [loadGroups]);
+
+  // 同步状态会自动追平，页面每 15s 静默刷新一次（切到后台时暂停）。
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        loadGroups({ silent: true });
+      }
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [loadGroups]);
 
   const [hostAgents, setHostAgents] = useState([]);
   useEffect(() => {
@@ -453,6 +464,27 @@ export function CommunityPage() {
       message: `目标 ${serverCount} 台服务器、${commands.length} 个插件；成功执行 ${successCount} 条命令，失败 ${failCount} 条。`,
       tone: failCount > 0 ? 'warning' : 'success',
     });
+  }
+
+  async function handleForceAuthSync(group) {
+    if (!group || (group.servers || []).length === 0) return;
+    let successCount = 0;
+    let failCount = 0;
+    for (const server of group.servers) {
+      try {
+        await api.executeRcon(token, server.id, { command: 'lumiadmin_auth_resync' });
+        successCount++;
+      } catch {
+        failCount++;
+      }
+    }
+    toast({
+      title: '已触发授权全量同步',
+      message: `成功 ${successCount} 台、失败 ${failCount} 台；同步完成后社区组状态会自动更新。`,
+      tone: failCount > 0 ? 'warning' : 'success',
+    });
+    // 给插件留出应用快照的时间后刷新社区状态
+    setTimeout(() => { loadGroups().catch(() => {}); }, 4000);
   }
 
   async function handleTestRcon() {
@@ -878,8 +910,11 @@ export function CommunityPage() {
 
         <FormSectionCard
           icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" /><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" /></svg>}
-          title="授权同步"
+          title="节点授权同步"
         >
+          <div className="form-hint mb-12">
+            同一台游戏机上的服务器共享同一份快照与同步进度，状态以社区组头部汇总为准。
+          </div>
           <div className="detail-grid">
             <span className="detail-label">连接</span>
             <span className="detail-value">
@@ -1288,7 +1323,20 @@ export function CommunityPage() {
         <div className="card" key={group.id}>
           <div className="card-header" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 16 }}>
             <div>
-              <div className="card-title" style={{ fontSize: 16 }}>{group.name}</div>
+              <div className="card-title" style={{ fontSize: 16, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                {group.name}
+                {group.servers.length > 0 ? (() => {
+                  const auth = buildAuthSyncSummary(group);
+                  const label = auth.lag ? `同步落后 ${auth.pending}` : auth.connected ? '同步已追平' : '同步未连接';
+                  const tone = auth.lag ? 'pill-warning' : auth.connected ? 'pill-online' : 'pill-offline';
+                  const hint = auth.lag
+                    ? `待同步 ${auth.pending} 条事件`
+                    : auth.connected
+                      ? `上次同步：${auth.lastSyncText}`
+                      : '游戏服尚未连接同步服务';
+                  return <span className={`status-pill ${tone}`} title={hint}>{label}</span>;
+                })() : null}
+              </div>
               <div className="card-sub">
                 包含 {group.servers.length} 个游戏服务器节点
                 {(group.min_rating > 0 || group.min_steam_level > 0 || group.whitelist_mode_enabled) ? (
@@ -1305,6 +1353,7 @@ export function CommunityPage() {
             {canMutate ? (
               <div className="action-btn-group">
                 <button className="action-btn" onClick={() => openReloadPluginsModal(group)}>重启插件</button>
+                <button className="action-btn" onClick={() => handleForceAuthSync(group)}>强制同步</button>
                 <button className="action-btn" onClick={() => openCommunityAccessModal(group)}>访问限制</button>
                 <button className="action-btn" onClick={() => openCreateServerModal(group.id)}>+ 添加服务器</button>
                 <button className="action-btn action-btn-danger" onClick={() => _handleDeleteGroup(group)}>删除社区组</button>

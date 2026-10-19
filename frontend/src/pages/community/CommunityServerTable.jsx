@@ -1,5 +1,5 @@
 import { serverStatusMeta } from '../../shared/serverStatus.js';
-import { buildAuthSyncSummary, buildPlayerSummary } from './communityServerDetail.js';
+import { buildPlayerSummary } from './communityServerDetail.js';
 
 export function CommunityServerTable({ group, renderServerActions }) {
   return (
@@ -21,7 +21,6 @@ export function CommunityServerTable({ group, renderServerActions }) {
             group.servers.map((server) => {
               const status = serverStatusMeta(server.status);
               const { online: playerCount, max: maxPlayers } = buildPlayerSummary(server);
-              const auth = buildAuthSyncSummary(server);
               return (
                 <tr key={server.id}>
                   <td className="fw-600 mobile-card-primary" data-label="服务器名称">{server.name}</td>
@@ -30,11 +29,6 @@ export function CommunityServerTable({ group, renderServerActions }) {
                     <span className={`status-pill ${status.className}`}>
                       {status.label}
                     </span>
-                    {auth.lag ? (
-                      <span className="status-pill pill-warning" style={{ marginLeft: 6 }}>
-                        同步落后
-                      </span>
-                    ) : null}
                   </td>
                   <td data-label="当前人数">
                     {status.online ? `${playerCount} / ${maxPlayers}` : <span className="text-muted-light">0 / {maxPlayers}</span>}

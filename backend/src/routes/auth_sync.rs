@@ -170,6 +170,12 @@ pub(crate) async fn auth_snapshot(
         .await
         .map_err(invalid_request)?
         .ok_or_else(|| invalid_request(anyhow::anyhow!("服务器未分配游戏节点")))?;
+    // 先取版本，再构建快照：快照可能包含更新的数据（幂等重放无害），
+    // 但 ACK 的版本绝不能超过「构建时已读到的数据版本」，否则会跳过
+    // 构建期间新产生的事件，导致本地漏掉新封禁/白名单。
+    let latest = auth_event_service::latest_version_for_node(&ctx.db, node_id)
+        .await
+        .map_err(invalid_request)?;
     let snapshot =
         crate::services::access_snapshot_service::refresh_snapshot(&ctx.db, &ctx.access_snapshot)
             .await
@@ -180,10 +186,6 @@ pub(crate) async fn auth_snapshot(
         chrono::Utc::now(),
     )
     .map_err(invalid_request)?;
-
-    let latest = auth_event_service::latest_version_for_node(&ctx.db, node_id)
-        .await
-        .map_err(invalid_request)?;
     auth_event_service::mark_snapshot(&ctx.db, node_id)
         .await
         .map_err(invalid_request)?;

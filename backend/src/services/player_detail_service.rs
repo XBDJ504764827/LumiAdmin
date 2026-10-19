@@ -2510,10 +2510,20 @@ fn build_timeline(sources: TimelineSources<'_>) -> (Vec<TimelineEvent>, usize, b
 
     for item in sources.whitelists {
         let mut meta = vec![TimelineMeta::new("昵称", &item.nickname)];
-        if let Some(contact) = item.contact.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        if let Some(contact) = item
+            .contact
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
             meta.push(TimelineMeta::new("联系方式", contact));
         }
-        if let Some(reason) = item.reason.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        if let Some(reason) = item
+            .reason
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
             meta.push(TimelineMeta::new("申请理由", reason));
         }
         events.push(TimelineEvent {
@@ -2580,7 +2590,14 @@ fn build_timeline(sources: TimelineSources<'_>) -> (Vec<TimelineEvent>, usize, b
         // 全球封禁同步生成的本地封禁与 global_ban 事件重复，只保留其解封事件。
         if item.source != "global_ban" {
             let mut meta = vec![
-                TimelineMeta::new("封禁维度", if item.ban_type == "ip" { "账号 + IP" } else { "账号" }),
+                TimelineMeta::new(
+                    "封禁维度",
+                    if item.ban_type == "ip" {
+                        "账号 + IP"
+                    } else {
+                        "账号"
+                    },
+                ),
                 TimelineMeta::new("时长", duration_label(item.duration_minutes)),
             ];
             if let Some(expires_at) = item.expires_at {
@@ -2592,13 +2609,12 @@ fn build_timeline(sources: TimelineSources<'_>) -> (Vec<TimelineEvent>, usize, b
             if let Some(ip) = item.ip_address.as_deref().filter(|v| !v.is_empty()) {
                 meta.push(TimelineMeta::new("关联 IP", ip));
             }
-            let server_name = item
-                .server_name
-                .clone()
-                .or_else(|| match (item.server_port, item.server_name.as_deref()) {
+            let server_name = item.server_name.clone().or_else(|| {
+                match (item.server_port, item.server_name.as_deref()) {
                     (Some(port), _) => Some(format!("端口 {port}")),
                     _ => None,
-                });
+                }
+            });
             events.push(TimelineEvent {
                 event_type: "ban_created".to_string(),
                 category: "ban".to_string(),
@@ -2731,11 +2747,10 @@ fn build_timeline(sources: TimelineSources<'_>) -> (Vec<TimelineEvent>, usize, b
             status: Some("online".to_string()),
             source: Some("server_online_players".to_string()),
             related_id: Some(item.server_id),
-            server_name: Some(server_label(
-                Some(item.server_name.as_str()),
-                Some(item.server_port),
-            )
-            .unwrap_or_else(|| item.server_name.clone())),
+            server_name: Some(
+                server_label(Some(item.server_name.as_str()), Some(item.server_port))
+                    .unwrap_or_else(|| item.server_name.clone()),
+            ),
             meta: vec![
                 TimelineMeta::new("地图", &item.current_map),
                 TimelineMeta::new("Ping", item.ping.to_string()),
@@ -2781,11 +2796,10 @@ fn build_timeline(sources: TimelineSources<'_>) -> (Vec<TimelineEvent>, usize, b
             }),
             source: Some("player_server_sessions".to_string()),
             related_id: Some(item.id),
-            server_name: Some(server_label(
-                Some(item.server_name.as_str()),
-                Some(item.server_port),
-            )
-            .unwrap_or_else(|| item.server_name.clone())),
+            server_name: Some(
+                server_label(Some(item.server_name.as_str()), Some(item.server_port))
+                    .unwrap_or_else(|| item.server_name.clone()),
+            ),
             meta: start_meta,
         });
         if let Some(left_at) = item.left_at {
@@ -2800,30 +2814,23 @@ fn build_timeline(sources: TimelineSources<'_>) -> (Vec<TimelineEvent>, usize, b
                 event_type: "server_session_left".to_string(),
                 category: "session".to_string(),
                 title: "退出服务器".to_string(),
-                description: item
-                    .end_detail
-                    .clone()
-                    .or_else(|| item.end_reason.clone()),
+                description: item.end_detail.clone().or_else(|| item.end_reason.clone()),
                 occurred_at: left_at,
                 actor: item.player_name.clone(),
                 status: Some("inactive".to_string()),
                 source: item.end_reason.clone(),
                 related_id: Some(item.id),
-                server_name: Some(server_label(
-                    Some(item.server_name.as_str()),
-                    Some(item.server_port),
-                )
-                .unwrap_or_else(|| item.server_name.clone())),
+                server_name: Some(
+                    server_label(Some(item.server_name.as_str()), Some(item.server_port))
+                        .unwrap_or_else(|| item.server_name.clone()),
+                ),
                 meta: end_meta,
             });
         }
     }
 
     for item in sources.access_logs {
-        let mut meta = vec![TimelineMeta::new(
-            "判定方式",
-            &item.access_method,
-        )];
+        let mut meta = vec![TimelineMeta::new("判定方式", &item.access_method)];
         if let Some(rating) = item.rating {
             meta.push(TimelineMeta::new("Rating", rating.to_string()));
         }
@@ -2862,11 +2869,10 @@ fn build_timeline(sources: TimelineSources<'_>) -> (Vec<TimelineEvent>, usize, b
             status: Some(if item.allowed { "success" } else { "failed" }.to_string()),
             source: Some(item.access_method.clone()),
             related_id: Some(item.id),
-            server_name: Some(server_label(
-                Some(item.server_name.as_str()),
-                Some(item.server_port),
-            )
-            .unwrap_or_else(|| item.server_name.clone())),
+            server_name: Some(
+                server_label(Some(item.server_name.as_str()), Some(item.server_port))
+                    .unwrap_or_else(|| item.server_name.clone()),
+            ),
             meta,
         });
     }
@@ -2981,7 +2987,13 @@ fn build_timeline(sources: TimelineSources<'_>) -> (Vec<TimelineEvent>, usize, b
             related_id: Some(binding.id),
             server_name: None,
             meta: vec![
-                TimelineMeta::new("QQ 昵称", binding.qq_username.clone().unwrap_or_else(|| "-".to_string())),
+                TimelineMeta::new(
+                    "QQ 昵称",
+                    binding
+                        .qq_username
+                        .clone()
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
                 TimelineMeta::new("绑定方式", binding.qq_scene.clone()),
             ],
         });

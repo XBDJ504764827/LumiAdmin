@@ -100,7 +100,11 @@ pub fn ban_add_payload(
     })
 }
 
-pub fn ban_remove_payload(ban_id: Uuid, steam_id: &str, ip_address: Option<&str>) -> serde_json::Value {
+pub fn ban_remove_payload(
+    ban_id: Uuid,
+    steam_id: &str,
+    ip_address: Option<&str>,
+) -> serde_json::Value {
     serde_json::json!({
         "ban_id": ban_id,
         "steam_id": steam_id,
@@ -402,7 +406,13 @@ mod tests {
         result.unwrap();
     }
 
-    async fn insert_server(db: &Database, community_id: Uuid, name: &str, ip: &str, port: i32) -> Uuid {
+    async fn insert_server(
+        db: &Database,
+        community_id: Uuid,
+        name: &str,
+        ip: &str,
+        port: i32,
+    ) -> Uuid {
         let id = Uuid::new_v4();
         sqlx::query(
             r#"INSERT INTO servers (id, community_id, name, ip, port, rcon_password, report_token)
@@ -441,11 +451,17 @@ mod tests {
             assert_ne!(node_a, node_b);
 
             // 广播事件：两个节点都可见
-            let broadcast = insert_event(&db, None, None, "whitelist.add", serde_json::json!({}))
-                .await?;
+            let broadcast =
+                insert_event(&db, None, None, "whitelist.add", serde_json::json!({})).await?;
             // 仅节点 A 的事件
-            let only_a = insert_event(&db, None, Some(node_a), "server.config.update", serde_json::json!({}))
-                .await?;
+            let only_a = insert_event(
+                &db,
+                None,
+                Some(node_a),
+                "server.config.update",
+                serde_json::json!({}),
+            )
+            .await?;
 
             assert_eq!(latest_version_for_node(&db, node_a).await?, only_a);
             assert_eq!(latest_version_for_node(&db, node_b).await?, broadcast);

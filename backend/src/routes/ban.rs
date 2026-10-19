@@ -408,7 +408,11 @@ pub(crate) async fn delete_ban(
         None,
         None,
         "ban.remove",
-        crate::services::auth_event_service::ban_remove_payload(id, &deleted_steam_id, before.ip_address.as_deref()),
+        crate::services::auth_event_service::ban_remove_payload(
+            id,
+            &deleted_steam_id,
+            before.ip_address.as_deref(),
+        ),
     )
     .await
     {

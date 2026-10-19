@@ -114,7 +114,11 @@ pub(crate) async fn manual_unban_global_ban(
             None,
             None,
             "ban.remove",
-            crate::services::auth_event_service::ban_remove_payload(ban_id, &steam_id, ip_address.as_deref()),
+            crate::services::auth_event_service::ban_remove_payload(
+                ban_id,
+                &steam_id,
+                ip_address.as_deref(),
+            ),
         )
         .await
         {

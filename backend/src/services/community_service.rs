@@ -703,7 +703,8 @@ pub async fn update_server(
     };
 
     if changed {
-        let event_node_id = super::game_node_service::node_for_server_tx(&mut tx, server_id).await?;
+        let event_node_id =
+            super::game_node_service::node_for_server_tx(&mut tx, server_id).await?;
         super::auth_event_service::insert_event_tx(
             &mut tx,
             Some(server_id),

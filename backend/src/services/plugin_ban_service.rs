@@ -323,7 +323,11 @@ pub async fn unban_plugin_target(
         None,
         None,
         "ban.remove",
-        super::auth_event_service::ban_remove_payload(row.id, &row.steam_id, row.ip_address.as_deref()),
+        super::auth_event_service::ban_remove_payload(
+            row.id,
+            &row.steam_id,
+            row.ip_address.as_deref(),
+        ),
     )
     .await?;
     tx.commit().await?;

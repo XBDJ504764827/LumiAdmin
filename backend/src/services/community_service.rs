@@ -56,6 +56,17 @@ pub struct CommunityGroup {
     pub min_rating: i32,
     pub min_steam_level: i32,
     pub servers: Vec<ServerItem>,
+    /// 社区级授权同步汇总（同一台游戏机上的服共享节点状态）：
+    /// 前端只在社区组头部展示一次，不再逐服展示“同步落后”。
+    #[serde(default)]
+    pub auth_connection: String,
+    #[serde(default)]
+    pub auth_version: i64,
+    #[serde(default)]
+    pub auth_latest_version: i64,
+    #[serde(default)]
+    pub auth_pending_events: i64,
+    pub auth_last_sync_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -371,6 +382,11 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
                     min_rating: row.community_min_rating.unwrap_or(0),
                     min_steam_level: row.community_min_steam_level.unwrap_or(0),
                     servers: Vec::new(),
+                    auth_connection: "disconnected".to_string(),
+                    auth_version: 0,
+                    auth_latest_version: 0,
+                    auth_pending_events: 0,
+                    auth_last_sync_at: None,
                 });
                 index
             }
@@ -436,6 +452,43 @@ pub async fn list_groups(db: &Database) -> anyhow::Result<Vec<CommunityGroup>> {
         }
     }
 
+    // 社区级同步汇总：同一节点上的多个服共享同一状态，这里取「最落后」的节点
+    // 作为社区状态，避免逐服展示重复信息。
+    for group in &mut groups {
+        let mut pending = -1_i64;
+        let mut version = 0_i64;
+        let mut latest = 0_i64;
+        let mut connected = false;
+        let mut last_sync: Option<String> = None;
+        for server in &group.servers {
+            if server.auth_connection == "connected" {
+                connected = true;
+            }
+            // 以「最落后」的节点作为社区状态：版本/最新版本取该节点的值，
+            // 避免多节点社区展示出不对应的版本号。
+            if server.auth_pending_events > pending {
+                pending = server.auth_pending_events;
+                version = server.auth_version;
+                latest = server.auth_latest_version;
+            }
+            if let Some(value) = server.auth_last_sync_at.as_deref() {
+                if last_sync.as_deref().is_none_or(|current| value > current) {
+                    last_sync = Some(value.to_string());
+                }
+            }
+        }
+        let pending = pending.max(0);
+        group.auth_connection = if connected {
+            "connected".to_string()
+        } else {
+            "disconnected".to_string()
+        };
+        group.auth_version = version;
+        group.auth_latest_version = latest;
+        group.auth_pending_events = pending;
+        group.auth_last_sync_at = last_sync;
+    }
+
     Ok(groups)
 }
 
@@ -460,6 +513,11 @@ pub async fn create_group(
         min_rating: 0,
         min_steam_level: 0,
         servers: Vec::new(),
+        auth_connection: "disconnected".to_string(),
+        auth_version: 0,
+        auth_latest_version: 0,
+        auth_pending_events: 0,
+        auth_last_sync_at: None,
     })
 }
 

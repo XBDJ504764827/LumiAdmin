@@ -140,21 +140,32 @@ export function CommunityPage() {
     serverCount: 0,
     countdown: 0,
   });
-  const loadGroups = useCallback(async () => {
+  const loadGroups = useCallback(async (options = {}) => {
+    const silent = options.silent === true;
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       setError(null);
       const response = await api.servers(token);
       setGroups(response?.groups ?? []);
     } catch (loadError) {
       setError(loadError);
-      setGroups([]);
+      if (!silent) setGroups([]);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [token]);
 
   useEffect(() => { loadGroups(); }, [loadGroups]);
+
+  // 同步状态会自动追平，页面每 15s 静默刷新一次（切到后台时暂停）。
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        loadGroups({ silent: true });
+      }
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [loadGroups]);
 
   const [hostAgents, setHostAgents] = useState([]);
   useEffect(() => {

@@ -130,9 +130,25 @@ pub async fn list_public_bans(
 
     let count_sql = format!("SELECT COUNT(*) FROM ban_records {where_clause}");
     let data_sql = format!(
-        r#"SELECT id, COALESCE(player, steam_id) AS player, steam_id, server_name,
-                  duration_minutes, expires_at, reason, status, created_at
-           FROM ban_records {where_clause} ORDER BY created_at DESC
+        r#"SELECT br.id, COALESCE(br.player, br.steam_id) AS player, br.steam_id, br.server_name,
+                  br.duration_minutes, br.expires_at, br.reason, br.status, br.created_at,
+                  COALESCE(
+                    (
+                      SELECT COALESCE(NULLIF(u.remark, ''), u.display_name, u.username)
+                      FROM users u
+                      WHERE u.username = br.operator_name
+                         OR u.display_name = br.operator_name
+                         OR NULLIF(u.remark, '') = br.operator_name
+                      ORDER BY CASE
+                        WHEN u.username = br.operator_name THEN 0
+                        WHEN u.display_name = br.operator_name THEN 1
+                        ELSE 2
+                      END
+                      LIMIT 1
+                    ),
+                    br.operator_name
+                  ) AS operator_name
+           FROM ban_records br {where_clause} ORDER BY br.created_at DESC
            LIMIT ${param_idx} OFFSET ${}"#,
         param_idx + 1
     );

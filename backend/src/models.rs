@@ -67,6 +67,8 @@ pub struct PublicBanItem {
     pub expires_at: Option<DateTime<Utc>>,
     pub reason: String,
     pub status: String,
+    /// 执行封禁的管理员（优先显示后台显示名，外部来源保留原始操作人）
+    pub operator_name: String,
     pub created_at: DateTime<Utc>,
 }
 

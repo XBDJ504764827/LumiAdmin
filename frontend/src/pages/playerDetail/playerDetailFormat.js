@@ -55,13 +55,65 @@ const FAILURE_CODE_LABELS = {
 const CATEGORY_LABELS = {
   whitelist: '白名单',
   ban: '封禁',
+  global_ban: '全球封禁',
+  abnormal: '异常成绩',
   online: '在线',
-  session: '会话',
+  session: '服务器',
   access: '进服',
   admin: '后台操作',
   audit: '审计',
   evidence: '证据',
+  internal: '内部备注',
+  qq: 'QQ',
 };
+
+/// 时间线分类配色（前端按分类着色标记与标签）
+const CATEGORY_TONES = {
+  whitelist: 'info',
+  ban: 'danger',
+  global_ban: 'danger',
+  abnormal: 'warning',
+  online: 'success',
+  session: 'accent',
+  access: 'default',
+  admin: 'default',
+  audit: 'default',
+  evidence: 'info',
+  internal: 'warning',
+  qq: 'info',
+};
+
+/// 时间线分类对应的简短动作词（用于轴头图标）
+const CATEGORY_ICON_LABELS = {
+  whitelist: '单',
+  ban: '封',
+  global_ban: '球',
+  abnormal: '异',
+  online: '在',
+  session: '服',
+  access: '进',
+  admin: '后',
+  audit: '审',
+  evidence: '证',
+  internal: '注',
+  qq: 'Q',
+};
+
+export function categoryTone(category) {
+  return CATEGORY_TONES[category] || 'default';
+}
+
+export function categoryIconLabel(category) {
+  return CATEGORY_ICON_LABELS[category] || '事';
+}
+
+/// 事件 actor 字段的语义：玩家侧事件记录的是玩家名，后台事件记录的是操作人。
+export function actorFieldLabel(category) {
+  if (category === 'session' || category === 'access' || category === 'online' || category === 'abnormal') {
+    return '玩家名';
+  }
+  return '操作人';
+}
 
 export function stKind(status, category) {
   if (status === 'active' || category === 'ban') return status === 'inactive' ? 'offline' : 'danger';
@@ -129,7 +181,7 @@ export function categoryLabel(category) {
 }
 
 export function categoryKind(category, status) {
-  if (status === 'failed' || category === 'ban') return 'danger';
+  if (status === 'failed' || status === 'rejected' || category === 'ban' || category === 'global_ban') return 'danger';
   if (status === 'pending') return 'warning';
   if (status === 'success' || status === 'approved' || status === 'online') return 'success';
   if (category === 'session') return status === 'online' ? 'success' : 'offline';
@@ -178,7 +230,9 @@ export function candidateMeta(candidate) {
 }
 
 export function latestWhitelistContact(detail) {
-  return (detail?.whitelist || [])
-    .map((item) => item.contact)
-    .find((value) => value && String(value).trim()) || null;
+  return detail?.profile?.contact
+    || (detail?.whitelist || [])
+      .map((item) => item.contact)
+      .find((value) => value && String(value).trim())
+    || null;
 }

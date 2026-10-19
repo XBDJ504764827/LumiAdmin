@@ -97,7 +97,7 @@ pub(crate) async fn manual_unban_global_ban(
         return Err(AppError::forbidden());
     }
 
-    global_ban_service::manual_unban(
+    let removed = global_ban_service::manual_unban(
         &ctx.db,
         &ctx.active_ban_cache,
         kzt_ban_id,
@@ -105,6 +105,30 @@ pub(crate) async fn manual_unban_global_ban(
     )
     .await
     .map_err(AppError::bad_request)?;
+
+    // 补发 ban.remove 事件 + RCON 快车道：否则游戏服本地 SQLite 会残留该封禁，
+    // 只能等下一次快照才解除，玩家会「解封后仍进不去」。
+    if let Some((ban_id, steam_id, ip_address)) = removed {
+        if let Err(e) = crate::services::auth_event_service::insert_event(
+            &ctx.db,
+            None,
+            None,
+            "ban.remove",
+            crate::services::auth_event_service::ban_remove_payload(ban_id, &steam_id, ip_address.as_deref()),
+        )
+        .await
+        {
+            tracing::warn!(%e, ban_id = %ban_id, "全球封禁手动解封：ban.remove 事件写入失败");
+        } else {
+            crate::services::auth_apply_service::apply_unban_fast_path(
+                &ctx.db,
+                &ctx.config,
+                ban_id,
+                &steam_id,
+            )
+            .await;
+        }
+    }
 
     if let Err(e) = audit_service::write_audit_log_with_context(
         &ctx.db,

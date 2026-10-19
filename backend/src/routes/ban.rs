@@ -406,8 +406,9 @@ pub(crate) async fn delete_ban(
     if let Err(e) = crate::services::auth_event_service::insert_event(
         &ctx.db,
         None,
+        None,
         "ban.remove",
-        crate::services::auth_event_service::ban_remove_payload(id, &deleted_steam_id),
+        crate::services::auth_event_service::ban_remove_payload(id, &deleted_steam_id, before.ip_address.as_deref()),
     )
     .await
     {

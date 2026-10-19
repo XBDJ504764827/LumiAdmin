@@ -236,6 +236,7 @@ pub async fn create_plugin_ban(
     let version = super::auth_event_service::insert_event_tx(
         &mut tx,
         None,
+        None,
         "ban.add",
         super::auth_event_service::ban_add_payload(
             ban_id,
@@ -320,8 +321,9 @@ pub async fn unban_plugin_target(
     let version = super::auth_event_service::insert_event_tx(
         &mut tx,
         None,
+        None,
         "ban.remove",
-        super::auth_event_service::ban_remove_payload(row.id, &row.steam_id),
+        super::auth_event_service::ban_remove_payload(row.id, &row.steam_id, row.ip_address.as_deref()),
     )
     .await?;
     tx.commit().await?;

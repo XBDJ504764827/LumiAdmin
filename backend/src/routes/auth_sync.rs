@@ -12,7 +12,7 @@ use axum::{extract::State, http::StatusCode, Json};
 use serde::Deserialize;
 
 use crate::routes::{invalid_request, AppCtx};
-use crate::services::{auth_event_service, plugin_ban_service::ServerAuth};
+use crate::services::{auth_event_service, game_node_service, plugin_ban_service::ServerAuth};
 
 #[derive(Deserialize)]
 pub(crate) struct AuthEventsPollBody {
@@ -52,18 +52,23 @@ pub(crate) async fn poll_auth_events(
     let server = auth_server(&ctx.db, &body.report_token, body.port)
         .await
         .map_err(invalid_request)?;
+    // 同一台机器上的所有服归为同一节点：同步以节点为单位，一台机器只拉一次。
+    let node_id = game_node_service::resolve_or_assign_node(&ctx.db, server.id)
+        .await
+        .map_err(invalid_request)?
+        .ok_or_else(|| invalid_request(anyhow::anyhow!("服务器未分配游戏节点")))?;
     let after = body.after_version.max(0);
 
-    // 快路径：已有新事件直接返回。
-    let latest = auth_event_service::latest_version(&ctx.db)
+    // 快路径：已有新事件直接返回（版本口径为「该节点可见的最新版本」）。
+    let latest = auth_event_service::latest_version_for_node(&ctx.db, node_id)
         .await
         .map_err(invalid_request)?;
     if auth_event_service::needs_snapshot(latest, after)
-        || auth_event_service::is_offline_snapshot_required(&ctx.db, server.id, after, latest)
+        || auth_event_service::is_offline_snapshot_required(&ctx.db, node_id, after, latest)
             .await
             .map_err(invalid_request)?
     {
-        auth_event_service::mark_seen(&ctx.db, server.id, true)
+        auth_event_service::mark_seen(&ctx.db, node_id, true)
             .await
             .map_err(invalid_request)?;
         return Ok(Json(serde_json::json!({
@@ -72,11 +77,11 @@ pub(crate) async fn poll_auth_events(
             "snapshot_required": true,
         })));
     }
-    let events = auth_event_service::events_after(&ctx.db, server.id, after, 100)
+    let events = auth_event_service::events_after(&ctx.db, node_id, after, 100)
         .await
         .map_err(invalid_request)?;
     if !events.is_empty() {
-        auth_event_service::mark_seen(&ctx.db, server.id, true)
+        auth_event_service::mark_seen(&ctx.db, node_id, true)
             .await
             .map_err(invalid_request)?;
         return Ok(Json(serde_json::json!({
@@ -94,15 +99,15 @@ pub(crate) async fn poll_auth_events(
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(hold_secs);
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        let latest = auth_event_service::latest_version(&ctx.db)
+        let latest = auth_event_service::latest_version_for_node(&ctx.db, node_id)
             .await
             .map_err(invalid_request)?;
         if auth_event_service::needs_snapshot(latest, after)
-            || auth_event_service::is_offline_snapshot_required(&ctx.db, server.id, after, latest)
+            || auth_event_service::is_offline_snapshot_required(&ctx.db, node_id, after, latest)
                 .await
                 .map_err(invalid_request)?
         {
-            auth_event_service::mark_seen(&ctx.db, server.id, true)
+            auth_event_service::mark_seen(&ctx.db, node_id, true)
                 .await
                 .map_err(invalid_request)?;
             return Ok(Json(serde_json::json!({
@@ -111,11 +116,11 @@ pub(crate) async fn poll_auth_events(
                 "snapshot_required": true,
             })));
         }
-        let events = auth_event_service::events_after(&ctx.db, server.id, after, 100)
+        let events = auth_event_service::events_after(&ctx.db, node_id, after, 100)
             .await
             .map_err(invalid_request)?;
         if !events.is_empty() || tokio::time::Instant::now() >= deadline {
-            auth_event_service::mark_seen(&ctx.db, server.id, true)
+            auth_event_service::mark_seen(&ctx.db, node_id, true)
                 .await
                 .map_err(invalid_request)?;
             return Ok(Json(serde_json::json!({
@@ -134,10 +139,14 @@ pub(crate) async fn ack_auth_version(
     let server = auth_server(&ctx.db, &body.report_token, body.port)
         .await
         .map_err(invalid_request)?;
+    let node_id = game_node_service::resolve_or_assign_node(&ctx.db, server.id)
+        .await
+        .map_err(invalid_request)?
+        .ok_or_else(|| invalid_request(anyhow::anyhow!("服务器未分配游戏节点")))?;
     if body.version < 0 {
         return Err(invalid_request(anyhow::anyhow!("version 非法")));
     }
-    let (acked, latest) = auth_event_service::ack_version(&ctx.db, server.id, body.version)
+    let (acked, latest) = auth_event_service::ack_version(&ctx.db, node_id, body.version)
         .await
         .map_err(invalid_request)?;
     Ok(Json(serde_json::json!({
@@ -157,38 +166,31 @@ pub(crate) async fn auth_snapshot(
         .await
         .map_err(invalid_request)?;
 
+    let node_id = game_node_service::resolve_or_assign_node(&ctx.db, server.id)
+        .await
+        .map_err(invalid_request)?
+        .ok_or_else(|| invalid_request(anyhow::anyhow!("服务器未分配游戏节点")))?;
     let snapshot =
         crate::services::access_snapshot_service::refresh_snapshot(&ctx.db, &ctx.access_snapshot)
             .await
             .map_err(invalid_request)?;
-    let item = crate::services::access_snapshot_service::snapshot_for_plugin(
+    let item = crate::services::access_snapshot_service::snapshot_for_node(
         &snapshot,
-        &body.report_token,
-        body.port,
+        node_id,
         chrono::Utc::now(),
     )
     .map_err(invalid_request)?;
 
-    let latest = auth_event_service::latest_version(&ctx.db)
+    let latest = auth_event_service::latest_version_for_node(&ctx.db, node_id)
         .await
         .map_err(invalid_request)?;
-    auth_event_service::mark_seen(&ctx.db, server.id, true)
+    auth_event_service::mark_snapshot(&ctx.db, node_id)
         .await
         .map_err(invalid_request)?;
-    // 标记一次 snapshot 同步时间（UI 的 LastSync 来源之一）。
-    let _ = sqlx::query(
-        r#"INSERT INTO auth_server_state (server_id, connection_status, last_seen_at, last_snapshot_at, updated_at)
-           VALUES ($1, 'connected', now(), now(), now())
-           ON CONFLICT (server_id) DO UPDATE SET
-             connection_status = 'connected', last_seen_at = now(),
-             last_snapshot_at = now(), updated_at = now()"#,
-    )
-    .bind(server.id)
-    .execute(&ctx.db.pool)
-    .await;
 
     Ok(Json(serde_json::json!({
         "server_id": server.id,
+        "node_id": node_id,
         "latest_version": latest,
         "item": item,
     })))

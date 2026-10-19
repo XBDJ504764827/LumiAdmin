@@ -36,6 +36,10 @@ pub struct AccessSnapshot {
     /// 仅存 IP 字符串，不含账号信息，规模可控（去重后通常几百条）。
     #[serde(default)]
     pub risk_ips: Vec<String>,
+    /// 构建快照前各节点已提交的最新授权事件版本。
+    /// 插件据此拒绝「比已应用事件更旧」的快照，避免旧快照把刚解封的玩家重新封回去。
+    #[serde(default)]
+    pub node_versions: std::collections::HashMap<Uuid, i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +114,9 @@ pub async fn refresh_snapshot(
 ) -> anyhow::Result<AccessSnapshot> {
     let now = Utc::now();
     let include_profiles = store.include_profiles();
+    // 先记录各节点版本，再读业务表：快照数据可能包含更新的事件（幂等），
+    // 但版本号一定不高于「读表前的已提交版本」，插件可据此安全拒绝旧快照。
+    let node_versions = load_node_versions(db).await?;
     let (servers, bans, whitelist, access_profiles, risk_ips) = tokio::try_join!(
         load_snapshot_servers(db),
         load_snapshot_bans(db),
@@ -126,6 +133,7 @@ pub async fn refresh_snapshot(
         whitelist,
         access_profiles,
         risk_ips,
+        node_versions,
     });
     store.write_snapshot(&snapshot).await?;
     info!(version = %snapshot.version, "access snapshot refreshed");
@@ -173,6 +181,27 @@ pub async fn shutdown_flush(db: &Database, store: &SnapshotStore) {
             Err(error) => warn!(%error, "读取现有访问快照失败"),
         }
     }
+}
+
+/// 各节点的最新可见授权事件版本（广播事件 + 该节点事件）。
+/// 快照构建前调用一次，随快照下发，供插件做单调性判断。
+async fn load_node_versions(db: &Database) -> anyhow::Result<std::collections::HashMap<Uuid, i64>> {
+    let rows: Vec<(Uuid, i64)> = sqlx::query_as(
+        r#"WITH broadcast AS (
+             SELECT COALESCE(MAX(version), 0) AS v FROM auth_events WHERE node_id IS NULL
+           ),
+           per_node AS (
+             SELECT node_id, MAX(version) AS v
+             FROM auth_events WHERE node_id IS NOT NULL GROUP BY node_id
+           )
+           SELECT g.id, GREATEST(b.v, COALESCE(n.v, 0))
+           FROM game_nodes g
+           CROSS JOIN broadcast b
+           LEFT JOIN per_node n ON n.node_id = g.id"#,
+    )
+    .fetch_all(&db.pool)
+    .await?;
+    Ok(rows.into_iter().collect())
 }
 
 async fn load_snapshot_servers(db: &Database) -> anyhow::Result<Vec<SnapshotServer>> {
@@ -492,6 +521,8 @@ pub struct PluginAccessSnapshot {
     pub expires_at: DateTime<Utc>,
     pub generated_at_unix: i64,
     pub expires_at_unix: i64,
+    /// 该服务器所属节点在构建快照时的事件版本（插件单调性判断）
+    pub latest_version: i64,
     pub server: PluginSnapshotServer,
     pub bans: Vec<SnapshotBan>,
     pub whitelist: Vec<SnapshotWhitelistEntry>,
@@ -541,6 +572,10 @@ pub fn snapshot_for_plugin(
         expires_at: snapshot.expires_at,
         generated_at_unix: snapshot.generated_at.timestamp(),
         expires_at_unix: snapshot.expires_at.timestamp(),
+        latest_version: server
+            .node_id
+            .and_then(|node_id| snapshot.node_versions.get(&node_id).copied())
+            .unwrap_or(0),
         server: PluginSnapshotServer {
             port: server.port,
             access_restriction_enabled: eff_restriction,
@@ -590,6 +625,7 @@ pub fn snapshot_for_node(
         expires_at: snapshot.expires_at,
         generated_at_unix: snapshot.generated_at.timestamp(),
         expires_at_unix: snapshot.expires_at.timestamp(),
+        latest_version: snapshot.node_versions.get(&node_id).copied().unwrap_or(0),
         node_id,
         servers,
         bans: snapshot.bans.clone(),
@@ -606,6 +642,8 @@ pub struct PluginNodeSnapshot {
     pub expires_at: DateTime<Utc>,
     pub generated_at_unix: i64,
     pub expires_at_unix: i64,
+    /// 该节点在构建快照时的事件版本（插件单调性判断）
+    pub latest_version: i64,
     pub node_id: Uuid,
     pub servers: Vec<PluginSnapshotServer>,
     pub bans: Vec<SnapshotBan>,
@@ -819,6 +857,7 @@ mod tests {
             }],
             access_profiles: Vec::new(),
             risk_ips: Vec::new(),
+            node_versions: std::collections::HashMap::new(),
         }
     }
 

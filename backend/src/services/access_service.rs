@@ -486,36 +486,92 @@ pub(crate) async fn fetch_player_profile_bounded(
             )));
         }
     }
-    let slot = timeout(
-        StdDuration::from_millis(500),
+
+    // 全局限流闸：并发上限 + 每分钟配额，避免集中重连打爆外部 API。
+    // 点查等待 2 秒；拿不到配额时返回 None，由插件重试或下次进服再拉。
+    let Some(_permit) = timeout(
+        StdDuration::from_secs(2),
         acquire_profile_fetch_slot(&steam_id64),
     )
     .await
     .ok()
-    .flatten();
-    let Some(_permit) = slot else {
+    .flatten() else {
+        warn!(steam_id64, "首次资料点查未拿到外部拉取配额");
         return Ok(None);
     };
-    let (steam_level, rating) = futures::join!(
-        timeout(
-            StdDuration::from_secs(2),
-            fetch_steam_level(config, &steam_id64)
-        ),
-        timeout(
-            StdDuration::from_secs(2),
-            fetch_best_gokz_rating(&steam_id64)
-        ),
-    );
-    let (Some(steam_level), Some(rating)) = (steam_level.ok().flatten(), rating.ok().flatten())
-    else {
-        return Ok(None);
-    };
-    let profile = PlayerAccessProfile {
-        rating,
-        steam_level,
-    };
-    write_cache(db, &steam_id64, &profile).await?;
-    Ok(Some((profile, Utc::now() + Duration::hours(24))))
+
+    // 首次进服点查：并发获取 Steam 等级与 Rating，最多重试 3 轮。
+    // 两者都必须拿到（Rating 已知为 0 也算拿到）才写缓存并返回；
+    // 任一轮拿到后就不再重复请求该维度。
+    let mut steam_level: Option<i32> = None;
+    let mut rating: Option<i32> = None;
+    for attempt in 0..3u32 {
+        let need_level = steam_level.is_none();
+        let need_rating = rating.is_none();
+        if !need_level && !need_rating {
+            break;
+        }
+
+        let (level_result, rating_result) = tokio::join!(
+            async {
+                if !need_level {
+                    return steam_level;
+                }
+                timeout(
+                    StdDuration::from_secs(5),
+                    fetch_steam_level(config, &steam_id64),
+                )
+                .await
+                .ok()
+                .flatten()
+            },
+            async {
+                if !need_rating {
+                    return rating;
+                }
+                // Some(0) 表示四个 scope 都成功返回但该玩家没有 rating（已知为 0），
+                // None 表示接口失败/超时（未知，需要重试）。
+                timeout(
+                    StdDuration::from_secs(5),
+                    fetch_best_gokz_rating_status(&steam_id64),
+                )
+                .await
+                .ok()
+                .and_then(|status| status.rating)
+            },
+        );
+
+        if level_result.is_some() {
+            steam_level = level_result;
+        }
+        if rating_result.is_some() {
+            rating = rating_result;
+        }
+
+        if let (Some(rating), Some(steam_level)) = (rating, steam_level) {
+            let profile = PlayerAccessProfile {
+                rating,
+                steam_level,
+            };
+            let expires_at = Utc::now() + Duration::hours(24);
+            write_cache(db, &steam_id64, &profile).await?;
+            return Ok(Some((profile, expires_at)));
+        }
+
+        if attempt < 2 {
+            tokio::time::sleep(StdDuration::from_millis(700)).await;
+        } else {
+            warn!(
+                steam_id64,
+                attempt,
+                rating_found = rating.is_some(),
+                steam_level_found = steam_level.is_some(),
+                "玩家准入资料 3 次点查后仍不完整"
+            );
+        }
+    }
+
+    Ok(None)
 }
 
 /// 异步刷新玩家准入资料（rating + Steam 等级）并写入 `player_access_cache`。
@@ -770,7 +826,13 @@ async fn fetch_player_profile(
     }
 }
 
-async fn fetch_best_gokz_rating(steam_id64: &str) -> Option<i32> {
+struct GokzRatingStatus {
+    /// Some(rating)：至少一个 scope 有 rating；Some(0)：四个 scope 都成功但都无 rating（已知为 0）；
+    /// None：存在接口失败/超时（未知，需要重试）。
+    rating: Option<i32>,
+}
+
+async fn fetch_best_gokz_rating_status(steam_id64: &str) -> GokzRatingStatus {
     let negative_cache = GOKZ_NEGATIVE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if negative_cache
         .lock()
@@ -778,30 +840,59 @@ async fn fetch_best_gokz_rating(steam_id64: &str) -> Option<i32> {
         .and_then(|cache| cache.get(steam_id64).copied())
         .is_some_and(|at| at.elapsed() < StdDuration::from_secs(60))
     {
-        return None;
+        // 60 秒内已确认“四个 scope 都成功且没有 rating”，视为已知 0，避免重试风暴。
+        return GokzRatingStatus { rating: Some(0) };
     }
-    let ratings = join_all(
+
+    let results = join_all(
         GOKZ_RATING_SCOPES
             .iter()
-            .map(|scope| fetch_gokz_scope_rating(steam_id64, scope)),
+            .map(|scope| fetch_gokz_scope_rating_status(steam_id64, scope)),
     )
     .await;
 
-    let best_rating = best_gokz_rating(ratings);
-    if best_rating.is_none() {
+    let mut best: Option<i32> = None;
+    let mut all_succeeded = true;
+    for (rating, succeeded) in results {
+        all_succeeded &= succeeded;
+        if let Some(value) = rating {
+            best = Some(best.map_or(value, |current| current.max(value)));
+        }
+    }
+
+    if let Some(rating) = best {
+        if let Ok(mut cache) = negative_cache.lock() {
+            cache.remove(steam_id64);
+        }
+        return GokzRatingStatus {
+            rating: Some(rating),
+        };
+    }
+
+    if all_succeeded {
         if let Ok(mut cache) = negative_cache.lock() {
             cache.retain(|_, at| at.elapsed() < StdDuration::from_secs(60));
             cache.insert(steam_id64.to_string(), std::time::Instant::now());
         }
         warn!(
             steam_id64,
-            "GOKZ 四个模式 rating 查询全部失败，进入限制将放行"
+            "GOKZ 四个模式均成功返回但该玩家没有 rating，按 0 处理"
         );
+        return GokzRatingStatus { rating: Some(0) };
     }
-    best_rating
+
+    warn!(
+        steam_id64,
+        "GOKZ 四个模式 rating 查询存在接口失败，保留未知状态等待重试"
+    );
+    GokzRatingStatus { rating: None }
 }
 
-async fn fetch_gokz_scope_rating(steam_id64: &str, scope: &str) -> Option<i32> {
+async fn fetch_best_gokz_rating(steam_id64: &str) -> Option<i32> {
+    fetch_best_gokz_rating_status(steam_id64).await.rating
+}
+
+async fn fetch_gokz_scope_rating_status(steam_id64: &str, scope: &str) -> (Option<i32>, bool) {
     let url = format!("https://api.gokz.top/v1/leaderboards/players/{steam_id64}");
     match http_client::http_client()
         .get(&url)
@@ -811,24 +902,25 @@ async fn fetch_gokz_scope_rating(steam_id64: &str, scope: &str) -> Option<i32> {
     {
         Ok(response) if response.status().is_success() => {
             match response.json::<GokzPlayerResponse>().await {
-                Ok(body) => body.rating.map(|rating| rating.trunc() as i32),
+                Ok(body) => (body.rating.map(|rating| rating.trunc() as i32), true),
                 Err(error) => {
                     warn!(steam_id64, scope, error = %error, "GOKZ scoped 玩家资料解析失败");
-                    None
+                    (None, false)
                 }
             }
         }
         Ok(response) => {
             warn!(steam_id64, scope, status = %response.status(), "GOKZ scoped 玩家资料请求失败");
-            None
+            (None, false)
         }
         Err(error) => {
             warn!(steam_id64, scope, error = %error, "GOKZ scoped 玩家资料请求异常");
-            None
+            (None, false)
         }
     }
 }
 
+#[allow(dead_code)]
 fn best_gokz_rating(ratings: impl IntoIterator<Item = Option<i32>>) -> Option<i32> {
     ratings.into_iter().flatten().max()
 }

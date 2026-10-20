@@ -12,6 +12,7 @@ import { Pagination } from '../../shared/Pagination.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { BanApiModal } from './BanApiModal.jsx';
 import { BanDetailModal } from './BanDetailModal.jsx';
+import { UnbanScopeModal } from './UnbanScopeModal.jsx';
 import { BanFormModal } from './BanFormModal.jsx';
 import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 
@@ -48,6 +49,8 @@ export function BanPage() {
 
   // 详情弹窗状态
   const [detailItem, setDetailItem] = useState(null);
+  const [unbanModal, setUnbanModal] = useState({ open: false, item: null });
+  const [unbanActing, setUnbanActing] = useState(false);
 
   // API 弹窗状态
   const [apiModalOpen, setApiModalOpen] = useState(false);
@@ -103,6 +106,11 @@ export function BanPage() {
   }
 
   async function handleUnban(item) {
+    // IP 封禁需要选择解封范围；Steam 账号封禁保持原有一键解封。
+    if (item.ban_type === 'ip') {
+      setUnbanModal({ open: true, item });
+      return;
+    }
     const confirmed = await confirm({
       title: '解封确认',
       message: `确定要解封玩家 ${item.player || item.steam_id} 吗？解封后该玩家将能够正常进入服务器。`,
@@ -110,11 +118,32 @@ export function BanPage() {
     });
     if (!confirmed) return;
     try {
-      await api.unban(token, item.id);
+      await api.unban(token, item.id, 'account_ip');
       refetch();
       toast({ title: '解封成功', message: `${item.player || item.steam_id} 已解封。` });
     } catch (requestError) {
       toast({ title: '解封失败', message: requestError.message, tone: 'danger' });
+    }
+  }
+
+  async function confirmUnbanScope(scope) {
+    const item = unbanModal.item;
+    if (!item || unbanActing) return;
+    setUnbanActing(true);
+    try {
+      await api.unban(token, item.id, scope);
+      setUnbanModal({ open: false, item: null });
+      refetch();
+      toast({
+        title: scope === 'account' ? '已仅解封该账号' : '已解封账号与账号下 IP',
+        message: scope === 'account'
+          ? `${item.player || item.steam_id} 可正常进入；该 IP 仍对其他账号生效。`
+          : `${item.player || item.steam_id} 及其使用过的 IP 已解封。`,
+      });
+    } catch (requestError) {
+      toast({ title: '解封失败', message: requestError.message, tone: 'danger' });
+    } finally {
+      setUnbanActing(false);
     }
   }
 
@@ -198,7 +227,10 @@ export function BanPage() {
                       <div>{formatBanDuration(x.duration_minutes)}</div>
                       <div style={{ color: 'var(--text3)', fontSize: 12 }}>{formatExpiresAt(x.expires_at)}</div>
                     </td>
-                    <td data-label="状态"><span className={`status-pill ${x.status === 'active' ? 'pill-danger' : 'pill-offline'}`}>{x.status === 'active' ? '生效中' : '已失效'}</span></td>
+                    <td data-label="状态">
+                      <span className={`status-pill ${x.status === 'active' ? 'pill-danger' : 'pill-offline'}`}>{x.status === 'active' ? '生效中' : '已失效'}</span>
+                      {x.account_unbanned ? <span className="status-pill pill-warning" style={{ marginLeft: 6 }}>账号已解封 / IP 仍封禁</span> : null}
+                    </td>
                     <td className="text-muted-light" data-label="封禁时间">{formatChinaDateTime(x.created_at)}</td>
                     <td className="text-right mobile-card-actions" data-label="操作">
                       <div className="action-btn-group">
@@ -240,6 +272,14 @@ export function BanPage() {
       <BanApiModal
         open={apiModalOpen}
         onClose={() => setApiModalOpen(false)}
+      />
+
+      <UnbanScopeModal
+        open={unbanModal.open}
+        item={unbanModal.item}
+        acting={unbanActing}
+        onClose={() => setUnbanModal({ open: false, item: null })}
+        onConfirm={confirmUnbanScope}
       />
 
       {dialog}

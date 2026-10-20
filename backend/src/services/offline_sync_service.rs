@@ -272,7 +272,7 @@ async fn apply_offline_unban(
 
     // 查找有效封禁（含操作人信息用于权限校验）
     let original_row: Option<super::ban_service::BanRow> = sqlx::query_as(
-        r#"SELECT id, player, steam_id, ip_address, server_name, ban_type,
+        r#"SELECT id, player, steam_id, ip_address, server_name, ban_type, account_unbanned,
                   duration_minutes, expires_at, reason, status, operator_name, source,
                   server_id, server_port, removed_reason, removed_by, removed_at, created_at
            FROM ban_records

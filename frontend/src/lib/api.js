@@ -83,7 +83,7 @@ export const api = {
   createBan: (token, body) => request('/api/bans', { method: 'POST', headers: withAuth(token), body: JSON.stringify(body) }),
   updateBan: (token, id, body) => request(`/api/bans/${id}`, { method: 'PUT', headers: withAuth(token), body: JSON.stringify(body) }),
   deleteBan: (token, id) => request(`/api/bans/${id}`, { method: 'DELETE', headers: withAuth(token) }),
-  unban: (token, id) => request(`/api/bans/${id}/unban`, { method: 'POST', headers: withAuth(token), body: JSON.stringify({}) }),
+  unban: (token, id, scope = 'account_ip') => request(`/api/bans/${id}/unban`, { method: 'POST', headers: withAuth(token), body: JSON.stringify({ scope }) }),
   syncExternalBan: (token, id) => request(`/api/bans/${id}/sync-external`, { method: 'POST', headers: withAuth(token), body: JSON.stringify({}) }),
   syncExternalBanToTarget: (token, banId, targetId) => request(`/api/bans/${banId}/sync-external/${targetId}`, { method: 'POST', headers: withAuth(token), body: JSON.stringify({}) }),
   externalBanApiSyncs: (token, params = {}) => request(`/api/external-ban-api/syncs${buildQueryString(params)}`, { headers: withAuth(token) }),

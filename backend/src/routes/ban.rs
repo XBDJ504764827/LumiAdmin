@@ -13,6 +13,13 @@ use crate::services::{
     permission_service, plugin_ban_service, r2_storage,
 };
 
+#[derive(Deserialize, Default)]
+pub(crate) struct UnbanBody {
+    /// account = 仅解封该账号（保留 IP 封禁）；account_ip = 账号与该账号使用过的 IP 全部解封
+    #[serde(default)]
+    pub scope: Option<String>,
+}
+
 #[derive(Deserialize)]
 pub(crate) struct BanBody {
     pub player: Option<String>,
@@ -423,6 +430,7 @@ pub(crate) async fn delete_ban(
             &ctx.config,
             id,
             &deleted_steam_id,
+            before.ip_address.as_deref(),
         )
         .await;
     }
@@ -485,6 +493,7 @@ pub(crate) async fn unban_ban(
     State(ctx): State<AppCtx>,
     headers: HeaderMap,
     Path(id): Path<Uuid>,
+    body: Option<Json<UnbanBody>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let actor = current_operator(&ctx, &headers).await?;
     let record = ban_service::find_ban(&ctx.db, id)
@@ -494,16 +503,36 @@ pub(crate) async fn unban_ban(
         return Err(forbidden());
     }
 
-    let item = ban_service::unban(&ctx.db, id, &actor.display_name)
+    let scope = body
+        .as_ref()
+        .and_then(|Json(payload)| payload.scope.clone())
+        .unwrap_or_else(|| "account_ip".to_string());
+    if !matches!(scope.as_str(), "account" | "account_ip") {
+        return Err(invalid_request(anyhow::anyhow!("解封范围无效")));
+    }
+
+    let item = ban_service::unban_scoped(&ctx.db, id, &actor.display_name, &scope)
         .await
         .map_err(invalid_request)?;
-    crate::services::auth_apply_service::apply_unban_fast_path(
-        &ctx.db,
-        &ctx.config,
-        item.id,
-        &item.steam_id,
-    )
-    .await;
+
+    if scope == "account" && item.ban_type == "ip" {
+        crate::services::auth_apply_service::apply_account_unban_fast_path(
+            &ctx.db,
+            &ctx.config,
+            item.id,
+            &item.steam_id,
+        )
+        .await;
+    } else {
+        crate::services::auth_apply_service::apply_unban_fast_path(
+            &ctx.db,
+            &ctx.config,
+            item.id,
+            &item.steam_id,
+            item.ip_address.as_deref(),
+        )
+        .await;
+    }
     let log_target = format!(
         "{} ({}) | 类型: {}",
         item.player.as_deref().unwrap_or("未知"),
@@ -531,9 +560,18 @@ pub(crate) async fn unban_ban(
         &actor,
         "unban",
         &item,
-        format!("后台解封，ID: {}", item.id),
+        format!(
+            "后台解封（{}），ID: {}",
+            if scope == "account" {
+                "仅解封账号"
+            } else {
+                "账号与账号下 IP 全部解封"
+            },
+            item.id
+        ),
         serde_json::json!({
             "action": "unban",
+            "scope": scope,
             "ban_id": item.id,
             "player": item.player,
             "steam_id": item.steam_id,

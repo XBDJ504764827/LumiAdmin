@@ -2055,7 +2055,7 @@ async fn restore_whitelist_with_authenticated_operator() {
 }
 
 #[tokio::test]
-async fn admin_can_create_manual_ip_ban_with_missing_player_and_ip() {
+async fn admin_can_create_manual_ip_ban_with_missing_player() {
     with_test_app(async |db, config| {
             let token = create_session_for_user(&db, "11111111-1111-1111-1111-111111111111").await?;
             let app = test_app(config, db.clone());
@@ -2068,7 +2068,7 @@ async fn admin_can_create_manual_ip_ban_with_missing_player_and_ip() {
                     "player": null,
                     "steam_id": "76561198000000000",
                     "ban_type": "ip",
-                    "ip_address": null,
+                    "ip_address": "203.0.113.10",
                     "reason": "重复违规"
                 }).to_string()))
                 .unwrap();
@@ -2081,7 +2081,7 @@ async fn admin_can_create_manual_ip_ban_with_missing_player_and_ip() {
             assert!(payload["item"]["player"].is_null());
             assert_eq!(payload["item"]["steam_id"], "76561198000000000");
             assert_eq!(payload["item"]["ban_type"], "ip");
-            assert!(payload["item"]["ip_address"].is_null());
+            assert_eq!(payload["item"]["ip_address"], "203.0.113.10");
             assert_eq!(payload["item"]["reason"], "重复违规");
             assert_eq!(payload["item"]["duration_minutes"], 0);
             assert!(payload["item"]["expires_at"].is_null());
@@ -2099,7 +2099,7 @@ async fn admin_can_create_manual_ip_ban_with_missing_player_and_ip() {
             assert_eq!(saved.0, None);
             assert_eq!(saved.1, "76561198000000000");
             assert_eq!(saved.2, "ip");
-            assert_eq!(saved.3, None);
+            assert_eq!(saved.3.as_deref(), Some("203.0.113.10"));
             assert_eq!(saved.4, "重复违规");
             assert_eq!(saved.5, 0);
             assert!(saved.6.is_none());
@@ -3616,10 +3616,12 @@ async fn auth_events_poll_ack_snapshot_flow() {
             "ban.add",
             crate::services::auth_event_service::ban_add_payload(
                 ban_id,
+                "steam",
                 "76561198000000001",
                 None,
                 "作弊",
                 None,
+                false,
             ),
         )
         .await

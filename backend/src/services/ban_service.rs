@@ -12,6 +12,8 @@ pub struct BanItem {
     pub ip_address: Option<String>,
     pub server_name: Option<String>,
     pub ban_type: String,
+    /// 仅解封账号（IP 封禁仍生效，该账号豁免）
+    pub account_unbanned: bool,
     pub duration_minutes: i32,
     pub expires_at: Option<String>,
     pub reason: String,
@@ -33,6 +35,7 @@ pub struct BanListItem {
     pub steam_id: String,
     pub ip_address: Option<String>,
     pub ban_type: String,
+    pub account_unbanned: bool,
     pub duration_minutes: i32,
     pub expires_at: Option<String>,
     pub reason: String,
@@ -57,6 +60,7 @@ pub(crate) struct BanRow {
     pub ip_address: Option<String>,
     pub server_name: Option<String>,
     pub ban_type: String,
+    pub account_unbanned: bool,
     pub duration_minutes: i32,
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub reason: String,
@@ -85,6 +89,7 @@ struct BanListRow {
     pub steam_id: String,
     pub ip_address: Option<String>,
     pub ban_type: String,
+    pub account_unbanned: bool,
     pub duration_minutes: i32,
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub reason: String,
@@ -117,10 +122,10 @@ pub struct UpdateBanInput {
     pub expires_at: Option<String>,
 }
 
-const BAN_DISPLAY_FIELDS: &str = "br.id, br.player, br.steam_id, br.ip_address, br.server_name, br.ban_type, br.duration_minutes, br.expires_at, br.reason, br.status, COALESCE(operator_user.display_name, br.operator_name) AS operator_name, br.source, br.server_id, br.server_port, br.removed_reason, COALESCE(removed_user.display_name, br.removed_by) AS removed_by, br.removed_at, br.created_at";
+const BAN_DISPLAY_FIELDS: &str = "br.id, br.player, br.steam_id, br.ip_address, br.server_name, br.ban_type, br.account_unbanned, br.duration_minutes, br.expires_at, br.reason, br.status, COALESCE(operator_user.display_name, br.operator_name) AS operator_name, br.source, br.server_id, br.server_port, br.removed_reason, COALESCE(removed_user.display_name, br.removed_by) AS removed_by, br.removed_at, br.created_at";
 // 列表查询不再使用逐行 LATERAL JOIN 解析 operator_name，改为取原始值后在应用层批量解析。
 // 详见 services::display_name::resolve_display_names。
-const BAN_LIST_DISPLAY_FIELDS: &str = "br.id, br.player, br.steam_id, br.ip_address, br.ban_type, br.duration_minutes, br.expires_at, br.reason, br.status, br.operator_name, br.source, br.created_at";
+const BAN_LIST_DISPLAY_FIELDS: &str = "br.id, br.player, br.steam_id, br.ip_address, br.ban_type, br.account_unbanned, br.duration_minutes, br.expires_at, br.reason, br.status, br.operator_name, br.source, br.created_at";
 // 使用共享的 SQL 片段（仅单条详情查询仍在使用 LATERAL；列表查询已改为应用层解析）
 use crate::sql_fragments::{
     OPERATOR_DISPLAY_JOIN as BAN_OPERATOR_DISPLAY_JOIN,
@@ -135,6 +140,7 @@ pub(crate) fn row_to_item(row: BanRow) -> BanItem {
         ip_address: row.ip_address,
         server_name: row.server_name,
         ban_type: row.ban_type,
+        account_unbanned: row.account_unbanned,
         duration_minutes: row.duration_minutes,
         expires_at: row.expires_at.map(|value| value.to_rfc3339()),
         reason: row.reason,
@@ -157,6 +163,7 @@ fn list_row_to_item(row: BanListRow) -> BanListItem {
         steam_id: row.steam_id,
         ip_address: row.ip_address,
         ban_type: row.ban_type,
+        account_unbanned: row.account_unbanned,
         duration_minutes: row.duration_minutes,
         expires_at: row.expires_at.map(|value| value.to_rfc3339()),
         reason: row.reason,
@@ -286,6 +293,16 @@ pub async fn create_ban(
     anyhow::ensure!(!steam_id_input.is_empty(), "SteamID64 不能为空");
     anyhow::ensure!(matches!(ban_type, "steam" | "ip"), "封禁属性无效");
     anyhow::ensure!(!reason.is_empty(), "封禁理由不能为空");
+    if ban_type == "ip" {
+        anyhow::ensure!(
+            input
+                .ip_address
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty()),
+            "IP 封禁需要填写 IP 地址"
+        );
+    }
 
     let steam_id = SteamResolver::new(config)
         .resolve(steam_id_input)
@@ -293,11 +310,14 @@ pub async fn create_ban(
         .steamid64;
 
     // 检查是否已有活跃封禁
-    let existing: Option<(Uuid,)> =
-        sqlx::query_as(r#"SELECT id FROM ban_records WHERE steam_id = $1 AND status = 'active'"#)
-            .bind(&steam_id)
-            .fetch_optional(&db.pool)
-            .await?;
+    let existing: Option<(Uuid,)> = sqlx::query_as(
+        r#"SELECT id FROM ban_records
+           WHERE steam_id = $1 AND status = 'active'
+             AND NOT (ban_type = 'ip' AND account_unbanned)"#,
+    )
+    .bind(&steam_id)
+    .fetch_optional(&db.pool)
+    .await?;
     if existing.is_some() {
         anyhow::bail!("该玩家已有活跃封禁记录，请先解封后再重新封禁");
     }
@@ -327,7 +347,7 @@ pub async fn create_ban(
                server_id, server_port
            )
            VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8, 'active', $9, 'manual', NULL, NULL)
-           RETURNING id, player, steam_id, ip_address, server_name, ban_type,
+           RETURNING id, player, steam_id, ip_address, server_name, ban_type, account_unbanned,
                      duration_minutes, expires_at, reason, status, operator_name, source,
                      server_id, server_port, removed_reason, removed_by, removed_at, created_at"#,
     )
@@ -351,10 +371,12 @@ pub async fn create_ban(
         "ban.add",
         super::auth_event_service::ban_add_payload(
             ban_id,
+            ban_type,
             &steam_id,
             event_ip.as_deref(),
             reason,
             expires_at,
+            false,
         ),
     )
     .await?;
@@ -376,6 +398,16 @@ pub async fn update_ban(
     anyhow::ensure!(!steam_id_input.is_empty(), "SteamID64 不能为空");
     anyhow::ensure!(matches!(ban_type, "steam" | "ip"), "封禁属性无效");
     anyhow::ensure!(!reason.is_empty(), "封禁理由不能为空");
+    if ban_type == "ip" {
+        anyhow::ensure!(
+            input
+                .ip_address
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty()),
+            "IP 封禁需要填写 IP 地址"
+        );
+    }
 
     let steam_id = SteamResolver::new(config)
         .resolve(steam_id_input)
@@ -406,7 +438,7 @@ pub async fn update_ban(
                duration_minutes = $7,
                expires_at = $8
            WHERE id = $1
-           RETURNING id, player, steam_id, ip_address, server_name, ban_type,
+           RETURNING id, player, steam_id, ip_address, server_name, ban_type, account_unbanned,
                      duration_minutes, expires_at, reason, status, operator_name, source,
                      server_id, server_port, removed_reason, removed_by, removed_at, created_at"#,
     )
@@ -560,13 +592,67 @@ pub async fn find_active_bans_by_steamid(
     Ok(rows.into_iter().map(row_to_item).collect())
 }
 
+#[derive(sqlx::FromRow)]
+struct ConvertedIpBanRow {
+    id: Uuid,
+    steam_id: String,
+    ip_address: Option<String>,
+    reason: String,
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// 全量解封（账号 + 账号使用过的 IP）。
+#[allow(dead_code)]
 pub async fn unban(db: &Database, id: Uuid, removed_by: &str) -> anyhow::Result<BanItem> {
+    unban_scoped(db, id, removed_by, "account_ip").await
+}
+
+/// 解封：
+/// - `account`：仅解封账号（仅对 IP 封禁有意义），IP 封禁继续对其它账号生效，
+///   该账号从这条 IP 封禁中豁免；
+/// - `account_ip`：账号与该账号使用过的 IP 全部解封；同一 IP 上其它仍被封禁的
+///   账号由 IP 封禁转为 Steam 账号封禁，避免连坐。
+pub async fn unban_scoped(
+    db: &Database,
+    id: Uuid,
+    removed_by: &str,
+    scope: &str,
+) -> anyhow::Result<BanItem> {
+    let current = get_ban(db, id).await?;
+    anyhow::ensure!(current.status == "active", "该封禁已失效");
+
+    if scope == "account" && current.ban_type == "ip" {
+        let mut tx = db.pool.begin().await?;
+        let row = sqlx::query_as::<_, BanRow>(
+            r#"UPDATE ban_records
+               SET account_unbanned = true
+               WHERE id = $1
+               RETURNING id, player, steam_id, ip_address, server_name, ban_type, account_unbanned,
+                         duration_minutes, expires_at, reason, status, operator_name, source,
+                         server_id, server_port, removed_reason, removed_by, removed_at, created_at"#,
+        )
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        super::auth_event_service::insert_event_tx(
+            &mut tx,
+            None,
+            None,
+            "ban.exempt",
+            super::auth_event_service::ban_exempt_payload(row.id, &row.steam_id),
+        )
+        .await?;
+        tx.commit().await?;
+        return Ok(row_to_item(row));
+    }
+
     let mut tx = db.pool.begin().await?;
     let row = sqlx::query_as::<_, BanRow>(
         r#"UPDATE ban_records
-           SET status = 'inactive', removed_by = $2, removed_at = now()
+           SET status = 'inactive', removed_by = $2, removed_at = now(), account_unbanned = false
            WHERE id = $1
-           RETURNING id, player, steam_id, ip_address, server_name, ban_type,
+           RETURNING id, player, steam_id, ip_address, server_name, ban_type, account_unbanned,
                      duration_minutes, expires_at, reason, status, operator_name, source,
                      server_id, server_port, removed_reason, removed_by, removed_at, created_at"#,
     )
@@ -587,6 +673,89 @@ pub async fn unban(db: &Database, id: Uuid, removed_by: &str) -> anyhow::Result<
         ),
     )
     .await?;
+
+    if row.ban_type == "ip" {
+        // 该 Steam 使用过的全部 IP（封禁记录 / 进服日志 / 会话 / 在线快照）
+        let ips: Vec<String> = sqlx::query_scalar(
+            r#"SELECT DISTINCT ip FROM (
+                 SELECT ip_address AS ip FROM ban_records WHERE steam_id = $1
+                 UNION
+                 SELECT ip_address AS ip FROM player_access_logs WHERE steam_id64 = $1
+                 UNION
+                 SELECT ip AS ip FROM player_server_sessions WHERE steam_id64 = $1
+                 UNION
+                 SELECT ip AS ip FROM server_online_players WHERE steam_id64 = $1
+               ) t
+               WHERE ip IS NOT NULL AND btrim(ip) <> ''"#,
+        )
+        .bind(&row.steam_id)
+        .fetch_all(&mut *tx)
+        .await?;
+
+        if !ips.is_empty() {
+            // 同一账号在同一 IP 上的其它 IP 封禁：一并解封
+            let same_account: Vec<ConvertedIpBanRow> = sqlx::query_as(
+                r#"UPDATE ban_records
+                   SET status = 'inactive', removed_by = $2, removed_at = now(), account_unbanned = false
+                   WHERE status = 'active' AND ban_type = 'ip' AND id <> $1
+                     AND steam_id = $3 AND ip_address = ANY($4)
+                   RETURNING id, steam_id, ip_address, reason, expires_at"#,
+            )
+            .bind(id)
+            .bind(removed_by)
+            .bind(&row.steam_id)
+            .bind(&ips)
+            .fetch_all(&mut *tx)
+            .await?;
+            for item in same_account {
+                super::auth_event_service::insert_event_tx(
+                    &mut tx,
+                    None,
+                    None,
+                    "ban.remove",
+                    super::auth_event_service::ban_remove_payload(
+                        item.id,
+                        &item.steam_id,
+                        item.ip_address.as_deref(),
+                    ),
+                )
+                .await?;
+            }
+
+            // 同 IP 上其它账号的 IP 封禁：转为 Steam 账号封禁（账号继续封禁，但不再连坐）
+            let converted: Vec<ConvertedIpBanRow> = sqlx::query_as(
+                r#"UPDATE ban_records
+                   SET ban_type = 'steam', account_unbanned = false
+                   WHERE status = 'active' AND ban_type = 'ip' AND id <> $1
+                     AND steam_id <> $2 AND ip_address = ANY($3)
+                   RETURNING id, steam_id, ip_address, reason, expires_at"#,
+            )
+            .bind(id)
+            .bind(&row.steam_id)
+            .bind(&ips)
+            .fetch_all(&mut *tx)
+            .await?;
+            for item in converted {
+                super::auth_event_service::insert_event_tx(
+                    &mut tx,
+                    None,
+                    None,
+                    "ban.update",
+                    super::auth_event_service::ban_update_payload(
+                        item.id,
+                        "steam",
+                        &item.steam_id,
+                        item.ip_address.as_deref(),
+                        &item.reason,
+                        item.expires_at,
+                        false,
+                    ),
+                )
+                .await?;
+            }
+        }
+    }
+
     tx.commit().await?;
 
     // 如果解封的是全球封禁来源的记录，标记对应 global_bans 记录为 manual_unbanned=true

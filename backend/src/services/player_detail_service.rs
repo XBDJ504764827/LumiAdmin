@@ -170,6 +170,7 @@ pub struct PlayerBanRecord {
     pub ip_address: Option<String>,
     pub server_name: Option<String>,
     pub ban_type: String,
+    pub account_unbanned: bool,
     pub duration_minutes: i32,
     pub expires_at: Option<DateTime<Utc>>,
     pub reason: String,
@@ -1530,7 +1531,7 @@ async fn fetch_whitelist_records(
 async fn fetch_ban_records(db: &Database, steamid64: &str) -> anyhow::Result<Vec<PlayerBanRecord>> {
     let rows = sqlx::query_as::<_, PlayerBanRecord>(
         r#"SELECT br.id, br.player, br.steam_id, br.ip_address, br.server_name, br.ban_type,
-                  br.duration_minutes, br.expires_at, br.reason, br.status,
+                  br.account_unbanned, br.duration_minutes, br.expires_at, br.reason, br.status,
                   COALESCE(operator_user.display_name, br.operator_name) AS operator_name,
                   br.source, br.server_id, br.server_port, br.removed_reason,
                   COALESCE(removed_user.display_name, br.removed_by) AS removed_by,

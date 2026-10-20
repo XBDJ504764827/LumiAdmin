@@ -110,6 +110,7 @@ export function BanDetailModal({ open, item: initialItem, onClose, canManageAll 
             <label className="mb-4">处理状态</label>
             <div>
               <span className={`status-pill ${detailItem.status === 'active' ? 'pill-danger' : 'pill-offline'}`}>{detailItem.status === 'active' ? '生效中' : '已失效'}</span>
+              {detailItem.account_unbanned ? <span className="status-pill pill-warning" style={{ marginLeft: 6 }}>账号已解封 / IP 仍封禁</span> : null}
             </div>
             {detailItem.removed_reason ? (
               <div style={{ color: 'var(--text2)', fontSize: 13, marginTop: 4, whiteSpace: 'pre-wrap', background: 'var(--surface2)', padding: 8, borderRadius: 6 }}>

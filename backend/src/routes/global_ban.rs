@@ -129,6 +129,7 @@ pub(crate) async fn manual_unban_global_ban(
                 &ctx.config,
                 ban_id,
                 &steam_id,
+                ip_address.as_deref(),
             )
             .await;
         }

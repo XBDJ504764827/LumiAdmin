@@ -1015,7 +1015,7 @@ async fn access_check_restriction_uses_success_cache_and_rejects_low_values() {
 /// 中高风险账号拦截：账号存在封禁类风险信号（同 IP 关联账号有效封禁）时，
 /// 即使服务器没有任何进服模式（满足最低进入要求/无限制）也必须在无白名单时拦截。
 #[tokio::test]
-async fn access_check_blocks_linked_ban_risk_without_whitelist() {
+async fn access_check_blocks_shared_ip_with_ip_ban() {
     with_test_app(async |db, config| {
             const BANNED_STEAMID: &str = "76561198000000081";
             const PLAYER_STEAMID: &str = "76561198000000082";
@@ -1036,13 +1036,14 @@ async fn access_check_blocks_linked_ban_risk_without_whitelist() {
             .execute(&db.pool)
             .await?;
 
-            // 被封禁账号：封禁只挂在账号上（未封禁 IP），确保本次拦截来自账号风险而非 IP 封禁
+            // 被封禁账号：IP 封禁（连坐），同一 IP 的其他账号应被阻止并收到共享 IP 提示
             sqlx::query(
-                r#"INSERT INTO ban_records (id, player, steam_id, ban_type, reason, duration_minutes, status, operator_name, source)
-                   VALUES ($1, 'bad-player', $2, 'steam', '作弊', 0, 'active', 'ConsoleAdmin', 'manual')"#,
+                r#"INSERT INTO ban_records (id, player, steam_id, ip_address, ban_type, reason, duration_minutes, status, operator_name, source)
+                   VALUES ($1, 'bad-player', $2, $3, 'ip', '作弊', 0, 'active', 'ConsoleAdmin', 'manual')"#,
             )
             .bind(Uuid::new_v4())
             .bind(BANNED_STEAMID)
+            .bind(SHARED_IP)
             .execute(&db.pool)
             .await?;
             // 该账号与玩家共用过 IP（历史进服记录）
@@ -1082,37 +1083,12 @@ async fn access_check_blocks_linked_ban_risk_without_whitelist() {
             let body = to_bytes(blocked.into_body(), usize::MAX).await.unwrap();
             let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(payload["result"]["allowed"], false);
-            assert_eq!(payload["result"]["access_method"], "risk_blocked");
-            assert_eq!(payload["result"]["failure_code"], "linked_ip_banned");
+            assert_eq!(payload["result"]["access_method"], "ip_collision");
+            assert_eq!(payload["result"]["failure_code"], "shared_ip");
             assert_eq!(
                 payload["result"]["message"],
-                "您的账号可能有些问题，本次进入服务器被阻止\n您可以进行申请白名单后再尝试进入\n如有疑问加入Q群275164688寻求帮助"
+                "您当前使用的IP与其他正在封禁中玩家的IP相同，这会导致您无法进入服务器，如有疑问请联系管理员"
             );
-
-            // 拥有白名单后放行
-            insert_whitelist_for_steamid64(&db, PLAYER_STEAMID, "approved").await?;
-            app.whitelist_cache.refresh(&db).await?;
-            let allowed = app
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri("/api/plugin/access/check")
-                        .header("content-type", "application/json")
-                        .body(Body::from(json!({
-                            "report_token": "access-token-risk",
-                            "port": 27015,
-                            "steam_id64": PLAYER_STEAMID,
-                            "ip_address": SHARED_IP
-                        }).to_string()))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(allowed.status(), StatusCode::OK);
-            let body = to_bytes(allowed.into_body(), usize::MAX).await.unwrap();
-            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            assert_eq!(payload["result"]["allowed"], true);
-            assert_eq!(payload["result"]["message"], "允许进入服务器。");
             Ok(())
         }).await;
 }
@@ -1247,7 +1223,7 @@ async fn access_check_still_blocks_whitelisted_banned_account() {
         }).await;
 }
 
-/// 全球封禁尚未同步成本地封禁时，账号风险拦截同样生效；白名单可豁免。
+/// 全球封禁尚未同步成本地封禁时，实时检查也应直接按账号封禁拦截（白名单不豁免）。
 #[tokio::test]
 async fn access_check_blocks_account_with_active_global_ban() {
     with_test_app(async |db, config| {
@@ -1297,11 +1273,12 @@ async fn access_check_blocks_account_with_active_global_ban() {
             let body = to_bytes(blocked.into_body(), usize::MAX).await.unwrap();
             let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(payload["result"]["allowed"], false);
-            assert_eq!(payload["result"]["failure_code"], "risk_blocked");
+            assert_eq!(payload["result"]["failure_code"], "banned");
 
+            // 白名单不能覆盖有效封禁
             insert_whitelist_for_steamid64(&db, STEAMID, "approved").await?;
             app.whitelist_cache.refresh(&db).await?;
-            let allowed = app
+            let blocked_again = app
                 .oneshot(
                     Request::builder()
                         .method("POST")
@@ -1316,10 +1293,11 @@ async fn access_check_blocks_account_with_active_global_ban() {
                 )
                 .await
                 .unwrap();
-            assert_eq!(allowed.status(), StatusCode::OK);
-            let body = to_bytes(allowed.into_body(), usize::MAX).await.unwrap();
+            assert_eq!(blocked_again.status(), StatusCode::OK);
+            let body = to_bytes(blocked_again.into_body(), usize::MAX).await.unwrap();
             let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            assert_eq!(payload["result"]["allowed"], true);
+            assert_eq!(payload["result"]["allowed"], false);
+            assert_eq!(payload["result"]["failure_code"], "banned");
             Ok(())
         }).await;
 }

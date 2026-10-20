@@ -19,7 +19,11 @@ use tracing::warn;
 
 const GOKZ_RATING_SCOPES: [&str; 4] = ["KZT", "SKZ", "VNL", "OVR"];
 pub(crate) const ACCESS_RATING_SOURCE: &str = "scoped_max";
+/// IP 封禁连坐时的统一提示（与插件侧保持一致）。
+pub(crate) const SHARED_IP_BAN_MESSAGE: &str =
+    "您当前使用的IP与其他正在封禁中玩家的IP相同，这会导致您无法进入服务器，如有疑问请联系管理员";
 /// 中高风险账号（存在封禁类风险信号）且没有白名单时的进服提示。
+#[allow(dead_code)]
 pub(crate) const RISK_BLOCK_MESSAGE: &str = "您的账号可能有些问题，本次进入服务器被阻止\n您可以进行申请白名单后再尝试进入\n如有疑问加入Q群275164688寻求帮助";
 static GOKZ_NEGATIVE_CACHE: OnceLock<Mutex<HashMap<String, std::time::Instant>>> = OnceLock::new();
 
@@ -64,6 +68,7 @@ pub(crate) struct PlayerAccessProfile {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct ActiveBanInfo {
     id: uuid::Uuid,
     #[allow(dead_code)]
@@ -144,7 +149,7 @@ async fn check_access_live(
     input: AccessCheckInput,
     steam_id64: &str,
     server_cache: &Arc<server_config_cache::ServerConfigCache>,
-    ban_cache: &ActiveBanCache,
+    _ban_cache: &ActiveBanCache,
     wl_cache: &WhitelistCache,
 ) -> anyhow::Result<AccessCheckResult> {
     // 使用缓存获取服务器配置
@@ -153,40 +158,37 @@ async fn check_access_live(
         .await?
         .ok_or_else(|| anyhow::anyhow!("服务器 Token 或端口无效"))?;
 
-    // 1. 检查封禁状态（优先使用缓存）
-    let ban_info = {
-        let cached = ban_cache.get_by_steam_id(steam_id64).await;
-        let cached = match cached {
-            Some(ban) => Some(ban),
-            None => match input.ip_address.as_deref() {
-                Some(ip) => ban_cache.get_by_ip(ip).await,
-                None => None,
-            },
-        };
-        match cached {
-            Some(ban) => Some(ActiveBanInfo {
-                id: ban.id,
-                reason: ban.reason,
-                expires_at: ban.expires_at,
-            }),
-            None => active_ban(db, steam_id64, input.ip_address.as_deref()).await?,
-        }
-    };
-    if let Some(ban) = ban_info {
+    // 1. 检查封禁状态（网站实时 DB，按 ban_type 语义）：
+    //    - Steam 封禁只匹配 steam_id，不连坐 IP；
+    //    - IP 封禁按 IP 匹配，account_unbanned 的账号从自身 IP 封禁中豁免；
+    //    - 同 IP 命中其它账号的 IP 封禁时，返回明确的共享 IP 提示（不新增封禁）。
+    if let Some(ban) = live_ban_for_access(db, steam_id64, input.ip_address.as_deref()).await? {
         let server_auth = plugin_ban_service::ServerAuth {
             id: server.id,
             name: server.name.clone(),
             port: server.port,
         };
-        plugin_ban_service::complete_missing_ban_details(
-            db,
-            ban.id,
-            input.player.as_deref(),
-            input.ip_address.as_deref(),
-            &server_auth,
-            input.server_port.unwrap_or(server.port),
-        )
-        .await?;
+        if !ban.from_global {
+            if let Err(error) = plugin_ban_service::complete_missing_ban_details(
+                db,
+                ban.id,
+                input.player.as_deref(),
+                input.ip_address.as_deref(),
+                &server_auth,
+                input.server_port.unwrap_or(server.port),
+            )
+            .await
+            {
+                warn!(%error, ban_id = %ban.id, "补齐封禁详情失败");
+            }
+        }
+        if ban.ban_type == "ip" {
+            return Ok(reject_with_method(
+                SHARED_IP_BAN_MESSAGE,
+                "ip_collision",
+                "shared_ip",
+            ));
+        }
         return Ok(reject_with_method(
             "你已被该服务器封禁。\n如有异议可前往社区论坛进行申诉。",
             "banned",
@@ -206,23 +208,6 @@ async fn check_access_live(
     } else {
         false
     };
-
-    // 2.1 中高风险账号拦截：账号存在封禁类风险信号（自身有效封禁、同 IP 关联账号
-    // 有效封禁、同 QQ 关联账号有效封禁）时为中/高风险，需持有白名单才可进入。
-    // 该开关独立于上方进服模式，因此必须放在「无限制放行」之前。
-    if risk_block_enabled && !whitelist_approved {
-        if let Some(risk) = player_risk_service::evaluate_ban_risk_for_access(
-            db,
-            steam_id64,
-            input.ip_address.as_deref(),
-        )
-        .await?
-        {
-            if risk.is_medium_or_high() {
-                return Ok(reject_access_risk(&risk));
-            }
-        }
-    }
 
     // 都没开 → 无限制放行
     if !effective_whitelist && !effective_restriction {
@@ -290,6 +275,7 @@ async fn check_access_live(
 /// 中高风险账号（封禁类风险信号）无白名单时的拒绝结果。
 ///
 /// 玩家侧只看到统一提示；命中明细写入 `audit_message`，仅进服日志可见。
+#[allow(dead_code)]
 fn reject_access_risk(risk: &player_risk_service::AccessBanRisk) -> AccessCheckResult {
     let audit_message = format!("账号风险拦截（{}）：{}", risk.action.label(), risk.detail);
     let mut result =
@@ -301,6 +287,7 @@ fn reject_access_risk(risk: &player_risk_service::AccessBanRisk) -> AccessCheckR
 /// 失败原因代码：纯「同 IP 关联封禁」保留既有代码，便于沿用历史筛选口径；
 /// 纯「同 QQ 关联封禁」使用新代码 `linked_qq_banned`，便于区分拦截来源；
 /// 涉及账号自身封禁信号或混合关联时归入通用的中高风险拦截。
+#[allow(dead_code)]
 fn risk_failure_code(risk: &player_risk_service::AccessBanRisk) -> &'static str {
     if !risk.codes.is_empty() && risk.codes.iter().all(|code| code.starts_with("linked_ip_")) {
         "linked_ip_banned"
@@ -379,6 +366,87 @@ fn reject_access_modes(
     reject_with_method(message, access_method, failure_code)
 }
 
+/// 实时准入封禁匹配结果（按 ban_type 语义）。
+struct LiveBanMatch {
+    id: uuid::Uuid,
+    ban_type: String,
+    from_global: bool,
+}
+
+/// 网站实时封禁匹配：
+/// - Steam 封禁只按 steam_id 匹配；
+/// - IP 封禁按 IP 匹配，`account_unbanned` 的账号从自身 IP 封禁中豁免；
+/// - 没有 IP 的历史 IP 封禁退化为账号封禁。
+async fn live_ban_for_access(
+    db: &Database,
+    steam_id64: &str,
+    ip_address: Option<&str>,
+) -> anyhow::Result<Option<LiveBanMatch>> {
+    // 先查 Steam 封禁（含无 IP 的 IP 封禁退化行），再查 IP 封禁。
+    let steam_row: Option<(uuid::Uuid, String)> = sqlx::query_as(
+        r#"SELECT id, ban_type FROM ban_records
+           WHERE status = 'active'
+             AND (expires_at IS NULL OR expires_at > now())
+             AND steam_id = $1
+             AND (ban_type = 'steam'
+                  OR (ban_type = 'ip' AND btrim(COALESCE(ip_address, '')) = ''))
+           ORDER BY CASE WHEN ban_type = 'steam' THEN 0 ELSE 1 END, created_at DESC
+           LIMIT 1"#,
+    )
+    .bind(steam_id64)
+    .fetch_optional(&db.pool)
+    .await?;
+    if let Some((id, ban_type)) = steam_row {
+        return Ok(Some(LiveBanMatch {
+            id,
+            ban_type,
+            from_global: false,
+        }));
+    }
+
+    // 全球封禁可能尚未同步成本地 ban_records：直接查 global_bans（管理员已解封/已过期除外）。
+    let global_row: Option<(uuid::Uuid,)> = sqlx::query_as(
+        r#"SELECT id FROM global_bans
+           WHERE steam_id64 = $1 AND is_expired = false AND manual_unbanned = false
+           ORDER BY created_on DESC NULLS LAST, synced_at DESC
+           LIMIT 1"#,
+    )
+    .bind(steam_id64)
+    .fetch_optional(&db.pool)
+    .await?;
+    if let Some((id,)) = global_row {
+        return Ok(Some(LiveBanMatch {
+            id,
+            ban_type: "steam".to_string(),
+            from_global: true,
+        }));
+    }
+
+    let Some(ip) = ip_address.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let ip_row: Option<(uuid::Uuid, String)> = sqlx::query_as(
+        r#"SELECT id, ban_type FROM ban_records
+           WHERE status = 'active'
+             AND (expires_at IS NULL OR expires_at > now())
+             AND ban_type = 'ip'
+             AND ip_address = $1
+             AND NOT (account_unbanned AND steam_id = $2)
+           ORDER BY created_at DESC
+           LIMIT 1"#,
+    )
+    .bind(ip)
+    .bind(steam_id64)
+    .fetch_optional(&db.pool)
+    .await?;
+    Ok(ip_row.map(|(id, ban_type)| LiveBanMatch {
+        id,
+        ban_type,
+        from_global: false,
+    }))
+}
+
+#[allow(dead_code)]
 async fn active_ban(
     db: &Database,
     steam_id64: &str,
@@ -397,6 +465,7 @@ async fn active_ban(
     Ok(None)
 }
 
+#[allow(dead_code)]
 async fn query_active_ban_by_steam(
     db: &Database,
     steam_id64: &str,
@@ -420,6 +489,7 @@ async fn query_active_ban_by_steam(
     }))
 }
 
+#[allow(dead_code)]
 async fn query_active_ban_by_ip(
     db: &Database,
     ip_address: &str,
@@ -448,20 +518,11 @@ async fn load_player_profile(
     config: &Config,
     steam_id64: &str,
 ) -> anyhow::Result<Option<PlayerAccessProfile>> {
-    if let Some(cached) = read_cache(db, steam_id64).await? {
-        if cached.expires_at > Utc::now() {
-            return Ok(Some(PlayerAccessProfile {
-                rating: cached.rating,
-                steam_level: cached.steam_level,
-            }));
-        }
+    // 网站实时点查为主：缓存命中直接返回；缺失/过期走 3 轮有界拉取。
+    match fetch_player_profile_bounded(db, config, steam_id64).await? {
+        Some((profile, _expires_at)) => Ok(Some(profile)),
+        None => Ok(None),
     }
-
-    let Some(profile) = fetch_player_profile(config, steam_id64).await? else {
-        return Ok(None);
-    };
-    write_cache(db, steam_id64, &profile).await?;
-    Ok(Some(profile))
 }
 
 /// 单玩家资料点查（供插件缺资料时同步直取，配合进服 3s 宽限）。

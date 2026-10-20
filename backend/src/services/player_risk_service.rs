@@ -68,6 +68,7 @@ pub struct AccessBanRisk {
 
 impl AccessBanRisk {
     /// 中高风险（warn / require_force / deny）账号需要白名单才可进入。
+    #[allow(dead_code)]
     pub fn is_medium_or_high(&self) -> bool {
         self.action != RiskAction::Allow
     }
@@ -362,6 +363,7 @@ pub async fn build_player_risk_profile(
 /// 只统计封禁类信号，自身命中封禁类信号时直接返回（自身封禁必然为高风险，
 /// 无需再查询关联账号）；同 QQ 与同 IP 信号会合并后统一判定，保证混合命中时
 /// 审计明细与 failure_code 能同时体现两路来源。
+#[allow(dead_code)]
 pub async fn evaluate_ban_risk_for_access(
     db: &Database,
     steamid64: &str,

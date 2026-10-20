@@ -35,6 +35,7 @@ const ACCESS_METHOD_LABELS = {
   restriction_rejected: 'Rating/等级拒绝',
   custom_rule_rejected: '自定义规则拒绝',
   risk_blocked: '中高风险拦截',
+  ip_collision: '同 IP 封禁拦截',
   snapshot_fallback: '快照回退',
 };
 
@@ -47,6 +48,7 @@ const FAILURE_CODE_LABELS = {
   risk_blocked: '中高风险账号拦截',
   linked_ip_banned: '同 IP 关联封禁',
   linked_qq_banned: '同 QQ 关联封禁',
+  shared_ip: '与封禁账号同 IP',
   profile_fetch_failed: '无法获取玩家资料',
   profile_missing: '资料未验证',
   snapshot_unavailable: '访问控制服务不可用',

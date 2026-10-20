@@ -85,19 +85,52 @@ pub fn whitelist_add_payload(
 
 pub fn ban_add_payload(
     ban_id: Uuid,
+    ban_type: &str,
     steam_id: &str,
     ip_address: Option<&str>,
     reason: &str,
     expires_at: Option<DateTime<Utc>>,
+    account_unbanned: bool,
 ) -> serde_json::Value {
     serde_json::json!({
         "ban_id": ban_id,
+        "ban_type": ban_type,
         "steam_id": steam_id,
         "ip_address": ip_address,
         "reason": reason,
         "expires_at": expires_at.map(|v| v.to_rfc3339()),
         "expires_at_unix": expires_at.map(|v| v.timestamp()).unwrap_or(0),
+        "account_unbanned": account_unbanned,
     })
+}
+
+/// 仅解封账号（IP 封禁保留）：插件给该 Steam 打上 account_unbanned 标记。
+pub fn ban_exempt_payload(ban_id: Uuid, steam_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "ban_id": ban_id,
+        "steam_id": steam_id,
+    })
+}
+
+/// 封禁属性/状态更新（IP 封禁转 Steam 封禁等）。
+pub fn ban_update_payload(
+    ban_id: Uuid,
+    ban_type: &str,
+    steam_id: &str,
+    ip_address: Option<&str>,
+    reason: &str,
+    expires_at: Option<DateTime<Utc>>,
+    account_unbanned: bool,
+) -> serde_json::Value {
+    ban_add_payload(
+        ban_id,
+        ban_type,
+        steam_id,
+        ip_address,
+        reason,
+        expires_at,
+        account_unbanned,
+    )
 }
 
 pub fn ban_remove_payload(

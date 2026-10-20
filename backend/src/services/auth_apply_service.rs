@@ -116,12 +116,14 @@ pub async fn apply_ban_fast_path(
         .map(|dt| dt.timestamp())
         .unwrap_or(0);
     let command = format!(
-        "lumiadmin_apply_ban \"{}\" {} \"{}\" {} \"{}\"",
+        "lumiadmin_apply_ban \"{}\" {} \"{}\" {} \"{}\" \"{}\" \"{}\"",
         item.id,
         version,
         escape_rcon_arg(&item.steam_id),
         expires_unix,
         escape_rcon_arg(&item.reason),
+        escape_rcon_arg(&item.ban_type),
+        escape_rcon_arg(item.ip_address.as_deref().unwrap_or("")),
     );
     let steam_id = item.steam_id.clone();
     for (server_id, server_name) in servers_for_fast_path(db).await {
@@ -138,10 +140,44 @@ pub async fn apply_ban_fast_path(
     }
 }
 
-/// 解封快车道：`lumiadmin_apply_unban <ban_id> <version> <steam_id>`。
-pub async fn apply_unban_fast_path(db: &Database, config: &Config, ban_id: Uuid, steam_id: &str) {
+/// 全量解封快车道：`lumiadmin_apply_unban <ban_id> <version> <steam_id> <ip>`。
+pub async fn apply_unban_fast_path(
+    db: &Database,
+    config: &Config,
+    ban_id: Uuid,
+    steam_id: &str,
+    ip_address: Option<&str>,
+) {
     let command = format!(
-        "lumiadmin_apply_unban \"{}\" 0 \"{}\"",
+        "lumiadmin_apply_unban \"{}\" 0 \"{}\" \"{}\"",
+        ban_id,
+        escape_rcon_arg(steam_id),
+        escape_rcon_arg(ip_address.unwrap_or("")),
+    );
+    for (server_id, server_name) in servers_for_fast_path(db).await {
+        send_fast_path(
+            db,
+            config,
+            server_id,
+            &server_name,
+            &command,
+            "auth_fast_path_unban",
+            steam_id,
+        )
+        .await;
+    }
+}
+
+/// 仅解封账号快车道：`lumiadmin_apply_account_unban <ban_id> <steam_id>`。
+/// IP 封禁记录保留，仅给该 Steam 打上豁免标记。
+pub async fn apply_account_unban_fast_path(
+    db: &Database,
+    config: &Config,
+    ban_id: Uuid,
+    steam_id: &str,
+) {
+    let command = format!(
+        "lumiadmin_apply_account_unban \"{}\" \"{}\"",
         ban_id,
         escape_rcon_arg(steam_id),
     );
@@ -152,7 +188,7 @@ pub async fn apply_unban_fast_path(db: &Database, config: &Config, ban_id: Uuid,
             server_id,
             &server_name,
             &command,
-            "auth_fast_path_unban",
+            "auth_fast_path_account_unban",
             steam_id,
         )
         .await;

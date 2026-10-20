@@ -65,11 +65,15 @@ pub struct SnapshotServer {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotBan {
+    pub ban_id: Uuid,
+    pub ban_type: String,
     pub steam_id: Option<String>,
     pub ip_address: Option<String>,
     pub reason: String,
     pub expires_at: Option<DateTime<Utc>>,
     pub expires_at_unix: i64,
+    /// 仅解封账号：该 steam_id 从自身 IP 封禁中豁免
+    pub account_unbanned: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -222,7 +226,7 @@ async fn load_snapshot_servers(db: &Database) -> anyhow::Result<Vec<SnapshotServ
 
 async fn load_snapshot_bans(db: &Database) -> anyhow::Result<Vec<SnapshotBan>> {
     sqlx::query_as::<_, SnapshotBanRow>(
-        r#"SELECT steam_id, ip_address, reason, expires_at
+        r#"SELECT id AS ban_id, ban_type, steam_id, ip_address, reason, expires_at, account_unbanned
            FROM ban_records
            WHERE status = 'active'
              AND (expires_at IS NULL OR expires_at > now())"#,
@@ -271,38 +275,11 @@ async fn load_snapshot_access_profiles(
 /// 判定口径与后端风险档案的同 IP 关联一致：只要某 IP 曾被一个当前有效封禁的
 /// 账号使用过（来自进服记录 / 在线玩家 / 封禁记录），该 IP 即进入集合。
 /// 为控制快照体积，仅取最近使用的若干条并去重。
-async fn load_snapshot_risk_ips(db: &Database) -> anyhow::Result<Vec<String>> {
-    let rows: Vec<(String,)> = sqlx::query_as(
-        r#"WITH active_banned AS (
-             SELECT DISTINCT steam_id AS steam FROM ban_records
-             WHERE status = 'active' AND (expires_at IS NULL OR expires_at > now())
-           ),
-           banned_ips AS (
-             SELECT ip_address AS ip FROM ban_records
-             WHERE status = 'active' AND (expires_at IS NULL OR expires_at > now())
-               AND ip_address IS NOT NULL AND btrim(ip_address) <> ''
-           ),
-           linked_ips AS (
-             SELECT ip_address AS ip FROM player_access_logs
-             WHERE steam_id64 IN (SELECT steam FROM active_banned)
-               AND ip_address IS NOT NULL AND btrim(ip_address) <> ''
-             UNION
-             SELECT ip AS ip FROM server_online_players
-             WHERE steam_id64 IN (SELECT steam FROM active_banned)
-               AND ip IS NOT NULL AND btrim(ip) <> ''
-           )
-           SELECT DISTINCT ip FROM (
-             SELECT ip FROM linked_ips
-             UNION
-             SELECT ip FROM banned_ips
-           ) AS all_ips
-           WHERE ip ~ '^[0-9a-fA-F:.]+$'
-           LIMIT 5000"#,
-    )
-    .fetch_all(&db.pool)
-    .await
-    .context("加载中高风险关联 IP 快照失败")?;
-    Ok(rows.into_iter().map(|(ip,)| ip).collect())
+async fn load_snapshot_risk_ips(_db: &Database) -> anyhow::Result<Vec<String>> {
+    // 新版语义：Steam 账号封禁不连坐；IP 封禁由 bans 表按 IP 精确匹配，
+    // 并在插件侧给出「与其他封禁账号同 IP」的明确提示，不再使用模糊的
+    // risk_ips 中高风险拦截（否则仅解封账号的玩家会被自己的 IP 再次拦回）。
+    Ok(Vec::new())
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -348,20 +325,26 @@ impl From<SnapshotServerRow> for SnapshotServer {
 
 #[derive(Debug, sqlx::FromRow)]
 struct SnapshotBanRow {
+    ban_id: Uuid,
+    ban_type: String,
     steam_id: Option<String>,
     ip_address: Option<String>,
     reason: String,
     expires_at: Option<DateTime<Utc>>,
+    account_unbanned: bool,
 }
 
 impl From<SnapshotBanRow> for SnapshotBan {
     fn from(row: SnapshotBanRow) -> Self {
         Self {
+            ban_id: row.ban_id,
+            ban_type: row.ban_type,
             steam_id: row.steam_id,
             ip_address: row.ip_address,
             reason: row.reason,
             expires_at: row.expires_at,
             expires_at_unix: row.expires_at.map(|value| value.timestamp()).unwrap_or(0),
+            account_unbanned: row.account_unbanned,
         }
     }
 }
@@ -652,6 +635,36 @@ pub struct PluginNodeSnapshot {
     pub risk_ips: Vec<String>,
 }
 
+/// 封禁匹配规则：
+/// - Steam 封禁只按 steam_id 匹配（不连坐 IP）；
+/// - IP 封禁按 IP 匹配；`account_unbanned` 的账号从自身 IP 封禁中豁免。
+fn ban_matches(
+    ban: &SnapshotBan,
+    steam_id: Option<&str>,
+    ip_address: Option<&str>,
+    now: DateTime<Utc>,
+) -> bool {
+    let active = ban.expires_at.is_none_or(|expires_at| expires_at > now);
+    if !active {
+        return false;
+    }
+    let steam_matches = steam_id.is_some_and(|value| ban.steam_id.as_deref() == Some(value));
+    if ban.ban_type == "ip" {
+        let has_ip = ban
+            .ip_address
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+        if !has_ip {
+            // 历史脏数据：没有 IP 的 IP 封禁退化为账号封禁，避免直接失效
+            return steam_matches;
+        }
+        let ip_matches = ip_address.is_some_and(|value| ban.ip_address.as_deref() == Some(value));
+        return ip_matches && !(ban.account_unbanned && steam_matches);
+    }
+    steam_matches
+}
+
 pub fn evaluate_ban_snapshot(
     snapshot: &AccessSnapshot,
     input: &SnapshotBanInput,
@@ -679,18 +692,12 @@ pub fn evaluate_ban_snapshot(
     }
 
     let ban = snapshot.bans.iter().find(|ban| {
-        let steam_matches = input
-            .steam_id64
-            .as_deref()
-            .is_some_and(|steam_id64| ban.steam_id.as_deref() == Some(steam_id64));
-        let ip_matches = input
-            .ip_address
-            .as_deref()
-            .is_some_and(|ip| ban.ip_address.as_deref() == Some(ip));
-        let active = ban
-            .expires_at
-            .is_none_or(|expires_at| expires_at > input.now);
-        active && (steam_matches || ip_matches)
+        ban_matches(
+            ban,
+            input.steam_id64.as_deref(),
+            input.ip_address.as_deref(),
+            input.now,
+        )
     });
 
     SnapshotBanDecision {
@@ -718,16 +725,18 @@ pub fn evaluate_access_snapshot(
     };
 
     if let Some(ban) = snapshot.bans.iter().find(|ban| {
-        let steam_matches = ban.steam_id.as_deref() == Some(input.steam_id64.as_str());
-        let ip_matches = input
-            .ip_address
-            .as_deref()
-            .is_some_and(|ip| ban.ip_address.as_deref() == Some(ip));
-        let active = ban
-            .expires_at
-            .is_none_or(|expires_at| expires_at > input.now);
-        active && (steam_matches || ip_matches)
+        ban_matches(
+            ban,
+            Some(input.steam_id64.as_str()),
+            input.ip_address.as_deref(),
+            input.now,
+        )
     }) {
+        if ban.ban_type == "ip" {
+            return reject(
+                "您当前使用的IP与其他正在封禁中玩家的IP一致，这会导致您无法进入服务器，如有疑问请联系管理员",
+            );
+        }
         return reject(&format!("你已被封禁：{}", ban.reason));
     }
 
@@ -907,11 +916,14 @@ mod tests {
         let now = Utc::now();
         let mut snapshot = base_snapshot(now);
         snapshot.bans.push(SnapshotBan {
+            ban_id: Uuid::new_v4(),
+            ban_type: "steam".to_string(),
             steam_id: Some("76561198000000001".to_string()),
             ip_address: None,
             reason: "违规".to_string(),
             expires_at: None,
             expires_at_unix: 0,
+            account_unbanned: false,
         });
         let decision = evaluate_access_snapshot(&snapshot, &input(now, "76561198000000001"));
 
@@ -1005,11 +1017,14 @@ mod tests {
         let now = Utc::now();
         let mut snapshot = base_snapshot(now);
         snapshot.bans.push(SnapshotBan {
+            ban_id: Uuid::new_v4(),
+            ban_type: "steam".to_string(),
             steam_id: Some("76561198000000003".to_string()),
             ip_address: None,
             reason: "作弊".to_string(),
             expires_at: Some(now + Duration::hours(1)),
             expires_at_unix: (now + Duration::hours(1)).timestamp(),
+            account_unbanned: false,
         });
 
         let result = evaluate_ban_snapshot(

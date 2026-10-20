@@ -7,6 +7,8 @@ impl Database {
             r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS ip_address TEXT"#,
             r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS server_name TEXT"#,
             r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS ban_type TEXT NOT NULL DEFAULT 'steam'"#,
+            // 仅解封账号（保留 IP 封禁）：该账号从自身 IP 封禁中豁免，其他账号仍被 IP 封禁拦截
+            r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS account_unbanned BOOLEAN NOT NULL DEFAULT false"#,
             r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS reason TEXT NOT NULL DEFAULT '未填写'"#,
             r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS duration_minutes INTEGER NOT NULL DEFAULT 0"#,
             r#"ALTER TABLE ban_records ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ"#,

@@ -214,7 +214,7 @@ pub async fn create_plugin_ban(
                server_id, server_port
            )
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', $10, 'game_plugin', $11, $12)
-           RETURNING id, player, steam_id, ip_address, server_name, ban_type,
+           RETURNING id, player, steam_id, ip_address, server_name, ban_type, account_unbanned,
                      duration_minutes, expires_at, reason, status, operator_name, source,
                      server_id, server_port, removed_reason, removed_by, removed_at, created_at"#,
     )
@@ -240,10 +240,12 @@ pub async fn create_plugin_ban(
         "ban.add",
         super::auth_event_service::ban_add_payload(
             ban_id,
+            &row.ban_type,
             &steam_id.clone().unwrap_or_default(),
             ip_address.as_deref(),
             reason,
             expires_at,
+            false,
         ),
     )
     .await?;
@@ -265,7 +267,7 @@ pub async fn unban_plugin_target(
 
     // 先查询封禁记录，获取原始封禁者
     let original_ban = sqlx::query_as::<_, super::ban_service::BanRow>(
-        r#"SELECT id, player, steam_id, ip_address, server_name, ban_type,
+        r#"SELECT id, player, steam_id, ip_address, server_name, ban_type, account_unbanned,
                   duration_minutes, expires_at, reason, status, operator_name, source,
                   server_id, server_port, removed_reason, removed_by, removed_at, created_at
            FROM ban_records
@@ -300,7 +302,7 @@ pub async fn unban_plugin_target(
         r#"UPDATE ban_records
            SET status = 'inactive', removed_reason = $2, removed_by = $3, removed_at = now()
            WHERE id = $1
-           RETURNING id, player, steam_id, ip_address, server_name, ban_type,
+           RETURNING id, player, steam_id, ip_address, server_name, ban_type, account_unbanned,
                      duration_minutes, expires_at, reason, status, operator_name, source,
                      server_id, server_port, removed_reason, removed_by, removed_at, created_at"#,
     )
@@ -460,7 +462,7 @@ pub async fn poll_active_bans_versioned(
     }
 
     let rows = sqlx::query_as::<_, super::ban_service::BanRow>(
-        r#"SELECT id, player, steam_id, ip_address, server_name, ban_type,
+        r#"SELECT id, player, steam_id, ip_address, server_name, ban_type, account_unbanned,
                   duration_minutes, expires_at, reason, status, operator_name, source,
                   server_id, server_port, removed_reason, removed_by, removed_at, created_at
            FROM ban_records
@@ -545,7 +547,7 @@ pub async fn poll_active_bans_incremental(
     let (rows, total_count) = if let Some(since_time) = since {
         // 增量查询：只获取新记录
         let rows = sqlx::query_as::<_, super::ban_service::BanRow>(
-            r#"SELECT id, player, steam_id, ip_address, server_name, ban_type,
+            r#"SELECT id, player, steam_id, ip_address, server_name, ban_type, account_unbanned,
                       duration_minutes, expires_at, reason, status, operator_name, source,
                       server_id, server_port, removed_reason, removed_by, removed_at, created_at
                FROM ban_records
@@ -578,7 +580,7 @@ pub async fn poll_active_bans_incremental(
     } else {
         // 首次查询：获取所有活跃封禁
         let rows = sqlx::query_as::<_, super::ban_service::BanRow>(
-            r#"SELECT id, player, steam_id, ip_address, server_name, ban_type,
+            r#"SELECT id, player, steam_id, ip_address, server_name, ban_type, account_unbanned,
                       duration_minutes, expires_at, reason, status, operator_name, source,
                       server_id, server_port, removed_reason, removed_by, removed_at, created_at
                FROM ban_records

@@ -206,7 +206,7 @@ pub async fn create_integration_ban(
                server_id, server_port
            )
            VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8, 'active', $9, 'external_api', NULL, NULL)
-           RETURNING id, player, steam_id, ip_address, server_name, ban_type,
+           RETURNING id, player, steam_id, ip_address, server_name, ban_type, account_unbanned,
                      duration_minutes, expires_at, reason, status, operator_name, source,
                      server_id, server_port, removed_reason, removed_by, removed_at, created_at"#,
     )
@@ -238,7 +238,7 @@ pub async fn check_integration_ban(
     );
 
     let row = sqlx::query_as::<_, BanRow>(
-        r#"SELECT id, player, steam_id, ip_address, server_name, ban_type,
+        r#"SELECT id, player, steam_id, ip_address, server_name, ban_type, account_unbanned,
                   duration_minutes, expires_at, reason, status, operator_name, source,
                   server_id, server_port, removed_reason, removed_by, removed_at, created_at
            FROM ban_records

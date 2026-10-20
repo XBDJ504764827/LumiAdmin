@@ -21,6 +21,7 @@ const ACCESS_METHOD_MAP = {
   restriction_rejected: { label: 'Rating 不足', kind: 'danger' },
   custom_rule_rejected: { label: '规则拒绝', kind: 'danger' },
   risk_blocked: { label: '中高风险拦截', kind: 'danger' },
+  ip_collision: { label: '同 IP 封禁拦截', kind: 'warning' },
   unknown: { label: '未知', kind: 'default' },
 };
 
@@ -29,6 +30,7 @@ const FAILURE_CODE_MAP = {
   global_banned: '全球封禁',
   linked_ip_banned: '同 IP 关联封禁',
   linked_qq_banned: '同 QQ 关联封禁',
+  shared_ip: '与封禁账号同 IP',
   not_whitelisted: '白名单未通过',
   low_rating: 'Rating 不足',
   low_steam_level: 'Steam 等级不足',

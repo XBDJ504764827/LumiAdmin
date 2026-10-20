@@ -5,6 +5,7 @@ import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { BanFormModal } from '../ban/BanFormModal.jsx';
+import { UnbanScopeModal } from '../ban/UnbanScopeModal.jsx';
 import { StatusPill } from '../../shared/StatusPill.jsx';
 import { Modal } from '../../shared/Modal.jsx';
 import { formatChinaDate, formatChinaDateTime } from '../../shared/time.js';
@@ -161,16 +162,41 @@ function BanDetailPopup({ item, onClose, onAction, token }) {
   const { toast } = useToast();
   const { confirm, dialog } = useConfirmDialog();
   const [acting, setActing] = useState(false);
+  const [unbanScopeOpen, setUnbanScopeOpen] = useState(false);
   if (!item) return null;
   const isActive = item.status === 'active';
 
-  async function doUnban() { if (acting) return; setActing(true); try { await api.unban(token, item.id); toast({ title: '解封成功' }); onAction(); onClose(); } catch (e) { toast({ title: '操作失败', message: e.message, tone: 'danger' }); } finally { setActing(false); } }
+  async function doUnban() {
+    if (acting) return;
+    if (item.ban_type === 'ip') {
+      setUnbanScopeOpen(true);
+      return;
+    }
+    setActing(true);
+    try { await api.unban(token, item.id, 'account_ip'); toast({ title: '解封成功' }); onAction(); onClose(); } catch (e) { toast({ title: '操作失败', message: e.message, tone: 'danger' }); } finally { setActing(false); }
+  }
+
+  async function confirmUnbanScope(scope) {
+    if (acting) return;
+    setActing(true);
+    try {
+      await api.unban(token, item.id, scope);
+      toast({ title: scope === 'account' ? '已仅解封该账号' : '已解封账号与账号下 IP' });
+      setUnbanScopeOpen(false);
+      onAction();
+      onClose();
+    } catch (e) {
+      toast({ title: '操作失败', message: e.message, tone: 'danger' });
+    } finally {
+      setActing(false);
+    }
+  }
   async function doDelete() { if (acting) return; const ok = await confirm({ title: '删除封禁记录', message: '确定删除这条封禁记录吗？此操作不可恢复。', tone: 'danger', confirmText: '确认删除' }); if (!ok) return; setActing(true); try { await api.deleteBan(token, item.id); toast({ title: '删除成功' }); onAction(); onClose(); } catch (e) { toast({ title: '操作失败', message: e.message, tone: 'danger' }); } finally { setActing(false); } }
 
   return (<>
     <Modal open={true} title="封禁详情" onClose={onClose} footer={<><button className="btn btn-outline" onClick={onClose}>关闭</button>{isActive && <><button className="action-btn action-btn-success" onClick={doUnban} disabled={acting}>解封</button><button className="action-btn action-btn-danger" onClick={doDelete} disabled={acting}>删除</button></>}</>}>
       <div className="detail-grid">
-        <span className="detail-label">状态</span><span className="detail-value"><StatusPill kind={stKind(item.status, 'ban')}>{stLabel(item.status)}</StatusPill></span>
+        <span className="detail-label">状态</span><span className="detail-value"><StatusPill kind={stKind(item.status, 'ban')}>{stLabel(item.status)}</StatusPill>{item.account_unbanned ? <span style={{ marginLeft: 6 }}><StatusPill kind="warning">账号已解封 / IP 仍封禁</StatusPill></span> : null}</span>
         <span className="detail-label">玩家</span><span className="detail-value fw-600">{item.player || '-'}</span>
         <span className="detail-label">SteamID64</span><span className="detail-value mono">{item.steam_id}</span>
         {item.ip_address && <><span className="detail-label">IP</span><span className="detail-value mono">{item.ip_address}</span></>}
@@ -183,6 +209,13 @@ function BanDetailPopup({ item, onClose, onAction, token }) {
         {item.removed_at && <><span className="detail-label">解封时间</span><span className="detail-value">{formatChinaDateTime(item.removed_at)} {item.removed_by ? `(${item.removed_by})` : ''}</span></>}
       </div>
     </Modal>
+    <UnbanScopeModal
+      open={unbanScopeOpen}
+      item={item}
+      acting={acting}
+      onClose={() => setUnbanScopeOpen(false)}
+      onConfirm={confirmUnbanScope}
+    />
     {dialog}
   </>);
 }
@@ -970,7 +1003,7 @@ function StatusTab({ detail, token, onRefresh }) {
           <td data-label="时长" style={{ color: item.status === 'active' ? 'var(--danger-text)' : 'var(--text2)' }}>{durLabel(item.duration_minutes)}</td>
           <td data-label="封禁理由" className="mobile-card-full" title={item.reason}>{item.reason}</td>
           <td data-label="操作人">{item.operator_name || '-'}</td>
-          <td data-label="状态"><StatusPill kind={stKind(item.status, 'ban')}>{stLabel(item.status)}</StatusPill></td>
+          <td data-label="状态"><StatusPill kind={stKind(item.status, 'ban')}>{stLabel(item.status)}</StatusPill>{item.account_unbanned ? <span style={{ marginLeft: 6 }}><StatusPill kind="warning">账号已解封 / IP 仍封禁</StatusPill></span> : null}</td>
         </tr>)}
       </tbody></table></div>}
     </div></div>

@@ -1077,6 +1077,7 @@ mod tests {
             ip_address: Some("127.0.0.1".to_string()),
             server_name: Some("KZ Server".to_string()),
             ban_type: "steam".to_string(),
+            account_unbanned: false,
             duration_minutes: 0,
             expires_at: None,
             reason: "macro".to_string(),

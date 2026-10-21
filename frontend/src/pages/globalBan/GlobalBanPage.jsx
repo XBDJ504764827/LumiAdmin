@@ -146,7 +146,7 @@ export function GlobalBanPage() {
               <div className="ops-kv"><span>同步任务</span><StatusPill kind={syncTaskStatus.kind}>{syncTaskStatus.label}</StatusPill></div>
               <div className="ops-kv"><span>KZTimer API</span><StatusPill kind={externalApiStatus.kind}>{externalApiStatus.label}</StatusPill></div>
             </div>
-            {syncStatus.task?.last_error&&<div className="info-box danger" style={{marginTop:12,marginBottom:0}}>最近同步错误：{syncStatus.task.last_error}</div>}
+            {syncStatus.task?.last_error&&<div className="info-box danger" style={{marginTop:12,marginBottom:0}}>最近同步错误：{syncStatus.task.last_error}。本地缓存封禁仍然生效，后台会自动重试。</div>}
             {syncStatus.external_api?.cooldown_until&&<div className="info-box warning" style={{marginTop:12,marginBottom:0}}>KZTimer API 冷却到 {formatChinaDateTime(syncStatus.external_api.cooldown_until)}，冷却期间继续使用本地缓存。</div>}
           </div>
         </div>

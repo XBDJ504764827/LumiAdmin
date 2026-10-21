@@ -287,22 +287,6 @@ pub async fn get_status_by_ids(
     .map_err(Into::into)
 }
 
-pub async fn get_all_with_status(db: &Database) -> anyhow::Result<Vec<ExternalServerWithStatus>> {
-    sqlx::query_as::<_, ExternalServerWithStatus>(
-        r#"SELECT es.id, es.name, es.ip, es.port, es.rcon_password, es.enabled,
-                  es.poll_interval, es.last_queried_at, es.created_at,
-                  st.server_name, st.current_map, st.player_count, st.max_players,
-                  st.players, st.queried_at AS status_queried_at
-           FROM external_servers es
-           JOIN external_server_status st ON st.server_id = es.id
-           WHERE es.enabled = true
-           ORDER BY es.name ASC"#,
-    )
-    .fetch_all(&db.pool)
-    .await
-    .map_err(Into::into)
-}
-
 pub async fn update_last_queried(db: &Database, server_id: Uuid) -> anyhow::Result<()> {
     sqlx::query("UPDATE external_servers SET last_queried_at = now() WHERE id = $1")
         .bind(server_id)

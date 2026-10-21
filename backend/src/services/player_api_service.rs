@@ -446,15 +446,15 @@ async fn fill_map_tiers(db: &Database, servers: &mut [WebhookServerPayload]) {
     }
 }
 
+/// 按端点显式选择的外部服务器 ID 组装 payload。
+///
+/// `ids` 为空表示该端点不分发任何外部服务器数据（历史上曾把空数组当作
+/// 「全部外部服务器」，导致管理后台清空选择后仍会推送外部服务器数据）。
 async fn fetch_external_server_rows(
     db: &Database,
     ids: &[Uuid],
 ) -> anyhow::Result<Vec<WebhookServerPayload>> {
-    let servers = if ids.is_empty() {
-        crate::services::external_server_service::get_all_with_status(db).await?
-    } else {
-        crate::services::external_server_service::get_status_by_ids(db, ids).await?
-    };
+    let servers = crate::services::external_server_service::get_status_by_ids(db, ids).await?;
 
     Ok(servers
         .into_iter()

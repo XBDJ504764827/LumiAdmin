@@ -289,6 +289,9 @@ export function PlayerApiPage() {
                     const selectedServerNames = item.serverIds.length === 0
                       ? '全部服务器'
                       : item.serverIds.map((id) => serverOptions.find((s) => s.id === id)?.label ?? id.slice(0, 8)).join('、');
+                    const selectedExternalServerNames = item.externalServerIds.length === 0
+                      ? '不分发外部服务器'
+                      : item.externalServerIds.map((id) => externalServerOptions.find((s) => s.id === id)?.label ?? id.slice(0, 8)).join('、');
                     return (
                       <div key={`${item.publicPath}-${index}`} className={`list-item-card${item.enabled ? '' : ' disabled'}`}>
                         <div style={{ flex: 1, minWidth: 0 }}>
@@ -302,6 +305,7 @@ export function PlayerApiPage() {
                           <div style={{ fontSize: 11.5, color: 'var(--text3)', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
                             <span>{window.location.origin}/webhook/{item.publicPath}</span>
                             <span>服务器：{selectedServerNames}</span>
+                            <span>外部服务器：{selectedExternalServerNames}</span>
                           </div>
                         </div>
                         <div className="action-btn-group flex-shrink-0">
@@ -474,6 +478,7 @@ export function PlayerApiPage() {
               {externalServerOptions.length > 0 && (
                 <div className="form-group">
                   <label>外部服务器</label>
+                  <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 8 }}>仅推送勾选的外部服务器；全部不勾选则不推送任何外部服务器数据</div>
                   <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--surface2)' }}>
                       <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 0, fontWeight: 500, fontSize: 13 }}>

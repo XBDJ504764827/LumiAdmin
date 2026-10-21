@@ -1545,6 +1545,80 @@ async fn player_api_dispatch_records_failed_webhook_status() {
 }
 
 #[tokio::test]
+async fn player_api_empty_external_selection_excludes_external_servers() {
+    with_test_app(async |db, _config| {
+        let (_, server_id) = insert_community_with_server(&db, "外部服务器选择服").await;
+        let external_id: Uuid = sqlx::query_scalar(
+            r#"INSERT INTO external_servers (id, name, ip, port, enabled, poll_interval)
+               VALUES (gen_random_uuid(), '外部服', '203.0.113.50', 27015, true, 120)
+               RETURNING id"#,
+        )
+        .fetch_one(&db.pool)
+        .await?;
+        sqlx::query(
+            r#"INSERT INTO external_server_status (server_id, server_name, current_map, player_count, max_players, players, queried_at)
+               VALUES ($1, '外部服', 'de_nuke', 1, 16, ARRAY['Bob'], now())"#,
+        )
+        .bind(external_id)
+        .execute(&db.pool)
+        .await?;
+
+        let save = |external_ids: Vec<Uuid>| {
+            let db = db.clone();
+            async move {
+                crate::services::player_api_service::save_config(
+                    &db,
+                    crate::services::player_api_service::PlayerApiConfigInput {
+                        max_api_count: 1,
+                        interval_seconds: 30,
+                        items: vec![crate::services::player_api_service::PlayerApiWebhookInput {
+                            public_path: "external-selection".to_string(),
+                            webhook_url: Some("https://api.example.com/a".to_string()),
+                            secret: None,
+                            server_ids: vec![server_id],
+                            external_server_ids: external_ids,
+                            enabled: true,
+                            public_access: true,
+                        }],
+                    },
+                )
+                .await
+            }
+        };
+
+        // 空选择 = 不分发任何外部服务器（旧实现会退化为「全部外部服务器」）。
+        save(vec![]).await?;
+        let payload = crate::services::player_api_service::fetch_webhook_payload_by_path(
+            &db,
+            "external-selection",
+            None,
+        )
+        .await?;
+        assert_eq!(payload.servers.len(), 1);
+        assert_eq!(payload.servers[0].server_id, server_id);
+        assert!(payload
+            .servers
+            .iter()
+            .all(|server| server.server_id != external_id));
+
+        // 显式选中后才分发该外部服务器。
+        save(vec![external_id]).await?;
+        let payload = crate::services::player_api_service::fetch_webhook_payload_by_path(
+            &db,
+            "external-selection",
+            None,
+        )
+        .await?;
+        assert!(payload
+            .servers
+            .iter()
+            .any(|server| server.server_id == external_id));
+        Ok(())
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn normal_admin_cannot_manage_player_api_config() {
     with_test_app(async |db, config| {
         let token = create_session_for_user(&db, "33333333-3333-3333-3333-333333333333").await?;

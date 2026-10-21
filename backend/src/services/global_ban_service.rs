@@ -31,6 +31,14 @@ const KZT_GLOBAL_BANS_API_NAME: &str = "KZTimer GlobalAPI";
 const KZT_GLOBAL_BAN_PAGE_LIMIT: i64 = 500;
 const DEFAULT_KZT_GLOBAL_BAN_MAX_PAGES: i64 = 1000;
 const GLOBAL_BAN_SYNC_MAX_PAGES_ENV: &str = "GLOBAL_BAN_SYNC_MAX_PAGES";
+/// 全量同步单页请求超时：KZTimer 每页最多 500 条且响应体较大，
+/// 跨境链路 20s 经常不够用，默认放宽到 60s 并支持环境变量覆盖。
+const DEFAULT_KZT_GLOBAL_BAN_REQUEST_TIMEOUT_SECS: u64 = 60;
+const GLOBAL_BAN_API_TIMEOUT_ENV: &str = "GLOBAL_BAN_API_TIMEOUT_SECS";
+/// 全量同步单页请求失败后的最大尝试次数（含首次）。
+const KZT_GLOBAL_BAN_FETCH_ATTEMPTS: u32 = 3;
+/// 全量同步重试退避基数（毫秒），按 1x / 2x 递增。
+const KZT_GLOBAL_BAN_RETRY_BACKOFF_MS: u64 = 500;
 /// KZTimer 单玩家实时查询时的最大分页数（正常玩家远小于一页，
 /// 此处仅防止 API 异常返回满页导致无限循环）。
 const KZT_GLOBAL_BAN_PER_PLAYER_MAX_PAGES: i64 = 10;
@@ -206,9 +214,66 @@ async fn fetch_kzt_bans(
         KZT_GLOBAL_BANS_API_KEY,
         KZT_GLOBAL_BANS_API_NAME,
         &url,
-        Duration::from_secs(20),
+        Duration::from_secs(configured_kzt_global_ban_request_timeout()),
     )
     .await
+}
+
+/// 全量同步分页请求带重试：单页超时 / 网络抖动不应该让整轮同步失败，
+/// 也不应该把一次性错误直接暴露成「最近同步错误」。
+///
+/// 与单玩家查询一致：命中 429 限流冷却时立即放弃重试（重试只会立即失败）。
+async fn fetch_kzt_bans_with_retry(
+    offset: i64,
+    limit: i64,
+    expired_filter: Option<bool>,
+) -> anyhow::Result<Vec<KZTBan>> {
+    fetch_page_with_retries(|| fetch_kzt_bans(offset, limit, expired_filter)).await
+}
+
+async fn fetch_page_with_retries<F, Fut>(mut fetch: F) -> anyhow::Result<Vec<KZTBan>>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<Vec<KZTBan>>>,
+{
+    let mut last_error: Option<anyhow::Error> = None;
+    for attempt in 1..=KZT_GLOBAL_BAN_FETCH_ATTEMPTS {
+        match fetch().await {
+            Ok(bans) => return Ok(bans),
+            Err(error) => {
+                if external_api_service::in_cooldown(KZT_GLOBAL_BANS_API_KEY) {
+                    tracing::warn!(
+                        %error,
+                        attempt,
+                        "KZTimer 全球封禁请求处于限流冷却，放弃重试"
+                    );
+                    return Err(error);
+                }
+                tracing::warn!(
+                    %error,
+                    attempt,
+                    max_attempts = KZT_GLOBAL_BAN_FETCH_ATTEMPTS,
+                    "KZTimer 全球封禁分页请求失败"
+                );
+                last_error = Some(error);
+                if attempt < KZT_GLOBAL_BAN_FETCH_ATTEMPTS {
+                    let backoff =
+                        KZT_GLOBAL_BAN_RETRY_BACKOFF_MS * 2u64.pow(attempt.saturating_sub(1));
+                    tokio::time::sleep(Duration::from_millis(backoff)).await;
+                }
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("KZTimer 全球封禁分页请求失败")))
+}
+
+fn configured_kzt_global_ban_request_timeout() -> u64 {
+    std::env::var(GLOBAL_BAN_API_TIMEOUT_ENV)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_KZT_GLOBAL_BAN_REQUEST_TIMEOUT_SECS)
 }
 
 /// 直接向 KZTimer 权威 API 查询某玩家当前的活跃全球封禁。
@@ -549,7 +614,7 @@ async fn fetch_all_active_kzt_bans() -> anyhow::Result<Vec<KZTBan>> {
     fetch_all_active_kzt_bans_with(
         KZT_GLOBAL_BAN_PAGE_LIMIT,
         configured_kzt_global_ban_max_pages(),
-        |offset, limit| fetch_kzt_bans(offset, limit, Some(false)),
+        |offset, limit| fetch_kzt_bans_with_retry(offset, limit, Some(false)),
     )
     .await
 }
@@ -1162,9 +1227,11 @@ pub fn start_global_ban_sync_loop(
                 Err(e) => tracing::warn!(%e, "全球封禁初始同步失败"),
             }
 
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+            // 用 sleep 而不是 interval：全量同步耗时可能超过同步周期，
+            // interval 会积累未消费的 tick 导致连续冲刺同步，把外部 API 打爆并放大超时；
+            // sleep 保证每轮之间至少间隔一个周期。首次同步已在上面执行。
             loop {
-                interval.tick().await;
+                tokio::time::sleep(std::time::Duration::from_secs(interval_secs.max(1))).await;
                 match observability_service::observe_task(
                     "global_ban_sync",
                     sync_global_bans(&db),
@@ -1293,6 +1360,52 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("分页超过 3 页"));
         assert!(message.contains(GLOBAL_BAN_SYNC_MAX_PAGES_ENV));
+    }
+
+    #[tokio::test]
+    async fn page_fetch_retries_transient_timeout() {
+        use std::sync::{
+            atomic::{AtomicU32, Ordering},
+            Arc,
+        };
+
+        let attempts = Arc::new(AtomicU32::new(0));
+        let bans = fetch_page_with_retries({
+            let attempts = attempts.clone();
+            move || {
+                let attempts = attempts.clone();
+                async move {
+                    let attempt = attempts.fetch_add(1, Ordering::SeqCst) + 1;
+                    if attempt < KZT_GLOBAL_BAN_FETCH_ATTEMPTS {
+                        anyhow::bail!("外部 API 请求超时 (60s)");
+                    }
+                    Ok(vec![test_kzt_ban(
+                        1,
+                        "76561198000000001",
+                        "2099-06-30T00:00:00Z",
+                        None,
+                    )])
+                }
+            }
+        })
+        .await
+        .expect("瞬时超时应在重试后成功");
+
+        assert_eq!(bans.len(), 1);
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            KZT_GLOBAL_BAN_FETCH_ATTEMPTS
+        );
+    }
+
+    #[tokio::test]
+    async fn page_fetch_surfaces_last_error_after_all_retries() {
+        let error =
+            fetch_page_with_retries(|| async { anyhow::bail!("外部 API 请求超时 (60s)") })
+                .await
+                .unwrap_err();
+
+        assert!(error.to_string().contains("超时"));
     }
 
     #[tokio::test]

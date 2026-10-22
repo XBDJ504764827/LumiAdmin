@@ -168,19 +168,17 @@ async fn check_access_live(
             name: server.name.clone(),
             port: server.port,
         };
-        if !ban.from_global {
-            if let Err(error) = plugin_ban_service::complete_missing_ban_details(
-                db,
-                ban.id,
-                input.player.as_deref(),
-                input.ip_address.as_deref(),
-                &server_auth,
-                input.server_port.unwrap_or(server.port),
-            )
-            .await
-            {
-                warn!(%error, ban_id = %ban.id, "补齐封禁详情失败");
-            }
+        if let Err(error) = plugin_ban_service::complete_missing_ban_details(
+            db,
+            ban.id,
+            input.player.as_deref(),
+            input.ip_address.as_deref(),
+            &server_auth,
+            input.server_port.unwrap_or(server.port),
+        )
+        .await
+        {
+            warn!(%error, ban_id = %ban.id, "补齐封禁详情失败");
         }
         if ban.ban_type == "ip" {
             return Ok(reject_with_method(
@@ -370,7 +368,6 @@ fn reject_access_modes(
 struct LiveBanMatch {
     id: uuid::Uuid,
     ban_type: String,
-    from_global: bool,
 }
 
 /// 网站实时封禁匹配：
@@ -397,30 +394,13 @@ async fn live_ban_for_access(
     .fetch_optional(&db.pool)
     .await?;
     if let Some((id, ban_type)) = steam_row {
-        return Ok(Some(LiveBanMatch {
-            id,
-            ban_type,
-            from_global: false,
-        }));
+        return Ok(Some(LiveBanMatch { id, ban_type }));
     }
 
-    // 全球封禁可能尚未同步成本地 ban_records：直接查 global_bans（管理员已解封/已过期除外）。
-    let global_row: Option<(uuid::Uuid,)> = sqlx::query_as(
-        r#"SELECT id FROM global_bans
-           WHERE steam_id64 = $1 AND is_expired = false AND manual_unbanned = false
-           ORDER BY created_on DESC NULLS LAST, synced_at DESC
-           LIMIT 1"#,
-    )
-    .bind(steam_id64)
-    .fetch_optional(&db.pool)
-    .await?;
-    if let Some((id,)) = global_row {
-        return Ok(Some(LiveBanMatch {
-            id,
-            ban_type: "steam".to_string(),
-            from_global: true,
-        }));
-    }
+    // 注意：全球封禁的准入判断同样只看 ban_records。
+    // global_ban 同步在同一个事务内写入 global_bans 与 ban_records，不存在
+    // “元数据已同步、本地封禁未建立”的正常窗口；直接查 global_bans 的
+    // is_expired 布尔值会在同步异常/外部 API 语义变化时造成误封。
 
     let Some(ip) = ip_address.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
@@ -439,11 +419,7 @@ async fn live_ban_for_access(
     .bind(steam_id64)
     .fetch_optional(&db.pool)
     .await?;
-    Ok(ip_row.map(|(id, ban_type)| LiveBanMatch {
-        id,
-        ban_type,
-        from_global: false,
-    }))
+    Ok(ip_row.map(|(id, ban_type)| LiveBanMatch { id, ban_type }))
 }
 
 #[allow(dead_code)]

@@ -4,9 +4,12 @@
 //
 // 同步策略（全量权威同步活跃 KZTimer 封禁）：
 //   1. global_bans 表以 kzt_ban_id 为 UNIQUE 键
-//   2. 每轮完整拉取 KZTimer 活跃封禁；分页/API 失败时本轮不修改本地数据
+//   2. 每轮完整拉取 KZTimer 封禁；分页/API 失败时本轮不修改本地数据。
+//      请求参数为 is_expired=false，同时在本地按 expires_on 再判一次过期，
+//      即使 KZTimer 忽略过滤参数，也不会把历史过期封禁当成活跃记录
 //   3. 每条 KZTimer 封禁对应一条 source='global_ban' 的 ban_records 记录
-//   4. KZTimer 中消失的封禁会标记为过期，并只自动解除对应的 source='global_ban' 本地封禁
+//   4. KZTimer 中消失或 expires_on 已过的封禁会标记为过期，并只自动解除对应的
+//      source='global_ban' 本地封禁
 //   5. 管理员在 LumiAdmin 中解封某条全球封禁后，仅该 kzt_ban_id 不会被同步封回
 //      同一玩家后续产生新的 KZTimer 封禁 ID 时仍会同步到本地封禁管理
 //   6. 服务器准入只看 ban_records；global_bans 仅作为同步/展示元数据
@@ -201,7 +204,7 @@ async fn fetch_kzt_bans(
 ) -> anyhow::Result<Vec<KZTBan>> {
     let url = match expired_filter {
         Some(v) => format!(
-            "https://kztimerglobal.com/api/v2.0/bans?isExpired={}&limit={}&offset={}",
+            "https://kztimerglobal.com/api/v2.0/bans?is_expired={}&limit={}&offset={}",
             v, limit, offset
         ),
         None => format!(
@@ -298,7 +301,15 @@ pub async fn fetch_active_global_bans_by_steamid64(steamid64: &str) -> anyhow::R
     let mut last_error: Option<anyhow::Error> = None;
     for attempt in 1..=KZT_PLAYER_QUERY_ATTEMPTS {
         match fetch_active_global_bans_page_loop(steamid64).await {
-            Ok(bans) => return Ok(bans),
+            Ok(bans) => {
+                // KZTimer 的 is_expired 参数可能失效或被改名；返回结果统一在本地
+                // 再按 expires_on 过滤一次，避免把历史过期封禁当成当前活跃封禁。
+                let now = Utc::now();
+                return Ok(bans
+                    .into_iter()
+                    .filter(|ban| !kzt_ban_is_expired(ban, now))
+                    .collect());
+            }
             Err(error) => {
                 if external_api_service::in_cooldown(KZT_PLAYER_BANS_API_KEY) {
                     tracing::warn!(
@@ -326,7 +337,7 @@ async fn fetch_active_global_bans_page_loop(steamid64: &str) -> anyhow::Result<V
     for page in 0..KZT_GLOBAL_BAN_PER_PLAYER_MAX_PAGES {
         let offset = page * KZT_GLOBAL_BAN_PAGE_LIMIT;
         let url = format!(
-            "https://kztimerglobal.com/api/v2.0/bans?steamid64={}&isExpired=false&limit={}&offset={}",
+            "https://kztimerglobal.com/api/v2.0/bans?steamid64={}&is_expired=false&limit={}&offset={}",
             steamid64, KZT_GLOBAL_BAN_PAGE_LIMIT, offset
         );
         let bans: Vec<KZTBan> = external_api_service::get_json(
@@ -585,7 +596,7 @@ pub async fn sync_status(
 // =====================================================
 
 /// 核心同步逻辑：
-///   - 完整拉取 KZTimer 所有活跃封禁（isExpired=false）
+///   - 完整拉取 KZTimer 所有活跃封禁（is_expired=false），并在本地按 expires_on 复核
 ///   - 拉取完整成功后才同步本地数据，避免 API/分页异常造成误解封
 ///   - 新增/更新每条全球封禁对应的 source='global_ban' 本地封禁
 ///   - KZTimer 中已解除/过期的封禁，只自动解除对应 source='global_ban' 本地封禁
@@ -691,8 +702,20 @@ async fn apply_authoritative_global_bans(
         total_fetched: all_bans.len() as i64,
         ..Default::default()
     };
+    let now = Utc::now();
+    let mut locally_expired = 0_i64;
+    let mut active_ids: Vec<i64> = Vec::with_capacity(all_bans.len());
 
     for ban in all_bans {
+        // 先按本地 expires_on 判断，不依赖 KZTimer 的 is_expired 过滤参数。
+        // 这里跳过的记录不会进入 active_ids，随后会被 expire_missing 标记为过期
+        // 并自动解除对应的本地封禁。
+        if kzt_ban_is_expired(ban, now) {
+            locally_expired += 1;
+            continue;
+        }
+        active_ids.push(ban.id);
+
         // 跳过无效 SteamID64（如外部 API 返回的 "0" / "STEAM_ID_STOP_IGNORING_RETVALS" 等），
         // 避免脏数据写入 global_bans / ban_records。
         if !crate::services::steam_service::is_steamid64(ban.steamid64.trim()) {
@@ -728,10 +751,17 @@ async fn apply_authoritative_global_bans(
         }
     }
 
+    if locally_expired > 0 {
+        tracing::warn!(
+            locally_expired,
+            total_fetched = all_bans.len(),
+            "KZTimer 返回了已过期封禁，已按本地 expires_on 过滤；请检查 API is_expired 过滤是否失效"
+        );
+    }
+
     if all_bans.is_empty() {
         tracing::warn!("KZTimer 全球封禁本轮返回 0 条，跳过自动解除缺失记录以避免误解封");
     } else {
-        let active_ids: Vec<i64> = all_bans.iter().map(|ban| ban.id).collect();
         result.expired = expire_missing_global_bans(&mut *tx, &active_ids).await?;
     }
 
@@ -875,10 +905,9 @@ async fn expire_missing_global_bans(
     tx: &mut sqlx::Transaction<'_, Postgres>,
     active_ids: &[i64],
 ) -> anyhow::Result<i64> {
-    if active_ids.is_empty() {
-        return Ok(0);
-    }
-
+    // 注意：active_ids 允许为空。调用方已确认本轮 API 确实返回了记录，
+    // 只是这些记录都在本地被判为过期；此时应把本地所有仍标记活跃的全球封禁
+    // 置为过期（即缺少任何活跃 ID）。
     let result = sqlx::query(
         r#"WITH expired AS (
              UPDATE global_bans
@@ -1000,6 +1029,39 @@ fn parse_kzt_datetime(s: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
         format!("{}Z", s)
     };
     DateTime::parse_from_rfc3339(&s2).map(|dt| dt.with_timezone(&Utc))
+}
+
+/// 按 `expires_on` 在本地判断全球封禁是否已经过期。
+///
+/// KZTimer 的 `is_expired` 查询参数属于外部契约，可能被改名或失效；
+/// 同步与单玩家权威查询必须再以本地时间判断一次：
+/// - `expires_on` 为空或 9999 年：永久封禁，未过期；
+/// - 解析失败：保守按未过期处理（由 KZTimer 的活跃列表兜底），并记录告警。
+fn kzt_ban_is_expired(ban: &KZTBan, now: DateTime<Utc>) -> bool {
+    let Some(raw) = ban
+        .expires_on
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    if raw.starts_with("9999") {
+        return false;
+    }
+
+    match parse_kzt_datetime(raw) {
+        Ok(expires_at) => expires_at <= now,
+        Err(error) => {
+            tracing::warn!(
+                kzt_ban_id = ban.id,
+                expires_on = raw,
+                %error,
+                "无法解析 KZTimer expires_on，按未过期处理"
+            );
+            false
+        }
+    }
 }
 
 /// 管理员手动解封全球封禁对应的本地封禁
@@ -1550,6 +1612,95 @@ mod tests {
                     .fetch_one(&db.pool)
                     .await?;
             assert_eq!(manual_status, "active");
+
+            Ok(())
+        })
+        .await;
+    }
+
+    #[test]
+    fn kzt_ban_expiry_is_computed_from_expires_on() {
+        let now = DateTime::parse_from_rfc3339("2026-10-22T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        assert!(kzt_ban_is_expired(
+            &test_kzt_ban(
+                1,
+                "76561198000000701",
+                "2026-01-01T00:00:00Z",
+                Some("2026-10-21T23:59:59Z")
+            ),
+            now
+        ));
+        assert!(!kzt_ban_is_expired(
+            &test_kzt_ban(
+                2,
+                "76561198000000702",
+                "2026-01-01T00:00:00Z",
+                Some("2026-10-22T00:00:01Z")
+            ),
+            now
+        ));
+        // 9999 年与空值都表示永久封禁。
+        assert!(!kzt_ban_is_expired(
+            &test_kzt_ban(
+                3,
+                "76561198000000703",
+                "2026-01-01T00:00:00Z",
+                Some("9999-12-31T23:59:59")
+            ),
+            now
+        ));
+        assert!(!kzt_ban_is_expired(
+            &test_kzt_ban(4, "76561198000000704", "2026-01-01T00:00:00Z", None),
+            now
+        ));
+    }
+
+    #[tokio::test]
+    async fn sync_expires_local_record_when_api_still_returns_expired_ban() {
+        with_test_db(async |db| {
+            let steam_id = "76561198000000005";
+            let active = test_kzt_ban(
+                3001,
+                steam_id,
+                "2026-01-01T00:00:00Z",
+                Some("2099-01-01T00:00:00Z"),
+            );
+            apply_bans_in_tx(&db, &[active]).await?;
+
+            let (local_id,): (Option<Uuid>,) =
+                sqlx::query_as("SELECT local_ban_id FROM global_bans WHERE kzt_ban_id = $1")
+                    .bind(3001_i64)
+                    .fetch_one(&db.pool)
+                    .await?;
+            let local_id = local_id.expect("initial sync should link a local ban");
+
+            // 模拟 KZTimer 忽略 is_expired 过滤：本轮仍返回这条已经过期的封禁。
+            let expired = test_kzt_ban(
+                3001,
+                steam_id,
+                "2026-01-01T00:00:00Z",
+                Some("2026-02-01T00:00:00Z"),
+            );
+            let result = apply_bans_in_tx(&db, &[expired]).await?;
+
+            assert_eq!(result.expired, 1);
+            let (is_expired,): (bool,) =
+                sqlx::query_as("SELECT is_expired FROM global_bans WHERE kzt_ban_id = $1")
+                    .bind(3001_i64)
+                    .fetch_one(&db.pool)
+                    .await?;
+            assert!(is_expired, "过期封禁不应继续标记为活跃");
+
+            let (status, removed_by): (String, Option<String>) =
+                sqlx::query_as("SELECT status, removed_by FROM ban_records WHERE id = $1")
+                    .bind(local_id)
+                    .fetch_one(&db.pool)
+                    .await?;
+            assert_eq!(status, "inactive");
+            assert_eq!(removed_by.as_deref(), Some("global_ban_sync"));
 
             Ok(())
         })

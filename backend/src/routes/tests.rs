@@ -1223,7 +1223,7 @@ async fn access_check_still_blocks_whitelisted_banned_account() {
         }).await;
 }
 
-/// 全球封禁尚未同步成本地封禁时，实时检查也应直接按账号封禁拦截（白名单不豁免）。
+/// 已同步到本地 ban_records 的全球封禁会拦截进服（白名单不豁免）。
 #[tokio::test]
 async fn access_check_blocks_account_with_active_global_ban() {
     with_test_app(async |db, config| {
@@ -1243,12 +1243,27 @@ async fn access_check_blocks_account_with_active_global_ban() {
             .bind(Vec::<String>::new())
             .execute(&db.pool)
             .await?;
+
+            let local_ban_id = Uuid::new_v4();
             sqlx::query(
-                r#"INSERT INTO global_bans (id, kzt_ban_id, steam_id64, player_name, ban_type, notes, is_expired, manual_unbanned)
-                   VALUES ($1, 900001, $2, 'global-bad-player', '作弊', 'KZTimer 全球封禁', false, false)"#,
+                r#"INSERT INTO ban_records (
+                       id, player, steam_id, ban_type, duration_minutes, reason,
+                       status, operator_name, source, created_at, expires_at
+                   )
+                   VALUES ($1, 'global-bad-player', $2, 'steam', 0, '[全球封禁] 作弊',
+                           'active', 'KZTimer Global', 'global_ban', now(), NULL)"#,
+            )
+            .bind(local_ban_id)
+            .bind(STEAMID)
+            .execute(&db.pool)
+            .await?;
+            sqlx::query(
+                r#"INSERT INTO global_bans (id, kzt_ban_id, steam_id64, player_name, ban_type, notes, is_expired, manual_unbanned, local_ban_id)
+                   VALUES ($1, 900001, $2, 'global-bad-player', '作弊', 'KZTimer 全球封禁', false, false, $3)"#,
             )
             .bind(Uuid::new_v4())
             .bind(STEAMID)
+            .bind(local_ban_id)
             .execute(&db.pool)
             .await?;
 
@@ -1300,6 +1315,83 @@ async fn access_check_blocks_account_with_active_global_ban() {
             assert_eq!(payload["result"]["failure_code"], "banned");
             Ok(())
         }).await;
+}
+
+/// 全球封禁元数据仍标记为活跃、但本地封禁已过期时，进服不应被误拦。
+#[tokio::test]
+async fn access_check_ignores_stale_active_global_ban_metadata() {
+    with_test_app(async |db, config| {
+        const STEAMID: &str = "76561198000000087";
+
+        let community_id = Uuid::new_v4();
+        sqlx::query(r#"INSERT INTO communities (id, name) VALUES ($1, '全球封禁过期社区')"#)
+            .bind(community_id)
+            .execute(&db.pool)
+            .await?;
+        sqlx::query(
+            r#"INSERT INTO servers (id, community_id, name, ip, port, rcon_password, report_token, status, players)
+               VALUES ($1, $2, '无限制服', '127.0.0.1', 27015, 'secret', 'access-token-expired-global-ban', 'online', $3)"#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(community_id)
+        .bind(Vec::<String>::new())
+        .execute(&db.pool)
+        .await?;
+
+        let local_ban_id = Uuid::new_v4();
+        sqlx::query(
+            r#"INSERT INTO ban_records (
+                   id, player, steam_id, ban_type, duration_minutes, expires_at,
+                   reason, status, operator_name, source, created_at,
+                   removed_by, removed_reason, removed_at
+               )
+               VALUES ($1, 'expired-global-player', $2, 'steam', 60,
+                       now() - interval '1 day', '[全球封禁] 已过期', 'inactive',
+                       'KZTimer Global', 'global_ban', now() - interval '2 days',
+                       'system', '临时封禁已到期，自动解封', now() - interval '1 day')"#,
+        )
+        .bind(local_ban_id)
+        .bind(STEAMID)
+        .execute(&db.pool)
+        .await?;
+        sqlx::query(
+            r#"INSERT INTO global_bans (
+                   id, kzt_ban_id, steam_id64, player_name, ban_type, notes,
+                   expires_on, is_expired, manual_unbanned, local_ban_id
+               )
+               VALUES ($1, 900002, $2, 'expired-global-player', 'cheat',
+                       '历史全球封禁', '2020-01-01T00:00:00Z', false, false, $3)"#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(STEAMID)
+        .bind(local_ban_id)
+        .execute(&db.pool)
+        .await?;
+
+        let app = test_app(config, db);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/plugin/access/check")
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({
+                        "report_token": "access-token-expired-global-ban",
+                        "port": 27015,
+                        "steam_id64": STEAMID
+                    }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["result"]["allowed"], true);
+        assert_eq!(payload["result"]["message"], "允许进入服务器。");
+        Ok(())
+    })
+    .await;
 }
 
 async fn server_id_by_token(db: &Database, report_token: &str) -> anyhow::Result<Uuid> {

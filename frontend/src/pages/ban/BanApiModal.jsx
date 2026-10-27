@@ -1,14 +1,13 @@
 import React, { useCallback, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useToast } from '../../shared/Toast.jsx';
-import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
+import { Popconfirm } from '../../shared/Popconfirm.jsx';
 import { useAuth } from '../../state/store.js';
 import { formatChinaDateTime } from '../../shared/time.js';
 
 export function BanApiModal({ open, onClose }) {
   const { session } = useAuth();
   const { toast } = useToast();
-  const { confirm, dialog } = useConfirmDialog();
   const token = session?.token ?? null;
 
   const [apiKeys, setApiKeys] = useState([]);
@@ -59,12 +58,6 @@ export function BanApiModal({ open, onClose }) {
   }
 
   async function handleDeleteApiKey(item) {
-    const confirmed = await confirm({
-      title: '删除 API 密钥',
-      message: `确定删除密钥「${item.name || item.key_prefix || item.id}」吗？删除后该密钥将无法使用。`,
-      confirmText: '确认删除',
-    });
-    if (!confirmed) return;
     try {
       await api.deleteBanApiKey(token, item.id);
       loadApiKeys();
@@ -127,7 +120,14 @@ export function BanApiModal({ open, onClose }) {
                     <td className="text-muted-light" data-label="最近使用">{formatChinaDateTime(item.last_used_at)}</td>
                     <td className="text-muted-light" data-label="创建时间">{formatChinaDateTime(item.created_at)}</td>
                     <td className="text-right mobile-card-actions" data-label="操作">
-                      <button className="action-btn action-btn-danger" onClick={() => handleDeleteApiKey(item)}>删除</button>
+                      <Popconfirm
+                        title="删除 API 密钥"
+                        description={`确定删除密钥「${item.name || item.key_prefix || item.id}」吗？删除后该密钥将无法使用。`}
+                        confirmText="删除"
+                        onConfirm={() => handleDeleteApiKey(item)}
+                      >
+                        <button className="action-btn action-btn-danger">删除</button>
+                      </Popconfirm>
                     </td>
                   </tr>
                 ))}
@@ -136,7 +136,6 @@ export function BanApiModal({ open, onClose }) {
           </div>
         </div>
       </div>
-      {dialog}
     </div>
   );
 }

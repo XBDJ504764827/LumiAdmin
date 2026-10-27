@@ -5,7 +5,9 @@ import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
 import { MetricCard } from '../../shared/MetricCard.jsx';
 import { Modal } from '../../shared/Modal.jsx';
+import { Alert } from '../../shared/Alert.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
+import { Popconfirm } from '../../shared/Popconfirm.jsx';
 import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { downloadHostAgentFile, normalizeSetupResponse } from './hostAgent.js';
@@ -128,12 +130,6 @@ export function HostAgentPage() {
   }
 
   async function handleDeleteHost(host) {
-    const confirmed = await confirm({
-      title: '删除宿主机',
-      message: `确定删除「${displayHostName(host)}」？已绑定的服务器将自动解绑，历史任务保留，确定继续？`,
-      confirmText: '删除',
-    });
-    if (!confirmed) return;
     try {
       setActing(host.id);
       await api.deleteHostAgent(token, host.id);
@@ -250,13 +246,19 @@ export function HostAgentPage() {
                             >
                               {host.disabled ? '启用' : '停用'}
                             </button>
-                            <button
-                              className="action-btn action-btn-danger"
-                              disabled={acting === host.id}
-                              onClick={() => handleDeleteHost(host)}
+                            <Popconfirm
+                              title="删除宿主机"
+                              description={`确定删除「${displayHostName(host)}」？已绑定的服务器将自动解绑，历史任务保留。`}
+                              confirmText="删除"
+                              onConfirm={() => handleDeleteHost(host)}
                             >
-                              删除
-                            </button>
+                              <button
+                                className="action-btn action-btn-danger"
+                                disabled={acting === host.id}
+                              >
+                                删除
+                              </button>
+                            </Popconfirm>
                           </div>
                         </td>
                       ) : null}
@@ -301,19 +303,21 @@ export function HostAgentPage() {
                   {issuing ? '签发中...' : '签发安装口令（15 分钟有效）'}
                 </button>
                 {installToken ? (
-                  <div className="info-box warning" style={{ marginTop: 8 }}>
-                    <div style={{ marginBottom: 6 }}>口令仅显示一次，请立即复制{installToken.expiresAt ? `（过期 ${formatChinaDateTime(installToken.expiresAt)}）` : ''}：</div>
-                    <code style={{ fontSize: 12, background: 'var(--surface2)', padding: '2px 6px', borderRadius: 4, wordBreak: 'break-all' }}>{installToken.token}</code>
-                    <div style={{ marginTop: 8 }}>
-                      <button className="btn btn-sm" onClick={() => handleCopy(installToken.token, '安装口令')}>复制口令</button>
-                    </div>
+                  <div style={{ marginTop: 8 }}>
+                    <Alert tone="warning" title="安装口令仅显示一次">
+                      请立即复制{installToken.expiresAt ? `（过期 ${formatChinaDateTime(installToken.expiresAt)}）` : ''}：
+                      <div style={{ marginTop: 6 }}>
+                        <code style={{ fontSize: 12, background: 'var(--surface2)', padding: '2px 6px', borderRadius: 4, wordBreak: 'break-all' }}>{installToken.token}</code>
+                      </div>
+                      <div style={{ marginTop: 8 }}>
+                        <button className="btn btn-sm" onClick={() => handleCopy(installToken.token, '安装口令')}>复制口令</button>
+                      </div>
+                    </Alert>
                   </div>
                 ) : null}
               </div>
             ) : (
-              <div className="info-box warning" style={{ marginTop: 12 }}>
-                安装口令需 developer 签发，请联系开发管理员获取。
-              </div>
+              <Alert tone="warning" className="mt-12">安装口令需 developer 签发，请联系开发管理员获取。</Alert>
             )}
           </div>
         </div>

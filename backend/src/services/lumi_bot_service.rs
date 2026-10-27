@@ -862,7 +862,7 @@ pub async fn report_whitelist_auto_approved(
         level: "info".to_string(),
         title: "白名单自动通过".to_string(),
         message: format!(
-            "玩家 {}（{}）的低风险白名单申请已自动通过（等待 {} 小时无人审核）",
+            "玩家 {}（{}）的低风险白名单申请已自动通过（等待 {} 小时无人审核），已授予 3 天临时白名单并进入管理员重新审核队列",
             display_name, item.steamid64, hours
         ),
         data: serde_json::json!({
@@ -872,6 +872,8 @@ pub async fn report_whitelist_auto_approved(
             "steam_persona_name": item.steam_persona_name,
             "hours": hours,
             "approved_at": item.approved_at,
+            "auto_review_required": true,
+            "expires_at": item.expires_at,
         }),
     };
 

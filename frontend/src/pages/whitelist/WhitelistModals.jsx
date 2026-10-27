@@ -1,9 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Modal } from '../../shared/Modal.jsx';
+import { Drawer } from '../../shared/Drawer.jsx';
+import { Alert } from '../../shared/Alert.jsx';
+import { useToast } from '../../shared/Toast.jsx';
+import { FieldHint } from '../../shared/FieldHint.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { InternalNoteBadge } from '../../shared/InternalNote.jsx';
 import { QqBindingPanel } from '../../shared/QqBindingPanel.jsx';
 import { publicApi } from '../../lib/publicApi.js';
+import { api } from '../../lib/api.js';
 
 // ---------------------------------------------------------------------------
 // 全球封禁记录列表（共享组件）
@@ -425,7 +430,10 @@ export function ManualCreateModal({ open, onClose, form, setForm, error, onSubmi
         />
       </div>
       <div className="form-group">
-        <label>玩家标识</label>
+        <label>
+          玩家标识
+          <FieldHint text="支持 SteamID64、Steam2、Steam3 和 Steam 个人主页链接" />
+        </label>
         <input
           type="text"
           className="form-control"
@@ -435,13 +443,15 @@ export function ManualCreateModal({ open, onClose, form, setForm, error, onSubmi
         />
       </div>
       <div className="form-group">
-        <label>白名单期限</label>
+        <label>
+          白名单期限
+          <FieldHint text="期限到期后白名单自动失效，玩家需要重新申请。" />
+        </label>
         <DurationSelect
           value={form.duration_days ?? 0}
           onChange={(value) => setForm((prev) => ({ ...prev, duration_days: value }))}
           disabled={submitting}
         />
-        <div className="form-hint">期限到期后白名单自动失效，玩家需重新申请。</div>
       </div>
       <label className="checkbox-line mb-12">
         <input
@@ -574,9 +584,11 @@ export function ApproveModal({ open, onClose, mode = 'approve', item, bans = [],
         />
       </div>
       <div className="form-group">
-        <label>白名单期限</label>
+        <label>
+          白名单期限
+          <FieldHint text="期限到期后白名单自动失效，玩家需要重新申请。" />
+        </label>
         <DurationSelect value={durationDays} onChange={setDurationDays} disabled={submitting} />
-        <div className="form-hint">期限到期后白名单自动失效，玩家需重新申请。</div>
       </div>
       {error ? <div className="text-accent">{error}</div> : null}
     </Modal>
@@ -809,5 +821,317 @@ export function PlayerDetailModal({ open, onClose, item, canReview, submitting, 
         </div>
       ) : null}
     </Modal>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// 系统自动通过白名单重新审核 Modal
+// ---------------------------------------------------------------------------
+
+const WHITELIST_STATUS_TEXT = {
+  pending: '待审核',
+  approved: '已通过',
+  rejected: '已拒绝',
+  revoked: '已撤销',
+  expired: '已过期',
+};
+
+function statusText(status) {
+  return WHITELIST_STATUS_TEXT[status] || status || '-';
+}
+
+function remainingWhitelistTime(expiresAt) {
+  if (!expiresAt) return '永久';
+  const remainMs = new Date(expiresAt).getTime() - Date.now();
+  if (!Number.isFinite(remainMs)) return '-';
+  if (remainMs <= 0) return '已到期';
+  const hours = Math.floor(remainMs / 3600000);
+  const minutes = Math.floor((remainMs % 3600000) / 60000);
+  if (hours >= 24) {
+    const days = Math.floor(hours / 24);
+    return `${days} 天 ${hours % 24} 小时`;
+  }
+  return hours > 0 ? `${hours} 小时 ${minutes} 分钟` : `${minutes} 分钟`;
+}
+
+function AutoReviewGokzPanel({ stats }) {
+  const validRows = KZ_MODES
+    .map((mode) => ({ mode, s: stats?.[mode.key] }))
+    .filter(({ s }) => s && s.rating != null);
+  if (validRows.length === 0) {
+    return (
+      <div className="gokz-empty">
+        <div className="gokz-empty-icon">ℹ</div>
+        <div className="gokz-empty-title">该玩家在 GOKZ.TOP 暂无跳图记录</div>
+        <div className="gokz-empty-desc">可能未在全球站完成地图，或数据暂未同步。</div>
+      </div>
+    );
+  }
+  return (
+    <div className="gokz-list">
+      {validRows.map(({ mode, s }) => (
+        <div key={mode.key} className={`gokz-row gokz-row-${mode.key.toLowerCase()}`}>
+          <span className="gokz-row-mode">{mode.label}</span>
+          <span className="gokz-row-val">{s.rating != null ? s.rating.toFixed(2) : '-'}</span>
+          <span className="gokz-row-val">{s.rank != null ? `#${s.rank}` : '-'}</span>
+          <span className="gokz-row-val">{s.mapFinish ?? 0} 张</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AutoReviewServerHistory({ detail }) {
+  const online = detail?.online_records || [];
+  const sessions = (detail?.player_sessions || []).slice(0, 8);
+  const lastSeen = detail?.summary?.last_seen_at;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ color: 'var(--text2)', fontSize: 13 }}>
+        最近登录：<strong>{lastSeen ? formatChinaDateTime(lastSeen, { seconds: false }) : '暂无记录'}</strong>
+        {online.length > 0 ? <span style={{ marginLeft: 10, color: 'var(--accent2)' }}>当前在线 {online.length} 个服务器</span> : null}
+      </div>
+      {online.length > 0 ? (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {online.map((record) => (
+            <span key={`${record.server_id}-${record.server_port}`} className="status-pill pill-online">
+              {record.server_name} · {record.current_map || '未知地图'}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {sessions.length > 0 ? (
+        <div className="table-responsive">
+          <table className="data-table" style={{ fontSize: 12 }}>
+            <thead>
+              <tr><th>服务器</th><th>地图</th><th>进服时间</th><th>离开时间</th></tr>
+            </thead>
+            <tbody>
+              {sessions.map((session) => (
+                <tr key={session.id}>
+                  <td>{session.server_name}</td>
+                  <td>{session.last_map || '-'}</td>
+                  <td>{formatChinaDateTime(session.first_seen_at, { seconds: false })}</td>
+                  <td>{session.left_at ? formatChinaDateTime(session.left_at, { seconds: false }) : '仍在线'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="global-ban-empty">暂无服务器登录记录。</div>
+      )}
+    </div>
+  );
+}
+
+function AutoReviewIpHistory({ ipHistory = [] }) {
+  if (ipHistory.length === 0) {
+    return <div className="global-ban-empty">暂无 IP 登录记录。</div>;
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {ipHistory.map((entry) => (
+        <div key={entry.ip} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <code style={{ fontSize: 13 }}>{entry.ip}</code>
+            <span className="text-muted-light fs-12">
+              最近使用：{entry.last_seen ? formatChinaDateTime(entry.last_seen, { seconds: false }) : '-'}
+            </span>
+            <span className="text-muted-light fs-12">关联账号 {entry.linked_accounts?.length || 0} 个</span>
+          </div>
+          {entry.servers?.length > 0 ? (
+            <div className="text-muted-light fs-12" style={{ marginTop: 4, wordBreak: 'break-all' }}>
+              使用服务器：{entry.servers.map((server) => server.server_name).filter(Boolean).join('、')}
+            </div>
+          ) : null}
+          {(entry.linked_accounts || []).length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
+              {entry.linked_accounts.map((account) => (
+                <div key={account.steam_id64} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', fontSize: 12 }}>
+                  <strong>{account.player_name || '(未知玩家)'}</strong>
+                  <code>{account.steam_id64}</code>
+                  <span className={`status-pill ${account.whitelist_status === 'approved' ? 'pill-online' : account.whitelist_status === 'expired' ? 'pill-offline' : 'pill-default'}`}>
+                    白名单 {statusText(account.whitelist_status)}
+                  </span>
+                  {account.has_local_ban ? <span className="status-pill pill-offline">本地封禁</span> : null}
+                  {account.has_global_ban ? <span className="status-pill pill-offline">全球封禁</span> : null}
+                  <span className="text-muted-light">
+                    最近出现：{account.last_seen ? formatChinaDateTime(account.last_seen, { seconds: false }) : '-'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-muted-light fs-12" style={{ marginTop: 6 }}>该 IP 下暂无其他关联账号。</div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function AutoReviewModal({ open, onClose, item, token, onReviewed }) {
+  const { toast } = useToast();
+  const [detail, setDetail] = useState(null);
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [reason, setReason] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!open || !item?.steamid64) return undefined;
+    let cancelled = false;
+    React.startTransition(() => {
+      setDetail(null);
+      setStats(null);
+      setError('');
+      setReason('');
+      setActionError('');
+      setLoading(true);
+    });
+
+    // 并行拉取：玩家详情（最近登录 / IP / 关联账号 / 风险）+ GOKZ.TOP 四模式战绩。
+    Promise.allSettled([
+      api.playerDetail(token, item.steamid64),
+      fetchPlayerKzStats(item.steamid64),
+    ]).then(([detailResult, statsResult]) => {
+      if (cancelled) return;
+      if (detailResult.status === 'fulfilled') {
+        setDetail(detailResult.value?.data ?? null);
+      } else {
+        setError(detailResult.reason?.message || '加载玩家详情失败');
+      }
+      if (statsResult.status === 'fulfilled') {
+        setStats(statsResult.value);
+      }
+      setLoading(false);
+    });
+
+    return () => { cancelled = true; };
+  }, [open, item?.steamid64, token]);
+
+  if (!item) return null;
+
+  const riskProfile = detail?.risk_profile || item.risk_profile;
+  const riskAction = riskProfile?.action || 'allow';
+  const forceRequired = riskAction === 'deny' || riskAction === 'require_force';
+  const reasonRequired = forceRequired || riskAction === 'warn';
+
+  async function handleReview(action) {
+    if (!token) return;
+    if ((action === 'reject' || reasonRequired) && !reason.trim()) {
+      setActionError('');
+      toast({
+        title: '请填写理由',
+        message: action === 'reject' ? '拒绝时必须填写理由。' : '该玩家命中风险，通过时必须填写理由。',
+        tone: 'warning',
+        duration: 2000,
+      });
+      return;
+    }
+    try {
+      setSubmitting(true);
+      setActionError('');
+      await api.reviewAutoApprovedWhitelist(token, item.id, {
+        action,
+        reason: reason.trim() || undefined,
+        force: forceRequired,
+      });
+      onReviewed?.(action, item);
+      onClose?.();
+    } catch (reviewError) {
+      setActionError(reviewError.message || '重新审核失败');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Drawer
+      open={open}
+      width={760}
+      title="系统自动通过白名单 · 重新审核"
+      subtitle="核对 GOKZ.TOP 战绩、最近登录与关联账号后，决定是否转为永久白名单"
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn btn-outline" onClick={onClose} disabled={submitting}>关闭</button>
+          <button className="action-btn action-btn-danger" onClick={() => handleReview('reject')} disabled={submitting || loading}>
+            拒绝并撤销
+          </button>
+          <button className="action-btn action-btn-success" onClick={() => handleReview('approve')} disabled={submitting || loading}>
+            {submitting ? '处理中...' : '重新审核通过（永久）'}
+          </button>
+        </>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <Alert tone="warning" title="临时白名单即将到期">
+          该系统自动通过记录当前仅有 <strong>3 天临时白名单</strong>，剩余
+          <strong> {remainingWhitelistTime(item.expires_at)}</strong>。
+          重新审核通过后转为永久白名单；逾期未处理会自动过期，玩家需要重新申请。
+        </Alert>
+
+        <div className="form-group">
+          <label className="mb-4">玩家信息</label>
+          <div style={{ color: 'var(--text2)', fontSize: 13 }}>
+            <div>游戏昵称：{item.nickname || '-'}</div>
+            <div>Steam 名称：{item.steam_persona_name || detail?.profile?.display_name || '-'}</div>
+            <div>SteamID64：<code>{item.steamid64}</code></div>
+            <div>SteamID2：{item.steamid || '-'}</div>
+            <div>SteamID3：{item.steamid3 || '-'}</div>
+            <div>系统自动通过时间：{item.approved_at ? formatChinaDateTime(item.approved_at) : '-'}</div>
+            <div>临时白名单到期：{item.expires_at ? formatChinaDateTime(item.expires_at) : '-'}</div>
+            {item.reason ? <div style={{ marginTop: 6, whiteSpace: 'pre-wrap' }}>申请理由：{item.reason}</div> : null}
+          </div>
+        </div>
+
+        {loading ? <div className="gokz-loading">正在拉取 GOKZ.TOP 数据与登录记录…</div> : null}
+        {error ? <Alert tone="danger" title="加载失败">{error}</Alert> : null}
+
+        <div className="form-group">
+          <label className="mb-4">GOKZ.TOP 战绩（Rating / 排名 / 完图）</label>
+          <AutoReviewGokzPanel stats={stats} />
+        </div>
+
+        <div className="form-group">
+          <label className="mb-4">最近登录服务器</label>
+          <AutoReviewServerHistory detail={detail} />
+        </div>
+
+        <div className="form-group">
+          <label className="mb-4">IP 登录历史与同 IP 关联账号（{(detail?.ip_history || []).length} 个 IP）</label>
+          <AutoReviewIpHistory ipHistory={detail?.ip_history || []} />
+        </div>
+
+        <div className="form-group">
+          <label className="mb-4">风险复核</label>
+          {riskProfile && riskAction !== 'allow' ? (
+            <RiskProfilePanel profile={riskProfile} mainName={item.nickname} />
+          ) : (
+            <div className="global-ban-empty">当前未发现风险。重新审核仍建议核对上方 IP 与关联账号信息。</div>
+          )}
+        </div>
+
+        <div className="form-group">
+          <label className="mb-4">{reasonRequired || forceRequired ? '重新审核理由（必填）' : '重新审核备注（可选，拒绝时必填）'}</label>
+          <textarea
+            className="form-control"
+            rows={3}
+            value={reason}
+            onChange={(event) => { setReason(event.target.value); setActionError(''); }}
+            placeholder="通过：可填写复核结论；拒绝：必须说明原因"
+            disabled={submitting}
+          />
+        </div>
+
+        <InternalNoteBadge steamid64={item.steamid64} />
+        {actionError ? <Alert tone="danger" title="操作未完成">{actionError}</Alert> : null}
+      </div>
+    </Drawer>
   );
 }

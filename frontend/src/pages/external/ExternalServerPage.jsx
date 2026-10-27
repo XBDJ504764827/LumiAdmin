@@ -4,7 +4,7 @@ import { useAsync } from '../../shared/useAsync.js';
 import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
 import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
-import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
+import { Popconfirm } from '../../shared/Popconfirm.jsx';
 import { formatChinaMonthDayTime } from '../../shared/time.js';
 import {
   EXTERNAL_SERVER_DEFAULT_POLL_INTERVAL,
@@ -44,7 +44,6 @@ const defaultForm = {
 
 export function ExternalServerPage() {
   const { session } = useAuth();
-  const { confirm, dialog } = useConfirmDialog();
   const { toast } = useToast();
   const token = session?.token ?? null;
 
@@ -117,12 +116,6 @@ export function ExternalServerPage() {
   }
 
   async function handleDelete(server) {
-    const confirmed = await confirm({
-      title: '删除外部服务器',
-      message: `确定要删除「${server.name}」吗?`,
-      confirmText: '确认删除',
-    });
-    if (!confirmed) return;
     try {
       await api.deleteExternalServer(token, server.id);
       toast({ title: '删除成功' });
@@ -217,7 +210,14 @@ export function ExternalServerPage() {
                             {testing === server.id ? '...' : '测试'}
                           </button>
                           <button className="action-btn" onClick={() => openEdit(server)}>编辑</button>
-                          <button className="action-btn action-btn-danger" onClick={() => handleDelete(server)}>删除</button>
+                          <Popconfirm
+                            title="删除外部服务器"
+                            description={`确定要删除「${server.name}」吗？删除后该服务器将不再参与外部数据采集。`}
+                            confirmText="删除"
+                            onConfirm={() => handleDelete(server)}
+                          >
+                            <button className="action-btn action-btn-danger">删除</button>
+                          </Popconfirm>
                         </div>
                       </td>
                     </tr>
@@ -315,7 +315,6 @@ export function ExternalServerPage() {
         </div>
       )}
 
-      {dialog}
     </div>
   );
 }

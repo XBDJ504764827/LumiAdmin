@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { Modal } from '../../shared/Modal.jsx';
+import { Popconfirm } from '../../shared/Popconfirm.jsx';
 import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
 import { useApiQuery, useApiMutation } from '../../shared/useApiQuery.js';
@@ -214,12 +215,6 @@ export function UsersPage() {
   }
 
   async function handleDelete(item) {
-    const confirmed = await confirm({
-      title: '删除管理员',
-      message: `确定删除管理员 ${item.username} 吗？`,
-    });
-    if (!confirmed) return;
-
     try {
       await deleteUserMutation.mutateAsync({ id: item.id });
       toast({ title: '删除成功', message: `管理员 ${item.username} 已删除。` });
@@ -245,12 +240,6 @@ export function UsersPage() {
   }
 
   async function handleRevokeSessions(item) {
-    const confirmed = await confirm({
-      title: '强制登出',
-      message: `确定强制登出管理员 ${item.username} 的所有设备吗？该用户需要重新登录才能继续使用系统。`,
-    });
-    if (!confirmed) return;
-
     try {
       const result = await revokeSessionsMutation.mutateAsync({ id: item.id });
       toast({ title: '登出成功', message: `已强制登出 ${item.username} 的 ${result.revoked_count} 个会话。` });
@@ -311,10 +300,29 @@ export function UsersPage() {
                     <td className="text-right mobile-card-actions" data-label="操作">
                       <div className="action-btn-group">
                         {canToggleEnabled(item) ? <button className={`action-btn ${item.enabled ? 'action-btn-danger' : 'action-btn-success'}`} onClick={() => handleToggleEnabled(item)}>{item.enabled ? '禁用' : '启用'}</button> : null}
-                        {canRevokeSessions(item) ? <button className="action-btn" onClick={() => handleRevokeSessions(item)}>强制登出</button> : null}
                         {canEditUser(item) ? <button className="action-btn action-btn-accent" onClick={() => openEditModal(item)}>{isNormal ? '编辑我的信息' : '编辑'}</button> : null}
                         {canEditUser(item) ? <button className="action-btn" onClick={() => openPasswordModal(item)}>修改密码</button> : null}
-                        {canDeleteUser(item) ? <button className="action-btn action-btn-danger" onClick={() => handleDelete(item)}>删除</button> : null}
+                        {canRevokeSessions(item) ? (
+                          <Popconfirm
+                            title="强制登出"
+                            description={`确定强制登出「${item.username}」的所有设备吗？该用户需要重新登录。`}
+                            confirmText="立即登出"
+                            tone="danger"
+                            onConfirm={() => handleRevokeSessions(item)}
+                          >
+                            <button className="action-btn">强制登出</button>
+                          </Popconfirm>
+                        ) : null}
+                        {canDeleteUser(item) ? (
+                          <Popconfirm
+                            title="删除管理员"
+                            description={`确定删除管理员「${item.username}」吗？\n\n删除后该账号将立即失效且无法登录，此操作不可恢复。`}
+                            confirmText="删除"
+                            onConfirm={() => handleDelete(item)}
+                          >
+                            <button className="action-btn action-btn-danger">删除</button>
+                          </Popconfirm>
+                        ) : null}
                       </div>
                     </td>
                   </tr>

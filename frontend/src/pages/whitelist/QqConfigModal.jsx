@@ -1,15 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { Modal } from '../../shared/Modal.jsx';
 import { ToggleSwitch } from '../community/CommunityComponents.jsx';
+import { useToast } from '../../shared/Toast.jsx';
+import { FieldHint } from '../../shared/FieldHint.jsx';
 
 // 白名单 QQ 绑定设置弹窗（机器人名称 / 机器人 QQ 号 / 绑定上限 / 验证码有效期）
 export function QqConfigModal({ open, onClose, config, onSave, saving }) {
+  const { toast } = useToast();
   const [enabled, setEnabled] = useState(true);
   const [botName, setBotName] = useState('');
   const [botQq, setBotQq] = useState('');
   const [maxBindings, setMaxBindings] = useState(5);
   const [codeTtl, setCodeTtl] = useState(300);
-  const [error, setError] = useState('');
 
   useEffect(() => {
     if (!open || !config) return;
@@ -20,13 +22,18 @@ export function QqConfigModal({ open, onClose, config, onSave, saving }) {
       setBotQq(config.bot_qq ?? '');
       setMaxBindings(config.max_bindings ?? 5);
       setCodeTtl(config.code_ttl_seconds ?? 300);
-      setError('');
     });
   }, [open, config]);
 
   function submit() {
-    if (!botQq.trim()) { setError('请填写机器人 QQ 号。'); return; }
-    setError('');
+    if (!botName.trim()) {
+      toast({ title: '请填写机器人名称', tone: 'warning', duration: 2000 });
+      return;
+    }
+    if (!botQq.trim()) {
+      toast({ title: '请填写机器人 QQ 号', tone: 'warning', duration: 2000 });
+      return;
+    }
     onSave({
       enabled,
       bot_name: botName.trim() || null,
@@ -60,9 +67,11 @@ export function QqConfigModal({ open, onClose, config, onSave, saving }) {
         </div>
 
         <div className="form-group">
-          <label>机器人 QQ 号 <span className="text-accent">*</span></label>
+          <label>
+            机器人 QQ 号 <span className="text-accent">*</span>
+            <FieldHint text="公开申请页会引导玩家添加该 QQ，并私聊发送验证码完成绑定。" />
+          </label>
           <input className="form-control" value={botQq} onChange={(e) => setBotQq(e.target.value)} placeholder="如 3889010779" />
-          <div className="form-hint">公开申请页会引导玩家添加该 QQ 并私聊发送验证码。</div>
         </div>
 
         <div style={{ display: 'flex', gap: 12 }}>
@@ -76,7 +85,6 @@ export function QqConfigModal({ open, onClose, config, onSave, saving }) {
           </div>
         </div>
 
-        {error ? <div className="form-hint" style={{ color: 'var(--danger-text)' }}>{error}</div> : null}
       </div>
     </Modal>
   );

@@ -10,6 +10,8 @@ import { Pagination } from '../../shared/Pagination.jsx';
 import { StatusPill } from '../../shared/StatusPill.jsx';
 import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 import { FileItem, fileActionLabel } from '../../shared/FilePreview.jsx';
+import { FieldHint } from '../../shared/FieldHint.jsx';
+import { Popconfirm } from '../../shared/Popconfirm.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { notifyPendingReviewsUpdated, usePendingReviewIndicators } from '../../hooks/usePendingReviewIndicators.js';
 import { buildRulePayload, courseLabel, createEmptyRuleForm, ruleMapLabel, ruleToForm } from './abnormalRuleForm.js';
@@ -175,6 +177,10 @@ export function AbnormalRecordPage() {
 
   async function handleReviewSubmit() {
     if (!reviewItem) return;
+    if (reviewAction === 'reject_ban' && !banReason.trim()) {
+      toast({ title: '请填写封禁理由', tone: 'warning', duration: 2000 });
+      return;
+    }
     const actionText = reviewAction === 'approve' ? '放行并提交全球榜单' : reviewAction === 'reject_ban' ? '作废并封禁' : '作废成绩';
     const confirmed = await confirm({
       title: '确认裁决',
@@ -254,11 +260,6 @@ export function AbnormalRecordPage() {
   }
 
   async function handleDeleteRule(rule) {
-    const confirmed = await confirm({
-      title: '删除规则',
-      message: `确定删除 ${ruleMapLabel(rule.map_name)} 的异常时间规则吗？`,
-    });
-    if (!confirmed) return;
     try {
       await api.deleteAbnormalRecordRule(token, rule.id);
       await rulesQuery.refetch();
@@ -422,7 +423,14 @@ export function AbnormalRecordPage() {
                         <td className="text-right mobile-card-actions" data-label="操作">
                           <div className="action-btn-group">
                             <button className="action-btn action-btn-accent" onClick={() => openRuleForm(rule)}>编辑</button>
-                            <button className="action-btn action-btn-danger" onClick={() => handleDeleteRule(rule)}>删除</button>
+                            <Popconfirm
+                              title="删除异常时间规则"
+                              description={`确定删除 ${ruleMapLabel(rule.map_name)} 的异常时间规则吗？`}
+                              confirmText="删除"
+                              onConfirm={() => handleDeleteRule(rule)}
+                            >
+                              <button className="action-btn action-btn-danger">删除</button>
+                            </Popconfirm>
                           </div>
                         </td>
                       </tr>
@@ -576,12 +584,14 @@ export function AbnormalRecordPage() {
       >
         <div className="flex-col gap-12">
           <div className="form-group">
-            <label>适用范围</label>
+            <label>
+              适用范围
+              <FieldHint text="单地图规则的优先级高于全部地图默认规则。" />
+            </label>
             <select className="form-control" value={ruleForm.scope} onChange={(event) => setRuleForm((prev) => ({ ...prev, scope: event.target.value }))}>
               <option value="all_maps">全部地图默认阈值</option>
               <option value="single_map">单独指定地图</option>
             </select>
-            <div className="form-hint mt-4">单地图规则的优先级高于全部地图默认规则。</div>
           </div>
           {ruleForm.scope === 'single_map' ? (
             <div className="form-group">
@@ -593,9 +603,11 @@ export function AbnormalRecordPage() {
           )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12 }}>
             <div className="form-group">
-              <label>关卡 (Course)</label>
+              <label>
+                关卡 (Course)
+                <FieldHint text="C0=主关，C1-99=指定奖励关。只匹配该关卡，不互相影响；要拦多个奖励关请分别建规则。" />
+              </label>
               <input className="form-control" type="number" min="0" max="99" value={ruleForm.course} onChange={(event) => setRuleForm((prev) => ({ ...prev, course: event.target.value }))} />
-              <div className="form-hint mt-4">C0=主关，C1-99=指定奖励关。只匹配该关卡，不互相影响；要拦多个奖励关请分别建规则。</div>
             </div>
             <div className="form-group">
               <label>模式</label>

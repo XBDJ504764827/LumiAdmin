@@ -335,6 +335,16 @@ pub fn list_endpoints() -> Vec<EndpointDoc> {
             roles: &["admin", "developer"],
         },
         EndpointDoc {
+            module: "白名单管理",
+            tone: "online",
+            name: "系统自动通过重新审核",
+            method: "POST",
+            endpoint: "/api/whitelist/:id/auto-review",
+            description: "对系统自动通过的 3 天临时白名单进行重新审核：approve 转永久，reject 撤销并需重新申请",
+            auth_required: true,
+            roles: &["admin", "developer", "normal"],
+        },
+        EndpointDoc {
             module: "封禁管理",
             tone: "danger",
             name: "封禁列表",

@@ -5,6 +5,11 @@
 //! 在申请提交满 `whitelist_auto_approve_config.hours`（默认 3 小时）后，
 //! 仍无人审核则自动通过。
 //!
+//! 自动通过不会直接授予永久白名单：系统先授予 3 天临时白名单，并把记录
+//! 放入「系统自动通过」重新审核队列（`auto_review_required=true`）。管理员
+//! 重新审核通过后转为永久；3 天内无人处理则由到期任务置为 `expired`，玩家
+//! 需要重新提交申请。
+//!
 //! 自动通过规则：
 //! - 仅 `RiskAction::Allow`（低风险）参与自动通过；
 //! - `Warn`（历史风险）/ `RequireForce` / `Deny`（中高风险，含自身全球封禁）
@@ -799,8 +804,9 @@ async fn detect_unresolved_ban(db: &Database, steamid64: &str) -> anyhow::Result
     Ok(None)
 }
 
-/// 低风险自动通过的白名单期限（天）
-const AUTO_APPROVE_DURATION_DAYS: i32 = 7;
+/// 低风险自动通过先授予的临时白名单期限（天）。
+/// 管理员在队列中重新审核通过后转为永久；逾期未处理则自动过期，需重新申请。
+const AUTO_REVIEW_DURATION_DAYS: i32 = 3;
 
 /// 单条申请自动通过：事务内原子更新 + 审计日志。
 /// 返回 Some(item) = 自动通过成功；None = 已被管理员处理（无可执行更新）。
@@ -810,16 +816,21 @@ async fn auto_approve_one(
     hours: i32,
 ) -> anyhow::Result<Option<whitelist_service::WhitelistItem>> {
     let mut tx = db.pool.begin().await?;
+    let approval_reason = format!(
+        "低风险玩家，申请满 {hours} 小时无人审核自动通过；先授予 {AUTO_REVIEW_DURATION_DAYS} 天临时白名单，等待管理员重新审核"
+    );
 
     let item = whitelist_service::approve_whitelist_tx(
         &mut tx,
         candidate.id,
         ApproveWhitelistInput {
             operator_name: "系统",
-            reason: Some(&format!("低风险玩家，申请满 {hours} 小时无人审核自动通过")),
+            reason: Some(approval_reason.as_str()),
             force: true,
             via: "auto",
-            duration_days: Some(AUTO_APPROVE_DURATION_DAYS),
+            // 3 天是系统自动通过专用的临时期限，不在人工可选期限
+            // （7/30/120/永久）范围内；先按永久写入，再在下方覆盖为临时期限。
+            duration_days: None,
         },
     )
     .await;
@@ -832,6 +843,22 @@ async fn auto_approve_one(
             return Ok(None);
         }
     };
+
+    // 授予 3 天临时白名单（到期后由 whitelist_expiry 任务置为 expired）。
+    let temp_expires_at = Utc::now() + chrono::Duration::days(AUTO_REVIEW_DURATION_DAYS as i64);
+    sqlx::query(
+        r#"UPDATE whitelist_requests
+           SET expires_at = $2, duration_days = $3, updated_at = now()
+           WHERE id = $1"#,
+    )
+    .bind(item.id)
+    .bind(temp_expires_at)
+    .bind(AUTO_REVIEW_DURATION_DAYS)
+    .execute(&mut *tx)
+    .await?;
+    let mut item = item;
+    item.expires_at = Some(temp_expires_at.to_rfc3339());
+    item.duration_days = Some(AUTO_REVIEW_DURATION_DAYS);
 
     audit_service::write_audit_log_in_transaction(
         &mut tx,
@@ -851,8 +878,8 @@ async fn auto_approve_one(
             server_port: None,
             success: true,
             message: Some(format!(
-                "低风险白名单申请自动通过（等待 {} 小时无人审核），ID: {}",
-                hours, item.id
+                "低风险白名单申请自动通过，授予 {} 天临时白名单并进入重新审核队列（等待 {} 小时无人审核），ID: {}",
+                AUTO_REVIEW_DURATION_DAYS, hours, item.id
             )),
             idempotency_key: None,
         },
@@ -867,6 +894,8 @@ async fn auto_approve_one(
             "approved_by": item.approved_by,
             "approval_reason": item.approval_reason,
             "auto_approve_hours": hours,
+            "auto_review_required": true,
+            "auto_review_deadline": item.expires_at,
             "duration_days": item.duration_days,
             "expires_at": item.expires_at,
         })),
@@ -971,18 +1000,26 @@ mod tests {
             assert!(approval_reason.as_deref().unwrap_or("").contains("自动通过"));
             assert!(cache.contains("76561198000000001").await);
 
-            // 低风险自动通过的期限应为 7 天
-            let (duration_days, expires_at): (Option<i32>, Option<chrono::DateTime<Utc>>) =
-                sqlx::query_as(
-                    "SELECT duration_days, expires_at FROM whitelist_requests WHERE id = $1",
-                )
-                .bind(id)
-                .fetch_one(&db.pool)
-                .await?;
-            assert_eq!(duration_days, Some(7));
-            let expires_at = expires_at.expect("自动通过应写入 7 天期限");
-            assert!(expires_at > Utc::now() + Duration::days(6));
-            assert!(expires_at < Utc::now() + Duration::days(8));
+            // 低风险自动通过先给 3 天临时白名单，并进入重新审核队列。
+            #[derive(sqlx::FromRow)]
+            struct AutoReviewState {
+                duration_days: Option<i32>,
+                expires_at: Option<chrono::DateTime<Utc>>,
+                auto_review_required: bool,
+                auto_approved_at: Option<chrono::DateTime<Utc>>,
+            }
+            let state: AutoReviewState = sqlx::query_as(
+                "SELECT duration_days, expires_at, auto_review_required, auto_approved_at FROM whitelist_requests WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(&db.pool)
+            .await?;
+            assert_eq!(state.duration_days, Some(3));
+            assert!(state.auto_review_required);
+            assert!(state.auto_approved_at.is_some());
+            let expires_at = state.expires_at.expect("自动通过应写入 3 天临时白名单期限");
+            assert!(expires_at > Utc::now() + Duration::days(2));
+            assert!(expires_at < Utc::now() + Duration::days(4));
 
             // 审计日志应存在
             let audit_count: i64 = sqlx::query_scalar(
@@ -991,6 +1028,48 @@ mod tests {
             .fetch_one(&db.pool)
             .await?;
             assert_eq!(audit_count, 1);
+
+            // 自动通过记录必须出现在「系统自动通过」重新审核队列中。
+            let queue = whitelist_service::list_whitelist(
+                &db,
+                &crate::routes::ListQuery {
+                    search: None,
+                    status: Some("auto_review".to_string()),
+                    source: None,
+                    page: None,
+                    page_size: None,
+                },
+            )
+            .await?;
+            assert_eq!(queue.items.len(), 1);
+            assert_eq!(queue.items[0].id, id);
+
+            // 重新审核通过后转为永久白名单，并离开队列。
+            let reviewed = whitelist_service::approve_auto_review_whitelist(
+                &db,
+                id,
+                "管理员B",
+                Some("人工复核通过"),
+                false,
+            )
+            .await?;
+            assert_eq!(reviewed.status, "approved");
+            assert!(reviewed.expires_at.is_none());
+            assert!(reviewed.duration_days.is_none());
+            assert_eq!(reviewed.approved_by.as_deref(), Some("管理员B"));
+
+            let queue = whitelist_service::list_whitelist(
+                &db,
+                &crate::routes::ListQuery {
+                    search: None,
+                    status: Some("auto_review".to_string()),
+                    source: None,
+                    page: None,
+                    page_size: None,
+                },
+            )
+            .await?;
+            assert!(queue.items.is_empty());
             Ok(())
         })
         .await;

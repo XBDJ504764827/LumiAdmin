@@ -18,6 +18,7 @@ const STATUS_LABELS = {
   approved: '已通过',
   rejected: '已驳回',
   revoked: '已撤销',
+  expired: '已过期',
   resolved: '已解决',
   online: '在线',
   hibernating: '休眠/待上报',
@@ -122,7 +123,7 @@ export function stKind(status, category) {
   if (status === 'online' || status === 'approved' || status === 'success' || status === 'resolved') return 'success';
   if (status === 'pending') return 'warning';
   if (status === 'failed' || status === 'rejected') return 'danger';
-  if (status === 'revoked' || status === 'inactive') return 'offline';
+  if (status === 'revoked' || status === 'inactive' || status === 'expired') return 'offline';
   return 'default';
 }
 

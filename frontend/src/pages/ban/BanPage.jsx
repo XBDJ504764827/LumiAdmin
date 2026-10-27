@@ -15,6 +15,7 @@ import { BanDetailModal } from './BanDetailModal.jsx';
 import { UnbanScopeModal } from './UnbanScopeModal.jsx';
 import { BanFormModal } from './BanFormModal.jsx';
 import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
+import { Popconfirm } from '../../shared/Popconfirm.jsx';
 
 export function BanPage() {
   const { session } = useAuth();
@@ -148,12 +149,6 @@ export function BanPage() {
   }
 
   async function handleDeleteBan(item) {
-    const confirmed = await confirm({
-      title: '删除封禁记录',
-      message: `确定删除 ${item.player || item.steam_id} 的封禁记录吗？此操作不可恢复。`,
-      confirmText: '确认删除',
-    });
-    if (!confirmed) return;
     try {
       await api.deleteBan(token, item.id);
       refetch();
@@ -238,7 +233,16 @@ export function BanPage() {
                         {canManageAll ? <button className="action-btn action-btn-accent" onClick={() => openEditModal(x)}>编辑</button> : null}
                         {canUnban(x) && x.status === 'active' ? <button className="action-btn action-btn-success" onClick={() => handleUnban(x)}>解封</button> : null}
                         {canCreate && x.status === 'inactive' ? <button className="action-btn action-btn-danger" onClick={() => openRebanModal(x)}>重新封禁</button> : null}
-                        {canManageAll ? <button className="action-btn action-btn-danger" onClick={() => handleDeleteBan(x)}>删除</button> : null}
+                        {canManageAll ? (
+                          <Popconfirm
+                            title="删除封禁记录"
+                            description={`确定删除「${x.player || x.steam_id}」的封禁记录吗？\n\n删除后该记录将从封禁列表移除，此操作不可恢复。`}
+                            confirmText="删除"
+                            onConfirm={() => handleDeleteBan(x)}
+                          >
+                            <button className="action-btn action-btn-danger">删除</button>
+                          </Popconfirm>
+                        ) : null}
                       </div>
                     </td>
                   </tr>

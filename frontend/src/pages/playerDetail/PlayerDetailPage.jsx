@@ -3,11 +3,12 @@ import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../../lib/api.js';
 import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
-import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { BanFormModal } from '../ban/BanFormModal.jsx';
 import { UnbanScopeModal } from '../ban/UnbanScopeModal.jsx';
 import { StatusPill } from '../../shared/StatusPill.jsx';
 import { Modal } from '../../shared/Modal.jsx';
+import { Tooltip } from '../../shared/Tooltip.jsx';
+import { Popconfirm } from '../../shared/Popconfirm.jsx';
 import { formatChinaDate, formatChinaDateTime } from '../../shared/time.js';
 import { QqBindingPanel } from '../../shared/QqBindingPanel.jsx';
 import {
@@ -135,23 +136,24 @@ function CopyId({ label, value }) {
       <span className="pd-id-label">{label}</span>
       <div className="pd-id-value-row">
         <code className="pd-id-value">{value}</code>
-        <button
-          type="button"
-          className="pd-copy-btn"
-          title={`复制 ${label}`}
-          aria-label={`复制 ${label}`}
-          onClick={async () => {
-            const ok = await copyText(value);
-            toast(ok
-              ? { title: `${label} 已复制` }
-              : { title: '复制失败', message: '请手动选择文本复制', tone: 'warning' });
-          }}
-        >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="9" y="9" width="12" height="12" rx="2" />
-            <path d="M5 15V5a2 2 0 0 1 2-2h10" />
-          </svg>
-        </button>
+        <Tooltip content={`复制 ${label}`}>
+          <button
+            type="button"
+            className="pd-copy-btn"
+            aria-label={`复制 ${label}`}
+            onClick={async () => {
+              const ok = await copyText(value);
+              toast(ok
+                ? { title: `${label} 已复制` }
+                : { title: '复制失败', message: '请手动选择文本复制', tone: 'warning' });
+            }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="9" y="9" width="12" height="12" rx="2" />
+              <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+            </svg>
+          </button>
+        </Tooltip>
       </div>
     </div>
   );
@@ -160,7 +162,6 @@ function CopyId({ label, value }) {
 // ── Ban Detail Popup ──
 function BanDetailPopup({ item, onClose, onAction, token }) {
   const { toast } = useToast();
-  const { confirm, dialog } = useConfirmDialog();
   const [acting, setActing] = useState(false);
   const [unbanScopeOpen, setUnbanScopeOpen] = useState(false);
   if (!item) return null;
@@ -191,10 +192,10 @@ function BanDetailPopup({ item, onClose, onAction, token }) {
       setActing(false);
     }
   }
-  async function doDelete() { if (acting) return; const ok = await confirm({ title: '删除封禁记录', message: '确定删除这条封禁记录吗？此操作不可恢复。', tone: 'danger', confirmText: '确认删除' }); if (!ok) return; setActing(true); try { await api.deleteBan(token, item.id); toast({ title: '删除成功' }); onAction(); onClose(); } catch (e) { toast({ title: '操作失败', message: e.message, tone: 'danger' }); } finally { setActing(false); } }
+  async function doDelete() { if (acting) return; setActing(true); try { await api.deleteBan(token, item.id); toast({ title: '删除成功' }); onAction(); onClose(); } catch (e) { toast({ title: '操作失败', message: e.message, tone: 'danger' }); } finally { setActing(false); } }
 
   return (<>
-    <Modal open={true} title="封禁详情" onClose={onClose} footer={<><button className="btn btn-outline" onClick={onClose}>关闭</button>{isActive && <><button className="action-btn action-btn-success" onClick={doUnban} disabled={acting}>解封</button><button className="action-btn action-btn-danger" onClick={doDelete} disabled={acting}>删除</button></>}</>}>
+    <Modal open={true} title="封禁详情" onClose={onClose} footer={<><button className="btn btn-outline" onClick={onClose}>关闭</button>{isActive && <><button className="action-btn action-btn-success" onClick={doUnban} disabled={acting}>解封</button><Popconfirm title="删除封禁记录" description="确定删除这条封禁记录吗？此操作不可恢复。" confirmText="删除" onConfirm={doDelete}><button className="action-btn action-btn-danger" disabled={acting}>删除</button></Popconfirm></>}</>}>
       <div className="detail-grid">
         <span className="detail-label">状态</span><span className="detail-value"><StatusPill kind={stKind(item.status, 'ban')}>{stLabel(item.status)}</StatusPill>{item.account_unbanned ? <span style={{ marginLeft: 6 }}><StatusPill kind="warning">账号已解封 / IP 仍封禁</StatusPill></span> : null}</span>
         <span className="detail-label">玩家</span><span className="detail-value fw-600">{item.player || '-'}</span>
@@ -216,7 +217,6 @@ function BanDetailPopup({ item, onClose, onAction, token }) {
       onClose={() => setUnbanScopeOpen(false)}
       onConfirm={confirmUnbanScope}
     />
-    {dialog}
   </>);
 }
 
@@ -229,9 +229,11 @@ function WhitelistDetailPopup({ item, onClose, onAction, token }) {
   const isPending = item.status === 'pending';
   const isApproved = item.status === 'approved';
   const isRejected = item.status === 'rejected' || item.status === 'revoked';
+  const isExpired = item.status === 'expired';
 
   async function doAction(action) {
-    if (acting) return; setActing(true);
+    if (acting) return;
+    setActing(true);
     try {
       if (action === 'reject') {
         if (!reason.trim()) { toast({ title: '请填写拒绝理由', tone: 'warning' }); setActing(false); return; }
@@ -247,9 +249,18 @@ function WhitelistDetailPopup({ item, onClose, onAction, token }) {
     } catch (e) { toast({ title: '操作失败', message: e.message, tone: 'danger' }); } finally { setActing(false); }
   }
 
-  return (<Modal open={true} title="白名单详情" onClose={onClose} footer={<><button className="btn btn-outline" onClick={onClose}>关闭</button>
+  return (<><Modal open={true} title="白名单详情" onClose={onClose} footer={<><button className="btn btn-outline" onClick={onClose}>关闭</button>
     {isPending && <><button className="action-btn action-btn-success" onClick={() => doAction('approve')} disabled={acting}>通过</button><button className="action-btn action-btn-danger" onClick={() => doAction('reject')} disabled={acting || !reason.trim()}>拒绝</button></>}
-    {isApproved && <button className="action-btn action-btn-danger" onClick={() => doAction('revoke')} disabled={acting}>撤销</button>}
+    {isApproved && (
+      <Popconfirm
+        title="撤销白名单"
+        description={`确定撤销「${item.nickname || item.steamid64}」的白名单吗？\n\n撤销后该玩家将无法凭白名单进入服务器，需要重新申请。`}
+        confirmText="撤销"
+        onConfirm={() => doAction('revoke')}
+      >
+        <button className="action-btn action-btn-danger" disabled={acting}>撤销</button>
+      </Popconfirm>
+    )}
     {isRejected && <button className="action-btn action-btn-success" onClick={() => doAction('restore')} disabled={acting}>恢复</button>}
   </>}>
     {isPending && <div className="form-group" style={{ marginBottom: 12 }}><label>拒绝理由（必填）</label><textarea className="form-control" rows={2} value={reason} onChange={e => setReason(e.target.value)} placeholder="请输入拒绝理由" style={{ resize: 'vertical', minHeight: 50 }} /></div>}
@@ -264,9 +275,10 @@ function WhitelistDetailPopup({ item, onClose, onAction, token }) {
       {item.approved_at && <><span className="detail-label">通过时间</span><span className="detail-value">{formatChinaDateTime(item.approved_at)} ({item.approved_by || '-'})</span></>}
       {item.rejected_at && <><span className="detail-label">拒绝时间</span><span className="detail-value">{formatChinaDateTime(item.rejected_at)} ({item.rejected_by || '-'})<br />{item.rejection_reason || ''}</span></>}
       {item.revoked_at && <><span className="detail-label">撤销时间</span><span className="detail-value">{formatChinaDateTime(item.revoked_at)} ({item.revoked_by || '-'})</span></>}
+      {isExpired && item.expired_at && <><span className="detail-label">过期时间</span><span className="detail-value">{formatChinaDateTime(item.expired_at)}</span></>}
       {item.approval_reason && <><span className="detail-label">通过理由</span><span className="detail-value pre">{item.approval_reason}</span></>}
     </div>
-  </Modal>);
+  </Modal></>);
 }
 
 // ── Global Ban Popup ──
@@ -541,13 +553,21 @@ function TimelineAxis({ events, overviewItems, onSelect, domain, mode = 'lanes',
 
     <div className="pd-axis-controls">
       <div className="pd-axis-zoom">
-        <button type="button" className="btn btn-outline btn-sm" disabled={zoomExp === 0} onClick={() => setZoomExp(value => Math.max(0, value - 1))} title="缩小">－</button>
+        <Tooltip content="缩小时间轴">
+          <button type="button" className="btn btn-outline btn-sm" disabled={zoomExp === 0} onClick={() => setZoomExp(value => Math.max(0, value - 1))}>－</button>
+        </Tooltip>
         <span className="pd-axis-zoom-label">{zoomExp === 0 ? '自适应' : `${2 ** zoomExp}×`}</span>
-        <button type="button" className="btn btn-outline btn-sm" disabled={zoomExp >= 7} onClick={() => setZoomExp(value => Math.min(7, value + 1))} title="放大">＋</button>
+        <Tooltip content="放大时间轴">
+          <button type="button" className="btn btn-outline btn-sm" disabled={zoomExp >= 7} onClick={() => setZoomExp(value => Math.min(7, value + 1))}>＋</button>
+        </Tooltip>
       </div>
       <div className="pd-axis-pan">
-        <button type="button" className="btn btn-outline btn-sm" onClick={() => panBy(-0.5)} title="向更早时间平移">← 更早</button>
-        <button type="button" className="btn btn-outline btn-sm" onClick={() => panBy(0.5)} title="向更晚时间平移">更晚 →</button>
+        <Tooltip content="向更早时间平移">
+          <button type="button" className="btn btn-outline btn-sm" onClick={() => panBy(-0.5)}>← 更早</button>
+        </Tooltip>
+        <Tooltip content="向更晚时间平移">
+          <button type="button" className="btn btn-outline btn-sm" onClick={() => panBy(0.5)}>更晚 →</button>
+        </Tooltip>
       </div>
       <button type="button" className="btn btn-outline btn-sm" onClick={onResetView}>重置视野</button>
       <span className="pd-axis-hint">{scrollable ? '点上方总览条或拖动窗口快速定位；放大后可左右滚动' : '点上方总览条快速定位，放大后查看细节'}</span>
@@ -1515,7 +1535,12 @@ export function PlayerDetailPage() {
 
   // 加载玩家详情
   async function loadDetail(input, resetTab = true) {
-    const q = input.trim(); if (!q) { setError('请输入 SteamID。'); return; }
+    const q = input.trim();
+    if (!q) {
+      setError('');
+      toast({ title: '请输入 SteamID、玩家名或 IP', tone: 'warning', duration: 2000 });
+      return;
+    }
     setCandidates([]); setCandidateError(''); setCandidatesLoading(false); setCandidatesOpen(false); setActiveCandidateIndex(-1);
     try { setLoading(true); setError(''); const r = await api.playerDetail(token, q); setDetail(r.data); const nextInput = r.data?.profile?.display_name || r.data?.profile?.steamid64 || q; if (nextInput !== steamInput) { suppressCandidateSearchRef.current = true; setSteamInput(nextInput); } else { suppressCandidateSearchRef.current = false; } setLastQuery(q); lastQueryRef.current = q; if (resetTab) setTab('timeline'); } catch (e) { setDetail(null); setError(e.message || '加载失败'); } finally { setLoading(false); }
   }
@@ -1524,7 +1549,12 @@ export function PlayerDetailPage() {
     if (candidatesLoading) { setCandidatesOpen(true); return; }
     const picked = activeCandidateIndex >= 0 ? candidates[activeCandidateIndex] : candidates.length === 1 ? candidates[0] : null;
     if (picked) { selectCandidate(picked); return; }
-    if (candidates.length > 1) { setCandidatesOpen(true); setError('找到多个匹配玩家，请在下拉框中选择。'); return; }
+    if (candidates.length > 1) {
+      setCandidatesOpen(true);
+      setError('');
+      toast({ title: '找到多个匹配玩家', message: '请在下拉框中选择目标玩家。', tone: 'warning', duration: 2000 });
+      return;
+    }
     loadDetail(steamInput);
   }
   function handleSearchKeyDown(e) {
@@ -1634,7 +1664,11 @@ export function PlayerDetailPage() {
     <div className="page-header"><div><div className="page-title">玩家详情</div><div className="page-sub">以时间线还原玩家行为轨迹：服务器进出、进服判定、白名单、封禁、管理员操作一目了然。</div></div><div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
       {detail && canCreateBan && <button type="button" className="btn btn-danger" onClick={() => setBanFormOpen(true)}>发起封禁</button>}
       {detail && <button type="button" className="btn btn-outline" onClick={refreshAccessProfile} disabled={profileRefreshing}>{profileRefreshing ? '刷新资料中...' : '刷新进服资料'}</button>}
-      {detail && <button type="button" className="btn btn-outline" onClick={exportReport}>导出调查报告</button>}
+      {detail ? (
+        <Tooltip content="导出包含玩家详情与时间线的 JSON 调查报告">
+          <button type="button" className="btn btn-outline" onClick={exportReport}>导出调查报告</button>
+        </Tooltip>
+      ) : null}
     </div></div>
 
     <div className="card player-search-card">

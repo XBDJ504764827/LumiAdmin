@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { Modal } from '../../shared/Modal.jsx';
+import { Tooltip } from '../../shared/Tooltip.jsx';
+import { FieldHint } from '../../shared/FieldHint.jsx';
+import { Popconfirm } from '../../shared/Popconfirm.jsx';
 import {
   buildDeleteGroupConfirmMessage,
   buildDeleteGroupFailureMessage,
@@ -114,7 +117,6 @@ export function CommunityPage() {
   const [serverFeedback, setServerFeedback] = useState({ testing: false, tested: false, ok: false, message: '', players: [] });
   const [submittingGroup, setSubmittingGroup] = useState(false);
   const [submittingServer, setSubmittingServer] = useState(false);
-  const [groupError, setGroupError] = useState('');
   const [tokenPanel, setTokenPanel] = useState({ serverId: null, token: '', loading: false, error: '' });
   const [detailModal, setDetailModal] = useState({ open: false, server: null, group: null });
   const [rconModal, setRconModal] = useState({ open: false, serverId: null, serverName: '', executing: '', customCommand: '', server: null });
@@ -253,17 +255,18 @@ export function CommunityPage() {
 
   async function handleCreateGroup() {
     const name = groupForm.name.trim();
-    if (!name) { setGroupError('请输入社区名称。'); return; }
+    if (!name) {
+      toast({ title: '请填写社区名称', tone: 'warning', duration: 2000 });
+      return;
+    }
     try {
       setSubmittingGroup(true);
-      setGroupError('');
       await api.createCommunityGroup(token, { name });
       await loadGroups();
       setGroupModalOpen(false);
       setGroupForm(emptyGroupForm);
       toast({ title: '创建成功', message: `社区组「${name}」已成功创建。` });
     } catch (submitError) {
-      setGroupError('');
       toast({ title: '创建失败', message: submitError.message, tone: 'danger' });
     } finally {
       setSubmittingGroup(false);
@@ -532,8 +535,6 @@ export function CommunityPage() {
   }
 
   async function _handleDeleteGroup(group) {
-    const confirmed = await confirm({ title: '删除社区组', message: buildDeleteGroupConfirmMessage(group) });
-    if (!confirmed) return;
     try {
       await api.deleteCommunityGroup(token, group.id);
       await loadGroups();
@@ -543,11 +544,9 @@ export function CommunityPage() {
     }
   }
 
-  async function handleDeleteServer(serverId) {
-    const confirmed = await confirm({ title: '删除游戏服务器', message: '确定删除这个游戏服务器吗？' });
-    if (!confirmed) return;
+  async function handleDeleteServer(server) {
     try {
-      await api.deleteCommunityServer(token, serverId);
+      await api.deleteCommunityServer(token, server.id);
       await loadGroups();
       toast({ title: '删除成功', message: '游戏服务器已删除。' });
     } catch (deleteError) {
@@ -734,8 +733,6 @@ export function CommunityPage() {
 
   async function handleResetReportToken(server) {
     if (!canManageToken) return;
-    const confirmed = await confirm({ title: '重置上报 Token', message: buildResetReportTokenConfirmMessage(server.name), confirmText: '确认重置' });
-    if (!confirmed) return;
     setTokenPanel({ serverId: server.id, token: '', loading: true, error: '' });
     try {
       const response = await api.resetServerReportToken(token, server.id);
@@ -951,7 +948,18 @@ export function CommunityPage() {
               {isViewing && tokenPanel.token ? (
                 <button className="token-btn token-btn-copy" onClick={handleCopyReportToken}>复制</button>
               ) : null}
-              <button className="token-btn token-btn-danger" onClick={() => handleResetReportToken(server)}>重置</button>
+              <Tooltip content="仅在服务器被其它插件实例占用时重置，旧实例将无法继续上报">
+                <span>
+                  <Popconfirm
+                    title="重置上报 Token"
+                    description={buildResetReportTokenConfirmMessage(server.name)}
+                    confirmText="确认重置"
+                    onConfirm={() => handleResetReportToken(server)}
+                  >
+                    <button className="token-btn token-btn-danger">重置</button>
+                  </Popconfirm>
+                </span>
+              </Tooltip>
             </div>
             {tokenPanel.error ? <div className="text-accent mt-8">{tokenPanel.error}</div> : null}
           </FormSectionCard>
@@ -995,7 +1003,10 @@ export function CommunityPage() {
             </div>
           </div>
           <div className="form-group">
-            <label>RCON 密码</label>
+            <label>
+              RCON 密码
+              {editingServerId ? <FieldHint text="编辑服务器时，修改其他配置项无需重新输入密码；留空即保持原密码。" /> : null}
+            </label>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <input type="password" className="form-control" style={{ flex: 1, minWidth: 160 }} placeholder={editingServerId ? '留空则不修改密码' : 'RCON 密码'} value={serverForm.rcon_password} onChange={(e) => handleServerFieldChange('rcon_password', e.target.value)} />
               {canMutate ? (
@@ -1004,7 +1015,6 @@ export function CommunityPage() {
                 </button>
               ) : null}
             </div>
-            {editingServerId ? <div className="form-hint">修改其他配置项无需重新输入密码</div> : null}
           </div>
           <ServerRconFeedback feedback={serverFeedback} />
           <div className="form-group">
@@ -1289,10 +1299,17 @@ export function CommunityPage() {
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
               编辑
             </button>
-            <button className="action-btn action-btn-danger" onClick={() => handleDeleteServer(server.id)}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
-              删除
-            </button>
+            <Popconfirm
+              title="删除游戏服务器"
+              description={`确定删除服务器「${server.name}」吗？\n\n删除后该服务器将从社区组中移除，相关配置和在线数据将无法继续使用。此操作不可恢复。`}
+              confirmText="删除服务器"
+              onConfirm={() => handleDeleteServer(server)}
+            >
+              <button className="action-btn action-btn-danger">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+                删除
+              </button>
+            </Popconfirm>
           </>
         ) : null}
       </div>
@@ -1356,7 +1373,14 @@ export function CommunityPage() {
                 <button className="action-btn" onClick={() => handleForceAuthSync(group)}>强制同步</button>
                 <button className="action-btn" onClick={() => openCommunityAccessModal(group)}>访问限制</button>
                 <button className="action-btn" onClick={() => openCreateServerModal(group.id)}>+ 添加服务器</button>
-                <button className="action-btn action-btn-danger" onClick={() => _handleDeleteGroup(group)}>删除社区组</button>
+                <Popconfirm
+                  title="删除社区组"
+                  description={buildDeleteGroupConfirmMessage(group)}
+                  confirmText="删除社区组"
+                  onConfirm={() => _handleDeleteGroup(group)}
+                >
+                  <button className="action-btn action-btn-danger">删除社区组</button>
+                </Popconfirm>
               </div>
             ) : null}
           </div>
@@ -1382,7 +1406,6 @@ export function CommunityPage() {
         )}
       >
         <div className="form-group"><label>社区名称</label><input type="text" className="form-control" placeholder="社区名称" value={groupForm.name} onChange={(e) => setGroupForm({ name: e.target.value })} /></div>
-        {groupError ? <div className="text-accent">{groupError}</div> : null}
       </Modal>
 
       {/* 社区访问限制设置弹窗 */}

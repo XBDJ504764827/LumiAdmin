@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
-import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
+import { Popconfirm } from '../../shared/Popconfirm.jsx';
 import { TableLoading, TableEmpty } from '../../shared/TableState.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
@@ -65,7 +65,6 @@ function targetPayload(form) {
 export function ExternalBanApiPage() {
   const { session } = useAuth();
   const { toast } = useToast();
-  const { confirm, dialog } = useConfirmDialog();
   const token = session?.token ?? null;
 
   // ---- Target management state ----
@@ -177,13 +176,6 @@ export function ExternalBanApiPage() {
   }
 
   async function handleDelete(target) {
-    const ok = await confirm({
-      title: '删除外部 API',
-      message: `确定删除「${target.name}」吗？同步记录也会一并删除。`,
-      confirmText: '确认删除',
-    });
-    if (!ok) return;
-
     try {
       await api.deleteExternalBanApiTarget(token, target.id);
       toast({ title: '删除成功' });
@@ -276,7 +268,14 @@ export function ExternalBanApiPage() {
                           {testingId === target.id ? '测试中' : '测试'}
                         </button>
                         <button className="action-btn action-btn-accent" onClick={() => openEdit(target)}>编辑</button>
-                        <button className="action-btn action-btn-danger" onClick={() => handleDelete(target)}>删除</button>
+                        <Popconfirm
+                          title="删除外部 API"
+                          description={`确定删除「${target.name}」吗？同步记录也会一并删除。`}
+                          confirmText="删除"
+                          onConfirm={() => handleDelete(target)}
+                        >
+                          <button className="action-btn action-btn-danger">删除</button>
+                        </Popconfirm>
                       </div>
                     </td>
                   </tr>
@@ -439,7 +438,6 @@ export function ExternalBanApiPage() {
         </div>
       ) : null}
 
-      {dialog}
     </div>
   );
 }

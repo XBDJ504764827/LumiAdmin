@@ -1417,6 +1417,7 @@
 .online-player-wl-approved { color: var(--success-text, #15803d); background: var(--success-bg, #dcfce7); font-family: inherit; }
 .online-player-wl-pending { color: var(--warning-text, #b45309); background: var(--warning-bg, #fef3c7); font-family: inherit; }
 .online-player-wl-rejected { color: var(--danger-text, #b91c1c); background: var(--danger-bg, #fee2e2); font-family: inherit; }
+.online-player-wl-expired { color: var(--text3); background: var(--surface2, #f1f5f9); font-family: inherit; }
 .online-player-wl-none { font-family: inherit; opacity: 0.85; }
 .online-player-name { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; flex-wrap: wrap; }
 .online-player-badge { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 8px; white-space: nowrap; flex-shrink: 0; font-family: inherit; }
@@ -1901,7 +1902,33 @@
   transform: scale(0.95);
 }
 .modal-body { padding: 20px 24px; overflow-y: auto; flex: 1; min-height: 0; }
-.confirm-dialog-message { color: var(--text2); line-height: 1.7; font-size: 14px; }
+.confirm-dialog {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 2px 0;
+}
+.confirm-dialog-icon {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--danger-text, #b91c1c);
+  background: var(--danger-bg, #fee2e2);
+  border: 1px solid color-mix(in srgb, var(--danger-text, #b91c1c) 35%, transparent);
+}
+.confirm-dialog-info .confirm-dialog-icon,
+.confirm-dialog-warning .confirm-dialog-icon {
+  color: var(--warning-text, #b45309);
+  background: var(--warning-bg, #fef3c7);
+  border-color: color-mix(in srgb, var(--warning-text, #b45309) 35%, transparent);
+}
+.confirm-dialog-message { color: var(--text2); line-height: 1.7; font-size: 14px; white-space: pre-line; }
 .modal-footer {
   padding: 14px 24px;
   background: color-mix(in srgb, var(--bg) 60%, transparent);
@@ -2554,3 +2581,140 @@
 .qq-chat-content { white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
 .qq-chat-meta { margin-top: 4px; font-size: 10.5px; color: var(--text3); }
 .qq-chat-row.failed .qq-chat-meta { color: var(--danger-text); }
+
+/* ── 通用交互组件：Tooltip / Popconfirm / Drawer / Alert ── */
+.ui-tooltip-anchor {
+  display: inline-flex;
+  max-width: 100%;
+}
+.ui-tooltip-content {
+  position: fixed;
+  z-index: 10010;
+  width: max-content;
+  padding: 6px 9px;
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-md);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  pointer-events: none;
+  animation: ui-tooltip-in 0.14s ease-out;
+}
+@keyframes ui-tooltip-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.ui-popconfirm {
+  position: fixed;
+  z-index: 10020;
+  padding: 12px 13px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.18), 0 0 0 1px var(--border);
+  animation: ui-popconfirm-in 0.16s ease-out;
+}
+@keyframes ui-popconfirm-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.ui-popconfirm-title { font-size: 13px; font-weight: 700; color: var(--text); }
+.ui-popconfirm-desc { margin-top: 4px; font-size: 12px; line-height: 1.5; color: var(--text2); white-space: pre-line; }
+.ui-popconfirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 11px; }
+
+.ui-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2100;
+  display: flex;
+  justify-content: flex-end;
+  background: var(--modal-overlay);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  animation: ui-drawer-overlay-in 0.2s ease;
+}
+@keyframes ui-drawer-overlay-in { from { opacity: 0; } to { opacity: 1; } }
+.ui-drawer {
+  width: min(640px, 96vw);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  box-shadow: -12px 0 48px rgba(0, 0, 0, 0.16);
+  animation: ui-drawer-in 0.26s cubic-bezier(0.16, 1, 0.3, 1);
+  outline: none;
+}
+@keyframes ui-drawer-in { from { transform: translateX(32px); opacity: 0.7; } to { transform: translateX(0); opacity: 1; } }
+.ui-drawer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.ui-drawer-header h2 { margin: 0; font-size: 16px; font-weight: 700; letter-spacing: -0.2px; }
+.ui-drawer-body { flex: 1; min-height: 0; overflow-y: auto; padding: 20px; }
+.ui-drawer-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--surface);
+}
+.alert-close {
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: currentColor;
+  opacity: 0.65;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 0 0 4px;
+}
+.alert-close:hover { opacity: 1; }
+
+@media (max-width: 720px) {
+  .ui-drawer { width: 100%; border-left: 0; }
+  .ui-drawer-body { padding: 16px; }
+  .ui-drawer-header, .ui-drawer-footer { padding: 14px 16px; }
+}
+.ui-popconfirm-anchor { display: inline-flex; }
+.ui-popconfirm-anchor.is-disabled { cursor: not-allowed; }
+.form-help-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin-left: 5px;
+  padding: 0;
+  border: 1px solid var(--border2);
+  border-radius: 50%;
+  background: var(--surface2);
+  color: var(--text3);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+  vertical-align: 1px;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.form-help-icon:hover,
+.form-help-icon:focus-visible {
+  color: var(--accent2);
+  border-color: var(--accent2);
+  background: var(--surface);
+  outline: none;
+}

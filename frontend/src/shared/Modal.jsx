@@ -1,9 +1,9 @@
 
-export function Modal({ open, title, subtitle, children, footer, onClose, wide = false, extraWide = false }) {
+export function Modal({ open, title, subtitle, children, footer, onClose, wide = false, extraWide = false, dismissible = true }) {
   if (!open) return null;
   const widthStyle = extraWide ? { maxWidth: 920 } : wide ? { maxWidth: 640 } : undefined;
   return (
-    <div className="modal-overlay active" onClick={onClose}>
+    <div className="modal-overlay active" onClick={dismissible ? onClose : undefined}>
       <div className="modal" style={widthStyle} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div>

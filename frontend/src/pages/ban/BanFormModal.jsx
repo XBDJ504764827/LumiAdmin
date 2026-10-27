@@ -3,6 +3,7 @@ import { api } from '../../lib/api.js';
 import { Modal } from '../../shared/Modal.jsx';
 import { DatePicker } from '../../shared/DatePicker.jsx';
 import { useToast } from '../../shared/Toast.jsx';
+import { FieldHint } from '../../shared/FieldHint.jsx';
 import { BAN_TYPE_OPTIONS, BAN_DURATION_OPTIONS, banModalSubmitText, banModalTitle, buildCreateBanPayload, emptyBanForm, validateBanForm } from './banForm.js';
 
 
@@ -204,8 +205,12 @@ export function BanFormModal({ open, mode, editingBanId, prefillForm, onClose, o
       <div className="form-group"><label>封禁理由 <span className="text-accent">*</span></label><textarea className="form-control" value={form.reason} onChange={(event) => setForm((prev) => ({ ...prev, reason: event.target.value }))} placeholder="请输入封禁理由" rows={3} /></div>
       {mode !== 'edit' ? (
         <div className="form-section-card mb-16">
-          <div className="form-section-header"><span>辅助文件（选填）</span></div>
-          <div className="form-hint mb-12">可上传录像、截图或录音作为封禁依据，单个文件最大 100MB。</div>
+          <div className="form-section-header">
+            <span>
+              辅助文件（选填）
+              <FieldHint text="可上传录像、截图或录音作为封禁依据，单个文件最大 100MB。" />
+            </span>
+          </div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
             <button type="button" className="btn btn-outline btn-sm" onClick={() => videoRef.current?.click()} disabled={submitting}>选择录像</button>
             <input ref={videoRef} type="file" accept={ALLOWED_VIDEO} multiple style={{ display: 'none' }} onChange={(event) => handleFileSelect(event.target.files, videoRef)} />

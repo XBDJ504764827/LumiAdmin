@@ -12,6 +12,7 @@ export function ConfirmModal({ options, onCancel, onConfirm }) {
       open
       title={options.title}
       onClose={onCancel ?? onConfirm}
+      dismissible={false}
       footer={(
         <>
           {onCancel ? <button className="btn btn-outline" type="button" onClick={onCancel}>{options.cancelText}</button> : null}
@@ -19,7 +20,10 @@ export function ConfirmModal({ options, onCancel, onConfirm }) {
         </>
       )}
     >
-      <div className="confirm-dialog-message">{options.message}</div>
+      <div className={`confirm-dialog confirm-dialog-${options.tone}`}>
+        <div className="confirm-dialog-icon" aria-hidden="true">{options.tone === 'danger' ? '!' : '?'}</div>
+        <div className="confirm-dialog-message">{options.message}</div>
+      </div>
     </Modal>
   );
 }

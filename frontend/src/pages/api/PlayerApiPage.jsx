@@ -4,7 +4,7 @@ import { useAsync } from '../../shared/useAsync.js';
 import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
 import { TableLoading, TableEmpty } from '../../shared/TableState.jsx';
-import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
+import { Popconfirm } from '../../shared/Popconfirm.jsx';
 import {
   buildPlayerApiConfigPayload,
   defaultPlayerApiConfig,
@@ -17,13 +17,11 @@ import {
 
 export function PlayerApiPage() {
   const { session } = useAuth();
-  const { confirm, dialog } = useConfirmDialog();
   const { toast } = useToast();
   const token = session?.token ?? null;
   const canConfigure = session?.role === 'developer' || session?.role === 'admin';
 
   const [form, setForm] = useState(defaultPlayerApiConfig);
-  const [message, setMessage] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -105,14 +103,12 @@ export function PlayerApiPage() {
     }
     setDraftWebhook({ ...defaultWebhookConfig });
     setEditingIndex(null);
-    setMessage('');
     setModalOpen(true);
   }
 
   function openEditWebhook(index) {
     setDraftWebhook({ ...form.items[index] });
     setEditingIndex(index);
-    setMessage('');
     setModalOpen(true);
   }
 
@@ -120,7 +116,6 @@ export function PlayerApiPage() {
     setModalOpen(false);
     setDraftWebhook(defaultWebhookConfig);
     setEditingIndex(null);
-    setMessage('');
   }
 
   function toggleServer(serverId) {
@@ -163,11 +158,11 @@ export function PlayerApiPage() {
 
   function saveWebhookToForm() {
     if (!draftWebhook.publicPath.trim()) {
-      setMessage('请输入自定义访问后缀。');
+      toast({ title: '请填写访问后缀', tone: 'warning', duration: 2000 });
       return;
     }
     if (/[^a-zA-Z0-9_-]/.test(draftWebhook.publicPath.trim())) {
-      setMessage('后缀只能包含字母、数字、下划线和连字符。');
+      toast({ title: '访问后缀格式不正确', message: '只能包含字母、数字、下划线和连字符。', tone: 'warning', duration: 2000 });
       return;
     }
 
@@ -185,13 +180,6 @@ export function PlayerApiPage() {
   }
 
   async function removeWebhook(index) {
-    const item = form.items[index];
-    const confirmed = await confirm({
-      title: '移除 API 端点',
-      message: `确定要移除端点「${item.publicPath}」吗？`,
-      confirmText: '确认移除',
-    });
-    if (!confirmed) return;
     setForm((prev) => ({ ...prev, items: prev.items.filter((_, i) => i !== index) }));
     toast({ title: '已移除', message: '请点击"保存全部配置"生效。' });
   }
@@ -310,7 +298,14 @@ export function PlayerApiPage() {
                         </div>
                         <div className="action-btn-group flex-shrink-0">
                           <button className="action-btn action-btn-accent" onClick={() => openEditWebhook(index)}>编辑</button>
-                          <button className="action-btn action-btn-danger" onClick={() => removeWebhook(index)}>移除</button>
+                          <Popconfirm
+                            title="移除 API 端点"
+                            description={`确定要移除端点「${item.publicPath}」吗？`}
+                            confirmText="移除"
+                            onConfirm={() => removeWebhook(index)}
+                          >
+                            <button className="action-btn action-btn-danger">移除</button>
+                          </Popconfirm>
                         </div>
                       </div>
                     );
@@ -524,7 +519,6 @@ export function PlayerApiPage() {
                 </div>
               )}
 
-              {message ? <div style={{ color: 'var(--accent)', fontSize: 13 }}>{message}</div> : null}
             </div>
             <div className="modal-footer">
               <button className="btn btn-outline" onClick={closeWebhookModal}>取消</button>
@@ -536,7 +530,6 @@ export function PlayerApiPage() {
         </div>
       )}
 
-      {dialog}
     </div>
   );
 }

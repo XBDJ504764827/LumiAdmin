@@ -34,6 +34,12 @@ impl Database {
             r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS duration_days INTEGER"#,
             // 到期任务将 approved 记录置为 expired 后写入的过期时间
             r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS expired_at TIMESTAMPTZ"#,
+            // 系统自动通过重新审核队列：低风险自动通过先给 3 天临时白名单，
+            // auto_review_required=true 表示仍待管理员重新审核；通过后转永久并清空。
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS auto_review_required BOOLEAN NOT NULL DEFAULT false"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS auto_approved_at TIMESTAMPTZ"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS auto_reviewed_at TIMESTAMPTZ"#,
+            r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS auto_reviewed_by TEXT"#,
             // 两步验证：QQ 绑定快照与 Steam 验证方式
             r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS qq_openid TEXT"#,
             r#"ALTER TABLE whitelist_requests ADD COLUMN IF NOT EXISTS qq_group_id TEXT"#,
@@ -207,6 +213,9 @@ impl Database {
             r#"UPDATE whitelist_requests SET source = 'public' WHERE source IS NULL OR btrim(source) = ''"#,
             r#"UPDATE whitelist_requests SET updated_at = COALESCE(approved_at, rejected_at, revoked_at, applied_at) WHERE updated_at IS NULL"#,
             r#"UPDATE whitelist_requests SET applied_at = COALESCE(updated_at, now()) WHERE applied_at IS NULL"#,
+            // 历史自动通过记录：保留自动通过时间，仍在有效期内的进入重新审核队列。
+            r#"UPDATE whitelist_requests SET auto_approved_at = COALESCE(approved_at, updated_at, now()) WHERE approved_via = 'auto' AND auto_approved_at IS NULL"#,
+            r#"UPDATE whitelist_requests SET auto_review_required = true WHERE approved_via = 'auto' AND status = 'approved' AND auto_review_required = false"#,
         ];
         for sql in fixes {
             sqlx::query(sql).execute(&self.pool).await?;
@@ -220,6 +229,14 @@ impl Database {
             r#"CREATE INDEX IF NOT EXISTS idx_whitelist_requests_steamid64_lookup
            ON whitelist_requests (steamid64, updated_at DESC, applied_at DESC)
            WHERE steamid64 IS NOT NULL"#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"CREATE INDEX IF NOT EXISTS idx_whitelist_requests_auto_review_queue
+           ON whitelist_requests (expires_at ASC, approved_at DESC)
+           WHERE auto_review_required = true AND status = 'approved'"#,
         )
         .execute(&self.pool)
         .await?;

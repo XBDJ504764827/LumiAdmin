@@ -163,6 +163,7 @@ struct WhitelistStatusRow {
     contact: Option<String>,
     reason: Option<String>,
     status: String,
+    auto_review_required: bool,
     applied_at: DateTime<Utc>,
     approved_at: Option<DateTime<Utc>>,
     approved_by: Option<String>,
@@ -192,11 +193,25 @@ pub async fn list_whitelist(
         ));
         param_idx += 1;
     }
-    if let Some(ref status) = query.status {
-        if !status.trim().is_empty() {
-            conditions.push(format!("status = ${param_idx}"));
-            param_idx += 1;
-        }
+    // `auto_review` 不是数据库里的 status，而是「系统自动通过，等待重新审核」队列。
+    // 队列中的记录仍然是 approved（拥有 3 天临时白名单），到期任务会将其置为 expired。
+    let requested_status = query
+        .status
+        .as_deref()
+        .map(str::trim)
+        .filter(|status| !status.is_empty());
+    let auto_review_only = requested_status == Some("auto_review");
+    let status_uses_bind =
+        requested_status.is_some() && !auto_review_only && requested_status != Some("approved");
+    if auto_review_only {
+        conditions.push("status = 'approved' AND auto_review_required = true".to_string());
+    } else if requested_status == Some("approved") {
+        // 系统自动通过记录在重新审核前只属于自动通过队列，避免在「已通过」
+        // 中看起来像已经获得永久白名单。
+        conditions.push("status = 'approved' AND auto_review_required = false".to_string());
+    } else if requested_status.is_some() {
+        conditions.push(format!("status = ${param_idx}"));
+        param_idx += 1;
     }
 
     let where_clause = if conditions.is_empty() {
@@ -208,7 +223,7 @@ pub async fn list_whitelist(
     // 使用 COUNT(*) OVER() 窗口函数一次性获取总数和数据。
     // 不再使用逐行 LATERAL JOIN 解析 approved_by/rejected_by，改为取原始值后在应用层批量解析。
     // 详见 services::display_name::resolve_display_names。
-    let order_clause = whitelist_order_clause(query.status.as_deref());
+    let order_clause = whitelist_order_clause(requested_status);
     let data_sql = format!(
         r#"SELECT wr.id, wr.steamid64, wr.steamid, wr.steamid3, wr.profile_url, wr.nickname, wr.steam_persona_name, wr.contact, wr.reason, wr.status,
                   wr.applied_at, wr.approved_at, wr.approved_by, wr.approval_reason,
@@ -226,9 +241,9 @@ pub async fn list_whitelist(
     if let Some(ref pattern) = search_pattern {
         data_query = data_query.bind(pattern);
     }
-    if let Some(ref status) = query.status {
-        if !status.trim().is_empty() {
-            data_query = data_query.bind(status.trim());
+    if let Some(status) = requested_status {
+        if status_uses_bind {
+            data_query = data_query.bind(status);
         }
     }
     data_query = data_query.bind(query.page_size()).bind(query.offset());
@@ -280,11 +295,18 @@ pub async fn list_whitelist(
 
 fn whitelist_order_clause(status: Option<&str>) -> &'static str {
     match status.map(str::trim) {
+        // 系统自动通过重新审核队列：最早到期的优先处理，避免临时白名单失效。
+        Some("auto_review") => {
+            "ORDER BY wr.expires_at ASC NULLS LAST, wr.approved_at ASC NULLS LAST, wr.id DESC"
+        }
         Some("approved") => {
             "ORDER BY wr.approved_at DESC NULLS LAST, wr.applied_at DESC, wr.id DESC"
         }
         Some("rejected") => {
             "ORDER BY wr.rejected_at DESC NULLS LAST, wr.applied_at DESC, wr.id DESC"
+        }
+        Some("expired") => {
+            "ORDER BY wr.expired_at DESC NULLS LAST, wr.expires_at DESC NULLS LAST, wr.id DESC"
         }
         _ => "ORDER BY wr.applied_at DESC, wr.id DESC",
     }
@@ -550,6 +572,11 @@ pub async fn approve_whitelist_tx(
             approved_by = $2,
             approval_reason = $3,
             approved_via = $4,
+            -- via='auto' 时进入重新审核队列；人工审批则清空自动通过标记。
+            auto_review_required = ($4 = 'auto'),
+            auto_approved_at = CASE WHEN $4 = 'auto' THEN now() ELSE NULL END,
+            auto_reviewed_at = NULL,
+            auto_reviewed_by = NULL,
             expires_at = $5,
             duration_days = $6,
             expired_at = NULL,
@@ -617,6 +644,10 @@ pub async fn reject_whitelist_tx(
             approved_by = NULL,
             approval_reason = NULL,
             approved_via = NULL,
+            auto_review_required = false,
+            auto_approved_at = NULL,
+            auto_reviewed_at = NULL,
+            auto_reviewed_by = NULL,
             revoked_at = NULL,
             revoked_by = NULL,
             updated_at = now()
@@ -668,6 +699,10 @@ pub async fn restore_whitelist(
             rejected_at = NULL,
             rejected_by = NULL,
             rejection_reason = NULL,
+            auto_review_required = false,
+            auto_approved_at = NULL,
+            auto_reviewed_at = NULL,
+            auto_reviewed_by = NULL,
             revoked_at = NULL,
             revoked_by = NULL,
             updated_at = now()
@@ -716,6 +751,7 @@ pub async fn revoke_whitelist(
         SET status = 'revoked',
             revoked_at = now(),
             revoked_by = $2,
+            auto_review_required = false,
             updated_at = now()
         WHERE id = $1
         RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
@@ -736,6 +772,138 @@ pub async fn revoke_whitelist(
         None,
         "whitelist.remove",
         serde_json::json!({ "steamid64": steamid64 }),
+    )
+    .await?;
+    tx.commit().await?;
+
+    Ok(map_whitelist_row(row))
+}
+
+/// 系统自动通过重新审核：通过后转为永久白名单。
+///
+/// 自动通过记录先获得 3 天临时白名单，进入 `auto_review_required=true` 队列。
+/// 管理员重新审核通过后清空到期时间（永久），并写回实际审核管理员。
+pub async fn approve_auto_review_whitelist(
+    db: &Database,
+    id: Uuid,
+    operator_name: &str,
+    reason: Option<&str>,
+    force: bool,
+) -> anyhow::Result<WhitelistItem> {
+    let current = find_by_id(db, id).await?;
+    anyhow::ensure!(
+        current.status == "approved" && current.auto_review_required,
+        "该记录不在系统自动通过待审核队列中"
+    );
+
+    // 重新审核时重新评估风险：自动通过后新增的封禁/关联风险不能被忽略。
+    let risk_profile =
+        player_risk_service::build_player_risk_profile(db, &current.steamid64).await?;
+    ensure_can_approve_with_risk(&risk_profile, force, reason)?;
+
+    let reason = reason.map(str::trim).filter(|value| !value.is_empty());
+    let mut tx = db.pool.begin().await?;
+    let row = sqlx::query_as::<_, WhitelistRow>(
+        r#"
+        UPDATE whitelist_requests
+        SET status = 'approved',
+            approved_at = now(),
+            approved_by = $2,
+            approval_reason = COALESCE($3, '系统自动通过，管理员重新审核通过'),
+            approved_via = 'web',
+            expires_at = NULL,
+            duration_days = NULL,
+            expired_at = NULL,
+            rejected_at = NULL,
+            rejected_by = NULL,
+            rejection_reason = NULL,
+            rejected_via = NULL,
+            revoked_at = NULL,
+            revoked_by = NULL,
+            auto_review_required = false,
+            auto_reviewed_at = now(),
+            auto_reviewed_by = $2,
+            updated_at = now()
+        WHERE id = $1 AND status = 'approved' AND auto_review_required = true
+        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
+                  applied_at, approved_at, approved_by, approval_reason, approved_via,
+                  expires_at, duration_days, expired_at,
+                  rejected_at, rejected_by, rejection_reason, rejected_via,
+                  steam_verified, qq_openid, qq_group_id, qq_username, qq_verified_at
+        "#,
+    )
+    .bind(id)
+    .bind(operator_name.trim())
+    .bind(reason)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("该记录已被其他管理员处理或临时白名单已过期"))?;
+
+    super::auth_event_service::insert_event_tx(
+        &mut tx,
+        None,
+        None,
+        "whitelist.add",
+        super::auth_event_service::whitelist_add_payload(&row.steamid64, None),
+    )
+    .await?;
+    tx.commit().await?;
+
+    Ok(map_whitelist_row(row))
+}
+
+/// 系统自动通过重新审核：不通过则撤销临时白名单，玩家需要重新申请。
+pub async fn reject_auto_review_whitelist(
+    db: &Database,
+    id: Uuid,
+    operator_name: &str,
+    reason: &str,
+) -> anyhow::Result<WhitelistItem> {
+    anyhow::ensure!(!reason.trim().is_empty(), "请输入重新审核拒绝理由");
+
+    let mut tx = db.pool.begin().await?;
+    let row = sqlx::query_as::<_, WhitelistRow>(
+        r#"
+        UPDATE whitelist_requests
+        SET status = 'rejected',
+            rejected_at = now(),
+            rejected_by = $2,
+            rejection_reason = $3,
+            rejected_via = 'web',
+            approved_at = NULL,
+            approved_by = NULL,
+            approval_reason = NULL,
+            approved_via = NULL,
+            expires_at = NULL,
+            duration_days = NULL,
+            expired_at = NULL,
+            revoked_at = NULL,
+            revoked_by = NULL,
+            auto_review_required = false,
+            auto_reviewed_at = now(),
+            auto_reviewed_by = $2,
+            updated_at = now()
+        WHERE id = $1 AND status = 'approved' AND auto_review_required = true
+        RETURNING id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
+                  applied_at, approved_at, approved_by, approval_reason, approved_via,
+                  expires_at, duration_days, expired_at,
+                  rejected_at, rejected_by, rejection_reason, rejected_via,
+                  steam_verified, qq_openid, qq_group_id, qq_username, qq_verified_at
+        "#,
+    )
+    .bind(id)
+    .bind(operator_name.trim())
+    .bind(reason.trim())
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("该记录已被其他管理员处理或临时白名单已过期"))?;
+
+    super::auth_event_service::insert_event_tx(
+        &mut tx,
+        None,
+        None,
+        "whitelist.remove",
+        serde_json::json!({ "steamid64": row.steamid64, "reason": "auto_review_rejected" }),
     )
     .await?;
     tx.commit().await?;
@@ -787,6 +955,10 @@ async fn reopen_inactive_whitelist(
             rejected_at = NULL,
             rejected_by = NULL,
             rejection_reason = NULL,
+            auto_review_required = false,
+            auto_approved_at = NULL,
+            auto_reviewed_at = NULL,
+            auto_reviewed_by = NULL,
             revoked_at = NULL,
             revoked_by = NULL,
             source = 'public',
@@ -866,6 +1038,10 @@ async fn approve_existing_record(
             rejected_at = NULL,
             rejected_by = NULL,
             rejection_reason = NULL,
+            auto_review_required = false,
+            auto_approved_at = NULL,
+            auto_reviewed_at = NULL,
+            auto_reviewed_by = NULL,
             revoked_at = NULL,
             revoked_by = NULL,
             source = 'manual',
@@ -917,6 +1093,7 @@ pub async fn list_status_by_steamid64(
     let rows = sqlx::query_as::<_, WhitelistStatusRow>(
         r#"
         SELECT id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
+               auto_review_required,
                applied_at, approved_at, approved_by, approval_reason,
                expires_at, duration_days, expired_at,
                rejected_at, rejected_by, rejection_reason,
@@ -957,6 +1134,7 @@ async fn find_by_steamid64(
     sqlx::query_as::<_, WhitelistStatusRow>(
         r#"
         SELECT id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
+               auto_review_required,
                applied_at, approved_at, approved_by, approval_reason,
                expires_at, duration_days, expired_at,
                rejected_at, rejected_by, rejection_reason,
@@ -979,6 +1157,7 @@ async fn find_by_id(db: &Database, id: Uuid) -> anyhow::Result<WhitelistStatusRo
     sqlx::query_as::<_, WhitelistStatusRow>(
         r#"
         SELECT id, steamid64, steamid, steamid3, profile_url, nickname, steam_persona_name, contact, reason, status,
+               auto_review_required,
                applied_at, approved_at, approved_by, approval_reason,
                expires_at, duration_days, expired_at,
                rejected_at, rejected_by, rejection_reason,
@@ -1205,6 +1384,7 @@ pub async fn process_expired_whitelist(db: &Database) -> anyhow::Result<usize> {
         r#"UPDATE whitelist_requests
            SET status = 'expired',
                expired_at = now(),
+               auto_review_required = false,
                updated_at = now()
            WHERE status = 'approved'
              AND expires_at IS NOT NULL

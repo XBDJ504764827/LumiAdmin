@@ -6,6 +6,7 @@ import { formatChinaDateTime } from '../../shared/time.js';
 import { api } from '../../lib/api.js';
 import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
+import { Tooltip } from '../../shared/Tooltip.jsx';
 
 /**
  * 在线玩家卡片组件
@@ -49,7 +50,10 @@ export function OnlinePlayerCard({ player, serverId, canOperate, onKick, onBan }
   }
 
   function handleKick() {
-    if (!kickReason.trim()) return;
+    if (!kickReason.trim()) {
+      toast({ title: '请填写踢出理由', tone: 'warning', duration: 2000 });
+      return;
+    }
     onKick(kickReason.trim());
     setShowKickForm(false);
     setKickReason('');
@@ -65,6 +69,7 @@ export function OnlinePlayerCard({ player, serverId, canOperate, onKick, onBan }
     pending: { text: '白名单待审核', cls: 'online-player-wl-pending' },
     rejected: { text: '白名单已拒绝', cls: 'online-player-wl-rejected' },
     revoked: { text: '白名单已撤销', cls: 'online-player-wl-rejected' },
+    expired: { text: '白名单已过期', cls: 'online-player-wl-expired' },
   }[player.whitelist_status] || { text: '无白名单', cls: 'online-player-wl-none' };
 
   const hasBanBadge = (player.local_ban_count ?? 0) > 0 || (player.global_ban_count ?? 0) > 0;
@@ -105,13 +110,14 @@ export function OnlinePlayerCard({ player, serverId, canOperate, onKick, onBan }
             <button className="btn btn-outline btn-sm text-accent" onClick={() => setShowBanForm(!showBanForm)}>
               {showKickForm ? '取消' : '封禁'}
             </button>
-            <button
-              className="btn btn-outline btn-sm"
-              title="在玩家全息档案中查看完整调查信息"
-              onClick={() => navigate(`/player-detail?steamid=${encodeURIComponent(player.steam_id64)}`)}
-            >
-              详情
-            </button>
+            <Tooltip content="在玩家全息档案中查看完整调查信息">
+              <button
+                className="btn btn-outline btn-sm"
+                onClick={() => navigate(`/player-detail?steamid=${encodeURIComponent(player.steam_id64)}`)}
+              >
+                详情
+              </button>
+            </Tooltip>
             <button className="btn btn-outline btn-sm" onClick={toggleRisk} disabled={riskLoading}>
               {riskLoading ? '加载中...' : risk ? '收起风险' : hasBanBadge ? '风险摘要' : '风险'}
             </button>
@@ -148,7 +154,7 @@ export function OnlinePlayerCard({ player, serverId, canOperate, onKick, onBan }
               autoFocus
               aria-label="踢出理由"
             />
-            <button className="btn btn-danger btn-sm" onClick={handleKick} disabled={!kickReason.trim()}>确认踢出</button>
+            <button className="btn btn-danger btn-sm" onClick={handleKick}>确认踢出</button>
           </div>
         </div>
       ) : null}

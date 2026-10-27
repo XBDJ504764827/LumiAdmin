@@ -11,11 +11,14 @@ import { Pagination } from '../../shared/Pagination.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { notifyPendingReviewsUpdated, usePendingReviewIndicators } from '../../hooks/usePendingReviewIndicators.js';
 import { fetchGlobalBansBatch, parseBanData, inferGlobalBanRisk } from './whitelistGlobalBans.js';
-import { ManualCreateModal, RejectModal, ApproveModal, BanDetailModal, PlayerDetailModal, RiskDetailModal } from './WhitelistModals.jsx';
+import { ManualCreateModal, RejectModal, ApproveModal, BanDetailModal, PlayerDetailModal, RiskDetailModal, AutoReviewModal } from './WhitelistModals.jsx';
 import { QqConfigModal } from './QqConfigModal.jsx';
 import { ToggleSwitch } from '../community/CommunityComponents.jsx';
 import { InternalNoteInline } from '../../shared/InternalNote.jsx';
 import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
+import { Alert } from '../../shared/Alert.jsx';
+import { Tooltip } from '../../shared/Tooltip.jsx';
+import { Popconfirm } from '../../shared/Popconfirm.jsx';
 
 const emptyManualForm = { nickname: '', steam_input: '', force: false, reason: '', duration_days: 0 };
 const APPROVE_REVIEW_SECONDS = 5;
@@ -120,13 +123,14 @@ function renderSteamNameCell(item, canRefreshSteam, refreshing, onRefresh) {
       <div className="flex items-center gap-4">
         <span>{item.steam_persona_name ?? '-'}</span>
         {canRefreshSteam ? (
-          <button
-            className="action-btn"
-            style={{ padding: '2px 6px' }}
-            onClick={() => onRefresh(item)}
-            disabled={refreshing}
-            title="刷新Steam名称"
-          >↻</button>
+          <Tooltip content="刷新 Steam 名称">
+            <button
+              className="action-btn"
+              style={{ padding: '2px 6px' }}
+              onClick={() => onRefresh(item)}
+              disabled={refreshing}
+            >↻</button>
+          </Tooltip>
         ) : null}
       </div>
     </td>
@@ -173,7 +177,7 @@ export function WhitelistPage() {
   const queryClient = useQueryClient();
   const token = session?.token ?? null;
 
-  // 审核相关操作后，失效所有白名单查询（pending/approved/rejected 各 tab），
+  // 审核相关操作后，失效所有白名单查询（pending/auto_review/approved/rejected/expired 各 tab），
   // 保证切换 tab 时能立即看到刚刚审核的玩家，而不需要刷新页面。
   async function invalidateWhitelist() {
     await queryClient.invalidateQueries({ queryKey: ['whitelist'] });
@@ -197,6 +201,7 @@ export function WhitelistPage() {
   const [banDetailModal, setBanDetailModal] = useState({ open: false, steamid64: '', bans: [] });
   const [riskDetailModal, setRiskDetailModal] = useState({ open: false, item: null });
   const [detailModal, setDetailModal] = useState({ open: false, item: null });
+  const [autoReviewModal, setAutoReviewModal] = useState({ open: false, item: null });
   const [refreshing, setRefreshing] = useState(false);
   const [autoApproveConfig, setAutoApproveConfig] = useState({ enabled: true, hours: 3, loading: true });
   const [savingAutoApprove, setSavingAutoApprove] = useState(false);
@@ -221,6 +226,12 @@ export function WhitelistPage() {
   const { data, isLoading, error } = useApiQuery(
     ['whitelist', { tab, page, search }],
     (token) => api.whitelist(token, { page, page_size: 20, status: tab, ...(search ? { search } : {}) }),
+  );
+
+  // 系统自动通过队列数量：用于标签页提示，避免管理员漏掉 3 天临时白名单。
+  const { data: autoReviewQueue } = useApiQuery(
+    ['whitelist', 'auto-review-count'],
+    (token) => api.whitelist(token, { page: 1, page_size: 1, status: 'auto_review' }),
   );
 
   useEffect(() => {
@@ -321,11 +332,17 @@ export function WhitelistPage() {
   async function handleApproveWithReason() {
     if (!approveModal.item) return;
     if (approveModal.secondsRemaining > 0) {
-      setApproveModal((prev) => ({ ...prev, error: `请先查看风险详情，${prev.secondsRemaining} 秒后才能确认通过。` }));
+      toast({
+        title: '请先查看风险详情',
+        message: `还需等待 ${approveModal.secondsRemaining} 秒才能确认通过。`,
+        tone: 'warning',
+        duration: 2000,
+      });
       return;
     }
     if (!approveModal.reason.trim()) {
-      setApproveModal((prev) => ({ ...prev, error: '该玩家命中风险，请说明通过理由。' }));
+      setApproveModal((prev) => ({ ...prev, error: '' }));
+      toast({ title: '请填写通过理由', message: '该玩家命中风险，通过时必须说明理由。', tone: 'warning', duration: 2000 });
       return;
     }
     try {
@@ -354,7 +371,8 @@ export function WhitelistPage() {
   async function handleReject() {
     if (!rejectModal.item) return;
     if (!rejectModal.reason.trim()) {
-      setRejectModal((prev) => ({ ...prev, error: '请输入拒绝理由。' }));
+      setRejectModal((prev) => ({ ...prev, error: '' }));
+      toast({ title: '请填写拒绝理由', message: '拒绝白名单申请时必须填写理由。', tone: 'warning', duration: 2000 });
       return;
     }
     try {
@@ -394,12 +412,6 @@ export function WhitelistPage() {
   }
 
   async function handleRevoke(item) {
-    const confirmed = await confirm({
-      title: '删除白名单审核',
-      message: `确定删除 ${item.nickname} 的白名单审核吗？删除后玩家需要重新申请。`,
-      confirmText: '确认删除',
-    });
-    if (!confirmed) return;
     try {
       setSubmitting(true);
       await api.revokeWhitelist(token, item.id);
@@ -411,10 +423,34 @@ export function WhitelistPage() {
     } finally { setSubmitting(false); }
   }
 
+  function handleAutoReviewReviewed(action, item) {
+    invalidateWhitelist();
+    notifyPendingReviewsUpdated({ source: 'whitelist', action: `auto_review_${action}` });
+    toast({
+      title: action === 'approve' ? '重新审核通过' : '已拒绝',
+      message: action === 'approve'
+        ? `${item.nickname} 的临时白名单已转为永久白名单。`
+        : `${item.nickname} 的临时白名单已撤销，玩家需要重新申请。`,
+      tone: action === 'approve' ? 'default' : 'danger',
+    });
+  }
+
   async function handleManualCreate() {
-    if (!manualForm.nickname.trim()) { setManualError('请输入玩家名称。'); return; }
-    if (!manualForm.steam_input.trim()) { setManualError('请输入玩家标识。'); return; }
-    if (manualForm.force && !manualForm.reason.trim()) { setManualError('强制通过时必须填写原因。'); return; }
+    if (!manualForm.nickname.trim()) {
+      setManualError('');
+      toast({ title: '请填写玩家名称', tone: 'warning', duration: 2000 });
+      return;
+    }
+    if (!manualForm.steam_input.trim()) {
+      setManualError('');
+      toast({ title: '请填写玩家标识', message: '支持 SteamID64 / 账号 / 个人主页链接。', tone: 'warning', duration: 2000 });
+      return;
+    }
+    if (manualForm.force && !manualForm.reason.trim()) {
+      setManualError('');
+      toast({ title: '请填写强制通过原因', message: '强制通过风险检查时必须说明原因。', tone: 'warning', duration: 2000 });
+      return;
+    }
     try {
       setSubmitting(true);
       setManualError('');
@@ -562,8 +598,10 @@ export function WhitelistPage() {
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
   const hasPendingWhitelist = (pendingCounts.whitelist ?? 0) > 0;
+  const autoReviewCount = autoReviewQueue?.total ?? 0;
   const approveGlobalBanRisk = inferGlobalBanRisk(approveModal.bans);
   const approveRiskProfile = approveModal.riskProfile;
+  const tableColumnCount = tab === 'pending' ? 7 : tab === 'auto_review' ? 8 : tab === 'approved' ? 11 : 10;
 
   // ---------------------------------------------------------------------------
   // 渲染
@@ -574,6 +612,7 @@ export function WhitelistPage() {
   const closeBanDetailModal = () => setBanDetailModal({ open: false, steamid64: '', bans: [] });
   const closeRiskDetailModal = () => setRiskDetailModal({ open: false, item: null });
   const closeDetailModal = () => setDetailModal({ open: false, item: null });
+  const closeAutoReviewModal = () => setAutoReviewModal({ open: false, item: null });
   const closeManualModal = () => { setManualModalOpen(false); setManualForm(emptyManualForm); setManualError(''); };
   const setRejectReason = (reason) => setRejectModal((prev) => ({ ...prev, reason, error: '' }));
   const setApproveReason = (reason) => setApproveModal((prev) => ({ ...prev, reason, error: '' }));
@@ -600,7 +639,7 @@ export function WhitelistPage() {
               <ToggleSwitch checked={autoApproveConfig.enabled} onChange={handleAutoApproveToggle} disabled={savingAutoApprove} />
               <div>
                 <div className="fw-600 fs-14">低风险自动通过</div>
-                <div className="text-muted-light fs-12">开启后，低风险（无封禁/全球封禁/IP关联风险）玩家申请满 {autoApproveConfig.hours} 小时无人审核将自动通过</div>
+                <div className="text-muted-light fs-12">开启后，低风险（无封禁/全球封禁/IP关联风险）玩家申请满 {autoApproveConfig.hours} 小时无人审核将自动通过，并获得 3 天临时白名单，等待管理员重新审核</div>
               </div>
             </div>
             <div className="flex items-center gap-6 ml-auto">
@@ -629,9 +668,21 @@ export function WhitelistPage() {
           <span>待审核</span>
           {hasPendingWhitelist ? <span className="tab-pending-dot" title={`有 ${pendingCounts.whitelist} 条待审核白名单`} /> : null}
         </button>
+        <button className={`tab ${tab === 'auto_review' ? 'active' : ''}`} onClick={() => switchTab('auto_review')}>
+          <span>系统自动通过</span>
+          {autoReviewCount > 0 ? <span className="tab-pending-dot" title={`有 ${autoReviewCount} 条系统自动通过记录待重新审核`} /> : null}
+        </button>
         <button className={`tab ${tab === 'approved' ? 'active' : ''}`} onClick={() => switchTab('approved')}>已通过</button>
         <button className={`tab ${tab === 'rejected' ? 'active' : ''}`} onClick={() => switchTab('rejected')}>未通过</button>
+        <button className={`tab ${tab === 'expired' ? 'active' : ''}`} onClick={() => switchTab('expired')}>已过期</button>
       </div>
+
+      {tab === 'auto_review' ? (
+        <Alert tone="info" title="系统自动通过队列">
+          这些玩家由系统低风险自动通过，目前仅拥有 3 天临时白名单。管理员重新审核通过后转为永久；
+          逾期未处理将自动过期，玩家需要重新申请。审核面板会拉取 GOKZ.TOP 战绩、最近登录服务器、全部 IP 与同 IP 关联账号。
+        </Alert>
+      ) : null}
 
       <SearchBar value={search} onChange={(v) => { setSearch(v); setPage(1); }} placeholder="搜索 SteamID64 / 玩家名称..." />
 
@@ -652,17 +703,23 @@ export function WhitelistPage() {
                 {tab === 'pending' ? (
                   <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>申请时间</th><th className="text-right">操作</th></tr>
                 ) : null}
+                {tab === 'auto_review' ? (
+                  <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>系统通过时间</th><th>临时到期时间</th><th className="text-right">操作</th></tr>
+                ) : null}
                 {tab === 'approved' ? (
                   <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>申请时间</th><th>通过时间</th><th>到期时间</th><th>审核管理员</th><th>通过理由</th><th className="text-right">操作</th></tr>
                 ) : null}
                 {tab === 'rejected' ? (
                   <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>拒绝理由</th><th>申请时间</th><th>拒绝时间</th><th>审核管理员</th><th className="text-right">操作</th></tr>
                 ) : null}
+                {tab === 'expired' ? (
+                  <tr><th>游戏昵称</th><th>Steam 名称</th><th>SteamID64</th><th>SteamID2</th><th>SteamID3</th><th>通过时间</th><th>原到期时间</th><th>过期时间</th><th>审核管理员</th><th className="text-right">操作</th></tr>
+                ) : null}
               </thead>
               <tbody>
-                {isLoading ? <TableLoading colSpan={tab === 'pending' ? 7 : 10} text="正在加载白名单数据..." /> : null}
-                {!isLoading && error ? <TableError colSpan={tab === 'pending' ? 7 : 11} message={error.message} /> : null}
-                {!isLoading && !error && items.length === 0 ? <TableEmpty colSpan={tab === 'pending' ? 7 : 11} text="当前分区暂无记录" /> : null}
+                {isLoading ? <TableLoading colSpan={tableColumnCount} text="正在加载白名单数据..." /> : null}
+                {!isLoading && error ? <TableError colSpan={tableColumnCount} message={error.message} /> : null}
+                {!isLoading && !error && items.length === 0 ? <TableEmpty colSpan={tableColumnCount} text="当前分区暂无记录" /> : null}
                 {!isLoading && !error && tab === 'pending' ? items.map((item) => (
                     <tr key={item.id} className={rowClassName(item, globalBans)} onContextMenu={(event) => handlePendingRowContextMenu(event, item)}>
                       {renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail, autoApproveConfig, now)}
@@ -675,6 +732,28 @@ export function WhitelistPage() {
                         {canReview ? <div className="action-btn-group">
                           <button className="action-btn action-btn-accent" onClick={() => setDetailModal({ open: true, item })}>详细</button>
                         </div> : null}
+                      </td>
+                    </tr>
+                  )) : null}
+                {!isLoading && !error && tab === 'auto_review' ? items.map((item) => (
+                    <tr key={item.id} className={rowClassName(item, globalBans)}>
+                      {renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail, autoApproveConfig, now)}
+                      {renderSteamNameCell(item, canRefreshSteam, refreshing, handleRefreshSteamName)}
+                      <td className="steam-id" data-label="SteamID64">{item.steamid64}</td>
+                      <td className="steam-id" data-label="SteamID2">{item.steamid ?? '-'}</td>
+                      <td className="steam-id" data-label="SteamID3">{item.steamid3 ?? '-'}</td>
+                      <td className="text-muted-light" data-label="系统通过时间">{formatChinaDateTime(item.approved_at)}</td>
+                      {renderExpiryCell(item)}
+                      <td className="text-right mobile-card-actions" data-label="操作">
+                        {canReview ? (
+                          <div className="action-btn-group">
+                            <Tooltip content="查看战绩、登录与关联账号">
+                              <button className="action-btn action-btn-accent" onClick={() => setAutoReviewModal({ open: true, item })}>
+                                重新审核
+                              </button>
+                            </Tooltip>
+                          </div>
+                        ) : null}
                       </td>
                     </tr>
                   )) : null}
@@ -693,7 +772,16 @@ export function WhitelistPage() {
                       <td className="text-right mobile-card-actions" data-label="操作">
                         <div className="action-btn-group">
                           <button className="action-btn action-btn-accent" onClick={() => setDetailModal({ open: true, item })}>详细</button>
-                          {canRevoke ? <button className="action-btn action-btn-danger" onClick={() => handleRevoke(item)} disabled={submitting}>删除审核</button> : null}
+                          {canRevoke ? (
+                            <Popconfirm
+                              title="删除白名单审核"
+                              description={`确定删除「${item.nickname}」的白名单审核吗？\n\n删除后该玩家将失去白名单资格，需要重新提交申请。此操作不可恢复。`}
+                              confirmText="删除审核"
+                              onConfirm={() => handleRevoke(item)}
+                            >
+                              <button className="action-btn action-btn-danger" disabled={submitting}>删除审核</button>
+                            </Popconfirm>
+                          ) : null}
                         </div>
                       </td>
                     </tr>
@@ -713,6 +801,24 @@ export function WhitelistPage() {
                         <div className="action-btn-group">
                           <button className="action-btn action-btn-accent" onClick={() => setDetailModal({ open: true, item })}>详细</button>
                           {canReview ? <button className="action-btn action-btn-success" onClick={() => handleRestore(item)} disabled={submitting}>恢复通过</button> : null}
+                        </div>
+                      </td>
+                    </tr>
+                  )) : null}
+                {!isLoading && !error && tab === 'expired' ? items.map((item) => (
+                    <tr key={item.id} className={rowClassName(item, globalBans)}>
+                      {renderNicknameCell(item, globalBans, openBanDetail, openRiskDetail)}
+                      {renderSteamNameCell(item, canRefreshSteam, refreshing, handleRefreshSteamName)}
+                      <td className="steam-id" data-label="SteamID64">{item.steamid64}</td>
+                      <td className="steam-id" data-label="SteamID2">{item.steamid ?? '-'}</td>
+                      <td className="steam-id" data-label="SteamID3">{item.steamid3 ?? '-'}</td>
+                      <td className="text-muted-light" data-label="通过时间">{formatChinaDateTime(item.approved_at)}</td>
+                      <td className="text-muted-light" data-label="原到期时间">{formatChinaDateTime(item.expires_at)}</td>
+                      <td className="text-muted-light" data-label="过期时间">{formatChinaDateTime(item.expired_at)}</td>
+                      <td data-label="审核管理员">{item.approved_by ?? '-'}</td>
+                      <td className="text-right mobile-card-actions" data-label="操作">
+                        <div className="action-btn-group">
+                          <button className="action-btn action-btn-accent" onClick={() => setDetailModal({ open: true, item })}>详细</button>
                         </div>
                       </td>
                     </tr>
@@ -797,6 +903,14 @@ export function WhitelistPage() {
         submitting={submitting}
         onApprove={handleApprove}
         onReject={openRejectModal}
+      />
+
+      <AutoReviewModal
+        open={autoReviewModal.open}
+        onClose={closeAutoReviewModal}
+        item={autoReviewModal.item}
+        token={token}
+        onReviewed={handleAutoReviewReviewed}
       />
 
       <QqConfigModal

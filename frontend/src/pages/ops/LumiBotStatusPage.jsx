@@ -4,7 +4,8 @@ import { PageState } from '../../shared/PageState.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { StatusPill } from '../../shared/StatusPill.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
-import { IconActivity, IconRefresh } from '../../shared/Icons.jsx';
+import { IconRefresh } from '../../shared/Icons.jsx';
+import { Alert } from '../../shared/Alert.jsx';
 import { useState } from 'react';
 
 function eventKind(item) {
@@ -283,13 +284,12 @@ export function LumiBotStatusPage() {
           </div>
 
           {hasOperationalIssue ? (
-            <div className="lumi-bot-alert" role="status">
-              <IconActivity size={18} />
-              <div>
-                <strong>{!status.configured ? 'LumiBot 集成未配置' : !status.reachable ? 'LumiBot 当前不可达' : 'LumiBot 上报链路需要关注'}</strong>
-                <span>{status.health_error || status.last_error || (queue.failed > 0 ? `${queue.failed} 条事件已进入失败状态。` : '请检查后台同步任务。')}</span>
-              </div>
-            </div>
+            <Alert
+              tone={!status.reachable || queue.failed > 0 ? 'danger' : 'warning'}
+              title={!status.configured ? 'LumiBot 集成未配置' : !status.reachable ? 'LumiBot 当前不可达' : 'LumiBot 上报链路需要关注'}
+            >
+              {status.health_error || status.last_error || (queue.failed > 0 ? `${queue.failed} 条事件已进入失败状态。` : '请检查后台同步任务。')}
+            </Alert>
           ) : null}
 
           <div className="lumi-bot-status-grid">

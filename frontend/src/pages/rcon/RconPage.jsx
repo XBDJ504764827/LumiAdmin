@@ -88,7 +88,10 @@ export function RconPage() {
 
   async function handleCustomExecute() {
     const cmd = customCommand.trim();
-    if (!cmd) return;
+    if (!cmd) {
+      toast({ title: '请输入 RCON 命令', tone: 'warning', duration: 2000 });
+      return;
+    }
     await handleExecute(cmd);
     setCustomCommand('');
   }

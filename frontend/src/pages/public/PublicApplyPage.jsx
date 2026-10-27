@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { publicApi } from '../../lib/publicApi.js';
 import { PublicPageShell } from './PublicPageShell.jsx';
+import { Alert } from '../../shared/Alert.jsx';
+import { FieldHint } from '../../shared/FieldHint.jsx';
+import { useToast } from '../../shared/Toast.jsx';
 
 const STEAM_AUTH_ERROR_REASONS = {
   invalid_mode: 'Steam 登录响应无效，请重试。',
@@ -14,6 +17,7 @@ const STEAM_AUTH_ERROR_REASONS = {
 const QQ_POLL_INTERVAL_MS = 3000;
 
 export function PublicApplyPage() {
+  const { toast } = useToast();
   // 首次渲染时一次性解析 Steam 回调 URL 参数（steam_token / steam_auth / reason）。
   const [steamCallback] = useState(() => {
     const params = new URLSearchParams(window.location.search);
@@ -130,7 +134,11 @@ export function PublicApplyPage() {
   // 手动输入：Steam 标识解析
   // ——————————————————————————————————————————————————————————————
   async function handleManualConfirm() {
-    if (!steamInput.trim()) { setResolveError('请输入 Steam 标识符。'); return; }
+    if (!steamInput.trim()) {
+      setResolveError('');
+      toast({ title: '请输入 Steam 标识符', tone: 'warning', duration: 2000 });
+      return;
+    }
     setResolving(true);
     setResolveError('');
     try {
@@ -237,9 +245,11 @@ export function PublicApplyPage() {
     try {
       await navigator.clipboard.writeText(qqCode.code);
       setCopied(true);
+      toast({ title: '验证码已复制', message: '请私聊机器人发送该验证码。' });
       window.setTimeout(() => setCopied(false), 2000);
     } catch {
       setQqError('复制失败，请手动选中验证码复制。');
+      toast({ title: '复制失败', message: '请手动选中验证码复制。', tone: 'danger' });
     }
   }
 
@@ -247,7 +257,11 @@ export function PublicApplyPage() {
   // 第三步：提交白名单
   // ——————————————————————————————————————————————————————————————
   const submit = async () => {
-    if (!reason.trim()) { setError('请填写申请理由。'); return; }
+    if (!reason.trim()) {
+      setError('');
+      toast({ title: '请填写申请理由', message: '请简单说明游戏时长、KZ 经历或加入社区的原因。', tone: 'warning', duration: 2000 });
+      return;
+    }
     setSubmitting(true);
     setError('');
     setMessage('');
@@ -298,41 +312,21 @@ export function PublicApplyPage() {
   // ——————————————————————————————————————————————————————————————
   function renderFeedback() {
     if (error) {
-      const type = error.includes('已通过') ? 'success' : error.includes('审核中') ? 'warning' : 'error';
-      if (type === 'success') return (
-        <div className="alert alert-success">
-          <span className="alert-icon">✓</span>
-          <div className="alert-content">
-            <div className="alert-title">白名单已通过</div>
-            <div className="alert-text">{error}</div>
-          </div>
-        </div>
-      );
-      if (type === 'warning') return (
-        <div className="alert alert-warning">
-          <span className="alert-icon">⏳</span>
-          <div className="alert-content">
-            <div className="alert-title">审核中</div>
-            <div className="alert-text">{error}</div>
-          </div>
-        </div>
-      );
+      if (error.includes('已通过')) {
+        return <Alert tone="success" title="白名单已通过" icon="✓">{error}</Alert>;
+      }
+      if (error.includes('审核中')) {
+        return <Alert tone="warning" title="审核中" icon="⏳">{error}</Alert>;
+      }
+      return <Alert tone="danger">{error}</Alert>;
+    }
+    if (message) {
       return (
-        <div className="alert alert-error">
-          <span className="alert-icon">✕</span>
-          <span className="alert-text">{error}</span>
-        </div>
+        <Alert tone="success" title="申请提交成功" icon="✓">
+          请等待管理员审核，审核通过后即可进入服务器。
+        </Alert>
       );
     }
-    if (message) return (
-      <div className="alert alert-success">
-        <span className="alert-icon">✓</span>
-        <div className="alert-content">
-          <div className="alert-title">申请提交成功</div>
-          <div className="alert-text">请等待管理员审核，审核通过后即可进入服务器。</div>
-        </div>
-      </div>
-    );
     return null;
   }
 
@@ -501,7 +495,10 @@ export function PublicApplyPage() {
                   ) : (
                     <>
                       <div className="form-group" style={{ textAlign: 'left' }}>
-                        <label>Steam 标识符 <span className="text-accent">*</span></label>
+                        <label>
+                          Steam 标识符 <span className="text-accent">*</span>
+                          <FieldHint text="支持 SteamID64、Steam2、Steam3 和 Steam 个人主页链接" />
+                        </label>
                         <input
                           type="text"
                           className="form-control"
@@ -510,10 +507,7 @@ export function PublicApplyPage() {
                           placeholder="SteamID64 / SteamID / 个人主页链接"
                           disabled={resolving}
                         />
-                        <div className="form-hint">
-                          支持 SteamID64、Steam2、Steam3 和 Steam 个人主页链接
-                          {resolving && <span className="form-hint-loading">正在获取 Steam 资料...</span>}
-                        </div>
+                        {resolving ? <div className="form-hint"><span className="form-hint-loading">正在获取 Steam 资料...</span></div> : null}
                         {resolveError && <div className="form-hint" style={{ color: 'var(--warning-text)' }}>{resolveError}</div>}
                       </div>
                       <div className="form-group" style={{ textAlign: 'left' }}>
@@ -670,7 +664,10 @@ export function PublicApplyPage() {
                 <h3 style={{ margin: '0 0 12px', fontSize: 16 }}>第三步：填写申请理由</h3>
 
                 <div className="form-group">
-                  <label>申请理由 <span className="text-accent">*</span></label>
+                  <label>
+                    申请理由 <span className="text-accent">*</span>
+                    <FieldHint text="必填。管理员将根据申请理由、游戏时长、KZ 经历等信息进行审核。" />
+                  </label>
                   <textarea
                     className="form-control"
                     rows={4}
@@ -679,7 +676,6 @@ export function PublicApplyPage() {
                     placeholder="请填写您申请白名单的理由，例如游戏时长、KZ 经历、加入社区的原因等"
                     disabled={submitting}
                   />
-                  <div className="form-hint">必填，管理员将根据申请理由进行审核。</div>
                 </div>
 
                 {renderFeedback()}

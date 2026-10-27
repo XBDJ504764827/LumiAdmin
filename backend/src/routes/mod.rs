@@ -435,6 +435,10 @@ pub fn router(
             post(whitelist::revoke_whitelist_request),
         )
         .route(
+            "/api/whitelist/:id/auto-review",
+            post(whitelist::review_auto_approved_whitelist),
+        )
+        .route(
             "/api/whitelist/:id/refresh-steam-name",
             post(whitelist::refresh_single_steam_name),
         )

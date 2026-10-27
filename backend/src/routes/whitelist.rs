@@ -43,6 +43,15 @@ pub(crate) struct WhitelistActionBody {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
+pub(crate) struct AutoReviewBody {
+    /// approve = 重新审核通过并转永久；reject = 不通过并撤销临时白名单
+    pub action: String,
+    pub reason: Option<String>,
+    pub force: Option<bool>,
+}
+
+#[derive(Deserialize)]
 pub(crate) struct RefreshSteamNamesBody {
     pub status: Option<String>,
 }
@@ -292,6 +301,113 @@ pub(crate) async fn approve_whitelist_request(
         },
     )
     .await;
+    Ok(Json(serde_json::json!({"item": item})))
+}
+
+pub(crate) async fn review_auto_approved_whitelist(
+    State(ctx): State<AppCtx>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<AutoReviewBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let actor = current_operator(&ctx, &headers).await?;
+    if !permission_service::can_review_whitelist(&actor) {
+        return Err(AppError::forbidden());
+    }
+    let operator_name = actor.display_name.clone();
+    let force = body.force.unwrap_or(false);
+    let action = body.action.trim().to_ascii_lowercase();
+
+    let mut item = match action.as_str() {
+        "approve" => whitelist_service::approve_auto_review_whitelist(
+            &ctx.db,
+            id,
+            &operator_name,
+            body.reason.as_deref(),
+            force,
+        )
+        .await
+        .map_err(AppError::bad_request)?,
+        "reject" => whitelist_service::reject_auto_review_whitelist(
+            &ctx.db,
+            id,
+            &operator_name,
+            body.reason.as_deref().unwrap_or(""),
+        )
+        .await
+        .map_err(AppError::bad_request)?,
+        _ => {
+            return Err(AppError::bad_request(anyhow::anyhow!(
+                "不支持的重新审核动作，仅支持 approve / reject"
+            )))
+        }
+    };
+
+    item.risk_profile = whitelist_service::risk_profile_for_whitelist(&ctx.db, item.id)
+        .await
+        .ok();
+
+    log_service::log_action(
+        &ctx.db,
+        &operator_name,
+        "白名单管理",
+        if action == "approve" {
+            "系统自动通过重新审核通过"
+        } else {
+            "系统自动通过重新审核拒绝"
+        },
+        &item.nickname,
+        &extract_client_ip(&headers),
+    )
+    .await;
+
+    write_whitelist_audit(
+        &ctx,
+        &headers,
+        &actor,
+        WhitelistAuditEvent {
+            operation: "whitelist_auto_review",
+            item: &item,
+            reason: item
+                .approval_reason
+                .clone()
+                .or(item.rejection_reason.clone()),
+            message: format!(
+                "系统自动通过白名单重新审核{}，ID: {}",
+                if action == "approve" {
+                    "通过（转永久）"
+                } else {
+                    "拒绝"
+                },
+                item.id
+            ),
+            details: serde_json::json!({
+                "action": "review_auto_approved_whitelist",
+                "decision": action,
+                "whitelist_id": item.id,
+                "steamid64": item.steamid64,
+                "nickname": item.nickname,
+                "status": item.status,
+                "approved_at": item.approved_at,
+                "approved_by": item.approved_by,
+                "approval_reason": item.approval_reason,
+                "rejection_reason": item.rejection_reason,
+                "expires_at": item.expires_at,
+                "duration_days": item.duration_days,
+                "force": force,
+                "risk_profile": item.risk_profile,
+                "operator_username": actor.username,
+                "operator_role": actor.role,
+            }),
+        },
+    )
+    .await;
+
+    // 重新审核会改变有效期/生效状态，主动刷新缓存，避免等待通知周期。
+    if let Err(error) = ctx.whitelist_cache.refresh(&ctx.db).await {
+        tracing::warn!(%error, "系统自动通过重新审核后刷新白名单缓存失败");
+    }
+
     Ok(Json(serde_json::json!({"item": item})))
 }
 

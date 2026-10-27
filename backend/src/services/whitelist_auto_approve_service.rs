@@ -1001,21 +1001,23 @@ mod tests {
             assert!(cache.contains("76561198000000001").await);
 
             // 低风险自动通过先给 3 天临时白名单，并进入重新审核队列。
-            let (duration_days, expires_at, auto_review_required, auto_approved_at): (
-                Option<i32>,
-                Option<chrono::DateTime<Utc>>,
-                bool,
-                Option<chrono::DateTime<Utc>>,
-            ) = sqlx::query_as(
+            #[derive(sqlx::FromRow)]
+            struct AutoReviewState {
+                duration_days: Option<i32>,
+                expires_at: Option<chrono::DateTime<Utc>>,
+                auto_review_required: bool,
+                auto_approved_at: Option<chrono::DateTime<Utc>>,
+            }
+            let state: AutoReviewState = sqlx::query_as(
                 "SELECT duration_days, expires_at, auto_review_required, auto_approved_at FROM whitelist_requests WHERE id = $1",
             )
             .bind(id)
             .fetch_one(&db.pool)
             .await?;
-            assert_eq!(duration_days, Some(3));
-            assert!(auto_review_required);
-            assert!(auto_approved_at.is_some());
-            let expires_at = expires_at.expect("自动通过应写入 3 天临时白名单期限");
+            assert_eq!(state.duration_days, Some(3));
+            assert!(state.auto_review_required);
+            assert!(state.auto_approved_at.is_some());
+            let expires_at = state.expires_at.expect("自动通过应写入 3 天临时白名单期限");
             assert!(expires_at > Utc::now() + Duration::days(2));
             assert!(expires_at < Utc::now() + Duration::days(4));
 

@@ -7,6 +7,7 @@ import { AppShell } from './components/layout/AppShell.jsx';
 import { publicRoutes, protectedRoutes, canViewRoute } from './routes/routeConfig.jsx';
 import { NotFoundPage } from './pages/notFound/NotFoundPage.jsx';
 import { PageState } from './shared/PageState.jsx';
+import { Alert } from './shared/Alert.jsx';
 
 // 创建 React Query 客户端，配置默认选项
 const queryClient = new QueryClient({
@@ -107,6 +108,9 @@ function LoginScreen() {
           </div>
 
           <form onSubmit={handleSubmit} className="login-card-body">
+            {error ? (
+              <Alert tone="danger" title="登录失败" closable onClose={() => setError('')}>{error}</Alert>
+            ) : null}
             <div className="login-field">
               <label className="login-label">用户名</label>
               <div className="login-input-wrap">
@@ -153,23 +157,6 @@ function LoginScreen() {
 
         <div className="login-footer">LumiAdmin Admin Panel</div>
       </div>
-
-      {error && (
-        <div className="login-error-overlay" onClick={() => setError('')}>
-          <div className="login-error-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="login-error-icon">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="10" />
-                <line x1="15" y1="9" x2="9" y2="15" />
-                <line x1="9" y1="9" x2="15" y2="15" />
-              </svg>
-            </div>
-            <div className="login-error-title">登录失败</div>
-            <div className="login-error-message">{error}</div>
-            <button className="login-error-btn" onClick={() => setError('')}>知道了</button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

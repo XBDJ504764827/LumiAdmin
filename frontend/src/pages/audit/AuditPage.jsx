@@ -4,7 +4,7 @@ import { useApiQuery } from '../../shared/useApiQuery.js';
 import { FilterToolbar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
-import { Modal } from '../../shared/Modal.jsx';
+import { Drawer } from '../../shared/Drawer.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 
 const OPERATION_LABELS = {
@@ -58,10 +58,10 @@ function textPreview(value, maxLength = 48) {
   return `${text.slice(0, maxLength)}...`;
 }
 
-function AuditDetailModal({ item, onClose }) {
+function AuditDetailDrawer({ item, onClose }) {
   if (!item) return null;
   return (
-    <Modal open title="审计详情" onClose={onClose} wide footer={<button className="btn btn-outline" onClick={onClose}>关闭</button>}>
+    <Drawer open title="审计详情" onClose={onClose} footer={<button className="btn btn-outline" onClick={onClose}>关闭</button>}>
       <div className="detail-grid">
         <span className="detail-label">时间</span><span className="detail-value">{formatChinaDateTime(item.created_at)}</span>
         <span className="detail-label">操作</span><span className="detail-value">{OPERATION_LABELS[item.operation] || item.operation}</span>
@@ -77,7 +77,7 @@ function AuditDetailModal({ item, onClose }) {
         <span className="detail-label">消息</span><span className="detail-value pre">{item.message || '-'}</span>
         <span className="detail-label">详情</span><span className="detail-value pre">{item.details ? JSON.stringify(item.details, null, 2) : '-'}</span>
       </div>
-    </Modal>
+    </Drawer>
   );
 }
 
@@ -241,7 +241,7 @@ export function AuditPage() {
       </div>
 
       <Pagination page={page} pageSize={20} total={total} onChange={setPage} />
-      <AuditDetailModal item={detailItem} onClose={() => setDetailItem(null)} />
+      <AuditDetailDrawer item={detailItem} onClose={() => setDetailItem(null)} />
     </div>
   );
 }

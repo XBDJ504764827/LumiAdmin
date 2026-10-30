@@ -1044,22 +1044,23 @@ export function CommunityPage() {
               <label>LGSM 实例名</label>
               <div style={{ display: 'flex', gap: 8 }}>
                 <input type="text" className="form-control" style={{ flex: 1, minWidth: 120 }} placeholder="例如：csgoserver" value={serverForm.lgsm_instance} onChange={(e) => handleServerFieldChange('lgsm_instance', e.target.value)} />
-                <button
-                  type="button"
-                  className="btn btn-outline"
-                  style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
-                  title="按服务器名称自动推导（如 2服 → csgoserver-2）"
-                  onClick={() => {
-                    const suggested = suggestLgsmInstance(serverForm.name);
-                    if (suggested) {
-                      handleServerFieldChange('lgsm_instance', suggested);
-                    } else {
-                      toast({ title: '无法推导', message: '服务器名称中没有数字，请手动填写实例名。', tone: 'warning' });
-                    }
-                  }}
-                >
-                  自动填充
-                </button>
+                <Tooltip content="按服务器名称自动推导（如 2服 → csgoserver-2）">
+                  <button
+                    type="button"
+                    className="btn btn-outline"
+                    style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
+                    onClick={() => {
+                      const suggested = suggestLgsmInstance(serverForm.name);
+                      if (suggested) {
+                        handleServerFieldChange('lgsm_instance', suggested);
+                      } else {
+                        toast({ title: '无法推导', message: '服务器名称中没有数字，请手动填写实例名。', tone: 'warning' });
+                      }
+                    }}
+                  >
+                    自动填充
+                  </button>
+                </Tooltip>
               </div>
             </div>
           </div>

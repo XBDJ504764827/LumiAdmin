@@ -83,14 +83,24 @@ export function OnlinePlayerCard({ player, serverId, canOperate, onKick, onBan }
           <div className="online-player-detail">
             <span className="online-player-name">
               {player.name}
-              {(player.local_ban_count ?? 0) > 0 && <span className="online-player-badge online-player-badge-ban" title="存在活跃本地封禁">⚑ 本地封禁</span>}
-              {(player.global_ban_count ?? 0) > 0 && <span className="online-player-badge online-player-badge-global" title="存在活跃 KZTimer 全球封禁">⚠ 全球封禁</span>}
+              {(player.local_ban_count ?? 0) > 0 && (
+                <Tooltip content="存在活跃本地封禁">
+                  <span className="online-player-badge online-player-badge-ban">⚑ 本地封禁</span>
+                </Tooltip>
+              )}
+              {(player.global_ban_count ?? 0) > 0 && (
+                <Tooltip content="存在活跃 KZTimer 全球封禁">
+                  <span className="online-player-badge online-player-badge-global">⚠ 全球封禁</span>
+                </Tooltip>
+              )}
             </span>
             <div className="online-player-meta">
               <span className="online-player-tag">{player.steam_id64}</span>
-              <span className={`online-player-tag ${ipLinked ? 'online-player-tag-warn' : ''}`} title={ipLinked ? `该 IP 历史上出现过多达 ${player.ip_account_count} 个账号` : undefined}>
-                {player.ip}{ipLinked ? `（关联 ${player.ip_account_count} 账号）` : ''}
-              </span>
+              <Tooltip content={ipLinked ? `该 IP 历史上出现过多达 ${player.ip_account_count} 个账号` : null}>
+                <span className={`online-player-tag ${ipLinked ? 'online-player-tag-warn' : ''}`}>
+                  {player.ip}{ipLinked ? `（关联 ${player.ip_account_count} 账号）` : ''}
+                </span>
+              </Tooltip>
               <span className="online-player-tag online-player-tag-tag-ping">{player.ping}ms</span>
               <span className={`online-player-tag ${whitelistLabel.cls}`}>{whitelistLabel.text}</span>
               {(player.session_count ?? 0) > 0 && (

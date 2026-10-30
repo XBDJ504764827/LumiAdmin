@@ -3,7 +3,6 @@ import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../../lib/api.js';
 import { publicApi } from '../../lib/publicApi.js';
 import { useApiQuery } from '../../shared/useApiQuery.js';
-import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
@@ -11,7 +10,7 @@ import { Pagination } from '../../shared/Pagination.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { notifyPendingReviewsUpdated, usePendingReviewIndicators } from '../../hooks/usePendingReviewIndicators.js';
 import { fetchGlobalBansBatch, parseBanData, inferGlobalBanRisk } from './whitelistGlobalBans.js';
-import { ManualCreateModal, RejectModal, ApproveModal, BanDetailModal, PlayerDetailModal, RiskDetailModal, AutoReviewModal } from './WhitelistModals.jsx';
+import { ManualCreateModal, RejectModal, ApproveModal, GlobalBanDetailDrawer, PlayerDetailModal, RiskDetailModal, AutoReviewModal } from './WhitelistModals.jsx';
 import { QqConfigModal } from './QqConfigModal.jsx';
 import { ToggleSwitch } from '../community/CommunityComponents.jsx';
 import { InternalNoteInline } from '../../shared/InternalNote.jsx';
@@ -171,7 +170,6 @@ function renderExpiryCell(item) {
 
 export function WhitelistPage() {
   const { session } = useAuth();
-  const { confirm, dialog } = useConfirmDialog();
   const { toast } = useToast();
   const { counts: pendingCounts } = usePendingReviewIndicators();
   const queryClient = useQueryClient();
@@ -388,18 +386,13 @@ export function WhitelistPage() {
     } finally { setSubmitting(false); }
   }
 
-  async function handleRestore(item) {
+  // 有审批风险的玩家需先在审核弹窗中确认；无风险的由行内 Popconfirm 确认后直接恢复。
+  function openRestoreReview(item) {
     const itemBans = globalBans[item.steamid64];
-    if (hasApprovalRisk(item, globalBans)) {
-      setApproveModal({ ...emptyApproveModal(), mode: 'restore', open: true, item, bans: itemBans || [], riskProfile: item.risk_profile || null });
-      return;
-    }
-    const confirmed = await confirm({
-      title: '恢复白名单',
-      message: `确定恢复 ${item.nickname} 的白名单吗？恢复后该玩家可正常进入服务器。`,
-      confirmText: '确认恢复',
-    });
-    if (!confirmed) return;
+    setApproveModal({ ...emptyApproveModal(), mode: 'restore', open: true, item, bans: itemBans || [], riskProfile: item.risk_profile || null });
+  }
+
+  async function restoreWhitelistItem(item) {
     try {
       setSubmitting(true);
       await api.restoreWhitelist(token, item.id, { duration_days: APPROVE_DEFAULT_DURATION_DAYS });
@@ -800,7 +793,21 @@ export function WhitelistPage() {
                       <td className="text-right mobile-card-actions" data-label="操作">
                         <div className="action-btn-group">
                           <button className="action-btn action-btn-accent" onClick={() => setDetailModal({ open: true, item })}>详细</button>
-                          {canReview ? <button className="action-btn action-btn-success" onClick={() => handleRestore(item)} disabled={submitting}>恢复通过</button> : null}
+                          {canReview ? (
+                            hasApprovalRisk(item, globalBans) ? (
+                              <button className="action-btn action-btn-success" onClick={() => openRestoreReview(item)} disabled={submitting}>恢复通过</button>
+                            ) : (
+                              <Popconfirm
+                                title="恢复白名单"
+                                description={`确定恢复 ${item.nickname} 的白名单吗？恢复后该玩家可正常进入服务器。`}
+                                confirmText="确认恢复"
+                                tone="primary"
+                                onConfirm={() => restoreWhitelistItem(item)}
+                              >
+                                <button className="action-btn action-btn-success" disabled={submitting}>恢复通过</button>
+                              </Popconfirm>
+                            )
+                          ) : null}
                         </div>
                       </td>
                     </tr>
@@ -884,7 +891,7 @@ export function WhitelistPage() {
         onSubmit={handleApproveWithReason}
         submitting={submitting}
       />
-      <BanDetailModal
+      <GlobalBanDetailDrawer
         open={banDetailModal.open}
         onClose={closeBanDetailModal}
         steamid64={banDetailModal.steamid64}
@@ -920,8 +927,6 @@ export function WhitelistPage() {
         onSave={handleQqConfigSave}
         saving={savingQqConfig}
       />
-
-      {dialog}
     </div>
   );
 }

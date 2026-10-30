@@ -15,13 +15,17 @@ export function Drawer({
 }) {
   const panelRef = useRef(null);
 
+  // 焦点只在打开时移入面板；父组件因 onClose 变化而重渲染时不应抢回焦点
+  useEffect(() => {
+    if (open) panelRef.current?.focus();
+  }, [open]);
+
   useEffect(() => {
     if (!open) return undefined;
     const onKeyDown = (event) => {
       if (event.key === 'Escape') onClose?.();
     };
     window.addEventListener('keydown', onKeyDown);
-    panelRef.current?.focus();
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [open, onClose]);
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../state/store.js';
 import { ThemeToggle } from '../../shared/ThemeToggle.jsx';
+import { Tooltip } from '../../shared/Tooltip.jsx';
 import { PendingReviewProvider, usePendingReviewData } from '../../hooks/usePendingReviewIndicators.js';
 import { sidebarSections } from './sidebarSections.jsx';
 
@@ -284,14 +285,16 @@ export function AppShell({ children }) {
               <div className="user-name">{session?.displayName ?? 'Alex 管理员'}</div>
               <div className="user-role">{session?.roleLabel ?? '系统管理员'}</div>
             </div>
-            <button className="logout-btn" type="button" onClick={logout} title="退出登录">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="logout-icon">
-                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-                <polyline points="16 17 21 12 16 7" />
-                <line x1="21" y1="12" x2="9" y2="12" />
-              </svg>
-              <span className="logout-text">退出</span>
-            </button>
+            <Tooltip content="退出登录" className="logout-tooltip">
+              <button className="logout-btn" type="button" onClick={logout}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="logout-icon">
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                  <polyline points="16 17 21 12 16 7" />
+                  <line x1="21" y1="12" x2="9" y2="12" />
+                </svg>
+                <span className="logout-text">退出</span>
+              </button>
+            </Tooltip>
           </div>
         </div>
       </aside>
@@ -373,13 +376,15 @@ export function AppShell({ children }) {
           </div>
           <div className="topbar-actions">
             <ThemeToggle compact />
-            <button className="icon-btn" type="button" onClick={() => navigate('/public/apply')} title="公开页面">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-                <polyline points="15 3 21 3 21 9" />
-                <line x1="10" y1="14" x2="21" y2="3" />
-              </svg>
-            </button>
+            <Tooltip content="公开页面" className="topbar-tooltip">
+              <button className="icon-btn" type="button" onClick={() => navigate('/public/apply')}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                  <polyline points="15 3 21 3 21 9" />
+                  <line x1="10" y1="14" x2="21" y2="3" />
+                </svg>
+              </button>
+            </Tooltip>
             <div className="topbar-divider" />
             <div className="topbar-profile" ref={profileRef}>
               <button

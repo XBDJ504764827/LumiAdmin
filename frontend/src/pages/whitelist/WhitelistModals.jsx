@@ -597,11 +597,11 @@ export function ApproveModal({ open, onClose, mode = 'approve', item, bans = [],
 
 export function RiskDetailModal({ open, onClose, item }) {
   return (
-    <Modal
+    <Drawer
       open={open}
-      wide
       title="关联账号风险"
       onClose={onClose}
+      width={720}
       footer={<button className="btn btn-primary" type="button" onClick={onClose}>关闭</button>}
     >
       <div className="global-ban-info">
@@ -612,7 +612,7 @@ export function RiskDetailModal({ open, onClose, item }) {
       {!item?.risk_profile || item.risk_profile.action === 'allow' ? (
         <div className="global-ban-empty">当前没有关联账号风险。</div>
       ) : null}
-    </Modal>
+    </Drawer>
   );
 }
 
@@ -620,17 +620,13 @@ export function RiskDetailModal({ open, onClose, item }) {
 // 全球封禁详情 Modal
 // ---------------------------------------------------------------------------
 
-export function BanDetailModal({ open, onClose, steamid64, bans }) {
+export function GlobalBanDetailDrawer({ open, onClose, steamid64, bans }) {
   return (
-    <Modal
+    <Drawer
       open={open}
-      title={
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 20, color: 'var(--accent)' }}>⚠</span>
-          <span>全球封禁记录</span>
-        </div>
-      }
+      title={<><span style={{ fontSize: 18, color: 'var(--accent)', marginRight: 8 }}>⚠</span>全球封禁记录</>}
       onClose={onClose}
+      width={720}
       footer={<button className="btn btn-primary" onClick={onClose}>关闭</button>}
     >
       <div className="global-ban-detail">
@@ -645,7 +641,7 @@ export function BanDetailModal({ open, onClose, steamid64, bans }) {
         </div>
         <GlobalBanRecordList bans={bans} />
       </div>
-    </Modal>
+    </Drawer>
   );
 }
 

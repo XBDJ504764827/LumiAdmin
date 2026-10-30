@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useApiQuery } from '../../shared/useApiQuery.js';
+import { useToast } from '../../shared/Toast.jsx';
 import { useAuth } from '../../state/store.js';
 import { formatChinaDateTime } from '../../shared/time.js';
 import { StatusPill } from '../../shared/StatusPill.jsx';
-import { Modal } from '../../shared/Modal.jsx';
+import { Drawer } from '../../shared/Drawer.jsx';
 import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 
 const BAN_TYPE_MAP = { bhop_hack:'连跳作弊', cheat:'作弊', tool_assist:'辅助工具', other:'其他' };
@@ -41,8 +42,8 @@ function apiStatus(metric, nowMs) {
   return { label: '等待请求', kind: 'default' };
 }
 
-function BanDetailModal({ ban, localBanId, manualUnbanned, onClose }) {
-  return (<Modal open={true} title="全球封禁详情" onClose={onClose} wide footer={<button className="btn btn-outline" onClick={onClose}>关闭</button>}>
+function BanDetailDrawer({ ban, localBanId, manualUnbanned, onClose }) {
+  return (<Drawer open={true} title="全球封禁详情" onClose={onClose} footer={<button className="btn btn-outline" onClick={onClose}>关闭</button>}>
     <div className="detail-grid">
       <span className="detail-label">KZTimer ID</span><span className="detail-value mono">{ban.id}</span>
       <span className="detail-label">玩家</span><span className="detail-value fw-600">{ban.player_name||'-'}</span>
@@ -61,11 +62,12 @@ function BanDetailModal({ ban, localBanId, manualUnbanned, onClose }) {
       <span className="detail-label">本地封禁</span>
       <span className="detail-value">{manualUnbanned?<StatusPill kind="default">管理员已解封</StatusPill>:localBanId?<StatusPill kind="danger">已同步封禁</StatusPill>:<StatusPill kind="success">未同步封禁</StatusPill>}</span>
     </div>
-  </Modal>);
+  </Drawer>);
 }
 
 export function GlobalBanPage() {
   const { session } = useAuth();
+  const { toast } = useToast();
   const token = session?.token ?? null;
   const role = session?.role ?? '';
   const isDeveloper = role === 'developer';
@@ -111,7 +113,7 @@ export function GlobalBanPage() {
 
   async function handleSync() {
     if(syncing)return;setSyncing(true);setSyncResult(null);
-    try{const result=await api.syncGlobalBans(token);setSyncResult(result.result||result);refetch();refetchStatus();}catch(e){setSyncResult({error:e.message});refetchStatus();}finally{setSyncing(false);}
+    try{const result=await api.syncGlobalBans(token);setSyncResult(result.result||result);refetch();refetchStatus();toast({ title: '全球封禁同步完成' });}catch(e){setSyncResult({error:e.message});refetchStatus();toast({ title: '同步失败', message: e.message, tone: 'danger' });}finally{setSyncing(false);}
   }
 
   async function handleSearch(e) {
@@ -204,7 +206,7 @@ export function GlobalBanPage() {
       </tbody></table></div></div></div>
 
       <div className="pagination"><button className="pagination-btn" disabled={page<=1} onClick={()=>setPage(p=>Math.max(1,p-1))}>上一页</button><span className="pagination-info">第 {page} 页</span><button className="pagination-btn" disabled={!hasMore} onClick={()=>setPage(p=>p+1)}>下一页</button></div>
-      {detailItem&&<BanDetailModal ban={detailItem.ban} localBanId={detailItem.local_ban_id} manualUnbanned={detailItem.manual_unbanned} onClose={()=>setDetailItem(null)}/>}
+      {detailItem&&<BanDetailDrawer ban={detailItem.ban} localBanId={detailItem.local_ban_id} manualUnbanned={detailItem.manual_unbanned} onClose={()=>setDetailItem(null)}/>}
     </div>
   );
 }

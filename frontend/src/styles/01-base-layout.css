@@ -636,7 +636,8 @@ input[type="checkbox"], input[type="radio"] {
 
 .sidebar-collapsed .user-card { justify-content: center; padding: 10px 8px; }
 .sidebar-collapsed .user-info { display: none !important; }
-.sidebar-collapsed .logout-btn { display: none; }
+.sidebar-collapsed .logout-btn,
+.sidebar-collapsed .logout-tooltip { display: none; }
 .sidebar-collapsed .logout-text { display: none; }
 
 .main, .app-main { margin-left: var(--sidebar-w); flex: 1; transition: margin-left var(--transition); min-height: 100vh; display: flex; flex-direction: column; min-width: 0; }

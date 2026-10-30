@@ -5,6 +5,7 @@ import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
 import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { Modal } from '../../shared/Modal.jsx';
+import { Drawer } from '../../shared/Drawer.jsx';
 import { SearchBar } from '../../shared/SearchBar.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { StatusPill } from '../../shared/StatusPill.jsx';
@@ -215,11 +216,6 @@ export function AbnormalRecordPage() {
   }
 
   async function handleRetrySubmit(item) {
-    const confirmed = await confirm({
-      title: '重试提交',
-      message: `确定重新将 ${item.player_name || item.steam_id64} 的记录加入全球提交队列吗？`,
-    });
-    if (!confirmed) return;
     try {
       await api.retryAbnormalRecordSubmit(token, item.id);
       await recordsQuery.refetch();
@@ -359,7 +355,15 @@ export function AbnormalRecordPage() {
                             <div className="action-btn-group">
                               <button className="action-btn action-btn-accent" onClick={() => openDetail(item)}>详情</button>
                               {item.status === 'approved_but_submit_failed' ? (
-                                <button className="action-btn action-btn-success" onClick={() => handleRetrySubmit(item)}>重试</button>
+                                <Popconfirm
+                                  title="重试提交"
+                                  description={`确定重新将 ${item.player_name || item.steam_id64} 的记录加入全球提交队列吗？`}
+                                  confirmText="重新提交"
+                                  tone="primary"
+                                  onConfirm={() => handleRetrySubmit(item)}
+                                >
+                                  <button className="action-btn action-btn-success">重试</button>
+                                </Popconfirm>
                               ) : null}
                             </div>
                           </td>
@@ -446,11 +450,11 @@ export function AbnormalRecordPage() {
         </>
       )}
 
-      <Modal
+      <Drawer
         open={detailOpen}
         title="异常记录详情"
         onClose={closeDetail}
-        extraWide
+        width={720}
         footer={
           detailItem?.status === 'pending' ? (
             <>
@@ -515,7 +519,7 @@ export function AbnormalRecordPage() {
             </div>
           </div>
         ) : null}
-      </Modal>
+      </Drawer>
 
       <Modal
         open={reviewOpen}

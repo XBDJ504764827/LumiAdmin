@@ -21,10 +21,12 @@ export function Alert({
   role,
 }) {
   const resolvedTone = tone === 'error' ? 'danger' : tone;
+  // 现有样式类名为 alert-error（没有 alert-danger），这里映射到已有样式
+  const toneClass = resolvedTone === 'danger' ? 'error' : resolvedTone;
   const level = resolvedTone === 'danger' || resolvedTone === 'warning' ? 'alert' : 'status';
   return (
     <div
-      className={`alert alert-${resolvedTone} ${className}`.trim()}
+      className={`alert alert-${toneClass} ${className}`.trim()}
       role={role || level}
     >
       <span className="alert-icon" aria-hidden="true">{icon ?? ICONS[resolvedTone] ?? ICONS.info}</span>

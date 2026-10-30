@@ -1305,8 +1305,11 @@
   flex: 1;
   min-height: 0;
 }
+/* 需为 flex 列布局：.dash-chart-fill 靠 flex:1 撑满高度，否则其内的画布为绝对定位，容器高度会塌成 0 */
 .dash-donut-chart {
   position: relative;
+  display: flex;
+  flex-direction: column;
   width: 46%;
   max-width: 210px;
   height: 100%;

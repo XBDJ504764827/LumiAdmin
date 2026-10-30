@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { api } from '../../lib/api.js';
-import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { Modal } from '../../shared/Modal.jsx';
 import { Popconfirm } from '../../shared/Popconfirm.jsx';
 import { useAuth } from '../../state/store.js';
@@ -34,7 +33,6 @@ function roleClass(role) {
 
 export function UsersPage() {
   const { session } = useAuth();
-  const { confirm, dialog } = useConfirmDialog();
   const { toast } = useToast();
   const _token = session?.token ?? null;
   const [search, setSearch] = useState('');
@@ -225,12 +223,6 @@ export function UsersPage() {
 
   async function handleToggleEnabled(item) {
     const action = item.enabled ? '禁用' : '启用';
-    const confirmed = await confirm({
-      title: `${action}账号`,
-      message: `确定${action}管理员 ${item.username} 吗？${item.enabled ? '禁用后该账号将无法登录。' : ''}`,
-    });
-    if (!confirmed) return;
-
     try {
       await toggleEnabledMutation.mutateAsync({ id: item.id, enabled: !item.enabled });
       toast({ title: `${action}成功`, message: `管理员 ${item.username} 已${action}。` });
@@ -299,7 +291,17 @@ export function UsersPage() {
                     <td className="text-muted-light" data-label="创建时间">{formatChinaDateTime(item.created_at)}</td>
                     <td className="text-right mobile-card-actions" data-label="操作">
                       <div className="action-btn-group">
-                        {canToggleEnabled(item) ? <button className={`action-btn ${item.enabled ? 'action-btn-danger' : 'action-btn-success'}`} onClick={() => handleToggleEnabled(item)}>{item.enabled ? '禁用' : '启用'}</button> : null}
+                        {canToggleEnabled(item) ? (
+                          <Popconfirm
+                            title={`${item.enabled ? '禁用' : '启用'}账号`}
+                            description={`确定${item.enabled ? '禁用' : '启用'}管理员 ${item.username} 吗？${item.enabled ? '禁用后该账号将无法登录。' : ''}`}
+                            confirmText={item.enabled ? '禁用' : '启用'}
+                            tone={item.enabled ? 'danger' : 'primary'}
+                            onConfirm={() => handleToggleEnabled(item)}
+                          >
+                            <button className={`action-btn ${item.enabled ? 'action-btn-danger' : 'action-btn-success'}`}>{item.enabled ? '禁用' : '启用'}</button>
+                          </Popconfirm>
+                        ) : null}
                         {canEditUser(item) ? <button className="action-btn action-btn-accent" onClick={() => openEditModal(item)}>{isNormal ? '编辑我的信息' : '编辑'}</button> : null}
                         {canEditUser(item) ? <button className="action-btn" onClick={() => openPasswordModal(item)}>修改密码</button> : null}
                         {canRevokeSessions(item) ? (
@@ -388,7 +390,6 @@ export function UsersPage() {
         <div className="form-group"><label>新密码</label><input type="password" className="form-control" value={passwordForm.password} onChange={(event) => setPasswordForm((prev) => ({ ...prev, password: event.target.value }))} /></div>
         <div className="form-group"><label>确认密码</label><input type="password" className="form-control" value={passwordForm.confirmPassword} onChange={(event) => setPasswordForm((prev) => ({ ...prev, confirmPassword: event.target.value }))} /></div>
       </Modal>
-      {dialog}
     </div>
   );
 }

@@ -6,7 +6,6 @@ import { useToast } from '../../shared/Toast.jsx';
 import { MetricCard } from '../../shared/MetricCard.jsx';
 import { Modal } from '../../shared/Modal.jsx';
 import { Alert } from '../../shared/Alert.jsx';
-import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { Popconfirm } from '../../shared/Popconfirm.jsx';
 import { TableLoading, TableError, TableEmpty } from '../../shared/TableState.jsx';
 import { formatChinaDateTime } from '../../shared/time.js';
@@ -34,7 +33,6 @@ export function displayHostName(host) {
 export function HostAgentPage() {
   const { session } = useAuth();
   const { toast } = useToast();
-  const { confirm, dialog } = useConfirmDialog();
   const token = session?.token ?? null;
   const isDeveloper = session?.role === 'developer';
 
@@ -109,14 +107,6 @@ export function HostAgentPage() {
 
   async function handleToggleDisabled(host) {
     const next = !host.disabled;
-    const confirmed = await confirm({
-      title: next ? '停用宿主机' : '启用宿主机',
-      message: next
-        ? `停用后「${displayHostName(host)}」不再领取电源任务，已下发任务不受影响，确定继续？`
-        : `确定重新启用「${displayHostName(host)}」？`,
-      confirmText: next ? '停用' : '启用',
-    });
-    if (!confirmed) return;
     try {
       setActing(host.id);
       await api.updateHostAgent(token, host.id, { disabled: next });
@@ -239,13 +229,22 @@ export function HostAgentPage() {
                             >
                               重命名
                             </button>
-                            <button
-                              className="action-btn"
-                              disabled={acting === host.id}
-                              onClick={() => handleToggleDisabled(host)}
+                            <Popconfirm
+                              title={host.disabled ? '启用宿主机' : '停用宿主机'}
+                              description={host.disabled
+                                ? `确定重新启用「${displayHostName(host)}」？`
+                                : `停用后「${displayHostName(host)}」不再领取电源任务，已下发任务不受影响，确定继续？`}
+                              confirmText={host.disabled ? '启用' : '停用'}
+                              tone={host.disabled ? 'primary' : 'danger'}
+                              onConfirm={() => handleToggleDisabled(host)}
                             >
-                              {host.disabled ? '启用' : '停用'}
-                            </button>
+                              <button
+                                className="action-btn"
+                                disabled={acting === host.id}
+                              >
+                                {host.disabled ? '启用' : '停用'}
+                              </button>
+                            </Popconfirm>
                             <Popconfirm
                               title="删除宿主机"
                               description={`确定删除「${displayHostName(host)}」？已绑定的服务器将自动解绑，历史任务保留。`}
@@ -345,7 +344,6 @@ export function HostAgentPage() {
           />
         </div>
       </Modal>
-      {dialog}
     </div>
   );
 }

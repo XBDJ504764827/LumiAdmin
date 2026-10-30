@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { api } from '../../lib/api.js';
 import { useApiQuery } from '../../shared/useApiQuery.js';
-import { useConfirmDialog } from '../../shared/ConfirmModal.jsx';
 import { InternalNoteInline } from '../../shared/InternalNote.jsx';
 import { useAuth } from '../../state/store.js';
 import { useToast } from '../../shared/Toast.jsx';
@@ -19,7 +18,6 @@ import { Popconfirm } from '../../shared/Popconfirm.jsx';
 
 export function BanPage() {
   const { session } = useAuth();
-  const { confirm, dialog } = useConfirmDialog();
   const { toast } = useToast();
   const token = session?.token ?? null;
 
@@ -106,18 +104,12 @@ export function BanPage() {
     return canManageAll || (session?.role === 'normal' && item.operator_name === session?.displayName);
   }
 
-  async function handleUnban(item) {
-    // IP 封禁需要选择解封范围；Steam 账号封禁保持原有一键解封。
-    if (item.ban_type === 'ip') {
-      setUnbanModal({ open: true, item });
-      return;
-    }
-    const confirmed = await confirm({
-      title: '解封确认',
-      message: `确定要解封玩家 ${item.player || item.steam_id} 吗？解封后该玩家将能够正常进入服务器。`,
-      confirmText: '确认解封',
-    });
-    if (!confirmed) return;
+  // IP 封禁需要选择解封范围，打开选择弹窗；Steam 账号封禁由行内 Popconfirm 确认后调用 unbanAccount。
+  function handleUnban(item) {
+    setUnbanModal({ open: true, item });
+  }
+
+  async function unbanAccount(item) {
     try {
       await api.unban(token, item.id, 'account_ip');
       refetch();
@@ -231,7 +223,21 @@ export function BanPage() {
                       <div className="action-btn-group">
                         <button className="action-btn" onClick={() => setDetailItem(x)}>详细</button>
                         {canManageAll ? <button className="action-btn action-btn-accent" onClick={() => openEditModal(x)}>编辑</button> : null}
-                        {canUnban(x) && x.status === 'active' ? <button className="action-btn action-btn-success" onClick={() => handleUnban(x)}>解封</button> : null}
+                        {canUnban(x) && x.status === 'active' ? (
+                          x.ban_type === 'ip' ? (
+                            <button className="action-btn action-btn-success" onClick={() => handleUnban(x)}>解封</button>
+                          ) : (
+                            <Popconfirm
+                              title="解封确认"
+                              description={`确定要解封玩家 ${x.player || x.steam_id} 吗？解封后该玩家将能够正常进入服务器。`}
+                              confirmText="确认解封"
+                              tone="primary"
+                              onConfirm={() => unbanAccount(x)}
+                            >
+                              <button className="action-btn action-btn-success">解封</button>
+                            </Popconfirm>
+                          )
+                        ) : null}
                         {canCreate && x.status === 'inactive' ? <button className="action-btn action-btn-danger" onClick={() => openRebanModal(x)}>重新封禁</button> : null}
                         {canManageAll ? (
                           <Popconfirm
@@ -285,8 +291,6 @@ export function BanPage() {
         onClose={() => setUnbanModal({ open: false, item: null })}
         onConfirm={confirmUnbanScope}
       />
-
-      {dialog}
     </div>
   );
 }

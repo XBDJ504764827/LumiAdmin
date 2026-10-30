@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../state/store.js';
 import { useToast } from './Toast.jsx';
-import { useConfirmDialog } from './ConfirmModal.jsx';
+import { Popconfirm } from './Popconfirm.jsx';
 import { formatChinaDateTime } from './time.js';
 
 // QQ 绑定信息面板 + 管理员私聊：白名单审核/玩家详情共用。
@@ -15,7 +15,6 @@ import { formatChinaDateTime } from './time.js';
 export function QqBindingPanel({ steamid64, compact = false }) {
   const { session } = useAuth();
   const { toast } = useToast();
-  const { confirm, dialog } = useConfirmDialog();
   const token = session?.token ?? null;
   // 私聊 / 解绑仅限 developer / admin（后端同样鉴权）
   const canManage = session?.role === 'developer' || session?.role === 'admin';
@@ -75,13 +74,6 @@ export function QqBindingPanel({ steamid64, compact = false }) {
   }
 
   async function handleUnbind() {
-    const ok = await confirm({
-      title: '解除 QQ 绑定',
-      message: '确定解除该 Steam 账号的 QQ 绑定吗？解除后玩家需重新私聊验证才能申请白名单。',
-      tone: 'danger',
-      confirmText: '确认解绑',
-    });
-    if (!ok) return;
     try {
       await api.deleteWhitelistQqBinding(token, steamid64);
       toast({ title: '已解绑' });
@@ -126,7 +118,16 @@ export function QqBindingPanel({ steamid64, compact = false }) {
           ) : null)}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
             {canManage ? <button className="action-btn action-btn-accent" type="button" onClick={() => setChatOpen((v) => !v)}>{chatOpen ? '收起聊天' : '私聊玩家'}</button> : null}
-            {canManage ? <button className="action-btn action-btn-danger" type="button" onClick={handleUnbind}>解绑</button> : null}
+            {canManage ? (
+              <Popconfirm
+                title="解除 QQ 绑定"
+                description="确定解除该 Steam 账号的 QQ 绑定吗？解除后玩家需重新私聊验证才能申请白名单。"
+                confirmText="确认解绑"
+                onConfirm={handleUnbind}
+              >
+                <button className="action-btn action-btn-danger" type="button">解绑</button>
+              </Popconfirm>
+            ) : null}
           </div>
 
           {chatOpen && canManage ? (
@@ -167,8 +168,6 @@ export function QqBindingPanel({ steamid64, compact = false }) {
       ) : (
         <div className="text-muted-light fs-12">该玩家尚未完成 QQ 私聊验证绑定。</div>
       )}
-
-      {dialog}
     </div>
   );
 }

@@ -101,10 +101,10 @@ export function buildServerActivityData(items = [], unit = 'hour') {
 
 /** 服务器状态展示文案（与后端 status 字段一一对应） */
 export const SERVER_STATUS_META = {
-  online: { label: '在线' },
-  hibernating: { label: '休眠' },
-  untested: { label: '未测试' },
-  offline: { label: '离线' },
+  online: { label: '在线', description: '状态为在线，且上报未超时' },
+  hibernating: { label: '休眠', description: '服务器处于休眠状态' },
+  untested: { label: '未测试', description: '尚未完成连接测试' },
+  offline: { label: '离线', description: '服务器离线，或在线状态下长时间未上报' },
 };
 
 /** 服务器状态分布 → 环形图数据（含总数） */

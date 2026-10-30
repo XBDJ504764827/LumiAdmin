@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api.js';
 import { useApiQuery, useApiMutation } from '../../shared/useApiQuery.js';
+import { useToast } from '../../shared/Toast.jsx';
 import { Pagination } from '../../shared/Pagination.jsx';
 import { EmptyBlock } from '../../shared/TableState.jsx';
 import { notifyNotificationsUpdated } from '../../hooks/useNotifications.js';
@@ -39,6 +40,7 @@ const TYPE_PILL_CLASS = {
 
 export function NotificationPage() {
   const navigate = useNavigate();
+  const { toast } = useToast();
 
   const [page, setPage] = useState(1);
   const [typeFilter, setTypeFilter] = useState('');
@@ -75,14 +77,19 @@ export function NotificationPage() {
     try {
       await markReadMutation.mutateAsync({ id });
       notifyNotificationsUpdated({ action: 'mark_read', id });
-    } catch {}
+    } catch (e) {
+      toast({ title: '标记已读失败', message: e.message, tone: 'danger' });
+    }
   }
 
   async function handleMarkAllRead() {
     try {
       await markAllReadMutation.mutateAsync({});
       notifyNotificationsUpdated({ action: 'mark_all_read' });
-    } catch {}
+      toast({ title: '已全部标记为已读' });
+    } catch (e) {
+      toast({ title: '操作失败', message: e.message, tone: 'danger' });
+    }
   }
 
   function handleClick(n) {

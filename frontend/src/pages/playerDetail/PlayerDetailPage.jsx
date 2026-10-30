@@ -7,6 +7,7 @@ import { BanFormModal } from '../ban/BanFormModal.jsx';
 import { UnbanScopeModal } from '../ban/UnbanScopeModal.jsx';
 import { StatusPill } from '../../shared/StatusPill.jsx';
 import { Modal } from '../../shared/Modal.jsx';
+import { Drawer } from '../../shared/Drawer.jsx';
 import { Tooltip } from '../../shared/Tooltip.jsx';
 import { Popconfirm } from '../../shared/Popconfirm.jsx';
 import { formatChinaDate, formatChinaDateTime } from '../../shared/time.js';
@@ -249,7 +250,7 @@ function WhitelistDetailPopup({ item, onClose, onAction, token }) {
     } catch (e) { toast({ title: '操作失败', message: e.message, tone: 'danger' }); } finally { setActing(false); }
   }
 
-  return (<><Modal open={true} title="白名单详情" onClose={onClose} footer={<><button className="btn btn-outline" onClick={onClose}>关闭</button>
+  return (<><Drawer open={true} title="白名单详情" onClose={onClose} footer={<><button className="btn btn-outline" onClick={onClose}>关闭</button>
     {isPending && <><button className="action-btn action-btn-success" onClick={() => doAction('approve')} disabled={acting}>通过</button><button className="action-btn action-btn-danger" onClick={() => doAction('reject')} disabled={acting || !reason.trim()}>拒绝</button></>}
     {isApproved && (
       <Popconfirm
@@ -278,7 +279,7 @@ function WhitelistDetailPopup({ item, onClose, onAction, token }) {
       {isExpired && item.expired_at && <><span className="detail-label">过期时间</span><span className="detail-value">{formatChinaDateTime(item.expired_at)}</span></>}
       {item.approval_reason && <><span className="detail-label">通过理由</span><span className="detail-value pre">{item.approval_reason}</span></>}
     </div>
-  </Modal></>);
+  </Drawer></>);
 }
 
 // ── Global Ban Popup ──
@@ -287,8 +288,8 @@ function GlobalBanPopup({ items, onClose }) {
   function banTypeLabel(t) { const m = { bhop_hack: '连跳作弊', cheat: '作弊', tool_assist: '辅助工具', other: '其他' }; return m[t] || t || '-'; }
   function isPerma(e) { return e && e.startsWith('9999'); }
   function expLabel(e) { if (!e) return '永久'; if (isPerma(e)) return '永久'; return formatChinaDateTime(e, { seconds: false }); }
-  return (<Modal open={true} title={`全球封禁详情 (${items.length} 条)`} onClose={onClose} wide footer={<button className="btn btn-outline" onClick={onClose}>关闭</button>}>
-    {/* 堆叠卡片而非表格：弹窗宽度有限，表格在移动端会严重溢出 */}
+  return (<Drawer open={true} title={`全球封禁详情 (${items.length} 条)`} onClose={onClose} footer={<button className="btn btn-outline" onClick={onClose}>关闭</button>}>
+    {/* 堆叠卡片而非表格：抽屉宽度有限，表格在移动端会严重溢出 */}
     <div className="global-ban-list">
       {items.map(item => {
         const ban = item.ban; return (<div key={ban.id} className="global-ban-item">
@@ -304,7 +305,7 @@ function GlobalBanPopup({ items, onClose }) {
         </div>);
       })}
     </div>
-  </Modal>);
+  </Drawer>);
 }
 
 const GOKZ_MODES = [
@@ -341,10 +342,10 @@ const TIMELINE_CATEGORY_ORDER = [
 /** 无事件时的兜底时间参考（模块加载时取一次，避免渲染期调用非纯函数）。 */
 const AXIS_FALLBACK_NOW = Date.now();
 
-/** 事件详情弹窗：点击坐标轴上的点后展示完整信息。 */
-function TimelineEventModal({ event, onClose }) {
+/** 事件详情抽屉：点击坐标轴上的点后展示完整信息。 */
+function TimelineEventDrawer({ event, onClose }) {
   if (!event) return null;
-  return <Modal open title="事件详情" onClose={onClose} wide footer={<button className="btn btn-outline" type="button" onClick={onClose}>关闭</button>}>
+  return <Drawer open title="事件详情" onClose={onClose} footer={<button className="btn btn-outline" type="button" onClick={onClose}>关闭</button>}>
     <div className="pd-event-detail">
       <div className="pd-event-detail-head">
         <div className="pd-event-detail-title">{event.title}</div>
@@ -368,7 +369,7 @@ function TimelineEventModal({ event, onClose }) {
         <span>事件类型：<code className="mono">{event.event_type}</code></span>
       </div>
     </div>
-  </Modal>;
+  </Drawer>;
 }
 
 /** 总览条：展示全量时间范围与事件分布。
@@ -827,9 +828,11 @@ function TimelineTab({ detail }) {
         <strong>{events.length}</strong>
         <span>条事件</span>
         {detail.timeline_truncated && detail.timeline_total > events.length && (
-          <span className="pd-timeline-warn" title="事件过多，仅展示最近 500 条，请用筛选缩小范围">
-            已截断（共 {detail.timeline_total} 条）
-          </span>
+          <Tooltip content="事件过多，仅展示最近 500 条，请用筛选缩小范围">
+            <span className="pd-timeline-warn">
+              已截断（共 {detail.timeline_total} 条）
+            </span>
+          </Tooltip>
         )}
       </div>
     </div>
@@ -899,7 +902,7 @@ function TimelineTab({ detail }) {
           />)}
     </div>
 
-    {selectedEvent && <TimelineEventModal event={selectedEvent} onClose={() => setSelectedEvent(null)} />}
+    {selectedEvent && <TimelineEventDrawer event={selectedEvent} onClose={() => setSelectedEvent(null)} />}
   </div>;
 }
 

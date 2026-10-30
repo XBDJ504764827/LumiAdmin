@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
 import { useApiQuery } from '../../shared/useApiQuery.js';
 import { api } from '../../lib/api.js';
-import { buildServerStatusData } from '../../pages/dashboard/dashboardData.js';
+import { buildServerStatusData, SERVER_STATUS_META } from '../../pages/dashboard/dashboardData.js';
+import { Tooltip } from '../../shared/Tooltip.jsx';
 import { DashboardChartCard } from './DashboardChartCard.jsx';
 import { ChartCanvas, useChartThemeColors } from './ChartCanvas.jsx';
 
@@ -51,6 +52,8 @@ export function ServerStatusChart() {
   const options = useMemo(
     () => ({
       cutout: '68%',
+      // 环形图没有 X/Y 轴，ChartCanvas 默认的 index 模式按横向范围命中扇区会取错数据，改为按扇区本身命中
+      interaction: { mode: 'nearest', intersect: true },
       plugins: {
         tooltip: {
           callbacks: {
@@ -87,7 +90,9 @@ export function ServerStatusChart() {
                   className="dash-donut-legend-dot"
                   style={{ background: colors[STATUS_COLOR_KEY[item.status]] ?? colors.text3 }}
                 />
-                <span className="dash-donut-legend-name">{item.label}</span>
+                <Tooltip content={SERVER_STATUS_META[item.status]?.description}>
+                  <span className="dash-donut-legend-name">{item.label}</span>
+                </Tooltip>
                 <span className="dash-donut-legend-count">{item.count}</span>
                 <span className="dash-donut-legend-pct">
                   {statusData.total > 0 ? `${Math.round((item.count / statusData.total) * 100)}%` : '0%'}

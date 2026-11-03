@@ -1,8 +1,26 @@
 use crate::{
     config::Config, db::Database, routes::ListQuery, services::steam_service::SteamResolver,
 };
+use chrono::TimeZone;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+fn parse_ban_expiry(value: &str) -> anyhow::Result<chrono::DateTime<chrono::Utc>> {
+    if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(value) {
+        return Ok(parsed.to_utc());
+    }
+
+    let local = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M")
+        .or_else(|_| chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S"))
+        .map_err(|e| anyhow::anyhow!("到期时间格式无效: {}", e))?;
+    let china_offset =
+        chrono::FixedOffset::east_opt(8 * 60 * 60).expect("UTC+08:00 is a valid fixed offset");
+    china_offset
+        .from_local_datetime(&local)
+        .single()
+        .map(|parsed| parsed.to_utc())
+        .ok_or_else(|| anyhow::anyhow!("到期时间格式无效"))
+}
 
 #[derive(Serialize, Clone)]
 pub struct BanItem {
@@ -281,6 +299,27 @@ pub async fn get_ban(db: &Database, id: Uuid) -> anyhow::Result<BanItem> {
     Ok(row_to_item(row))
 }
 
+#[cfg(test)]
+mod expiry_tests {
+    use super::parse_ban_expiry;
+    use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn parses_date_picker_local_minute_value_as_china_time() {
+        let parsed = parse_ban_expiry("2026-11-04T12:34").unwrap();
+        assert_eq!(parsed, Utc.with_ymd_and_hms(2026, 11, 4, 4, 34, 0).unwrap());
+    }
+
+    #[test]
+    fn parses_rfc3339_expiry_with_its_timezone() {
+        let parsed = parse_ban_expiry("2026-11-04T12:34:56Z").unwrap();
+        assert_eq!(
+            parsed,
+            Utc.with_ymd_and_hms(2026, 11, 4, 12, 34, 56).unwrap()
+        );
+    }
+}
+
 pub async fn create_ban(
     db: &Database,
     config: &Config,
@@ -325,12 +364,9 @@ pub async fn create_ban(
     let duration_minutes = input.duration_minutes;
     anyhow::ensure!(duration_minutes >= 0, "封禁时长不能为负数");
     let expires_at = if let Some(ref expires_at_str) = input.expires_at {
-        // 前端传来自定义到期时间，解析 ISO 格式
-        let parsed = chrono::DateTime::parse_from_rfc3339(&format!("{}+08:00", expires_at_str))
-            .or_else(|_| chrono::DateTime::parse_from_rfc3339(expires_at_str))
-            .map_err(|e| anyhow::anyhow!("到期时间格式无效: {}", e))?;
+        let parsed = parse_ban_expiry(expires_at_str)?;
         anyhow::ensure!(parsed > chrono::Utc::now(), "封禁到期时间必须晚于当前时间");
-        Some(parsed.to_utc())
+        Some(parsed)
     } else if duration_minutes == 0 {
         None
     } else {
@@ -417,11 +453,9 @@ pub async fn update_ban(
     let duration_minutes = input.duration_minutes;
     anyhow::ensure!(duration_minutes >= 0, "封禁时长不能为负数");
     let expires_at = if let Some(ref expires_at_str) = input.expires_at {
-        let parsed = chrono::DateTime::parse_from_rfc3339(&format!("{}+08:00", expires_at_str))
-            .or_else(|_| chrono::DateTime::parse_from_rfc3339(expires_at_str))
-            .map_err(|e| anyhow::anyhow!("到期时间格式无效: {}", e))?;
+        let parsed = parse_ban_expiry(expires_at_str)?;
         anyhow::ensure!(parsed > chrono::Utc::now(), "封禁到期时间必须晚于当前时间");
-        Some(parsed.to_utc())
+        Some(parsed)
     } else if duration_minutes == 0 {
         None
     } else {
